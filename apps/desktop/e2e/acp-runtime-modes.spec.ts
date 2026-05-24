@@ -11,6 +11,8 @@ import { launchElectronApp } from "./fixtures/electron-app";
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
 const geminiBackendId = "acp:gemini" as AcpBackendId;
+const legacyImageDataUrl =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 function acpMockScript(): string {
   return `
@@ -25,12 +27,113 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/load") {
+    const loadModeId =
+      msg.params?.sessionId === "acp-replay-noise-thread" ? "yolo" : currentModeId;
+    if (msg.params?.sessionId === "acp-replay-noise-thread") {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "What is this project?",
+            turnId: "pending:acp-replay-noise-thread:1779400000000"
+          }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "What is " }
+          }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "this project?" }
+          }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: { kind: "agent_message_chunk", content: "[MODE_UPDATE] yolo" }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: { kind: "agent_message_chunk", content: "It is PwrAgent." }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            kind: "turn_finished",
+            turnId: "pending:acp-replay-noise-thread:1779400000000"
+          }
+        }
+      });
+    }
+    if (msg.params?.sessionId === "acp-legacy-image-thread") {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "What's in this image?\\n[Image: ${legacyImageDataUrl}]",
+            turnId: "pending:acp-legacy-image-thread:1779400000000"
+          }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            kind: "agent_message_chunk",
+            content: "This image is a detailed screenshot."
+          }
+        }
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: msg.params.sessionId,
+          update: {
+            kind: "turn_finished",
+            turnId: "pending:acp-legacy-image-thread:1779400000000"
+          }
+        }
+      });
+    }
     send({
       jsonrpc: "2.0",
       id: msg.id,
       result: {
         modes: {
-          currentModeId,
+          currentModeId: loadModeId,
           availableModes: [
             { id: "default", name: "Default" },
             { id: "autoEdit", name: "Auto Edit" },
@@ -254,15 +357,6 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
         updatedAt: 1779400000000,
       },
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1779400000000,
-          update: {
-            kind: "agent_message_chunk",
-            content: "Ready.",
-          },
-        },
-      ],
     });
   } finally {
     db.close();
@@ -430,15 +524,7 @@ async function seedAcpGeminiWithHistory(homeRoot: string): Promise<void> {
       updatedAt: 1779400000000,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1779400000000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "What is this project?",
-          },
-        },
-      ],
+      hasConversationHistory: true,
     });
   } finally {
     db.close();
@@ -494,51 +580,7 @@ async function seedAcpGeminiReplayNoise(homeRoot: string): Promise<void> {
       updatedAt: 1779400005000,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1779400000000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "What is this project?",
-            turnId: "pending:acp-replay-noise-thread:1779400000000",
-          },
-        },
-        {
-          receivedAt: 1779400000100,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            content: { type: "text", text: "What is " },
-          },
-        },
-        {
-          receivedAt: 1779400000200,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            content: { type: "text", text: "this project?" },
-          },
-        },
-        {
-          receivedAt: 1779400000300,
-          update: {
-            kind: "agent_message_chunk",
-            content: "[MODE_UPDATE] yolo",
-          },
-        },
-        {
-          receivedAt: 1779400000400,
-          update: {
-            kind: "agent_message_chunk",
-            content: "It is PwrAgent.",
-          },
-        },
-        {
-          receivedAt: 1779400000500,
-          update: {
-            kind: "turn_finished",
-            turnId: "pending:acp-replay-noise-thread:1779400000000",
-          },
-        },
-      ],
+      hasConversationHistory: true,
     });
   } finally {
     db.close();
@@ -549,8 +591,6 @@ async function seedAcpGeminiLegacyImagePrompt(homeRoot: string): Promise<void> {
   const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
   await mkdir(path.dirname(dbPath), { recursive: true });
   const db = StateDb.open(dbPath, { profileName: "default" });
-  const imageUrl =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   try {
     new AcpAgentStore(db).upsertInstalledAgent({
       backendId: geminiBackendId,
@@ -582,30 +622,7 @@ async function seedAcpGeminiLegacyImagePrompt(homeRoot: string): Promise<void> {
       updatedAt: 1779400005000,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1779400000000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: `What's in this image?\n[Image: ${imageUrl}]`,
-            turnId: "pending:acp-legacy-image-thread:1779400000000",
-          },
-        },
-        {
-          receivedAt: 1779400001000,
-          update: {
-            kind: "agent_message_chunk",
-            content: "This image is a detailed screenshot.",
-          },
-        },
-        {
-          receivedAt: 1779400002000,
-          update: {
-            kind: "turn_finished",
-            turnId: "pending:acp-legacy-image-thread:1779400000000",
-          },
-        },
-      ],
+      hasConversationHistory: true,
     });
   } finally {
     db.close();
@@ -627,21 +644,21 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     await expect(
       app.window.getByRole("heading", { level: 2, name: "ACP Yolo Thread" }),
     ).toBeVisible();
-    const modeChip = app.window.locator(".thread-header .chip--mode");
-    await expect(modeChip).toHaveText("Default");
+    const accessChip = app.window.locator(".thread-header .chip--mode");
+    await expect(accessChip).toHaveText("Default Access");
 
-    const acpMode = app.window.getByLabel("ACP mode");
-    await expect(acpMode).toBeEnabled();
-    await expect(acpMode).toHaveAttribute("data-value", "default");
+    const agentMode = app.window.getByLabel("Agent mode");
+    await expect(agentMode).toBeEnabled();
+    await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await acpMode.click();
+    await agentMode.click();
     await app.window.getByRole("option", { name: "YOLO" }).click();
 
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await app.window.waitForTimeout(300);
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
   } finally {
     await app.close();
@@ -660,19 +677,19 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
   try {
     await app.window.getByRole("button", { name: /ACP Config Mode Thread/i }).click();
 
-    const modeChip = app.window.locator(".thread-header .chip--mode");
-    const acpMode = app.window.getByLabel("ACP mode");
-    await expect(modeChip).toHaveText("Default");
-    await expect(acpMode).toHaveAttribute("data-value", "default");
+    const accessChip = app.window.locator(".thread-header .chip--mode");
+    const agentMode = app.window.getByLabel("Agent mode");
+    await expect(accessChip).toHaveText("Default Access");
+    await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await acpMode.click();
+    await agentMode.click();
     await app.window.getByRole("option", { name: "YOLO" }).click();
 
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await app.window.waitForTimeout(300);
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
   } finally {
     await app.close();
@@ -753,9 +770,6 @@ test("normalizes ACP replay noise without duplicate prompts or mode marker text"
     await expect(app.window.getByText("What is this project?")).toHaveCount(1);
     await expect(app.window.getByText("It is PwrAgent.")).toBeVisible();
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
-
-    const modeChip = app.window.locator(".thread-header .chip--mode");
-    await expect(modeChip).toHaveText("Yolo");
   } finally {
     await app.close();
   }

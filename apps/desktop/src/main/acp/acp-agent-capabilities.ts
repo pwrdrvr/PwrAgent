@@ -10,6 +10,9 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   gemini: {
     liveWorkspaceHandoff: false,
   },
+  kimi: {
+    liveWorkspaceHandoff: false,
+  },
 };
 
 export function acpAgentCapabilitiesForRegistryId(

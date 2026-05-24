@@ -50,7 +50,16 @@ graph TD
     Shell -.->|opt-in recording| Observer
 ```
 
-**Desktop** uses sqlite for all structured persistent state (messaging, overlay, secrets). **Agent-Core** uses append-only JSONL files for thread conversation history and flat TOML for per-thread configuration. The two layers communicate over JSON-RPC via stdio — they do not share a database.
+**Desktop** uses sqlite for structured persistent state (messaging, overlay,
+secrets, launchpad defaults, and thread metadata). It must not store full
+thread conversation history in sqlite. **Agent-Core** uses append-only JSONL
+files for thread conversation history and flat TOML for per-thread
+configuration. The two layers communicate over JSON-RPC via stdio — they do not
+share a database.
+
+See [thread-history-persistence.md](thread-history-persistence.md) for the
+history storage boundary, including ACP provider restore and JSONL fallback
+rules.
 
 ## Directory Structure
 

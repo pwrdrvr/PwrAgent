@@ -87,9 +87,13 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     await this.connection.close();
   }
 
-  async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  async request(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     await this.connection.connect();
-    return await this.connection.request(method, params);
+    return await this.connection.request(method, params, timeoutMs);
   }
 
   async notify(method: string, params?: Record<string, unknown>): Promise<void> {

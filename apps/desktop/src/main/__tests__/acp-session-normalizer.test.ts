@@ -40,6 +40,24 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("OK.");
   });
 
+  it("reads Kimi snake_case assistant chunks", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "Kimi text." },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Kimi text." }),
+    ]);
+    expect(replay.lastAssistantMessage).toBe("Kimi text.");
+  });
+
   it("renders ACP user message chunks as transcript messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -307,9 +325,9 @@ describe("AcpSessionReplayNormalizer", () => {
 
     expect(replay.messages.map((message) => [message.id, message.text])).toEqual([
       ["user:pending:session-1:1000", "What is this project?"],
-      ["assistant:pending:session-1:1000", "It is PwrSnap."],
+      ["assistant:pending:session-1:1000:0", "It is PwrSnap."],
       ["user:pending:session-1:2000", "What is the CWD?"],
-      ["assistant:pending:session-1:2000", "/repo/project"],
+      ["assistant:pending:session-1:2000:0", "/repo/project"],
     ]);
     expect(replay.lastUserMessage).toBe("What is the CWD?");
     expect(replay.lastAssistantMessage).toBe("/repo/project");
@@ -381,6 +399,41 @@ describe("AcpSessionReplayNormalizer", () => {
             path: "/repo/README.md",
           }),
         ],
+      }),
+    ]);
+  });
+
+  it("merges Kimi snake_case tool call updates into the original activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        session_update: "tool_call",
+        tool_call_id: "turn-1:tool-1",
+        title: "pnpm build",
+        status: "in_progress",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        session_update: "tool_call_update",
+        tool_call_id: "turn-1:tool-1",
+        title: "pnpm build",
+        status: "completed",
+        content: { type: "text", text: "Build succeeded" },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "turn-1:tool-1",
+        summary: "pnpm build",
+        status: "completed",
       }),
     ]);
   });
@@ -532,7 +585,7 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([]);
   });
 
-  it("records thought chunks as assistant commentary", () => {
+  it("records thought chunks as assistant response messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
     const replay = normalizer.apply({
@@ -547,12 +600,12 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([
       expect.objectContaining({
         type: "message",
-        id: "thought:session-1",
+        id: "assistant:session-1:0",
         role: "assistant",
-        phase: "commentary",
         text: "Inspecting project files.",
       }),
     ]);
+    expect(replay.lastAssistantMessage).toBe("Inspecting project files.");
   });
 
   it("preserves unknown update variants as structured activity", () => {
@@ -604,6 +657,57 @@ describe("AcpSessionReplayNormalizer", () => {
           }),
         ],
       }),
+    ]);
+  });
+
+  it("splits assistant response messages around tool activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "does it build?",
+        turnId: "turn-1",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "I will inspect package scripts." },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-1",
+        title: "cat package.json",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1003,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "The build script is available." },
+      },
+    });
+
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type
+      ),
+    ).toEqual([
+      "user:turn-1:does it build?",
+      "assistant:turn-1:0:I will inspect package scripts.",
+      "activity",
+      "assistant:turn-1:1:The build script is available.",
     ]);
   });
 });

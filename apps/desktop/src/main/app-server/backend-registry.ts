@@ -102,6 +102,7 @@ import {
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
+  buildThreadIdentityKey,
   isAcpBackendId,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -115,6 +116,7 @@ import {
   inputToAcpPrompt,
   isAcpSessionMissingForProjectError,
   mergeAcpRuntimeState,
+  readKimiYoloExecutionModeFromText,
   withAcpModelRuntimeSelection,
   type AcpBackendAdapterOptions,
   type AcpClientFactory,
@@ -916,6 +918,17 @@ function buildPendingRequestKey(params: {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
 }
 
+function executionModeQueueKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return buildThreadIdentityKey(backend, threadId);
+}
+
+function formatExecutionModeForError(mode: ThreadExecutionMode): string {
+  return mode === "full-access" ? "Full Access" : "Default Access";
+}
+
 function buildActiveTurnModeKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
 }
@@ -1386,7 +1399,7 @@ function resolveCodexEnvironmentSelection(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
 ): CodexEnvironmentSelection | undefined {
-  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId) {
     return undefined;
   }
 
@@ -1414,7 +1427,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKey: launchpad.directoryKey,
   });
 
-  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId) {
     return;
   }
 
@@ -1424,7 +1437,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKind: launchpad.directoryKind,
     directoryLabel: launchpad.directoryLabel,
     directoryPath: launchpad.directoryPath,
-    backend: "codex",
+    backend: defaults.backend,
     executionMode: defaults.executionMode,
     model: defaults.model,
     reasoningEffort: defaults.reasoningEffort,
@@ -1756,14 +1769,15 @@ export class DesktopBackendRegistry {
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
-   * is active; flushed to codex at the resume boundary (turn-end, or
-   * just before the next turn-start). Not persisted across app restart
-   * by design — the corresponding audit-log entries on overlay state
-   * carry the historical record.
+   * is active; flushed at the resume boundary (turn-end, or just before
+   * the next turn-start). Not persisted across app restart by design —
+   * the corresponding audit-log entries on overlay state carry the
+   * historical record.
    */
   private readonly queuedExecutionModes = new Map<
     string,
     {
+      backend: AppServerBackendKind;
       mode: ThreadExecutionMode;
       queuedAt: number;
       queueId: string;
@@ -1771,6 +1785,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -2189,7 +2204,11 @@ export class DesktopBackendRegistry {
     });
     const cwd =
       params.backend === "codex"
-        ? await this.resolveCodexThreadTurnCwd(params.agentThreadId, overlay)
+        ? await this.resolveThreadEnvironmentCwd(
+            params.backend,
+            params.agentThreadId,
+            overlay,
+          )
         : undefined;
     const input = prependAutomationRuntimeContext({
       approvalPolicy,
@@ -2663,29 +2682,55 @@ export class DesktopBackendRegistry {
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
-    return (await this.acpBackend.listAvailableAgents()).flatMap((agent) =>
-      this.listInstalledAcpThreads(agent.backendId, filter, archived),
+    const threadLists = await Promise.all(
+      (await this.acpBackend.listAvailableAgents()).map((agent) =>
+        this.listInstalledAcpThreads(agent.backendId, filter, archived),
+      ),
     );
+    return threadLists.flat();
   }
 
-  private listInstalledAcpThreads(
+  private async listInstalledAcpThreads(
     backendId: AppServerBackendKind,
     filter?: string,
     archived?: boolean,
-  ): AppServerThreadSummary[] {
+  ): Promise<AppServerThreadSummary[]> {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
     const normalizedFilter = filter?.trim().toLowerCase();
-    return this.acpBackend
+    const threads = this.acpBackend
       .listSessions(backendId, { archived })
-      .map((session) => this.acpBackend.sessionToThreadSummary(session))
-      .filter(
-        (thread) =>
-          !normalizedFilter ||
-          thread.title.toLowerCase().includes(normalizedFilter) ||
-          thread.id.toLowerCase().includes(normalizedFilter),
-      );
+      .map((session) => this.acpBackend.sessionToThreadSummary(session));
+    const enrichedThreads = await Promise.all(
+      threads.map(async (thread) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: backendId,
+          threadId: thread.id,
+        });
+        const executionMode =
+          this.latestAppliedExecutionModeFromOverlay(overlay) ??
+          thread.executionMode;
+        const cwd = resolveThreadWorkspaceCwd(
+          thread,
+          overlay?.extraLinkedDirectories ?? [],
+        );
+        const codexEnvironmentOptions = cwd
+          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
+          : [];
+        return {
+          ...thread,
+          executionMode,
+          codexEnvironmentOptions,
+        };
+      }),
+    );
+    return enrichedThreads.filter(
+      (thread) =>
+        !normalizedFilter ||
+        thread.title.toLowerCase().includes(normalizedFilter) ||
+        thread.id.toLowerCase().includes(normalizedFilter),
+    );
   }
 
   private async readAcpThread(
@@ -2714,16 +2759,40 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
+    const initialExecutionMode = this.usesKimiSlashExecutionModes(params.backend)
+      ? "default"
+      : params.executionMode;
     const session = await client.startSession({
       cwd: params.cwd,
-      executionMode: params.executionMode,
+      executionMode: initialExecutionMode,
       acpRuntime: params.acpRuntime,
     });
+    if (
+      this.usesKimiSlashExecutionModes(params.backend) &&
+      params.executionMode !== "default"
+    ) {
+      await this.applyKimiAcpThreadExecutionMode({
+        backend: params.backend,
+        threadId: session.sessionId,
+        executionMode: params.executionMode,
+      });
+    }
     await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
     return { threadId: session.sessionId };
   }
 
   private async startAcpTurn(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    return await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(params.backend, params.threadId),
+      async () => await this.startAcpTurnLocked(params),
+    );
+  }
+
+  private async startAcpTurnLocked(params: {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -3237,7 +3306,6 @@ export class DesktopBackendRegistry {
       executionMode: session.executionMode,
       title: session.title,
       createdAt: session.createdAt,
-      transcriptUpdates: session.transcriptUpdates,
     });
   }
 
@@ -3851,13 +3919,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
-      if (request.codexEnvironmentRuntime) {
-        await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-          backend,
-          threadId: result.threadId,
-          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
-        });
-      }
+    }
+    if (request.codexEnvironmentRuntime) {
+      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+        backend,
+        threadId: result.threadId,
+        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+      });
     }
     if (
       modelSettings.model !== undefined ||
@@ -3961,6 +4029,12 @@ export class DesktopBackendRegistry {
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
       try {
+        if (this.usesKimiSlashExecutionModes(params.backend)) {
+          await this.flushQueuedExecutionModeIfPresent(
+            params.threadId,
+            params.backend,
+          );
+        }
         await this.flushQueuedAcpRuntimeOptionIfPresent(
           params.backend,
           params.threadId,
@@ -4013,7 +4087,11 @@ export class DesktopBackendRegistry {
       });
       cwd =
         params.backend === "codex"
-          ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
+          ? await this.resolveThreadEnvironmentCwd(
+              params.backend,
+              params.threadId,
+              overlay,
+            )
           : undefined;
       input = await this.buildTurnInputWithAutomationContext({
         backend: params.backend,
@@ -4212,6 +4290,9 @@ export class DesktopBackendRegistry {
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
+    if (isAcpBackendId(params.backend)) {
+      throw new Error("Selected backend does not support review/start");
+    }
     if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
       throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
     }
@@ -4235,7 +4316,7 @@ export class DesktopBackendRegistry {
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, startWithClient)
-        : await startWithClient(this.grokClient);
+        : await startWithClient(this.getClient(params.backend));
 
     return {
       backend: params.backend,
@@ -4376,6 +4457,15 @@ export class DesktopBackendRegistry {
     params: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
+      if (
+        isAcpBackendId(params.backend) &&
+        this.usesKimiSlashExecutionModes(params.backend)
+      ) {
+        return await this.setSlashControlledAcpExecutionMode({
+          ...params,
+          backend: params.backend,
+        });
+      }
       // Non-codex backends (e.g. Grok) currently no-op on execution
       // mode — no overlay write, no backend change. We still emit on
       // the bus so all surfaces stay visually consistent with the
@@ -4404,7 +4494,8 @@ export class DesktopBackendRegistry {
     });
     const currentApplied = overlay?.executionMode ?? "default";
     const hasActiveTurn = this.threadHasActiveTurn(params.threadId, "codex");
-    const hasQueue = this.queuedExecutionModes.has(params.threadId);
+    const queueKey = executionModeQueueKey("codex", params.threadId);
+    const hasQueue = this.queuedExecutionModes.has(queueKey);
 
     // Toggling back to the currently-applied mode while a queue is
     // pending is a cancel — the user changed their mind. No codex call,
@@ -4442,8 +4533,51 @@ export class DesktopBackendRegistry {
     return await this.applyThreadExecutionMode(params);
   }
 
+  private async setSlashControlledAcpExecutionMode(
+    params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
+  ): Promise<SetThreadExecutionModeResponse> {
+    const currentApplied = await this.readAppliedExecutionMode(
+      params.backend,
+      params.threadId,
+    );
+    const hasActiveTurn = this.threadHasActiveTurn(params.threadId, params.backend);
+    const queueKey = executionModeQueueKey(params.backend, params.threadId);
+    const hasQueue = this.queuedExecutionModes.has(queueKey);
+
+    if (hasQueue && params.executionMode === currentApplied) {
+      await this.cancelThreadExecutionModeQueue({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: currentApplied,
+      };
+    }
+
+    if (params.executionMode === currentApplied) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: currentApplied,
+      };
+    }
+
+    if (hasActiveTurn && params.executionMode !== currentApplied) {
+      const queued = await this.queueThreadExecutionMode(params);
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: queued.queuedExecutionMode,
+      };
+    }
+
+    return await this.applyThreadExecutionMode(params);
+  }
+
   /**
-   * Snapshot of in-memory queued execution modes keyed by `threadId`.
+   * Snapshot of in-memory queued execution modes keyed by thread identity.
    * Consumed by the navigation snapshot path so the renderer sees
    * queued state on the very first snapshot after restart, without
    * waiting for a follow-up bus event. The queue map itself is not
@@ -4458,8 +4592,8 @@ export class DesktopBackendRegistry {
       string,
       { mode: ThreadExecutionMode; queuedAt: number }
     > = {};
-    for (const [threadId, entry] of this.queuedExecutionModes) {
-      snapshot[threadId] = {
+    for (const [queueKey, entry] of this.queuedExecutionModes) {
+      snapshot[queueKey] = {
         mode: entry.mode,
         queuedAt: entry.queuedAt,
       };
@@ -4467,10 +4601,58 @@ export class DesktopBackendRegistry {
     return snapshot;
   }
 
+  private usesKimiSlashExecutionModes(
+    backend: AppServerBackendKind,
+  ): backend is AcpBackendId {
+    return (
+      isAcpBackendId(backend) &&
+      this.acpBackend.getInstalledAgent(backend)?.registryId === "kimi"
+    );
+  }
+
+  private backendUsesQueuedExecutionModes(
+    backend: AppServerBackendKind,
+  ): boolean {
+    return backend === "codex" || this.usesKimiSlashExecutionModes(backend);
+  }
+
+  private async readAppliedExecutionMode(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<ThreadExecutionMode> {
+    if (backend === "codex") {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend,
+        threadId,
+      });
+      return overlay?.executionMode ?? "default";
+    }
+    if (this.usesKimiSlashExecutionModes(backend)) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend,
+        threadId,
+      });
+      return (
+        this.latestAppliedExecutionModeFromOverlay(overlay) ??
+        this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
+      );
+    }
+    return "default";
+  }
+
+  private latestAppliedExecutionModeFromOverlay(
+    overlay: ThreadOverlayState | undefined,
+  ): ThreadExecutionMode | undefined {
+    return [...(overlay?.permissionTransitionLog ?? [])]
+      .reverse()
+      .find((transition) => transition.status === "applied")
+      ?.toExecutionMode;
+  }
+
   async queueThreadExecutionMode(
     params: QueueThreadExecutionModeRequest,
   ): Promise<QueueThreadExecutionModeResponse> {
-    if (params.backend !== "codex") {
+    if (!this.backendUsesQueuedExecutionModes(params.backend)) {
       // Non-codex backends don't have a queue concept; fall through to
       // immediate apply so the caller observes consistent semantics.
       await this.setThreadExecutionMode(params);
@@ -4482,15 +4664,17 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: params.threadId,
-    });
-    const currentApplied = overlay?.executionMode ?? "default";
+    const currentApplied = await this.readAppliedExecutionMode(
+      params.backend,
+      params.threadId,
+    );
     const queuedAt = Date.now();
     const queueId = randomUUID();
 
-    this.queuedExecutionModes.set(params.threadId, {
+    const queueKey = executionModeQueueKey(params.backend, params.threadId);
+
+    this.queuedExecutionModes.set(queueKey, {
+      backend: params.backend,
       mode: params.executionMode,
       queuedAt,
       queueId,
@@ -4498,6 +4682,7 @@ export class DesktopBackendRegistry {
     });
 
     await this.appendPermissionTransition({
+      backend: params.backend,
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
@@ -4517,7 +4702,7 @@ export class DesktopBackendRegistry {
     });
 
     await this.emit({
-      backend: "codex",
+      backend: params.backend,
       notification: {
         method: "thread/executionMode/queued",
         params: {
@@ -4529,7 +4714,7 @@ export class DesktopBackendRegistry {
     });
 
     return {
-      backend: "codex",
+      backend: params.backend,
       threadId: params.threadId,
       queuedExecutionMode: params.executionMode,
       queuedAt,
@@ -4539,18 +4724,16 @@ export class DesktopBackendRegistry {
   async cancelThreadExecutionModeQueue(
     params: CancelThreadExecutionModeQueueRequest,
   ): Promise<CancelThreadExecutionModeQueueResponse> {
-    const overlay =
-      params.backend === "codex"
-        ? await this.overlayStore.getThreadOverlayState({
-            backend: "codex",
-            threadId: params.threadId,
-          })
-        : undefined;
-    const currentApplied = overlay?.executionMode ?? "default";
+    const currentApplied = await this.readAppliedExecutionMode(
+      params.backend,
+      params.threadId,
+    );
 
     const queue =
-      params.backend === "codex"
-        ? this.queuedExecutionModes.get(params.threadId)
+      this.backendUsesQueuedExecutionModes(params.backend)
+        ? this.queuedExecutionModes.get(
+            executionModeQueueKey(params.backend, params.threadId),
+          )
         : undefined;
     if (!queue) {
       // Idempotent: cancel of nothing is a no-op that returns the
@@ -4562,9 +4745,12 @@ export class DesktopBackendRegistry {
       };
     }
 
-    this.queuedExecutionModes.delete(params.threadId);
+    this.queuedExecutionModes.delete(
+      executionModeQueueKey(params.backend, params.threadId),
+    );
 
     await this.appendPermissionTransition({
+      backend: params.backend,
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
@@ -4584,7 +4770,7 @@ export class DesktopBackendRegistry {
     });
 
     await this.emit({
-      backend: "codex",
+      backend: params.backend,
       notification: {
         method: "thread/executionMode/queueCleared",
         params: {
@@ -4613,6 +4799,18 @@ export class DesktopBackendRegistry {
     options?: { fromQueue?: boolean; queueId?: string },
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
+      if (
+        isAcpBackendId(params.backend) &&
+        this.usesKimiSlashExecutionModes(params.backend)
+      ) {
+        return await this.applyKimiAcpThreadExecutionMode(
+          {
+            ...params,
+            backend: params.backend,
+          },
+          options,
+        );
+      }
       // The non-codex grok no-op path — preserved for symmetry. Direct
       // callers route through setThreadExecutionMode which short-circuits
       // before reaching this method, so we should never get here, but
@@ -4711,6 +4909,113 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private async applyKimiAcpThreadExecutionMode(
+    params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
+    options?: { fromQueue?: boolean; queueId?: string },
+  ): Promise<SetThreadExecutionModeResponse> {
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
+    const previousApplied = session.executionMode ?? "default";
+    const client = await this.acpBackend.getClient(params.backend);
+    await client.ensureSession?.(session);
+    await this.applyKimiAcpExecutionModeControlPrompt({
+      backend: params.backend,
+      client,
+      sessionId: params.threadId,
+      fromExecutionMode: previousApplied,
+      toExecutionMode: params.executionMode,
+    });
+
+    const updatedAt = Date.now();
+    this.acpBackend.upsertSession({
+      ...session,
+      executionMode: params.executionMode,
+      updatedAt: Math.max(session.updatedAt, updatedAt),
+    });
+
+    await this.appendPermissionTransition({
+      backend: params.backend,
+      threadId: params.threadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: previousApplied,
+        toExecutionMode: params.executionMode,
+        status: "applied",
+        occurredAt: updatedAt,
+        queueId: options?.queueId,
+      },
+    });
+
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: params.threadId,
+          executionMode: params.executionMode,
+        },
+      },
+    });
+
+    if (options?.fromQueue) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/queueCleared",
+          params: {
+            threadId: params.threadId,
+            reason: "applied",
+          },
+        },
+      });
+    }
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: params.executionMode,
+    };
+  }
+
+  private async applyKimiAcpExecutionModeControlPrompt(params: {
+    backend: AcpBackendId;
+    client: AcpRuntimeClient;
+    sessionId: string;
+    fromExecutionMode: ThreadExecutionMode;
+    toExecutionMode: ThreadExecutionMode;
+  }): Promise<void> {
+    if (!this.usesKimiSlashExecutionModes(params.backend)) {
+      return;
+    }
+    if (params.fromExecutionMode === params.toExecutionMode) {
+      return;
+    }
+    const client = params.client;
+    if (!client.sendControlPrompt) {
+      throw new Error("Kimi ACP execution mode updates require control prompts");
+    }
+    const result = await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(params.backend, params.sessionId),
+      async () =>
+        await client.sendControlPrompt!({
+          sessionId: params.sessionId,
+          prompt: "/yolo",
+        }),
+    );
+    const observedMode = readKimiYoloExecutionModeFromText(result.text);
+    if (observedMode !== params.toExecutionMode) {
+      const target = formatExecutionModeForError(params.toExecutionMode);
+      const observed = observedMode
+        ? formatExecutionModeForError(observedMode)
+        : "unknown state";
+      throw new Error(
+        `Kimi ACP /yolo did not confirm ${target}; observed ${observed}`,
+      );
+    }
+  }
+
   /**
    * Returns true iff the registry currently believes a turn is in
    * flight on this thread. `activeCodexTurnModes` is keyed by
@@ -4800,14 +5105,16 @@ export class DesktopBackendRegistry {
    */
   private async flushQueuedExecutionModeIfPresent(
     threadId: string,
+    backend: AppServerBackendKind = "codex",
   ): Promise<void> {
-    const activeFlush = this.queuedExecutionModeFlushes.get(threadId);
+    const queueKey = executionModeQueueKey(backend, threadId);
+    const activeFlush = this.queuedExecutionModeFlushes.get(queueKey);
     if (activeFlush) {
       await activeFlush;
       return;
     }
 
-    const queue = this.queuedExecutionModes.get(threadId);
+    const queue = this.queuedExecutionModes.get(queueKey);
     if (!queue) return;
     // Atomic claim: in JS's single-threaded event loop, `Map.delete`
     // returning true gives this caller exclusive ownership of the
@@ -4816,24 +5123,26 @@ export class DesktopBackendRegistry {
     // queue but only one's delete returns true — the other no-ops.
     // Without this, both callers race on applyThreadExecutionMode and
     // each appends a duplicate "applied" transition entry.
-    if (!this.queuedExecutionModes.delete(threadId)) {
+    if (!this.queuedExecutionModes.delete(queueKey)) {
       return;
     }
 
-    const flush = this.applyClaimedQueuedExecutionMode(threadId, queue);
-    this.queuedExecutionModeFlushes.set(threadId, flush);
+    const flush = this.applyClaimedQueuedExecutionMode(threadId, queueKey, queue);
+    this.queuedExecutionModeFlushes.set(queueKey, flush);
     try {
       await flush;
     } finally {
-      if (this.queuedExecutionModeFlushes.get(threadId) === flush) {
-        this.queuedExecutionModeFlushes.delete(threadId);
+      if (this.queuedExecutionModeFlushes.get(queueKey) === flush) {
+        this.queuedExecutionModeFlushes.delete(queueKey);
       }
     }
   }
 
   private async applyClaimedQueuedExecutionMode(
     threadId: string,
+    queueKey: string,
     queue: {
+      backend: AppServerBackendKind;
       mode: ThreadExecutionMode;
       queuedAt: number;
       queueId: string;
@@ -4843,7 +5152,7 @@ export class DesktopBackendRegistry {
     try {
       await this.applyThreadExecutionMode(
         {
-          backend: "codex",
+          backend: queue.backend,
           threadId,
           executionMode: queue.mode,
         },
@@ -4851,7 +5160,7 @@ export class DesktopBackendRegistry {
       );
     } catch (error) {
       const attempts = queue.flushAttempts + 1;
-      const stillRetained = this.queuedExecutionModes.get(threadId);
+      const stillRetained = this.queuedExecutionModes.get(queueKey);
       if (stillRetained && stillRetained.queueId !== queue.queueId) {
         // The queue was replaced while we were mid-apply (the user
         // queued a different target). Discard our retry — the new
@@ -4869,11 +5178,15 @@ export class DesktopBackendRegistry {
           },
         );
         const overlay = await this.overlayStore
-          .getThreadOverlayState({ backend: "codex", threadId })
+          .getThreadOverlayState({ backend: queue.backend, threadId })
           .catch(() => undefined);
-        const currentApplied = overlay?.executionMode ?? "default";
-        this.queuedExecutionModes.delete(threadId);
+        const currentApplied =
+          queue.backend === "codex"
+            ? overlay?.executionMode ?? "default"
+            : await this.readAppliedExecutionMode(queue.backend, threadId);
+        this.queuedExecutionModes.delete(queueKey);
         await this.appendPermissionTransition({
+          backend: queue.backend,
           threadId,
           transition: {
             id: randomUUID(),
@@ -4886,7 +5199,7 @@ export class DesktopBackendRegistry {
           },
         });
         await this.emit({
-          backend: "codex",
+          backend: queue.backend,
           notification: {
             method: "thread/executionMode/queueCleared",
             params: {
@@ -4897,7 +5210,7 @@ export class DesktopBackendRegistry {
         });
         return;
       }
-      this.queuedExecutionModes.set(threadId, {
+      this.queuedExecutionModes.set(queueKey, {
         ...queue,
         flushAttempts: attempts,
       });
@@ -5345,10 +5658,6 @@ export class DesktopBackendRegistry {
   async runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> {
-    if (request.backend !== "codex") {
-      throw new Error("Codex environment actions are only available for Codex threads.");
-    }
-
     // Serialise the read-modify-write under the per-thread lock so two
     // concurrent Run-button clicks can't clobber each other's appended
     // run entry.
@@ -5362,14 +5671,16 @@ export class DesktopBackendRegistry {
         });
         const runtime = overlay?.codexEnvironmentRuntime;
         if (!runtime) {
-          throw new Error(
-            "This thread does not have a selected Codex environment.",
-          );
+          throw new Error("This thread does not have a selected environment.");
         }
 
         const currentCwd =
           request.cwd?.trim() ||
-          (await this.resolveCodexThreadTurnCwd(request.threadId, overlay));
+          (await this.resolveThreadEnvironmentCwd(
+            request.backend,
+            request.threadId,
+            overlay,
+          ));
         const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
           currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
           request.actionId,
@@ -5474,10 +5785,6 @@ export class DesktopBackendRegistry {
   async setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse> {
-    if (request.backend !== "codex") {
-      throw new Error("Codex environments are only available for Codex threads.");
-    }
-
     if (!request.environmentId) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: request.backend,
@@ -5500,13 +5807,17 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
     });
-    const cwd = await this.resolveCodexThreadTurnCwd(request.threadId, overlay);
+    const cwd = await this.resolveThreadEnvironmentCwd(
+      request.backend,
+      request.threadId,
+      overlay,
+    );
     const options = await listCodexEnvironmentOptions(cwd);
     const environment = options.find(
       (candidate) => candidate.id === request.environmentId,
     );
     if (!environment) {
-      throw new Error("Selected Codex environment is not available for this thread.");
+      throw new Error("Selected environment is not available for this thread.");
     }
 
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
@@ -5812,36 +6123,34 @@ export class DesktopBackendRegistry {
       queuedActionDetachedOutputs.length = 0;
       queuedActionDetachedOutputs.push(event);
     };
-    if (launchpad.backend === "codex") {
-      try {
-        codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
-          commandRunner: this.codexEnvironmentCommandRunner,
-          cwd: workspace.cwd,
-          env: this.codexEnvironmentCommandEnv,
-          onSetupProgress: options?.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                options.onCodexEnvironmentSetupProgress?.({
-                  directoryKey: launchpad.directoryKey,
-                  ...event,
-                });
-              }
-            : undefined,
-          onActionDetachedExit,
-          onActionDetachedOutput,
-          actionRunId: autoActionRunId,
-          selection: codexEnvironmentSelection,
-        });
-      } catch (error) {
-        if (!(error instanceof CodexEnvironmentStartupError)) {
-          throw error;
-        }
-        codexEnvironmentRuntime = error.runtime;
-        codexEnvironmentStartupFailure = {
-          message: error.message,
-          phase: error.phase,
-          worktreeCleanupAvailable: workspace.workMode === "worktree",
-        };
+    try {
+      codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+        commandRunner: this.codexEnvironmentCommandRunner,
+        cwd: workspace.cwd,
+        env: this.codexEnvironmentCommandEnv,
+        onSetupProgress: options?.onCodexEnvironmentSetupProgress
+          ? (event) => {
+              options.onCodexEnvironmentSetupProgress?.({
+                directoryKey: launchpad.directoryKey,
+                ...event,
+              });
+            }
+          : undefined,
+        onActionDetachedExit,
+        onActionDetachedOutput,
+        actionRunId: autoActionRunId,
+        selection: codexEnvironmentSelection,
+      });
+    } catch (error) {
+      if (!(error instanceof CodexEnvironmentStartupError)) {
+        throw error;
       }
+      codexEnvironmentRuntime = error.runtime;
+      codexEnvironmentStartupFailure = {
+        message: error.message,
+        phase: error.phase,
+        worktreeCleanupAvailable: workspace.workMode === "worktree",
+      };
     }
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
@@ -6439,6 +6748,9 @@ export class DesktopBackendRegistry {
     return (
       method === "thread/archived" ||
       method === "thread/acpRuntime/updated" ||
+      method === "thread/executionMode/queueCleared" ||
+      method === "thread/executionMode/queued" ||
+      method === "thread/executionMode/updated" ||
       method === "thread/name/updated" ||
       method === "thread/started" ||
       method === "thread/unarchived" ||
@@ -7279,7 +7591,8 @@ export class DesktopBackendRegistry {
       .catch(() => undefined);
   }
 
-  private async resolveCodexThreadTurnCwd(
+  private async resolveThreadEnvironmentCwd(
+    backend: AppServerBackendKind,
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
@@ -7290,14 +7603,14 @@ export class DesktopBackendRegistry {
       return overlayCwd.trim();
     }
 
-    const pendingThread = this.pendingStartedThreads.get(`codex:${threadId}`);
+    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
     const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
     if (pendingCwd?.trim()) {
       return pendingCwd.trim();
     }
 
     const thread = await this.findThreadForWorkspaceHandoff({
-      backend: "codex",
+      backend,
       callerReason: "turn-cwd",
       threadId,
     });
@@ -8023,6 +8336,12 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
       } else if (isAcpBackendId(event.backend)) {
+        if (this.usesKimiSlashExecutionModes(event.backend)) {
+          void this.flushQueuedExecutionModeIfPresent(
+            notification.params.threadId,
+            event.backend,
+          );
+        }
         void this.flushQueuedAcpRuntimeOptionIfPresent(
           event.backend,
           notification.params.threadId,
@@ -8042,6 +8361,12 @@ export class DesktopBackendRegistry {
       }
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
+          if (this.usesKimiSlashExecutionModes(event.backend)) {
+            void this.flushQueuedExecutionModeIfPresent(
+              event.notification.params.threadId,
+              event.backend,
+            );
+          }
           void this.flushQueuedAcpRuntimeOptionIfPresent(
             event.backend,
             event.notification.params.threadId,

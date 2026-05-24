@@ -86,6 +86,33 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("maps Kimi snake_case ACP tool updates to stable live item ids", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        session_update: "tool_call_update",
+        tool_call_id: "turn-1:tool-7",
+        title: "pnpm build",
+        status: "in_progress",
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/started",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "turn-1:tool-7",
+            command: "pnpm build",
+            toolName: "tool",
+            status: "in_progress",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("does not render ACP topic updates as live tool activity", () => {
     expect(
       acpToolUpdateNotifications({

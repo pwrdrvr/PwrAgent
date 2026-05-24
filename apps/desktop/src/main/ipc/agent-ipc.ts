@@ -73,6 +73,17 @@ let unsubscribeRegistryEvents: (() => void) | undefined;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const appServerLog = getMainLogger("pwragent:app-server");
+const AGENT_EVENT_LOG_INTERVAL_MS = 1_000;
+
+type CoalescedAgentEventLog = {
+  firstSuppressedAt: number;
+  lastLoggedAt: number;
+  lastSuppressedAt: number;
+  latestSummary: Record<string, unknown>;
+  suppressedCount: number;
+};
+
+const coalescedAgentEventLogs = new Map<string, CoalescedAgentEventLog>();
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {
@@ -173,10 +184,71 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
   return summary;
 }
 
+function logAgentEventSummary(summary: Record<string, unknown>): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  const key = coalescedAgentEventLogKey(summary);
+  if (!key) {
+    appServerLog.info("agentEvent", summary);
+    return;
+  }
+
+  const now = Date.now();
+  const existing = coalescedAgentEventLogs.get(key);
+  if (!existing) {
+    coalescedAgentEventLogs.set(key, {
+      firstSuppressedAt: now,
+      lastLoggedAt: now,
+      lastSuppressedAt: now,
+      latestSummary: summary,
+      suppressedCount: 0,
+    });
+    appServerLog.info("agentEvent", summary);
+    return;
+  }
+
+  existing.latestSummary = summary;
+  existing.lastSuppressedAt = now;
+  existing.suppressedCount += 1;
+  if (now - existing.lastLoggedAt < AGENT_EVENT_LOG_INTERVAL_MS) {
+    return;
+  }
+
+  appServerLog.info("agentEventCoalesced", {
+    ...existing.latestSummary,
+    coalescedDurationMs: existing.lastSuppressedAt - existing.firstSuppressedAt,
+    suppressedCount: existing.suppressedCount,
+  });
+  existing.firstSuppressedAt = now;
+  existing.lastLoggedAt = now;
+  existing.lastSuppressedAt = now;
+  existing.suppressedCount = 0;
+}
+
+function coalescedAgentEventLogKey(
+  summary: Record<string, unknown>,
+): string | undefined {
+  const method = summary.method;
+  if (method !== "item/started" && method !== "item/completed") {
+    return undefined;
+  }
+  return JSON.stringify({
+    backend: summary.backend,
+    itemType: summary.itemType,
+    method,
+    status: summary.status,
+    threadId: summary.threadId,
+    toolName: summary.toolName,
+    turnId: summary.turnId,
+  });
+}
+
 function broadcastAgentEvent(event: AgentEvent): void {
   const eventSummary = summarizeAgentEvent(event);
   if (eventSummary) {
-    logDebug("agentEvent", eventSummary);
+    logAgentEventSummary(eventSummary);
   }
 
   // Only deliver to windows that registered for this channel.

@@ -3,18 +3,20 @@ import {
   type AcpBackendId,
   type AgentEvent,
   type AppServerBackendKind,
+  type AppServerNotification,
   type AppServerPendingRequestNotification,
   type AppServerThreadMessagePart,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
-  type BackendAcpRuntimeCapabilities,
   type BackendAcpSessionRuntimeState,
+  type BackendAcpRuntimeCapabilities,
   type BackendCapabilities,
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendSummary,
+  type ThreadExecutionMode,
   isAcpBackendId,
 } from "@pwragent/shared";
 import {
@@ -28,24 +30,34 @@ import {
 } from "../acp/acp-agent-capabilities";
 import {
   AcpAgentClient,
+  type AcpJsonRpcTransport,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
-import {
-  acpRuntimeSupportsSessionLoad,
-  acpSessionRuntimeStateFromUpdate,
-} from "../acp/acp-runtime-capabilities";
+import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import {
   AcpSessionStore,
   type AcpSessionMetadata,
   type AcpSessionStore as AcpSessionStoreContract,
 } from "../acp/acp-session-store";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import {
+  AcpSessionReplayNormalizer,
+  readAcpContentText,
+} from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
-import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import {
+  getAppStateDb,
+  getAppStateMode,
+  isAppStateInitialized,
+} from "../state/app-state";
+import {
+  resolveActiveProfilePath,
+  resolveBootstrapProfilePath,
+} from "../profile";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import {
@@ -72,9 +84,12 @@ export type AcpRuntimeClient = Pick<
   | "startPrompt"
   | "startSession"
 > &
-  Partial<Pick<AcpAgentClient, "setRuntimeOption">>;
+  Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
 
 export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
+export type AcpTransportFactory = (
+  agent: AcpInstalledAgentRecord,
+) => AcpJsonRpcTransport;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 
 export type AcpSessionStoreLike =
@@ -92,9 +107,11 @@ export type AcpBackendAdapterOptions = {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   > | null;
+  acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   createAcpClient?: AcpClientFactory;
+  createAcpTransport?: AcpTransportFactory;
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
@@ -106,7 +123,8 @@ export type AcpBackendAdapterOptions = {
 export function readAcpUpdateKind(
   update: Record<string, unknown>,
 ): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  const kind =
+    update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
 }
 
@@ -119,14 +137,84 @@ export function readAcpUpdateText(
   if (typeof update.outputText === "string") {
     return update.outputText;
   }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
+  if (typeof update.output_text === "string") {
+    return update.output_text;
+  }
+  return readAcpContentText(update.content);
+}
+
+export function readKimiYoloExecutionModeFromText(
+  text: string,
+): ThreadExecutionMode | undefined {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("all actions will be auto-approved")) {
+    return "full-access";
+  }
+  if (normalized.includes("tool calls remain auto-approved")) {
+    return "full-access";
+  }
+  if (normalized.includes("actions will require approval")) {
+    return "default";
+  }
+  return undefined;
+}
+
+function liveToolNotificationKey(
+  backend: AcpBackendId,
+  notification: AppServerNotification,
+): string | undefined {
+  const params = asPlainRecord(notification.params);
+  const item = asPlainRecord(params?.item);
+  const threadId = readNonEmptyString(params, "threadId");
+  const turnId = readNonEmptyString(params, "turnId") ?? "no-turn";
+  const itemId = readNonEmptyString(item, "id");
+  return threadId && itemId
+    ? `${backend}:${threadId}:${turnId}:${itemId}`
+    : undefined;
+}
+
+function liveToolNotificationFingerprint(
+  notification: AppServerNotification,
+): string | undefined {
+  const params = asPlainRecord(notification.params);
+  const item = asPlainRecord(params?.item);
+  if (!item) {
     return undefined;
   }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
+  const data = asPlainRecord(item.data);
+  const output = readNonEmptyString(data, "output") ?? "";
+  return JSON.stringify({
+    method: notification.method,
+    type: item.type,
+    toolName: item.toolName,
+    status: item.status,
+    command: item.command,
+    commandActions: item.commandActions,
+    outputHash: hashString(output),
+    outputLength: output.length,
+  });
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readNonEmptyString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return hash.toString(16);
 }
 
 export function buildAcpCapabilities(): BackendCapabilities {
@@ -154,6 +242,7 @@ export function buildAcpCapabilities(): BackendCapabilities {
 export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
+  const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
   const available =
     agent.installStatus === "installed" &&
     (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
@@ -168,7 +257,7 @@ export function describeInstalledAcpBackend(
   return {
     kind: agent.backendId,
     source: "acp",
-    label: agent.name,
+    label: formatAcpAgentDisplayName(agent),
     available,
     acp: {
       registryId: agent.registryId,
@@ -183,21 +272,77 @@ export function describeInstalledAcpBackend(
       websiteUrl: agent.registryAgent?.websiteUrl,
       allowlistRuleId: agent.allowlistRuleId,
       license: agent.registryAgent?.license,
-      runtime: agent.runtimeCapabilities,
+      runtime: runtimeCapabilities,
     },
     methods: [
       "session/new",
-      ...(acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities)
+      ...(acpRuntimeSupportsSessionLoad(runtimeCapabilities)
         ? ["session/load"]
         : []),
       "session/prompt",
       "session/cancel",
     ],
     capabilities: buildAcpCapabilities(),
-    executionModes: [],
-    launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
+    executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
+    launchpadOptions: buildAcpLaunchpadOptions(runtimeCapabilities),
     unavailableReason,
   };
+}
+
+function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
+  if (agent.registryId === "gemini") {
+    return "Gemini";
+  }
+  if (agent.registryId === "kimi") {
+    return "Kimi";
+  }
+  return agent.name;
+}
+
+function acpRuntimeCapabilitiesForAgent(
+  agent: AcpInstalledAgentRecord,
+): BackendAcpRuntimeCapabilities | undefined {
+  return agent.runtimeCapabilities;
+}
+
+function normalizeInstalledAcpAgent(
+  agent: AcpInstalledAgentRecord,
+): AcpInstalledAgentRecord {
+  const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
+  return runtimeCapabilities === agent.runtimeCapabilities
+    ? agent
+    : { ...agent, runtimeCapabilities };
+}
+
+function resolveDefaultAcpRolloutRoot(): string {
+  return getAppStateMode() === "bootstrap"
+    ? resolveBootstrapProfilePath("state/acp-rollouts")
+    : resolveActiveProfilePath("state/acp-rollouts");
+}
+
+function buildAcpExecutionModes(
+  agent: AcpInstalledAgentRecord,
+  available: boolean,
+  unavailableReason: string | undefined,
+): BackendSummary["executionModes"] {
+  if (agent.registryId !== "kimi") {
+    return [];
+  }
+  return [
+    {
+      mode: "default",
+      label: "Default Access",
+      available,
+      isDefault: true,
+      unavailableReason,
+    },
+    {
+      mode: "full-access",
+      label: "Full Access",
+      available,
+      unavailableReason,
+    },
+  ];
 }
 
 export function buildAcpLaunchpadOptions(
@@ -313,10 +458,6 @@ export function acpSessionToThreadSummary(
   const workspaceHandoffAvailable =
     !acpSessionHasConversationHistory(session) ||
     capabilities?.liveWorkspaceHandoff === true;
-  const acpRuntime = mergeAcpRuntimeState(
-    session.acpRuntime,
-    deriveAcpRuntimeStateFromTranscript(session),
-  );
   return {
     id: session.sessionId,
     title: session.title,
@@ -338,7 +479,7 @@ export function acpSessionToThreadSummary(
       : [],
     source: session.backendId,
     executionMode: session.executionMode,
-    acpRuntime,
+    acpRuntime: session.acpRuntime,
     workspaceHandoff: workspaceHandoffAvailable
       ? { available: true }
       : {
@@ -352,11 +493,6 @@ export function acpSessionLoadFallbackReplay(
   session: AcpSessionMetadata,
   error: unknown,
 ): AppServerThreadReplay {
-  const persistedReplay = replayPersistedAcpTranscript(session);
-  if (persistedReplay.entries.length > 0 || persistedReplay.messages.length > 0) {
-    return persistedReplay;
-  }
-
   const message = error instanceof Error ? error.message : String(error);
   return {
     entries: [
@@ -384,37 +520,6 @@ export function acpSessionLoadFallbackReplay(
   };
 }
 
-export function replayPersistedAcpTranscript(
-  session: AcpSessionMetadata,
-): AppServerThreadReplay {
-  const normalizer = new AcpSessionReplayNormalizer();
-  let replay = normalizer.replay();
-  for (const item of session.transcriptUpdates ?? []) {
-    replay = normalizer.apply({
-      sessionId: session.sessionId,
-      update: item.update,
-      receivedAt: item.receivedAt,
-    });
-  }
-  return {
-    ...replay,
-    threadStatus: acpSessionThreadStatus(session.status),
-  };
-}
-
-export function deriveAcpRuntimeStateFromTranscript(
-  session: AcpSessionMetadata,
-): BackendAcpSessionRuntimeState | undefined {
-  let runtimeState: BackendAcpSessionRuntimeState | undefined;
-  for (const item of session.transcriptUpdates ?? []) {
-    runtimeState = mergeAcpRuntimeState(
-      runtimeState,
-      acpSessionRuntimeStateFromUpdate(item.update, item.receivedAt),
-    );
-  }
-  return runtimeState;
-}
-
 export function acpSessionThreadStatus(
   status: AcpSessionMetadata["status"],
 ): AppServerThreadStatus {
@@ -431,14 +536,7 @@ export function isAcpSessionMissingForProjectError(error: unknown): boolean {
 export function acpSessionHasConversationHistory(
   session: AcpSessionMetadata,
 ): boolean {
-  return (session.transcriptUpdates ?? []).some((item) => {
-    const kind = item.update.kind ?? item.update.type ?? item.update.sessionUpdate;
-    return (
-      kind === "pwragent_user_prompt" ||
-      kind === "user_message_chunk" ||
-      kind === "agent_message_chunk"
-    );
-  });
+  return session.hasConversationHistory === true;
 }
 
 export function inputToAcpPrompt(
@@ -514,9 +612,14 @@ export class AcpBackendAdapter {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   >;
+  private readonly acpRolloutStore?: Pick<
+    AcpRolloutStore,
+    "appendUpdate" | "readReplay" | "readUpdates"
+  >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly createAcpClient: AcpClientFactory;
+  private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
@@ -524,6 +627,7 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
+  private readonly liveNotificationFingerprints = new Map<string, string>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -544,8 +648,16 @@ export class AcpBackendAdapter {
           (isAppStateInitialized()
             ? new AcpSessionStore(getAppStateDb())
             : undefined);
+    this.acpRolloutStore =
+      options.acpRolloutStore === null
+        ? undefined
+        : options.acpRolloutStore ??
+          (isAppStateInitialized()
+            ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
+            : undefined);
     this.discoverLocalAcpAgents =
       options.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
+    this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
       options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
   }
@@ -575,7 +687,8 @@ export class AcpBackendAdapter {
   }
 
   getInstalledAgent(backendId: AcpBackendId): AcpInstalledAgentRecord | undefined {
-    return this.acpAgentStore?.getInstalledAgent(backendId);
+    const agent = this.acpAgentStore?.getInstalledAgent(backendId);
+    return agent ? normalizeInstalledAcpAgent(agent) : undefined;
   }
 
   sessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
@@ -601,14 +714,67 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
+    const session = this.getSession(backend, sessionId);
     const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
     if (cachedClient) {
-      return cachedClient.readReplay(sessionId);
+      const replay = cachedClient.readReplay(sessionId);
+      if (
+        session &&
+        acpSessionHasConversationHistory(session) &&
+        replay.entries.length === 0 &&
+        acpRuntimeSupportsSessionLoad(
+          this.getInstalledAgent(backend)?.runtimeCapabilities,
+        )
+      ) {
+        try {
+          const replay = await cachedClient.loadSession(session);
+          return this.providerReplayOrRolloutFallback({
+            backend,
+            replay,
+            session,
+          });
+        } catch (error) {
+          acpBackendAdapterLog.warn("acp_session_load_failed", {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            sessionId,
+          });
+          return this.loadFailureReplayOrRolloutFallback({
+            backend,
+            error,
+            session,
+          });
+        }
+      }
+      if (
+        session &&
+        replay.entries.length === 0 &&
+        !acpRuntimeSupportsSessionLoad(
+          this.getInstalledAgent(backend)?.runtimeCapabilities,
+        )
+      ) {
+        return this.readRolloutReplay(session, "rollout-session-load-unsupported");
+      }
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId,
+        source: "memory",
+      });
+      return replay;
     }
 
-    const session = this.getSession(backend, sessionId);
     if (!session) {
-      return new AcpSessionReplayNormalizer().replay();
+      const replay = new AcpSessionReplayNormalizer().replay();
+      this.logSessionReplaySource({
+        backend,
+        entries: 0,
+        messages: 0,
+        sessionId,
+        source: "empty-no-session",
+      });
+      return replay;
     }
 
     if (
@@ -616,7 +782,7 @@ export class AcpBackendAdapter {
         this.getInstalledAgent(backend)?.runtimeCapabilities,
       )
     ) {
-      return replayPersistedAcpTranscript(session);
+      return this.readRolloutReplay(session, "rollout-session-load-unsupported");
     }
     const client = await this.getClient(backend);
     try {
@@ -628,14 +794,22 @@ export class AcpBackendAdapter {
           sessionId,
         });
       });
-      return replay;
+      return this.providerReplayOrRolloutFallback({
+        backend,
+        replay,
+        session,
+      });
     } catch (error) {
       acpBackendAdapterLog.warn("acp_session_load_failed", {
         backend,
         error: error instanceof Error ? error.message : String(error),
         sessionId,
       });
-      return acpSessionLoadFallbackReplay(session, error);
+      return this.loadFailureReplayOrRolloutFallback({
+        backend,
+        error,
+        session,
+      });
     }
   }
 
@@ -658,6 +832,126 @@ export class AcpBackendAdapter {
       }
     });
     return await clientPromise;
+  }
+
+  private readRolloutReplay(
+    session: AcpSessionMetadata,
+    source: string,
+  ): AppServerThreadReplay {
+    const replay =
+      this.acpRolloutStore?.readReplay({
+        backendId: session.backendId,
+        sessionId: session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    this.logSessionReplaySource({
+      backend: session.backendId,
+      entries: replay.entries.length,
+      messages: replay.messages.length,
+      sessionId: session.sessionId,
+      source,
+    });
+    return {
+      ...replay,
+      threadStatus: acpSessionThreadStatus(session.status),
+    };
+  }
+
+  private providerReplayOrRolloutFallback(params: {
+    backend: AcpBackendId;
+    replay: AppServerThreadReplay;
+    session: AcpSessionMetadata;
+  }): AppServerThreadReplay {
+    const { backend, replay, session } = params;
+    if (replay.entries.length > 0 || !acpSessionHasConversationHistory(session)) {
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId: session.sessionId,
+        source:
+          replay.entries.length > 0
+            ? "provider-session-load"
+            : "provider-session-load-empty",
+      });
+      return replay;
+    }
+
+    const rolloutReplay =
+      this.acpRolloutStore?.readReplay({
+        backendId: session.backendId,
+        sessionId: session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    if (rolloutReplay.entries.length === 0) {
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId: session.sessionId,
+        source: "provider-session-load-empty-no-rollout",
+      });
+      return replay;
+    }
+
+    this.logSessionReplaySource({
+      backend,
+      entries: rolloutReplay.entries.length,
+      messages: rolloutReplay.messages.length,
+      providerEntries: replay.entries.length,
+      providerMessages: replay.messages.length,
+      sessionId: session.sessionId,
+      source: "rollout-provider-empty",
+    });
+    return {
+      ...rolloutReplay,
+      threadStatus: acpSessionThreadStatus(session.status),
+    };
+  }
+
+  private loadFailureReplayOrRolloutFallback(params: {
+    backend: AcpBackendId;
+    error: unknown;
+    session: AcpSessionMetadata;
+  }): AppServerThreadReplay {
+    const rolloutReplay =
+      this.acpRolloutStore?.readReplay({
+        backendId: params.session.backendId,
+        sessionId: params.session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    if (rolloutReplay.entries.length > 0) {
+      this.logSessionReplaySource({
+        backend: params.backend,
+        entries: rolloutReplay.entries.length,
+        messages: rolloutReplay.messages.length,
+        sessionId: params.session.sessionId,
+        source: "rollout-session-load-failed",
+      });
+      return {
+        ...rolloutReplay,
+        threadStatus: acpSessionThreadStatus(params.session.status),
+      };
+    }
+
+    const replay = acpSessionLoadFallbackReplay(params.session, params.error);
+    this.logSessionReplaySource({
+      backend: params.backend,
+      entries: replay.entries.length,
+      messages: replay.messages.length,
+      sessionId: params.session.sessionId,
+      source: "session-load-failed",
+    });
+    return replay;
+  }
+
+  private logSessionReplaySource(params: {
+    backend: AcpBackendId;
+    entries: number;
+    messages: number;
+    providerEntries?: number;
+    providerMessages?: number;
+    sessionId: string;
+    source: string;
+  }): void {
+    acpBackendAdapterLog.info("acp_session_replay_source", params);
   }
 
   async resolveInstalledAgent(
@@ -687,15 +981,15 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
-    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? []).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
+    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const installedBackendIds = new Set(
       installedAgents.map((agent) => agent.backendId),
     );
-    const discoveredAgents = (await this.readLocalAgentsOnce()).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
+    const discoveredAgents = (await this.readLocalAgentsOnce())
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     for (const agent of discoveredAgents) {
       if (!installedBackendIds.has(agent.backendId)) {
         this.acpAgentStore?.upsertInstalledAgent(agent);
@@ -712,12 +1006,43 @@ export class AcpBackendAdapter {
   async close(): Promise<void> {
     const acpClients = [...this.acpClients.values()];
     this.acpClients.clear();
+    this.liveNotificationFingerprints.clear();
     await Promise.all(
       acpClients.map(async (clientPromise) => {
         const client = await clientPromise.catch(() => undefined);
         await client?.dispose();
       }),
     );
+  }
+
+  private shouldEmitLiveToolNotification(
+    backend: AcpBackendId,
+    notification: AppServerNotification,
+  ): boolean {
+    const key = liveToolNotificationKey(backend, notification);
+    const fingerprint = liveToolNotificationFingerprint(notification);
+    if (!key || !fingerprint) {
+      return true;
+    }
+    const previous = this.liveNotificationFingerprints.get(key);
+    if (previous === fingerprint) {
+      return false;
+    }
+    this.liveNotificationFingerprints.set(key, fingerprint);
+    return true;
+  }
+
+  private clearLiveToolNotificationFingerprints(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    turnId: string;
+  }): void {
+    const prefix = `${params.backend}:${params.threadId}:${params.turnId}:`;
+    for (const key of this.liveNotificationFingerprints.keys()) {
+      if (key.startsWith(prefix)) {
+        this.liveNotificationFingerprints.delete(key);
+      }
+    }
   }
 
   private async readLocalAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
@@ -746,18 +1071,29 @@ export class AcpBackendAdapter {
     }
     return new AcpAgentClient({
       backendId: agent.backendId,
-      initialRuntimeCapabilities: agent.runtimeCapabilities,
+      agentDisplayName: agent.name,
+      initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
-      transport: new AcpStdioJsonRpcTransport({
-        launchDescriptor: agent.launchDescriptor,
-        observer: createCompositeJsonRpcObserver([
-          acpCapture?.observer,
-          createProtocolLogObserverFromEnv({
-            backend: agent.backendId,
-          }),
-        ]),
-      }),
-      onSessionUpdate: async ({ sessionId, replay, title, turnId, update }) => {
+      transport:
+        this.createAcpTransport?.(agent) ??
+        new AcpStdioJsonRpcTransport({
+          launchDescriptor: agent.launchDescriptor,
+          observer: createCompositeJsonRpcObserver([
+            acpCapture?.observer,
+            createProtocolLogObserverFromEnv({
+              backend: agent.backendId,
+            }),
+          ]),
+        }),
+      onSessionUpdate: async ({
+        assistantMessageItemId,
+        sessionId,
+        replay,
+        title,
+        turnId,
+        update,
+      }) => {
         const updateKind = readAcpUpdateKind(update);
         if (title) {
           await this.emit({
@@ -771,7 +1107,37 @@ export class AcpBackendAdapter {
             },
           });
         }
-        if (updateKind === "agent_message_chunk") {
+        const kimiYoloExecutionMode =
+          agent.registryId === "kimi"
+            ? readKimiYoloExecutionModeFromText(readAcpUpdateText(update) ?? "")
+            : undefined;
+        if (kimiYoloExecutionMode) {
+          const metadata = this.getSession(agent.backendId, sessionId);
+          if (
+            metadata &&
+            (metadata.executionMode ?? "default") !== kimiYoloExecutionMode
+          ) {
+            this.acpSessionStore?.upsertSession?.({
+              ...metadata,
+              executionMode: kimiYoloExecutionMode,
+              updatedAt: Math.max(metadata.updatedAt, Date.now()),
+            });
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "thread/executionMode/updated",
+                params: {
+                  threadId: sessionId,
+                  executionMode: kimiYoloExecutionMode,
+                },
+              },
+            });
+          }
+        }
+        if (
+          updateKind === "agent_message_chunk" ||
+          updateKind === "agent_thought_chunk"
+        ) {
           const delta = readAcpUpdateText(update);
           if (delta) {
             await this.emit({
@@ -781,24 +1147,33 @@ export class AcpBackendAdapter {
                 params: {
                   threadId: sessionId,
                   turnId,
-                  itemId: `assistant:${turnId ?? sessionId}`,
+                  itemId:
+                    assistantMessageItemId ?? `assistant:${turnId ?? sessionId}`,
                   delta,
                 },
               },
             });
           }
         }
-        for (const notification of acpToolUpdateNotifications({
+        const toolNotifications = acpToolUpdateNotifications({
           threadId: sessionId,
           turnId,
           update,
-        })) {
+        }).filter((notification) =>
+          this.shouldEmitLiveToolNotification(agent.backendId, notification),
+        );
+        for (const notification of toolNotifications) {
           await this.emit({
             backend: agent.backendId,
             notification,
           });
         }
         if (updateKind === "turn_finished" && turnId) {
+          this.clearLiveToolNotificationFingerprints({
+            backend: agent.backendId,
+            threadId: sessionId,
+            turnId,
+          });
           const outputText = readAcpUpdateText(update);
           await this.emit({
             backend: agent.backendId,
@@ -863,6 +1238,15 @@ export class AcpBackendAdapter {
           lastDiscoveredAt: runtimeCapabilities.discoveredAt ?? now,
           lastDiscoveryError: runtimeCapabilities.lastError,
           updatedAt: Math.max(current.updatedAt, now),
+        });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "backend/acpRuntimeCapabilities/updated",
+            params: {
+              backend: agent.backendId,
+            },
+          },
         });
         if (sessionId && runtimeState && this.acpSessionStore?.upsertSession) {
           const metadata = this.getSession(agent.backendId, sessionId);

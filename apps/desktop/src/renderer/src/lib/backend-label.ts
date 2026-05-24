@@ -4,6 +4,12 @@ export function formatBackendLabel(
   backend: AppServerBackendKind,
   summaries: BackendSummary[] = [],
 ): string {
+  if (backend === "acp:gemini") {
+    return "Gemini";
+  }
+  if (backend === "acp:kimi") {
+    return "Kimi";
+  }
   const summary = summaries.find((candidate) => candidate.kind === backend);
   if (summary?.label) {
     return summary.label;
@@ -14,5 +20,9 @@ export function formatBackendLabel(
   if (backend === "grok") {
     return "Grok";
   }
-  return backend.startsWith("acp:") ? backend.slice("acp:".length) : backend;
+  if (backend.startsWith("acp:")) {
+    const registryId = backend.slice("acp:".length);
+    return registryId;
+  }
+  return backend;
 }

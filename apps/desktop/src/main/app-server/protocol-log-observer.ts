@@ -3,6 +3,7 @@ import { getMainLogger } from "../log";
 
 const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";
 const STREAM_LOG_INTERVAL_MS = 500;
+const COALESCED_MESSAGE_LOG_INTERVAL_MS = 1_000;
 const PREVIEW_LIMIT = 160;
 
 type ProtocolLogBackend = string;
@@ -14,6 +15,7 @@ type ProtocolLogObserverOptions = {
   logger?: ProtocolLogger;
   now?: () => number;
   streamLogIntervalMs?: number;
+  coalescedMessageLogIntervalMs?: number;
 };
 
 type JsonRpcEnvelope = JsonRpcObserverEvent["envelope"];
@@ -25,6 +27,14 @@ type DeltaBuffer = {
   lastAt: number;
   lastLoggedAt: number;
   preview: string;
+};
+
+type CoalescedMessageBuffer = {
+  firstAt: number;
+  lastAt: number;
+  lastLoggedAt: number;
+  lastFields: Partial<Record<string, unknown>>;
+  suppressedCount: number;
 };
 
 export function createCompositeJsonRpcObserver(
@@ -73,7 +83,10 @@ export function createProtocolLogObserver(
   const now = options.now ?? (() => Date.now());
   const streamLogIntervalMs =
     options.streamLogIntervalMs ?? STREAM_LOG_INTERVAL_MS;
+  const coalescedMessageLogIntervalMs =
+    options.coalescedMessageLogIntervalMs ?? COALESCED_MESSAGE_LOG_INTERVAL_MS;
   const deltaBuffers = new Map<string, DeltaBuffer>();
+  const coalescedMessageBuffers = new Map<string, CoalescedMessageBuffer>();
   const requestMethodsById = new Map<string, string>();
   const requestDiagnosticsById = new Map<
     string,
@@ -127,6 +140,62 @@ export function createProtocolLogObserver(
     }
   }
 
+  function logCoalescedMessageBuffer(
+    key: string,
+    buffer: CoalescedMessageBuffer,
+    reason: "interval",
+  ): void {
+    if (buffer.suppressedCount === 0) {
+      return;
+    }
+
+    logger.info(
+      "message coalesced",
+      compactFields({
+        ...buffer.lastFields,
+        coalescedDurationMs: buffer.lastAt - buffer.firstAt,
+        messageKey: key,
+        reason,
+        suppressedCount: buffer.suppressedCount,
+      }),
+    );
+  }
+
+  function logMessage(
+    fields: Partial<Record<string, unknown>>,
+    coalescedKey: string | undefined,
+  ): void {
+    if (!coalescedKey) {
+      logger.info("message", fields);
+      return;
+    }
+
+    const timestamp = now();
+    const buffer = coalescedMessageBuffers.get(coalescedKey);
+    if (!buffer) {
+      coalescedMessageBuffers.set(coalescedKey, {
+        firstAt: timestamp,
+        lastAt: timestamp,
+        lastFields: fields,
+        lastLoggedAt: timestamp,
+        suppressedCount: 0,
+      });
+      logger.info("message", fields);
+      return;
+    }
+
+    buffer.lastAt = timestamp;
+    buffer.lastFields = fields;
+    buffer.suppressedCount += 1;
+
+    if (timestamp - buffer.lastLoggedAt >= coalescedMessageLogIntervalMs) {
+      logCoalescedMessageBuffer(coalescedKey, buffer, "interval");
+      buffer.firstAt = timestamp;
+      buffer.lastLoggedAt = timestamp;
+      buffer.suppressedCount = 0;
+    }
+  }
+
   return {
     onMessage: (event) => {
       const envelope = event.envelope;
@@ -138,9 +207,18 @@ export function createProtocolLogObserver(
       const kind = classifyEnvelope(envelope);
       const method =
         envelope.method ?? (id ? requestMethodsById.get(id) : undefined) ?? "response";
+      const updateKind = pickString(
+        update,
+        "sessionUpdate",
+        "session_update",
+        "kind",
+        "type",
+      );
       const diagnostics =
         event.diagnostics ?? (id ? requestDiagnosticsById.get(id) : undefined);
-      const delta = pickRawString(params, "delta");
+      const delta =
+        pickRawString(params, "delta") ??
+        pickAcpStreamingSessionUpdateText(method, updateKind, update);
       const deltaKey = delta
         ? buildDeltaKey({
             backend: options.backend,
@@ -183,26 +261,39 @@ export function createProtocolLogObserver(
         }
       }
       const paramKeys = Object.keys(params ?? {});
-      logger.info(
-        "message",
-        compactFields({
-          backend: options.backend,
-          callerReason: diagnostics?.callerReason,
-          direction: compactDirection(event.direction),
-          errorCode: pickNumberOrString(error, "code"),
-          errorMessage: pickString(error, "message"),
-          id,
-          itemId: pickString(params, "itemId") ?? pickString(item, "id"),
-          kind,
-          method,
-          ownerId: diagnostics?.ownerId,
-          paramKeys: paramKeys.length > 0 ? paramKeys : undefined,
-          sessionId: pickString(params, "sessionId"),
-          turnId: pickString(params, "turnId"),
-          threadId: pickString(params, "threadId"),
-          updateKind: pickString(update, "sessionUpdate", "kind", "type"),
-        }),
-      );
+      const messageFields = compactFields({
+        backend: options.backend,
+        callerReason: diagnostics?.callerReason,
+        direction: compactDirection(event.direction),
+        errorCode: pickNumberOrString(error, "code"),
+        errorMessage: pickString(error, "message"),
+        id,
+        itemId: pickString(params, "itemId") ?? pickString(item, "id"),
+        kind,
+        method,
+        ownerId: diagnostics?.ownerId,
+        paramKeys: paramKeys.length > 0 ? paramKeys : undefined,
+        sessionId: pickString(params, "sessionId"),
+        status: pickString(update, "status"),
+        title: pickString(update, "title"),
+        toolCallId: pickString(update, "toolCallId", "tool_call_id", "id"),
+        turnId: pickString(params, "turnId"),
+        threadId: pickString(params, "threadId"),
+        updateKind,
+      });
+      const coalescedMessageKey = shouldCoalesceMessage({
+        backend: options.backend,
+        method,
+        updateKind,
+      })
+        ? buildCoalescedMessageKey({
+            backend: options.backend,
+            direction: event.direction,
+            method,
+            params,
+          })
+        : undefined;
+      logMessage(messageFields, coalescedMessageKey);
       if (kind === "response" && id) {
         requestMethodsById.delete(id);
         requestDiagnosticsById.delete(id);
@@ -281,6 +372,22 @@ function pickRawString(
   return undefined;
 }
 
+function pickAcpStreamingSessionUpdateText(
+  method: string,
+  updateKind: string | undefined,
+  update: Record<string, unknown> | undefined,
+): string | undefined {
+  if (
+    method !== "session/update" ||
+    (updateKind !== "agent_message_chunk" &&
+      updateKind !== "agent_thought_chunk")
+  ) {
+    return undefined;
+  }
+  const content = asRecord(update?.content);
+  return pickRawString(content, "text") ?? pickRawString(update, "text");
+}
+
 function pickNumberOrString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
@@ -296,6 +403,18 @@ function pickNumberOrString(
     }
   }
   return undefined;
+}
+
+function shouldCoalesceMessage(params: {
+  backend: ProtocolLogBackend;
+  method: string;
+  updateKind: string | undefined;
+}): boolean {
+  return (
+    params.backend.startsWith("acp:") &&
+    params.method === "session/update" &&
+    params.updateKind === "tool_call_update"
+  );
 }
 
 function appendPreview(existing: string, delta: string): string {
@@ -315,13 +434,40 @@ function buildDeltaKey(params: {
   params?: Record<string, unknown>;
 }): string {
   const item = asRecord(params.params?.item);
+  const update = asRecord(params.params?.update);
   return [
     `backend:${params.backend}`,
     `direction:${params.direction}`,
     `method:${params.method}`,
+    `session:${pickString(params.params, "sessionId") ?? "unknown"}`,
     `thread:${pickString(params.params, "threadId") ?? "unknown"}`,
     `turn:${pickString(params.params, "turnId") ?? "unknown"}`,
     `item:${pickString(params.params, "itemId") ?? pickString(item, "id") ?? "unknown"}`,
-    `stream:${pickString(params.params, "stream") ?? "text"}`,
+    `stream:${
+      pickString(params.params, "stream") ??
+      pickString(update, "sessionUpdate", "session_update", "kind", "type") ??
+      "text"
+    }`,
+  ].join(" ");
+}
+
+function buildCoalescedMessageKey(params: {
+  backend: ProtocolLogBackend;
+  direction: JsonRpcObserverEvent["direction"];
+  method: string;
+  params?: Record<string, unknown>;
+}): string {
+  const update = asRecord(params.params?.update);
+  return [
+    `backend:${params.backend}`,
+    `direction:${params.direction}`,
+    `method:${params.method}`,
+    `session:${pickString(params.params, "sessionId") ?? "unknown"}`,
+    `update:${
+      pickString(update, "sessionUpdate", "session_update", "kind", "type") ??
+      "unknown"
+    }`,
+    `tool:${pickString(update, "toolCallId", "tool_call_id", "id") ?? "unknown"}`,
+    `status:${pickString(update, "status") ?? "unknown"}`,
   ].join(" ");
 }

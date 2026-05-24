@@ -22,13 +22,13 @@ export type AcpSessionMetadata = {
   executionMode: ThreadExecutionMode;
   acpRuntime?: BackendAcpSessionRuntimeState;
   status: "active" | "idle" | "failed" | "unknown";
+  hasConversationHistory?: boolean;
   requiresAgentSessionRebind?: boolean;
   archivedAt?: number;
   lastError?: string;
-  transcriptUpdates?: AcpPersistedTranscriptUpdate[];
 };
 
-export type AcpPersistedTranscriptUpdate = {
+type AcpPersistedTranscriptUpdate = {
   receivedAt: number;
   update: Record<string, unknown>;
 };
@@ -37,6 +37,7 @@ export class AcpSessionStore {
   constructor(private readonly stateDb: StateDb) {}
 
   upsertSession(metadata: AcpSessionMetadata): void {
+    const persistableMetadata = stripAcpSessionHistory(metadata);
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO acp_sessions(
@@ -49,11 +50,11 @@ export class AcpSessionStore {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
-        metadata.backendId,
-        metadata.sessionId,
-        metadata.createdAt,
-        metadata.updatedAt,
-        JSON.stringify(metadata),
+        persistableMetadata.backendId,
+        persistableMetadata.sessionId,
+        persistableMetadata.createdAt,
+        persistableMetadata.updatedAt,
+        JSON.stringify(persistableMetadata),
       );
   }
 
@@ -74,7 +75,9 @@ export class AcpSessionStore {
       if (!isSessionMetadata(parsed)) {
         return [];
       }
-      return Boolean(parsed.archivedAt) === archived ? [parsed] : [];
+      return Boolean(parsed.archivedAt) === archived
+        ? [stripAcpSessionHistory(parsed)]
+        : [];
     });
   }
 
@@ -89,7 +92,7 @@ export class AcpSessionStore {
       )
       .get(backendId, sessionId) as { payload: string } | undefined;
     const parsed = row ? parseJson(row.payload) : undefined;
-    return isSessionMetadata(parsed) ? parsed : undefined;
+    return isSessionMetadata(parsed) ? stripAcpSessionHistory(parsed) : undefined;
   }
 }
 
@@ -99,6 +102,54 @@ function parseJson(value: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadata {
+  const legacyTranscriptUpdates = readLegacyTranscriptUpdates(metadata);
+  const {
+    transcriptUpdates: _transcriptUpdates,
+    ...metadataWithoutHistory
+  } = metadata as AcpSessionMetadata & {
+    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
+  };
+  const hasConversationHistory =
+    metadata.hasConversationHistory ??
+    (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
+  return {
+    ...metadataWithoutHistory,
+    ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
+  };
+}
+
+function readLegacyTranscriptUpdates(
+  metadata: AcpSessionMetadata,
+): AcpPersistedTranscriptUpdate[] {
+  const value = (metadata as { transcriptUpdates?: unknown }).transcriptUpdates;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = item as Partial<AcpPersistedTranscriptUpdate>;
+    return typeof record.receivedAt === "number" &&
+      record.update &&
+      typeof record.update === "object" &&
+      !Array.isArray(record.update)
+      ? [{ receivedAt: record.receivedAt, update: record.update }]
+      : [];
+  });
+}
+
+function isConversationTranscriptUpdate(
+  item: AcpPersistedTranscriptUpdate,
+): boolean {
+  const update = item.update;
+  const kind =
+    update.kind ?? update.type ?? update.sessionUpdate ?? update.session_update;
+  return (
+    kind === "pwragent_user_prompt" ||
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk"
+  );
 }
 
 function isSessionMetadata(value: unknown): value is AcpSessionMetadata {

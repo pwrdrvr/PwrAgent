@@ -548,7 +548,7 @@ class DesktopAppServerService {
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const bindingsDurationMs = Date.now() - bindingsStartedAt;
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();
-    const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
+    const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
     const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
@@ -556,7 +556,7 @@ class DesktopAppServerService {
       automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
-      queuedExecutionModesByThreadId,
+      queuedExecutionModesByThreadKey,
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });

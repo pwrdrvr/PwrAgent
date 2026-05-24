@@ -353,7 +353,7 @@ describe("app server ipc", () => {
       backend: "all",
       fetchedAt: expect.any(Number),
       messagingBindingsByThreadKey: undefined,
-      queuedExecutionModesByThreadId: {},
+      queuedExecutionModesByThreadKey: {},
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),

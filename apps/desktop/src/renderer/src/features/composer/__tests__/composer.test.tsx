@@ -535,7 +535,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
     expect(screen.getByLabelText("Environment command")).toHaveTextContent(
       "Dev - Messaging",
     );
@@ -549,7 +549,7 @@ describe("Composer", () => {
       });
     });
 
-    chooseDropdownOption("Codex environment", "No environment");
+    chooseDropdownOption("Environment", "No environment");
     await waitFor(() => {
       expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
         backend: "codex",
@@ -596,7 +596,7 @@ describe("Composer", () => {
       "No commands",
     );
     expect(screen.getByLabelText("Environment command")).toBeDisabled();
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
   });
 
   it("hides thread environment commands when no environment is selected", () => {
@@ -632,7 +632,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent(
+    expect(screen.getByLabelText("Environment")).toHaveTextContent(
       "No environment",
     );
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
@@ -685,10 +685,62 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
     expect(screen.getByText("Run setup")).toBeInTheDocument();
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["acp:gemini", acpGeminiBackendSummary()],
+    ["acp:kimi", backendSummary("acp:kimi")],
+  ] as const)("shows the launchpad environment picker for %s", (_backendId, backend) => {
+    const updateLaunchpad = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backend]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: backend.kind,
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              setupScript: "pnpm install",
+              actions: [],
+            },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={updateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+      "No environment",
+    );
+
+    chooseDropdownOption("Environment", "PwrAgnt");
+
+    expect(updateLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo/PwrAgent",
+      expect.objectContaining({
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("shows an orange moon for reported context window usage", () => {
@@ -2588,6 +2640,63 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("does not open the review picker for backends without review support", async () => {
+    const kimiBackend = backendSummary("acp:kimi" as BackendSummary["kind"]);
+    const startReview = vi.fn();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...kimiBackend,
+            capabilities: {
+              ...kimiBackend.capabilities,
+              startReview: false,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "kimi-session-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(startReview).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:kimi",
+          threadId: "kimi-session-1",
+          input: [{ type: "text", text: "/review" }],
+        }),
+      );
+    });
+  });
+
   it("queues review target submissions while a turn is active", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -3174,6 +3283,55 @@ describe("Composer", () => {
         sourceBranch: "feat/thread-workspace-handoff-plan",
       });
     });
+
+    chooseDropdownOption("Access mode", "Full Access");
+
+    await waitFor(() => {
+      expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
+  it("shows ACP thread access in the composer", async () => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("acp:kimi"),
+            label: "Kimi Code CLI",
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        disabled={false}
+        fullAccessRiskWarningDismissed
+        onSetExecutionMode={onSetExecutionMode}
+        skills={[]}
+        thread={{
+          id: "kimi-session-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
 
     chooseDropdownOption("Access mode", "Full Access");
 
@@ -4683,7 +4841,7 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("ACP mode", "Yolo");
+    chooseDropdownOption("Agent mode", "Yolo");
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(

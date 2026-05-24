@@ -21,6 +21,8 @@ export class AcpSessionReplayNormalizer {
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
+  private activeAssistantMessageId?: string;
+  private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
 
   recordUserPrompt(params: {
@@ -34,6 +36,8 @@ export class AcpSessionReplayNormalizer {
     const id = `user:${params.turnId}`;
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.currentTurnId = params.turnId;
+    this.activeAssistantMessageId = undefined;
+    this.assistantMessageSequence = 0;
     this.upsertMessage({
       id,
       role: "user",
@@ -49,6 +53,7 @@ export class AcpSessionReplayNormalizer {
     if (!turnId || this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
     }
+    this.activeAssistantMessageId = undefined;
     this.status = "idle";
     return this.replay();
   }
@@ -63,6 +68,7 @@ export class AcpSessionReplayNormalizer {
     if (this.currentTurnId === params.turnId) {
       this.currentTurnId = undefined;
     }
+    this.activeAssistantMessageId = undefined;
     this.status = "idle";
     this.upsertActivity({
       type: "activity",
@@ -91,46 +97,56 @@ export class AcpSessionReplayNormalizer {
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
+    const isAssistantTextUpdate =
+      kind === "agent_message_chunk" || kind === "agent_thought_chunk";
 
-    if (kind === "agent_message_chunk") {
-      this.applyAgentMessageChunk(update, createdAt);
+    if (isAssistantTextUpdate) {
+      // Consecutive ACP text chunks form one live bubble, but text after a tool
+      // call should become a new bubble instead of overwriting earlier text.
+      if (kind === "agent_message_chunk") {
+        this.applyAgentMessageChunk(update, createdAt);
+      } else {
+        this.applyAgentThoughtChunk(update, createdAt);
+      }
     } else if (kind === "user_message_chunk") {
+      this.activeAssistantMessageId = undefined;
       this.applyUserMessageChunk(update, createdAt);
-    } else if (kind === "agent_thought_chunk") {
-      this.applyAgentThoughtChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
     } else if (kind === "config_option_update" || kind === "current_mode_update") {
       // Runtime configuration changes belong in ACP session metadata.
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
-    } else if (kind === "plan") {
-      this.upsertPlan(update, createdAt);
-    } else if (kind === "tool_call" || kind === "tool_call_update") {
-      this.upsertActivity(toolActivity(update, kind, createdAt));
-    } else if (kind === "file" || kind === "terminal") {
-      this.upsertActivity(toolActivity(update, kind, createdAt));
-    } else if (kind === "turn_started") {
-      this.status = "active";
-    } else if (kind === "turn_finished") {
-      this.recordTurnFinished(readString(update.update, "turnId"));
-    } else if (kind === "pwragent_turn_failed") {
-      this.recordTurnFailed({
-        sessionId: update.sessionId,
-        turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
-        error: readString(update.update, "error") ?? "Turn failed.",
-        receivedAt: createdAt,
-      });
-    } else if (kind === "pwragent_user_prompt") {
-      this.recordUserPrompt({
-        sessionId: update.sessionId,
-        prompt: readString(update.update, "prompt") ?? "",
-        parts: readMessageParts(update.update),
-        turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
-        receivedAt: createdAt,
-      });
     } else {
-      this.upsertActivity(unknownActivity(update, kind, createdAt));
+      this.activeAssistantMessageId = undefined;
+      if (kind === "plan") {
+        this.upsertPlan(update, createdAt);
+      } else if (kind === "tool_call" || kind === "tool_call_update") {
+        this.upsertActivity(toolActivity(update, kind, createdAt));
+      } else if (kind === "file" || kind === "terminal") {
+        this.upsertActivity(toolActivity(update, kind, createdAt));
+      } else if (kind === "turn_started") {
+        this.status = "active";
+      } else if (kind === "turn_finished") {
+        this.recordTurnFinished(readString(update.update, "turnId"));
+      } else if (kind === "pwragent_turn_failed") {
+        this.recordTurnFailed({
+          sessionId: update.sessionId,
+          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          error: readString(update.update, "error") ?? "Turn failed.",
+          receivedAt: createdAt,
+        });
+      } else if (kind === "pwragent_user_prompt") {
+        this.recordUserPrompt({
+          sessionId: update.sessionId,
+          prompt: readString(update.update, "prompt") ?? "",
+          parts: readMessageParts(update.update),
+          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          receivedAt: createdAt,
+        });
+      } else {
+        this.upsertActivity(unknownActivity(update, kind, createdAt));
+      }
     }
 
     return this.replay();
@@ -162,9 +178,7 @@ export class AcpSessionReplayNormalizer {
     if (isModeUpdateMarker(text)) {
       return;
     }
-    const id =
-      readString(update.update, "messageId") ??
-      `assistant:${this.currentTurnId ?? update.sessionId}`;
+    const id = this.assistantMessageIdForChunk(update);
     this.appendMessageChunk({ id, role: "assistant", text, createdAt });
   }
 
@@ -200,16 +214,28 @@ export class AcpSessionReplayNormalizer {
     if (!text) {
       return;
     }
-    const id =
-      readString(update.update, "messageId") ??
-      `thought:${this.currentTurnId ?? update.sessionId}`;
+    const id = this.assistantMessageIdForChunk(update);
     this.appendMessageChunk({
       id,
-      phase: "commentary",
       role: "assistant",
       text,
       createdAt,
     });
+  }
+
+  private assistantMessageIdForChunk(update: AcpSessionUpdate): string {
+    const explicitId =
+      readString(update.update, "messageId") ??
+      readString(update.update, "message_id");
+    if (explicitId) {
+      this.activeAssistantMessageId = explicitId;
+      return explicitId;
+    }
+    if (!this.activeAssistantMessageId) {
+      this.activeAssistantMessageId =
+        `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
+    }
+    return this.activeAssistantMessageId;
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
@@ -330,6 +356,7 @@ function shouldSeparateTranscriptChunks(existing: string, next: string): boolean
 function readKind(update: Record<string, unknown>): string {
   return (
     readString(update, "sessionUpdate") ??
+    readString(update, "session_update") ??
     readString(update, "kind") ??
     readString(update, "type") ??
     "unknown"
@@ -339,7 +366,8 @@ function readKind(update: Record<string, unknown>): string {
 export function readAcpTopicTitle(
   update: Record<string, unknown>,
 ): string | undefined {
-  const sessionUpdate = readString(update, "sessionUpdate");
+  const sessionUpdate =
+    readString(update, "sessionUpdate") ?? readString(update, "session_update");
   const kind = readString(update, "kind");
   const isToolUpdate =
     sessionUpdate === "tool_call" ||
@@ -532,7 +560,10 @@ function toolActivity(
 ): AppServerThreadActivityEntry {
   const id =
     readString(update.update, "toolCallId") ??
+    readString(update.update, "tool_call_id") ??
     readString(update.update, "id") ??
+    readString(update.update, "itemId") ??
+    readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
   const label =
     readString(update.update, "title") ??

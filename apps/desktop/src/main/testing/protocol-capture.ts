@@ -6,6 +6,7 @@ import { ProtocolCaptureStore } from "./capture-store";
 
 const CAPTURE_ENABLED_ENV = "PWRAGENT_PROTOCOL_CAPTURE";
 const CAPTURE_ROOT_ENV = "PWRAGENT_PROTOCOL_CAPTURE_ROOT";
+const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";
 const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
 
 export function createProtocolCaptureObserver(params: {
@@ -31,7 +32,8 @@ export function createProtocolCaptureFromEnv(params: {
   store: ProtocolCaptureStore;
   observer: JsonRpcObserver;
 } | undefined {
-  if (!isCaptureEnabled(process.env[CAPTURE_ENABLED_ENV])) {
+  const enabledBy = captureEnabledBy();
+  if (!enabledBy) {
     return undefined;
   }
 
@@ -49,6 +51,7 @@ export function createProtocolCaptureFromEnv(params: {
     backend: params.backend,
     backendInstance: params.backendInstance,
     captureId,
+    enabledBy,
     path: store.captureFilePath,
     indexPath: store.indexFilePath,
   });
@@ -70,6 +73,16 @@ function buildCaptureId(backend: string, backendInstance: string): string {
 function sanitizeCapturePart(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   return normalized || "default";
+}
+
+function captureEnabledBy(): string | undefined {
+  if (isCaptureEnabled(process.env[CAPTURE_ENABLED_ENV])) {
+    return CAPTURE_ENABLED_ENV;
+  }
+  if (isCaptureEnabled(process.env[PROTOCOL_LOG_ENV])) {
+    return PROTOCOL_LOG_ENV;
+  }
+  return undefined;
 }
 
 function isCaptureEnabled(value: string | undefined): boolean {

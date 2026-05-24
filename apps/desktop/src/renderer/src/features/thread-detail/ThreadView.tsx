@@ -2055,7 +2055,7 @@ export function ThreadView(props: ThreadViewProps) {
               }
               environmentName={
                 selectedThread.codexEnvironmentRuntime?.environmentName ??
-                "Codex environment"
+                "Environment"
               }
               error={props.archiveThreadError ?? setupFailureContinueError}
               exitCode={

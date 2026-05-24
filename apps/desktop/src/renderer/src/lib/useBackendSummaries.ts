@@ -72,9 +72,10 @@ export function useBackendSummaries(
     }
     return desktopApi.onAgentEvent((event) => {
       if (
-        event.backend === "codex" &&
-        (event.notification.method === "account/rateLimits/updated" ||
-          event.notification.method === "account/updated")
+        (event.backend === "codex" &&
+          (event.notification.method === "account/rateLimits/updated" ||
+            event.notification.method === "account/updated")) ||
+        event.notification.method === "backend/acpRuntimeCapabilities/updated"
       ) {
         void refresh();
       }

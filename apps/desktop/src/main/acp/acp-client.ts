@@ -10,24 +10,33 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  readAcpContentText,
   readAcpTopicTitle,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
+  acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
   acpSessionRuntimeStateFromCapabilities,
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
 import type {
-  AcpPersistedTranscriptUpdate,
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
+import type {
+  AcpRolloutRecord,
+  AcpRolloutStoreAppendParams,
+} from "./acp-rollout-store.js";
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
-  request(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  request(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown>;
   notify?(method: string, params?: Record<string, unknown>): Promise<void>;
   close?(): Promise<void>;
   onNotification(
@@ -43,7 +52,7 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
-
+const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -53,13 +62,32 @@ type AcpSessionStoreLike = Pick<
   "getSession" | "listSessions" | "upsertSession"
 >;
 
+type AcpRolloutStoreLike = {
+  appendUpdate(params: AcpRolloutStoreAppendParams): void;
+  flushAll?(): void;
+  readUpdates(params: {
+    backendId: AcpBackendId;
+    sessionId: string;
+  }): AcpRolloutRecord[];
+};
+
+type AcpActiveTurn = {
+  activeAssistantMessageItemId?: string;
+  assistantText: string;
+  assistantMessageSequence: number;
+  turnId: string;
+};
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
+  agentDisplayName?: string;
   initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
+  rolloutStore?: AcpRolloutStoreLike;
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
   onSessionUpdate?: (event: {
+    assistantMessageItemId?: string;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -87,19 +115,16 @@ export type AcpAgentClientOptions = {
 
 export class AcpAgentClient {
   private readonly normalizers = new Map<string, AcpSessionReplayNormalizer>();
-  private readonly activeTurns = new Map<
-    string,
-    {
-      assistantText: string;
-      turnId: string;
-    }
-  >();
+  private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
-  private readonly suppressLoadReplaySessions = new Set<string>();
-  private readonly hydratedTranscriptSessions = new Set<string>();
+  private readonly suppressedControlPromptSessions = new Map<
+    string,
+    { textChunks: string[] }
+  >();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
+  private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
@@ -107,6 +132,7 @@ export class AcpAgentClient {
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
+    this.approvalRequesterName = approvalRequesterNameForOptions(options);
   }
 
   async initialize(): Promise<void> {
@@ -136,13 +162,17 @@ export class AcpAgentClient {
         version: "0.0.0",
       },
     });
-    this.captureRuntimeCapabilities({
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "initialize",
       result,
+    });
+    this.notifyRuntimeCapabilities({
+      runtimeCapabilities,
     });
   }
 
   async dispose(): Promise<void> {
+    this.options.rolloutStore?.flushAll?.();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.unsubscribeRequest?.();
@@ -150,8 +180,6 @@ export class AcpAgentClient {
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
-    this.suppressLoadReplaySessions.clear();
-    this.hydratedTranscriptSessions.clear();
     await this.options.transport.close?.();
   }
 
@@ -162,7 +190,6 @@ export class AcpAgentClient {
     title?: string;
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
-    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
     const result = await this.options.transport.request("session/new", {
@@ -205,7 +232,6 @@ export class AcpAgentClient {
       executionMode: params.executionMode,
       acpRuntime: combinedRuntimeState,
       status: "idle",
-      transcriptUpdates: params.transcriptUpdates,
     };
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
@@ -224,7 +250,6 @@ export class AcpAgentClient {
     promptContent?: AcpPromptContentBlock[];
     parts?: AppServerThreadMessagePart[];
   }): Promise<{ sessionId: string; turnId: string }> {
-    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -235,30 +260,36 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
-    this.persistTranscriptUpdate(params.sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_user_prompt",
-        prompt: params.prompt,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
-        turnId,
-      },
+    this.appendHistoryUpdate(params.sessionId, receivedAt, {
+      kind: "pwragent_user_prompt",
+      prompt: params.prompt,
+      ...(params.parts?.length ? { parts: params.parts } : {}),
+      turnId,
     });
+    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     let result: unknown;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     try {
-      const promptRequest = this.options.transport.request("session/prompt", {
-        sessionId: protocolSessionId,
-        prompt: params.promptContent ?? textPrompt(params.prompt),
-      });
-      this.clearLoadReplaySuppression(protocolSessionId);
+      const promptRequest = this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: protocolSessionId,
+          prompt: params.promptContent ?? textPrompt(params.prompt),
+        },
+        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+      );
       result = await promptRequest;
     } catch (error) {
-      this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+      this.finishTrackedTurn(params.sessionId);
       this.recordPromptFailure(params.sessionId, turnId, error);
       throw error;
     }
     this.finishTrackedTurn(params.sessionId);
+    const finishedAt = this.now();
+    this.appendHistoryUpdate(params.sessionId, finishedAt, {
+      kind: "turn_finished",
+      turnId,
+    });
     const record = asRecord(result);
     return {
       sessionId: params.sessionId,
@@ -272,16 +303,16 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    return this.hydratePersistedTranscript(metadata);
+    if (this.supportsSessionLoad()) {
+      await this.ensureSession(metadata);
+    } else {
+      this.hydrateSessionFromHistory(metadata);
+    }
+    return this.replayForSessionMetadata(metadata);
   }
 
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
-    this.options.store.upsertSession(metadata);
-    this.rememberSessionIds(metadata);
-    if (!this.supportsSessionLoad()) {
-      return;
-    }
-    await this.loadSessionFromAgent(metadata);
+    await this.ensureSession(metadata);
   }
 
   async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
@@ -308,7 +339,6 @@ export class AcpAgentClient {
     parts?: AppServerThreadMessagePart[];
     turnId?: string;
   }): { sessionId: string; turnId: string } {
-    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -319,24 +349,31 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
-    this.persistTranscriptUpdate(params.sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_user_prompt",
-        prompt: params.prompt,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
-        turnId,
-      },
+    this.appendHistoryUpdate(params.sessionId, receivedAt, {
+      kind: "pwragent_user_prompt",
+      prompt: params.prompt,
+      ...(params.parts?.length ? { parts: params.parts } : {}),
+      turnId,
     });
+    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const promptRequest = this.options.transport.request("session/prompt", {
-      sessionId: protocolSessionId,
-      prompt: params.promptContent ?? textPrompt(params.prompt),
-    });
-    this.clearLoadReplaySuppression(protocolSessionId);
+    const promptRequest = this.options.transport.request(
+      "session/prompt",
+      {
+        sessionId: protocolSessionId,
+        prompt: params.promptContent ?? textPrompt(params.prompt),
+      },
+      ACP_PROMPT_REQUEST_TIMEOUT_MS,
+    );
     void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
+        const receivedAt = this.now();
+        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+          kind: "turn_finished",
+          ...(finished.turnId ? { turnId: finished.turnId } : {}),
+          outputText: finished.assistantText,
+        });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
           replay: finished.replay,
@@ -348,7 +385,7 @@ export class AcpAgentClient {
         });
       })
       .catch((error) => {
-        this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+        this.finishTrackedTurn(params.sessionId);
         this.recordPromptFailure(params.sessionId, turnId, error);
         return Promise.resolve(
           this.options.onPromptError?.({
@@ -371,6 +408,28 @@ export class AcpAgentClient {
     await this.options.transport.notify("session/cancel", {
       sessionId: this.protocolSessionIdFor(sessionId),
     });
+  }
+
+  async sendControlPrompt(params: {
+    sessionId: string;
+    prompt: string;
+  }): Promise<{ text: string }> {
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    const suppression = { textChunks: [] };
+    this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
+    try {
+      await this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: protocolSessionId,
+          prompt: textPrompt(params.prompt),
+        },
+        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+      );
+      return { text: suppression.textChunks.join("\n").trim() };
+    } finally {
+      this.suppressedControlPromptSessions.delete(protocolSessionId);
+    }
   }
 
   async setRuntimeOption(params: {
@@ -456,7 +515,6 @@ export class AcpAgentClient {
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {
-    this.hydratePersistedTranscriptForSession(sessionId);
     return this.normalizerFor(sessionId).replay();
   }
 
@@ -465,6 +523,15 @@ export class AcpAgentClient {
       typeof params.sessionId === "string" ? params.sessionId : undefined;
     const update = asRecord(params.update);
     if (!protocolSessionId || !update) {
+      return;
+    }
+    const suppressedControlPrompt =
+      this.suppressedControlPromptSessions.get(protocolSessionId);
+    if (suppressedControlPrompt) {
+      const text = readUpdateText(update);
+      if (text) {
+        suppressedControlPrompt.textChunks.push(text);
+      }
       return;
     }
     const sessionId = this.appSessionIdFor(protocolSessionId);
@@ -479,31 +546,33 @@ export class AcpAgentClient {
       return;
     }
     const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
-    if (this.suppressLoadReplaySessions.has(protocolSessionId)) {
-      if (title) {
-        void this.notifySessionUpdate({
-          sessionId,
-          replay: this.normalizerFor(sessionId).replay(),
-          title,
-          turnId: activeTurn?.turnId,
-          update,
-        });
-      }
-      return;
+    if (isConversationHistoryUpdate(update)) {
+      this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
-    if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
-      activeTurn.assistantText += readUpdateText(update) ?? "";
+    this.appendHistoryUpdate(sessionId, receivedAt, update);
+    const updateKind = readUpdateKind(update);
+    const isAssistantTextUpdate =
+      updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+    const text = readUpdateText(update);
+    let assistantMessageItemId: string | undefined;
+    if (isAssistantTextUpdate && activeTurn && text) {
+      assistantMessageItemId = assistantMessageItemIdForUpdate({
+        activeTurn,
+        update,
+      });
+      if (updateKind === "agent_message_chunk") {
+        activeTurn.assistantText += text;
+      }
+    } else if (!isAssistantTextUpdate && activeTurn) {
+      activeTurn.activeAssistantMessageItemId = undefined;
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
       receivedAt,
     } satisfies AcpSessionUpdate);
-    this.persistTranscriptUpdate(sessionId, {
-      receivedAt,
-      update,
-    });
     void this.notifySessionUpdate({
+      assistantMessageItemId,
       sessionId,
       replay,
       title,
@@ -549,7 +618,11 @@ export class AcpAgentClient {
         ? toolCall.title.trim()
         : "ACP tool call";
     const toolCallId =
-      typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined;
+      typeof toolCall.toolCallId === "string"
+        ? toolCall.toolCallId
+        : typeof toolCall.tool_call_id === "string"
+          ? toolCall.tool_call_id
+          : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
 
@@ -559,8 +632,8 @@ export class AcpAgentClient {
         threadId: sessionId,
         ...(activeTurn?.turnId ? { turnId: activeTurn.turnId } : {}),
         requestId,
-        prompt: permissionPrompt(title, toolCall),
-        reason: permissionPrompt(title, toolCall),
+        prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
+        reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
         command: title,
         displayCommand: title,
         acpMethod: "session/request_permission",
@@ -580,70 +653,47 @@ export class AcpAgentClient {
     return normalizer;
   }
 
-  private applyPersistedTranscriptUpdates(
-    normalizer: AcpSessionReplayNormalizer,
+  private replayForSessionMetadata(
     metadata: AcpSessionMetadata,
   ): AppServerThreadReplay {
-    let replay = normalizer.replay();
-    for (const item of metadata.transcriptUpdates ?? []) {
-      const runtimeState = acpSessionRuntimeStateFromUpdate(
-        item.update,
-        item.receivedAt,
-      );
-      if (runtimeState) {
-        this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
-      }
-      this.updateSessionTitleFromAcpUpdate(
-        metadata.sessionId,
-        item.update,
-        item.receivedAt,
-      );
-      replay = normalizer.apply({
-        sessionId: metadata.sessionId,
-        update: item.update,
-        receivedAt: item.receivedAt,
-      });
-    }
+    const normalizer = this.normalizerFor(metadata.sessionId);
+    const replay = normalizer.replay();
     return {
       ...replay,
       threadStatus: acpSessionThreadStatus(metadata.status, replay.threadStatus),
     };
   }
 
-  private hydratePersistedTranscriptForSession(sessionId: string): AppServerThreadReplay {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
-      return this.normalizerFor(sessionId).replay();
+  private hydrateSessionFromHistory(metadata: AcpSessionMetadata): void {
+    if (!this.options.rolloutStore) {
+      return;
     }
-    return this.hydratePersistedTranscript(metadata);
+    const normalizer = new AcpSessionReplayNormalizer();
+    for (const record of this.options.rolloutStore.readUpdates({
+      backendId: this.options.backendId,
+      sessionId: metadata.sessionId,
+    })) {
+      normalizer.apply({
+        sessionId: metadata.sessionId,
+        receivedAt: record.receivedAt,
+        update: record.update,
+      });
+    }
+    this.normalizers.set(metadata.sessionId, normalizer);
   }
 
-  private hydratePersistedTranscript(
-    metadata: AcpSessionMetadata,
-  ): AppServerThreadReplay {
-    const normalizer = this.normalizerFor(metadata.sessionId);
-    if (!this.hydratedTranscriptSessions.has(metadata.sessionId)) {
-      this.applyPersistedTranscriptUpdates(normalizer, metadata);
-      this.hydratedTranscriptSessions.add(metadata.sessionId);
-    }
-    return {
-      ...normalizer.replay(),
-      threadStatus: acpSessionThreadStatus(metadata.status, normalizer.replay().threadStatus),
-    };
-  }
-
-  private persistTranscriptUpdate(
+  private markSessionHasConversationHistory(
     sessionId: string,
-    update: AcpPersistedTranscriptUpdate,
+    receivedAt: number,
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
+    if (!metadata || metadata.hasConversationHistory) {
       return;
     }
     this.options.store.upsertSession({
       ...metadata,
-      updatedAt: Math.max(metadata.updatedAt, update.receivedAt),
-      transcriptUpdates: [...(metadata.transcriptUpdates ?? []), update],
+      hasConversationHistory: true,
+      updatedAt: Math.max(metadata.updatedAt, receivedAt),
     });
   }
 
@@ -696,6 +746,7 @@ export class AcpAgentClient {
   }
 
   private async notifySessionUpdate(event: {
+    assistantMessageItemId?: string;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -713,7 +764,6 @@ export class AcpAgentClient {
     }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    this.suppressLoadReplaySessions.add(protocolSessionId);
     const result = await this.options.transport.request("session/load", {
       cwd,
       mcpServers: [],
@@ -729,6 +779,12 @@ export class AcpAgentClient {
     );
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
+      void Promise.resolve(
+        this.options.onSessionRuntimeStateChange?.({
+          sessionId: metadata.sessionId,
+          runtimeState,
+        }),
+      ).catch(() => undefined);
     }
     this.notifyRuntimeCapabilities({
       sessionId: metadata.sessionId,
@@ -743,25 +799,19 @@ export class AcpAgentClient {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
-  private clearLoadReplaySuppression(sessionId: string): void {
-    this.suppressLoadReplaySessions.delete(sessionId);
-  }
-
   private startTrackedTurn(sessionId: string, turnId: string): void {
     if (this.activeTurns.has(sessionId)) {
       throw new Error("A turn is already active for this ACP session.");
     }
     this.activeTurns.set(sessionId, {
       assistantText: "",
+      assistantMessageSequence: 0,
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");
   }
 
-  private finishTrackedTurn(
-    sessionId: string,
-    options?: { persistFinished?: boolean },
-  ): {
+  private finishTrackedTurn(sessionId: string): {
     assistantText: string;
     replay: AppServerThreadReplay;
     turnId?: string;
@@ -772,16 +822,6 @@ export class AcpAgentClient {
       activeTurn?.turnId,
     );
     this.updateSessionStatus(sessionId, "idle");
-    if (activeTurn && options?.persistFinished !== false) {
-      this.persistTranscriptUpdate(sessionId, {
-        receivedAt: this.now(),
-        update: {
-          kind: "turn_finished",
-          outputText: activeTurn.assistantText,
-          turnId: activeTurn.turnId,
-        },
-      });
-    }
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -796,14 +836,6 @@ export class AcpAgentClient {
   ): AppServerThreadReplay {
     const message = errorMessage(error);
     const receivedAt = this.now();
-    this.persistTranscriptUpdate(sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_turn_failed",
-        turnId,
-        error: message,
-      },
-    });
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (metadata) {
       this.options.store.upsertSession({
@@ -813,11 +845,32 @@ export class AcpAgentClient {
         updatedAt: Math.max(metadata.updatedAt, receivedAt),
       });
     }
+    this.appendHistoryUpdate(sessionId, receivedAt, {
+      kind: "pwragent_turn_failed",
+      turnId,
+      error: message,
+    });
     return this.normalizerFor(sessionId).recordTurnFailed({
       sessionId,
       turnId,
       error: message,
       receivedAt,
+    });
+  }
+
+  private appendHistoryUpdate(
+    sessionId: string,
+    receivedAt: number,
+    update: Record<string, unknown>,
+  ): void {
+    if (acpRuntimeSupportsSessionHistoryReplay(this.runtimeCapabilities)) {
+      return;
+    }
+    this.options.rolloutStore?.appendUpdate({
+      backendId: this.options.backendId,
+      sessionId,
+      receivedAt,
+      update,
     });
   }
 
@@ -891,22 +944,31 @@ function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
 }
 
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  const kind =
+    update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
+}
+
+function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
+  const kind = readUpdateKind(update);
+  return (
+    kind === "pwragent_user_prompt" ||
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk"
+  );
 }
 
 function readUpdateText(update: Record<string, unknown>): string | undefined {
   if (typeof update.text === "string") {
     return update.text;
   }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
-    return undefined;
+  if (typeof update.outputText === "string") {
+    return update.outputText;
   }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
-    : undefined;
+  if (typeof update.output_text === "string") {
+    return update.output_text;
+  }
+  return readAcpContentText(update.content);
 }
 
 function errorMessage(error: unknown): string {
@@ -967,13 +1029,36 @@ function readPermissionOptions(value: unknown): AcpPermissionOption[] {
   });
 }
 
-function permissionPrompt(title: string, toolCall: Record<string, unknown>): string {
+function approvalRequesterNameForOptions(options: Pick<
+  AcpAgentClientOptions,
+  "agentDisplayName" | "backendId"
+>): string {
+  const configured = options.agentDisplayName?.trim();
+  if (configured) {
+    return configured;
+  }
+  const backendName = options.backendId
+    .replace(/^acp:/, "")
+    .split(/[-_:]+/)
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ")
+    .trim();
+  return backendName || "ACP agent";
+}
+
+function permissionPrompt(
+  requesterName: string,
+  title: string,
+  toolCall: Record<string, unknown>,
+): string {
   const contentText = readToolCallText(toolCall.content);
   if (contentText) {
     return contentText;
   }
   const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
-  return kind ? `Gemini wants to run ${kind}: ${title}` : `Gemini wants to run ${title}`;
+  return kind
+    ? `${requesterName} wants to run ${kind}: ${title}`
+    : `${requesterName} wants to run ${title}`;
 }
 
 function readToolCallText(value: unknown): string | undefined {
@@ -1055,6 +1140,28 @@ function selectPermissionOptionId(
 
 function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
+}
+
+function assistantMessageItemIdForUpdate(params: {
+  activeTurn: AcpActiveTurn;
+  update: Record<string, unknown>;
+}): string {
+  const explicitId =
+    typeof params.update.messageId === "string"
+      ? params.update.messageId
+      : typeof params.update.message_id === "string"
+        ? params.update.message_id
+        : undefined;
+  if (explicitId) {
+    params.activeTurn.activeAssistantMessageItemId = explicitId;
+    return explicitId;
+  }
+
+  if (!params.activeTurn.activeAssistantMessageItemId) {
+    params.activeTurn.activeAssistantMessageItemId =
+      `assistant:${params.activeTurn.turnId}:${params.activeTurn.assistantMessageSequence++}`;
+  }
+  return params.activeTurn.activeAssistantMessageItemId;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -216,6 +216,16 @@ The desktop config writer must preserve recognized legacy shapes when possible,
 mark them with the `pwragent-legacy-settings` comment, lazily convert on save,
 and avoid whole-file rewrites that discard user comments.
 
+## Thread History Persistence
+
+Thread transcripts, rollout events, streamed message deltas, prompt text,
+assistant text, and command output history must not be written into the desktop
+sqlite database. Store only desktop metadata there. For the full rule and the
+ACP fallback direction, read
+[../../docs/thread-history-persistence.md](../../docs/thread-history-persistence.md)
+before changing ACP session storage, thread replay restoration, or rollout
+persistence.
+
 ## Thread-State Update Bus
 
 When mutating persistent thread state (model, reasoning effort, fast mode,

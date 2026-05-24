@@ -159,11 +159,9 @@ describe("protocol log observer", () => {
         params: {
           sessionId: "session-1",
           update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "hidden from protocol summaries",
-            },
+            sessionUpdate: "tool_call_update",
+            tool_call_id: "tool-1",
+            status: "in_progress",
           },
         },
       }),
@@ -176,8 +174,152 @@ describe("protocol log observer", () => {
       method: "session/update",
       paramKeys: ["sessionId", "update"],
       sessionId: "session-1",
-      updateKind: "agent_message_chunk",
+      status: "in_progress",
+      toolCallId: "tool-1",
+      updateKind: "tool_call_update",
     });
+  });
+
+  it("coalesces repeated ACP tool call update summaries", () => {
+    let now = 1_000;
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "acp:kimi",
+      coalescedMessageLogIntervalMs: 500,
+      logger: { info },
+      now: () => now,
+    });
+
+    for (const title of ["Shell: p", "Shell: pn", "Shell: pnpm"]) {
+      observer.onMessage(
+        createEvent({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "session-1",
+            update: {
+              sessionUpdate: "tool_call_update",
+              status: "in_progress",
+              title,
+              toolCallId: "tool-1",
+            },
+          },
+        }),
+      );
+      now += 100;
+    }
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenLastCalledWith(
+      "message",
+      expect.objectContaining({
+        backend: "acp:kimi",
+        status: "in_progress",
+        title: "Shell: p",
+        toolCallId: "tool-1",
+        updateKind: "tool_call_update",
+      }),
+    );
+
+    now = 1_600;
+    observer.onMessage(
+      createEvent({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            status: "in_progress",
+            title: "Shell: pnpm build",
+            toolCallId: "tool-1",
+          },
+        },
+      }),
+    );
+
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenLastCalledWith(
+      "message coalesced",
+      expect.objectContaining({
+        backend: "acp:kimi",
+        coalescedDurationMs: 600,
+        status: "in_progress",
+        suppressedCount: 3,
+        title: "Shell: pnpm build",
+        toolCallId: "tool-1",
+        updateKind: "tool_call_update",
+      }),
+    );
+
+    observer.onMessage(
+      createEvent({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            status: "completed",
+            title: "Shell: pnpm build",
+            toolCallId: "tool-1",
+          },
+        },
+      }),
+    );
+
+    expect(info).toHaveBeenCalledTimes(3);
+    expect(info).toHaveBeenLastCalledWith(
+      "message",
+      expect.objectContaining({
+        status: "completed",
+        toolCallId: "tool-1",
+      }),
+    );
+  });
+
+  it("coalesces ACP streaming session update chunks", () => {
+    let now = 1_000;
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "acp:kimi",
+      logger: { info },
+      now: () => now,
+      streamLogIntervalMs: 500,
+    });
+
+    for (const text of ["a", " ", "c"]) {
+      observer.onMessage(
+        createEvent({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "session-1",
+            update: {
+              session_update: "agent_thought_chunk",
+              content: {
+                type: "text",
+                text,
+              },
+            },
+          },
+        }),
+      );
+      now += 100;
+    }
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenLastCalledWith(
+      "stream delta",
+      expect.objectContaining({
+        backend: "acp:kimi",
+        chars: 1,
+        count: 1,
+        reason: "interval",
+        streamKey: expect.stringContaining("session:session-1"),
+        text: "a",
+      }),
+    );
   });
 
   it("logs response error codes and messages", () => {

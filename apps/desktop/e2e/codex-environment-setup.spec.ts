@@ -366,7 +366,7 @@ async function readActionCwdMarker(params: {
   return "";
 }
 
-test("selected Codex environments run setup and show transcript output", async () => {
+test("selected environments run setup and show transcript output", async () => {
   const fixture = await createCodexEnvironmentSetupFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -380,7 +380,7 @@ test("selected Codex environments run setup and show transcript output", async (
 
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     const launchpadTools = app.window.getByLabel("Composer tools");
-    await launchpadTools.getByRole("button", { name: "Codex environment" }).click();
+    await launchpadTools.getByRole("button", { name: "Environment", exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
     await expect(
       launchpadTools.locator("label", { hasText: "Run setup" }).locator("input"),
@@ -425,7 +425,7 @@ test("selected Codex environments run setup and show transcript output", async (
   }
 });
 
-test("existing running thread keeps selected Codex environment after pending state clears", async () => {
+test("existing running thread keeps selected environment after pending state clears", async () => {
   const fixture = await createCodexEnvironmentSetupFixture({
     includeExistingRunningSteps: true,
   });
@@ -445,7 +445,10 @@ test("existing running thread keeps selected Codex environment after pending sta
     await app.advance({ stepId: "existing-thread-turn-started" });
     await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
 
-    const environmentDropdown = app.window.getByLabel("Codex environment");
+    const environmentDropdown = app.window.getByRole("button", {
+      name: "Environment",
+      exact: true,
+    });
     await expect(environmentDropdown).toHaveAttribute("data-value", "");
     await environmentDropdown.click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
@@ -473,9 +476,11 @@ test("thread environment Run command uses the current cwd after workspace handof
       app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),
     ).toBeVisible();
 
-    await app.window.getByLabel("Codex environment").click();
+    await app.window.getByRole("button", { name: "Environment", exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
-    await expect(app.window.getByLabel("Codex environment")).toContainText(
+    await expect(
+      app.window.getByRole("button", { name: "Environment", exact: true }),
+    ).toContainText(
       "Fixture Env",
     );
     await expect(app.window.getByLabel("Environment command")).toContainText(
@@ -554,7 +559,7 @@ test("thread environment Run command uses the current cwd after workspace handof
   }
 });
 
-test("directory launchpad keeps selected Codex environment controls after snapshot reload", async () => {
+test("directory launchpad keeps selected environment controls after snapshot reload", async () => {
   const fixture = await createCodexEnvironmentSetupFixture({
     includeExistingThread: false,
   });
@@ -612,7 +617,9 @@ test("directory launchpad keeps selected Codex environment controls after snapsh
       "worktree",
     );
     const tools = secondApp.window.getByLabel("Composer tools");
-    await expect(tools.getByLabel("Codex environment")).toContainText(
+    await expect(
+      tools.getByRole("button", { name: "Environment", exact: true }),
+    ).toContainText(
       "Fixture Env",
     );
     await expect(tools.getByLabel("Run setup")).toBeChecked();
@@ -646,7 +653,9 @@ test("directory launchpad opens without an environment picker when no environmen
       app.window.getByRole("heading", { level: 2, name: "NoEnvRepo" }),
     ).toBeVisible();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
-    await expect(app.window.getByLabel("Codex environment")).toHaveCount(0);
+    await expect(
+      app.window.getByRole("button", { name: "Environment", exact: true }),
+    ).toHaveCount(0);
     await expect(
       app.window.getByText(/Error invoking remote method|ENOTDIR/),
     ).toHaveCount(0);

@@ -38,8 +38,10 @@ function liveItemForAcpToolUpdate(
   const toolKind = readString(update, "kind") ?? "tool";
   const id =
     readString(update, "toolCallId") ??
+    readString(update, "tool_call_id") ??
     readString(update, "id") ??
-    readString(update, "itemId");
+    readString(update, "itemId") ??
+    readString(update, "item_id");
   const title =
     readString(update, "title") ??
     readString(update, "command") ??
@@ -128,6 +130,7 @@ function readAcpToolOutput(record: Record<string, unknown>): string | undefined 
 function readKind(update: Record<string, unknown>): string {
   return (
     readString(update, "sessionUpdate") ??
+    readString(update, "session_update") ??
     readString(update, "kind") ??
     readString(update, "type") ??
     "unknown"

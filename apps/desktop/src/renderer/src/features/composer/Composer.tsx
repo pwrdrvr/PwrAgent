@@ -1318,6 +1318,10 @@ export function Composer(props: ComposerProps) {
       ),
     [props.backends, props.launchpad?.backend, props.thread?.source]
   );
+  const supportsReview =
+    backend?.kind.startsWith("acp:") === true
+      ? backend.capabilities.startReview !== false
+      : true;
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -1862,7 +1866,7 @@ export function Composer(props: ComposerProps) {
       .map((match) => match.skill);
   }, [props.skills, trigger]);
   const filteredSlashCommands = useMemo(() => {
-    if (!slashTrigger) {
+    if (!slashTrigger || !supportsReview) {
       return [];
     }
 
@@ -1872,7 +1876,7 @@ export function Composer(props: ComposerProps) {
         command.label.toLowerCase().startsWith(typed) ||
         command.description.toLowerCase().includes(typed.slice(1))
     );
-  }, [draft, slashTrigger]);
+  }, [draft, slashTrigger, supportsReview]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
@@ -1919,7 +1923,15 @@ export function Composer(props: ComposerProps) {
     [props.directory, props.thread]
   );
   const isBareReviewCommand = draft.trim() === "/review";
-  const isReviewComposerOpen = Boolean(reviewConfig && isBareReviewCommand);
+  const isReviewComposerOpen = Boolean(
+    supportsReview && reviewConfig && isBareReviewCommand
+  );
+
+  useEffect(() => {
+    if (!supportsReview && reviewConfig) {
+      setReviewConfig(undefined);
+    }
+  }, [reviewConfig, supportsReview]);
 
   useEffect(() => {
     return () => {
@@ -2293,6 +2305,11 @@ export function Composer(props: ComposerProps) {
   }): Promise<void> => {
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      return;
+    }
+    if (!supportsReview) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      setSendError("Selected backend does not support reviews.");
       return;
     }
     if (!options?.queued && imageAttachments.length > 0) {
@@ -2760,7 +2777,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
-    const reviewCommand = parseReviewCommand(draft);
+    const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
     if (shouldQueueThreadSubmit()) {
       if (activeTurnIdRef.current && mode === "steer") {
         steerCurrentDraft();
@@ -3186,7 +3203,6 @@ export function Composer(props: ComposerProps) {
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
     if (
       !props.thread ||
-      props.thread.source !== "codex" ||
       !props.desktopApi?.runCodexEnvironmentAction ||
       !selectedThreadCodexAction
     ) {
@@ -3215,7 +3231,6 @@ export function Composer(props: ComposerProps) {
   ): Promise<void> => {
     if (
       !props.thread ||
-      props.thread.source !== "codex" ||
       !props.desktopApi?.setCodexThreadEnvironment
     ) {
       return;
@@ -3224,7 +3239,7 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     setSelectedThreadCodexActionId("");
     props.onPendingStatusChange?.(
-      environmentId ? "Selecting Codex environment" : "Clearing Codex environment",
+      environmentId ? "Selecting environment" : "Clearing environment",
     );
     try {
       await props.desktopApi.setCodexThreadEnvironment({
@@ -3353,24 +3368,18 @@ export function Composer(props: ComposerProps) {
       ? props.launchpad.workMode
       : "local";
   const launchpadCodexEnvironmentOptions =
-    props.launchpad?.backend === "codex"
-      ? props.launchpad.codexEnvironmentOptions ?? []
-      : [];
+    props.launchpad?.codexEnvironmentOptions ?? [];
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
     (environment) => environment.id === props.launchpad?.codexEnvironmentId,
   );
   const threadCodexEnvironmentOptions =
-    props.thread?.source === "codex"
-      ? props.thread.codexEnvironmentOptions ?? []
-      : [];
+    props.thread?.codexEnvironmentOptions ?? [];
   const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
     (environment) =>
       environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
   );
   const runtimeThreadCodexEnvironmentActions =
-    props.thread?.source === "codex"
-      ? props.thread.codexEnvironmentRuntime?.actions ?? []
-      : [];
+    props.thread?.codexEnvironmentRuntime?.actions ?? [];
   const threadCodexEnvironmentActions =
     runtimeThreadCodexEnvironmentActions.length > 0
       ? runtimeThreadCodexEnvironmentActions
@@ -4532,7 +4541,7 @@ export function Composer(props: ComposerProps) {
           ) : null}
 
           {availableExecutionModes.length > 0 &&
-          (props.launchpad || (props.thread?.source === "codex" && props.onSetExecutionMode)) ? (
+          (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
             <ComposerDropdown
               ariaLabel="Access mode"
               compact
@@ -4555,7 +4564,7 @@ export function Composer(props: ComposerProps) {
 
           {acpRuntimeModeControl ? (
             <ComposerDropdown
-              ariaLabel="ACP mode"
+              ariaLabel="Agent mode"
               compact
               disabled={
                 launchpadSubmitting ||
@@ -4899,7 +4908,7 @@ export function Composer(props: ComposerProps) {
           <div className="composer__application-actions" aria-label="Composer tools">
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
-                ariaLabel="Codex environment"
+                ariaLabel="Environment"
                 compact
                 disabled={launchpadSubmitting}
                 icon={FileCodeIcon}
@@ -4947,7 +4956,7 @@ export function Composer(props: ComposerProps) {
 
             {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
-                ariaLabel="Codex environment"
+                ariaLabel="Environment"
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
                 icon={FileCodeIcon}
