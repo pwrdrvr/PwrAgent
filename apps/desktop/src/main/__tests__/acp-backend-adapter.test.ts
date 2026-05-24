@@ -39,7 +39,7 @@ describe("describeInstalledAcpBackend", () => {
     expect(backend.methods).toContain("session/load");
   });
 
-  it("does not advertise session/load for Kimi even without stored capability data", () => {
+  it("advertises session/load for Kimi unless the agent reports it is unsupported", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
       backendId: "acp:kimi" as AcpBackendId,
@@ -47,11 +47,7 @@ describe("describeInstalledAcpBackend", () => {
       name: "Kimi Code CLI",
     });
 
-    expect(backend.methods).toEqual([
-      "session/new",
-      "session/prompt",
-      "session/cancel",
-    ]);
+    expect(backend.methods).toContain("session/load");
   });
 });
 
@@ -516,6 +512,13 @@ describe("AcpBackendAdapter", () => {
       backendId,
       registryId: "kimi",
       name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        agentCapabilities: {
+          loadSession: false,
+        },
+      },
     };
     const session: AcpSessionMetadata = {
       backendId,
@@ -592,6 +595,103 @@ describe("AcpBackendAdapter", () => {
       lastAssistantMessage: "Restored from rollout",
     });
     expect(loadSession).not.toHaveBeenCalled();
+
+    await adapter.close();
+  });
+
+  it("falls back to rollout history when Kimi session/load returns no replay", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    };
+    const session: AcpSessionMetadata = {
+      backendId,
+      sessionId: "session-1",
+      title: "Kimi thread",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    };
+    const replay = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "Restored from rollout",
+          createdAt: 1001,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "Restored from rollout",
+          createdAt: 1001,
+        },
+      ],
+      lastAssistantMessage: "Restored from rollout",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    };
+    const loadSession = vi.fn(async () => ({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    }));
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpRolloutStore: {
+        appendUpdate: vi.fn(),
+        readUpdates: vi.fn(() => []),
+        readReplay: vi.fn(() => replay),
+      },
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          loadSession,
+          readReplay: vi.fn(() => ({
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+            threadStatus: "idle",
+          })),
+          dispose: vi.fn(async () => undefined),
+          refreshSession: vi.fn(async () => undefined),
+        }) as never,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+      lastAssistantMessage: "Restored from rollout",
+    });
+    expect(loadSession).toHaveBeenCalled();
 
     await adapter.close();
   });

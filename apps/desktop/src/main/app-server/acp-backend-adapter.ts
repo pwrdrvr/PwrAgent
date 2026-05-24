@@ -292,21 +292,7 @@ export function describeInstalledAcpBackend(
 function acpRuntimeCapabilitiesForAgent(
   agent: AcpInstalledAgentRecord,
 ): BackendAcpRuntimeCapabilities | undefined {
-  if (agent.registryId !== "kimi") {
-    return agent.runtimeCapabilities;
-  }
-  const now = Date.now();
-  return {
-    schemaVersion: 1,
-    status: "discovered",
-    checkedAt: agent.runtimeCapabilities?.checkedAt ?? agent.updatedAt ?? now,
-    source: agent.runtimeCapabilities?.source ?? "local-probe",
-    ...agent.runtimeCapabilities,
-    agentCapabilities: {
-      ...agent.runtimeCapabilities?.agentCapabilities,
-      loadSession: false,
-    },
-  };
+  return agent.runtimeCapabilities;
 }
 
 function normalizeInstalledAcpAgent(
@@ -731,14 +717,23 @@ export class AcpBackendAdapter {
         )
       ) {
         try {
-          return await cachedClient.loadSession(session);
+          const replay = await cachedClient.loadSession(session);
+          return this.providerReplayOrRolloutFallback({
+            backend,
+            replay,
+            session,
+          });
         } catch (error) {
           acpBackendAdapterLog.warn("acp_session_load_failed", {
             backend,
             error: error instanceof Error ? error.message : String(error),
             sessionId,
           });
-          return acpSessionLoadFallbackReplay(session, error);
+          return this.loadFailureReplayOrRolloutFallback({
+            backend,
+            error,
+            session,
+          });
         }
       }
       if (
@@ -748,13 +743,28 @@ export class AcpBackendAdapter {
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
-        return this.readRolloutReplay(session);
+        return this.readRolloutReplay(session, "rollout-session-load-unsupported");
       }
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId,
+        source: "memory",
+      });
       return replay;
     }
 
     if (!session) {
-      return new AcpSessionReplayNormalizer().replay();
+      const replay = new AcpSessionReplayNormalizer().replay();
+      this.logSessionReplaySource({
+        backend,
+        entries: 0,
+        messages: 0,
+        sessionId,
+        source: "empty-no-session",
+      });
+      return replay;
     }
 
     if (
@@ -762,7 +772,7 @@ export class AcpBackendAdapter {
         this.getInstalledAgent(backend)?.runtimeCapabilities,
       )
     ) {
-      return this.readRolloutReplay(session);
+      return this.readRolloutReplay(session, "rollout-session-load-unsupported");
     }
     const client = await this.getClient(backend);
     try {
@@ -774,14 +784,22 @@ export class AcpBackendAdapter {
           sessionId,
         });
       });
-      return replay;
+      return this.providerReplayOrRolloutFallback({
+        backend,
+        replay,
+        session,
+      });
     } catch (error) {
       acpBackendAdapterLog.warn("acp_session_load_failed", {
         backend,
         error: error instanceof Error ? error.message : String(error),
         sessionId,
       });
-      return acpSessionLoadFallbackReplay(session, error);
+      return this.loadFailureReplayOrRolloutFallback({
+        backend,
+        error,
+        session,
+      });
     }
   }
 
@@ -806,16 +824,124 @@ export class AcpBackendAdapter {
     return await clientPromise;
   }
 
-  private readRolloutReplay(session: AcpSessionMetadata): AppServerThreadReplay {
+  private readRolloutReplay(
+    session: AcpSessionMetadata,
+    source: string,
+  ): AppServerThreadReplay {
     const replay =
       this.acpRolloutStore?.readReplay({
         backendId: session.backendId,
         sessionId: session.sessionId,
       }) ?? new AcpSessionReplayNormalizer().replay();
+    this.logSessionReplaySource({
+      backend: session.backendId,
+      entries: replay.entries.length,
+      messages: replay.messages.length,
+      sessionId: session.sessionId,
+      source,
+    });
     return {
       ...replay,
       threadStatus: acpSessionThreadStatus(session.status),
     };
+  }
+
+  private providerReplayOrRolloutFallback(params: {
+    backend: AcpBackendId;
+    replay: AppServerThreadReplay;
+    session: AcpSessionMetadata;
+  }): AppServerThreadReplay {
+    const { backend, replay, session } = params;
+    if (replay.entries.length > 0 || !acpSessionHasConversationHistory(session)) {
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId: session.sessionId,
+        source:
+          replay.entries.length > 0
+            ? "provider-session-load"
+            : "provider-session-load-empty",
+      });
+      return replay;
+    }
+
+    const rolloutReplay =
+      this.acpRolloutStore?.readReplay({
+        backendId: session.backendId,
+        sessionId: session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    if (rolloutReplay.entries.length === 0) {
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId: session.sessionId,
+        source: "provider-session-load-empty-no-rollout",
+      });
+      return replay;
+    }
+
+    this.logSessionReplaySource({
+      backend,
+      entries: rolloutReplay.entries.length,
+      messages: rolloutReplay.messages.length,
+      providerEntries: replay.entries.length,
+      providerMessages: replay.messages.length,
+      sessionId: session.sessionId,
+      source: "rollout-provider-empty",
+    });
+    return {
+      ...rolloutReplay,
+      threadStatus: acpSessionThreadStatus(session.status),
+    };
+  }
+
+  private loadFailureReplayOrRolloutFallback(params: {
+    backend: AcpBackendId;
+    error: unknown;
+    session: AcpSessionMetadata;
+  }): AppServerThreadReplay {
+    const rolloutReplay =
+      this.acpRolloutStore?.readReplay({
+        backendId: params.session.backendId,
+        sessionId: params.session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    if (rolloutReplay.entries.length > 0) {
+      this.logSessionReplaySource({
+        backend: params.backend,
+        entries: rolloutReplay.entries.length,
+        messages: rolloutReplay.messages.length,
+        sessionId: params.session.sessionId,
+        source: "rollout-session-load-failed",
+      });
+      return {
+        ...rolloutReplay,
+        threadStatus: acpSessionThreadStatus(params.session.status),
+      };
+    }
+
+    const replay = acpSessionLoadFallbackReplay(params.session, params.error);
+    this.logSessionReplaySource({
+      backend: params.backend,
+      entries: replay.entries.length,
+      messages: replay.messages.length,
+      sessionId: params.session.sessionId,
+      source: "session-load-failed",
+    });
+    return replay;
+  }
+
+  private logSessionReplaySource(params: {
+    backend: AcpBackendId;
+    entries: number;
+    messages: number;
+    providerEntries?: number;
+    providerMessages?: number;
+    sessionId: string;
+    source: string;
+  }): void {
+    acpBackendAdapterLog.info("acp_session_replay_source", params);
   }
 
   async resolveInstalledAgent(
