@@ -1318,7 +1318,10 @@ export function Composer(props: ComposerProps) {
       ),
     [props.backends, props.launchpad?.backend, props.thread?.source]
   );
-  const supportsReview = backend ? backend.capabilities.startReview !== false : true;
+  const supportsReview =
+    backend?.kind.startsWith("acp:") === true
+      ? backend.capabilities.startReview !== false
+      : true;
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
