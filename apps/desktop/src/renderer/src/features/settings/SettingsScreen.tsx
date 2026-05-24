@@ -319,6 +319,11 @@ function SettingsSectionBody(props: {
             experimental: { diffCondensation: { model } },
           });
         }}
+        onLiveTranscriptEventFilteringChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { liveTranscriptEventFiltering: enabled },
+          });
+        }}
       />
     );
   }

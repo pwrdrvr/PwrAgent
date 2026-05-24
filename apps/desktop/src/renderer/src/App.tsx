@@ -302,6 +302,8 @@ function DesktopAppShell(props: {
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
+    liveTranscriptEventFiltering:
+      settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
   const skills = useThreadSkills({

@@ -26,13 +26,22 @@ const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> =
   { label: "grok-3", value: "grok-3" },
 ];
 
+const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
+  onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
+  const liveTranscriptEventFiltering =
+    props.snapshot.experimental.liveTranscriptEventFiltering ??
+    DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
   );
@@ -109,6 +118,32 @@ export function ExperimentalSettings(props: {
                   </button>
                 ) : null}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Live Transcript Event Filtering"
+        description="Reduce renderer work from live transcript notifications by ignoring unrelated thread-local events and skipping duplicate activity updates. Disabled by default."
+        chip={liveTranscriptEventFiltering.value ? "On" : "Off"}
+        chipKind={liveTranscriptEventFiltering.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable live transcript event filtering"
+            sub="When on, live transcript notifications for other threads no longer update the focused thread view."
+            source={sourceBadge(liveTranscriptEventFiltering)}
+            control={
+              <SettingsSwitch
+                checked={liveTranscriptEventFiltering.value}
+                disabled={props.saving}
+                label="Enable live transcript event filtering"
+                onChange={(enabled) => {
+                  void props.onLiveTranscriptEventFilteringChange(enabled);
+                }}
+              />
             }
           />
         </div>

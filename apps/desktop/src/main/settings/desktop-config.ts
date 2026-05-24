@@ -74,6 +74,7 @@ export type DesktopSettingsConfig = {
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
+    liveTranscriptEventFiltering?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -344,6 +345,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "full_access_risk_warning_dismissed"],
       patch.experimental.fullAccessRiskWarningDismissed,
+    );
+  }
+  if (patch.experimental?.liveTranscriptEventFiltering !== undefined) {
+    set(
+      ["experimental", "live_transcript_event_filtering"],
+      patch.experimental.liveTranscriptEventFiltering,
     );
   }
   if (patch.experimental?.diffCondensation?.model !== undefined) {
@@ -818,6 +825,9 @@ function normalizeDesktopConfig(
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
       fullAccessRiskWarningDismissed: readBoolean(
         experimental?.full_access_risk_warning_dismissed,
+      ),
+      liveTranscriptEventFiltering: readBoolean(
+        experimental?.live_transcript_event_filtering,
       ),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),

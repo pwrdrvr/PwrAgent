@@ -8,6 +8,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerToolRequestUserInputNotification,
+  AppServerThreadCommandDetail,
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
@@ -1119,9 +1120,18 @@ function flushPendingAssistantToOptimistic(
 function updateActivityEntry(
   entry: AppServerThreadActivityEntry,
   details: AppServerThreadActivityDetail[],
-  turn: AppServerThreadTurnMetadata | undefined
+  turn: AppServerThreadTurnMetadata | undefined,
+  options: { suppressNoop?: boolean } = {}
 ): AppServerThreadActivityEntry {
   const mergedDetails = mergeActivityDetails(entry.details, details);
+  if (
+    options.suppressNoop &&
+    activityDetailsEqual(entry.details, mergedDetails) &&
+    turnMetadataEqual(entry.turn, entry.turn ?? turn)
+  ) {
+    return entry;
+  }
+
   return {
     ...entry,
     summary: summarizeLiveActivity(mergedDetails),
@@ -1131,11 +1141,122 @@ function updateActivityEntry(
   };
 }
 
+function activityCommandDetailsEqual(
+  left: AppServerThreadCommandDetail | undefined,
+  right: AppServerThreadCommandDetail | undefined
+): boolean {
+  return (
+    left?.displayCommand === right?.displayCommand &&
+    left?.rawCommand === right?.rawCommand &&
+    left?.cwd === right?.cwd &&
+    left?.output === right?.output &&
+    left?.exitCode === right?.exitCode &&
+    left?.durationMs === right?.durationMs
+  );
+}
+
+function activityDetailsEqual(
+  left: AppServerThreadActivityDetail[],
+  right: AppServerThreadActivityDetail[]
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((leftDetail, index) => {
+    const rightDetail = right[index];
+    return (
+      leftDetail.id === rightDetail?.id &&
+      leftDetail.kind === rightDetail.kind &&
+      leftDetail.label === rightDetail.label &&
+      leftDetail.path === rightDetail.path &&
+      leftDetail.status === rightDetail.status &&
+      leftDetail.url === rightDetail.url &&
+      leftDetail.fileDiff === rightDetail.fileDiff &&
+      activityCommandDetailsEqual(leftDetail.command, rightDetail.command)
+    );
+  });
+}
+
+function turnMetadataEqual(
+  left: AppServerThreadTurnMetadata | undefined,
+  right: AppServerThreadTurnMetadata | undefined
+): boolean {
+  return (
+    left?.id === right?.id &&
+    left?.status === right?.status &&
+    left?.startedAt === right?.startedAt &&
+    left?.completedAt === right?.completedAt &&
+    left?.durationMs === right?.durationMs
+  );
+}
+
+function isThreadLocalTranscriptNotification(
+  notification: AppServerNotification
+): boolean {
+  return (
+    notification.method === "item/started" ||
+    notification.method === "item/completed" ||
+    notification.method === "item/agentMessage/delta" ||
+    notification.method === "item/mcpToolCall/progress" ||
+    notification.method === "item/commandExecution/outputDelta" ||
+    notification.method === "item/fileChange/outputDelta" ||
+    notification.method === "thread/tokenUsage/updated"
+  );
+}
+
+function liveActivityNotificationSignature(params: {
+  backend: string;
+  notification: AppServerNotification;
+  threadId: string;
+}): string | undefined {
+  if (
+    params.notification.method !== "item/started" &&
+    params.notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+
+  const item = getNotificationItem(params.notification.params);
+  const details = item ? buildLiveToolDetails(item) : [];
+  if (details.length === 0) {
+    return undefined;
+  }
+
+  const turnId =
+    typeof params.notification.params.turnId === "string"
+      ? params.notification.params.turnId
+      : "";
+  const signatureParts = [
+    params.backend,
+    params.threadId,
+    params.notification.method,
+    turnId,
+    ...details.flatMap((detail) => [
+      detail.id,
+      detail.kind,
+      detail.label,
+      detail.path ?? "",
+      detail.status ?? "",
+      detail.url ?? "",
+      detail.command?.displayCommand ?? "",
+      detail.command?.rawCommand ?? "",
+      detail.command?.cwd ?? "",
+      detail.command?.output ?? "",
+      typeof detail.command?.exitCode === "number" ? String(detail.command.exitCode) : "",
+      typeof detail.command?.durationMs === "number" ? String(detail.command.durationMs) : "",
+    ]),
+  ];
+
+  return signatureParts.join("\u0000");
+}
+
 function upsertLiveActivityEntry(
   current: ThreadSessionEntry,
   params: {
     details: AppServerThreadActivityDetail[];
     now: number;
+    suppressDuplicateLiveActivityUpdates?: boolean;
     threadId: string;
     turn?: AppServerThreadTurnMetadata;
   }
@@ -1155,11 +1276,16 @@ function upsertLiveActivityEntry(
   if (matchingIndex !== -1) {
     const optimisticEntries = [...flushed.optimisticEntries];
     const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
-    optimisticEntries[matchingIndex] = updateActivityEntry(
+    const updated = updateActivityEntry(
       existing,
       params.details,
-      params.turn
+      params.turn,
+      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
     );
+    if (updated === existing) {
+      return flushed;
+    }
+    optimisticEntries[matchingIndex] = updated;
     return {
       ...flushed,
       expectOwnUpdate: true,
@@ -1175,6 +1301,16 @@ function upsertLiveActivityEntry(
     lastOptimisticEntry.turn?.id === params.turn?.id;
 
   if (canMergeWithLastActivity) {
+    const updated = updateActivityEntry(
+      lastOptimisticEntry as AppServerThreadActivityEntry,
+      params.details,
+      params.turn,
+      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
+    );
+    if (updated === lastOptimisticEntry) {
+      return flushed;
+    }
+
     return {
       ...flushed,
       expectOwnUpdate: true,
@@ -1182,11 +1318,7 @@ function upsertLiveActivityEntry(
       lastTouchedAt: params.now,
       optimisticEntries: [
         ...flushed.optimisticEntries.slice(0, -1),
-        updateActivityEntry(
-          lastOptimisticEntry as AppServerThreadActivityEntry,
-          params.details,
-          params.turn
-        ),
+        updated,
       ],
     };
   }
@@ -1746,6 +1878,7 @@ function didHydrateCompletedTurn(
 
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
+  liveTranscriptEventFiltering?: boolean;
   thread?: NavigationThreadSummary;
 }): {
   activeTurnId?: string;
@@ -1786,11 +1919,12 @@ export function useThreadSessionState(params: {
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
 } {
-  const { desktopApi, thread } = params;
+  const { desktopApi, liveTranscriptEventFiltering = false, thread } = params;
   const threadKey = thread
     ? buildThreadIdentityKey(thread.source, thread.id)
     : undefined;
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
+  const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const [sessions, setSessions] = useState<ThreadSessionState>({});
@@ -2156,6 +2290,28 @@ export function useThreadSessionState(params: {
       }
 
       const targetThreadKey = buildThreadIdentityKey(event.backend, notificationThreadId);
+      const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      if (
+        liveTranscriptEventFiltering &&
+        isUnfocusedThread &&
+        isThreadLocalTranscriptNotification(event.notification)
+      ) {
+        return;
+      }
+
+      if (liveTranscriptEventFiltering) {
+        const liveActivitySignature = liveActivityNotificationSignature({
+          backend: event.backend,
+          notification: event.notification,
+          threadId: notificationThreadId,
+        });
+        if (liveActivitySignature) {
+          if (lastLiveActivitySignatureRef.current[targetThreadKey] === liveActivitySignature) {
+            return;
+          }
+          lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
+        }
+      }
 
       updateSession(targetThreadKey, (current) => {
         const nextLastTouchedAt = Date.now();
@@ -2237,6 +2393,7 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details,
             now: nextLastTouchedAt,
+            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -2324,6 +2481,7 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details: [detail],
             now: nextLastTouchedAt,
+            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -2568,6 +2726,7 @@ export function useThreadSessionState(params: {
             return upsertLiveActivityEntry(current, {
               details,
               now: nextLastTouchedAt,
+              suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
               threadId: notificationThreadId,
               turn,
             });
@@ -2581,6 +2740,21 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          if (liveTranscriptEventFiltering && isUnfocusedThread) {
+            return {
+              ...current,
+              activeTurnId: undefined,
+              activeTurnStartedAt: undefined,
+              error: undefined,
+              lastTouchedAt: nextLastTouchedAt,
+              pendingAssistantMessage: undefined,
+              pendingMcpInteraction: undefined,
+              pendingRequest: undefined,
+              pendingUserInput: undefined,
+              pendingStatusText: undefined,
+            };
+          }
+
           const completedTurnHasReview = hasReviewEntryForTurn(
             current.response,
             completedTurn?.id
@@ -2810,7 +2984,7 @@ export function useThreadSessionState(params: {
         return current;
       });
     });
-  }, [desktopApi, thread, threadKey, updateSession]);
+  }, [desktopApi, liveTranscriptEventFiltering, thread, threadKey, updateSession]);
 
   const selectedSession = threadKey ? sessions[threadKey] : undefined;
 

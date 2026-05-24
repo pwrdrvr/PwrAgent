@@ -36,6 +36,22 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       },
     ]);
   });
+
+  it("writes the live transcript event filtering flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        liveTranscriptEventFiltering: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "live_transcript_event_filtering"],
+        value: true,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — image uploads", () => {

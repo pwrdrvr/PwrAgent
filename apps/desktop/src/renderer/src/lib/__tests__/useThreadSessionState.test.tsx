@@ -3057,6 +3057,487 @@ describe("useThreadSessionState", () => {
     expect(result.current.contextWindow).toBeUndefined();
   });
 
+  it("ignores live transcript activity for unrelated threads", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        liveTranscriptEventFiltering: true,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-2",
+              turnId: "turn-2",
+              item: {
+                id: "tool-2",
+                type: "commandExecution",
+                command: "pnpm test",
+                status: "inProgress",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBeUndefined();
+  });
+
+  it("keeps unrelated live transcript activity when filtering is disabled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-2",
+              turnId: "turn-2",
+              item: {
+                id: "tool-2",
+                type: "commandExecution",
+                command: "pnpm test",
+                status: "inProgress",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBe(true);
+  });
+
+  it("clears unrelated completed turn state without appending transcript output when filtering is enabled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-assistant`,
+              role: "assistant" as const,
+              text: `Hydrated transcript for ${threadId}.`,
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-assistant`,
+              role: "assistant" as const,
+              text: `Hydrated transcript for ${threadId}.`,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread,
+    };
+
+    const thread1 = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const thread2 = buildThread({ id: "thread-2", updatedAt: 1_000 });
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          liveTranscriptEventFiltering: true,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: thread1,
+        },
+      },
+    );
+
+    await waitForThreadHydration(result, "thread-1");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-2",
+              turnId: "turn-2",
+              turn: {
+                id: "turn-2",
+                status: "in_progress",
+              },
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBe(true);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-2",
+              turnId: "turn-2",
+              turn: {
+                id: "turn-2",
+                status: "completed",
+                output: [{ type: "text", text: "Background final answer." }],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBeUndefined();
+
+    rerender({ thread: thread2 });
+
+    await waitForThreadHydration(result, "thread-2");
+    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Hydrated transcript for thread-2.",
+    ]);
+  });
+
+  it("keeps non-focused compaction invalidations for cached threads", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-assistant`,
+              role: "assistant" as const,
+              text: `Cached transcript for ${threadId}.`,
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-assistant`,
+              role: "assistant" as const,
+              text: `Cached transcript for ${threadId}.`,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread,
+    };
+
+    const thread1 = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const thread2 = buildThread({ id: "thread-2", updatedAt: 1_000 });
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          liveTranscriptEventFiltering: true,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: thread2,
+        },
+      }
+    );
+
+    await waitForThreadHydration(result, "thread-2");
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ thread: thread1 });
+    await waitForThreadHydration(result, "thread-1");
+    expect(readThread).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/compacted",
+            params: {
+              threadId: "thread-2",
+              itemId: "compact-item-2",
+            },
+          },
+        });
+      }
+    });
+
+    rerender({ thread: thread2 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitForThreadHydration(result, "thread-2");
+  });
+
+  it("keeps repeated identical live activity updates as renderer no-ops", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    let renderCount = 0;
+    const { result } = renderHook(() => {
+      renderCount += 1;
+      return useThreadSessionState({
+        desktopApi,
+        liveTranscriptEventFiltering: true,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      });
+    });
+
+    await waitForThreadHydration(result);
+
+    const event = {
+      backend: "codex" as const,
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "commandExecution",
+            command: "pnpm test",
+            status: "inProgress",
+          },
+        },
+      },
+    };
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener(event as any);
+      }
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    await flushReactUpdates();
+    const rendersAfterFirstUpdate = renderCount;
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener(event as any);
+      }
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(renderCount).toBe(rendersAfterFirstUpdate);
+  });
+
+  it("handles repeated identical live activity updates when filtering is disabled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    let renderCount = 0;
+    const { result } = renderHook(() => {
+      renderCount += 1;
+      return useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      });
+    });
+
+    await waitForThreadHydration(result);
+
+    const event = {
+      backend: "codex" as const,
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "commandExecution",
+            command: "pnpm test",
+            status: "inProgress",
+          },
+        },
+      },
+    };
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener(event as any);
+      }
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    await flushReactUpdates();
+    const rendersAfterFirstUpdate = renderCount;
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener(event as any);
+      }
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(renderCount).toBeGreaterThan(rendersAfterFirstUpdate);
+  });
+
   it("returns to thinking when context compaction completes and the turn continues", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

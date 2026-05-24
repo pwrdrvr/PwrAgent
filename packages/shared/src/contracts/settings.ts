@@ -413,6 +413,13 @@ export type DesktopSettingsSnapshot = {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
     fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
     /**
+     * Gates renderer-side live transcript event reductions. When disabled,
+     * every thread event is handled as before. When enabled, unrelated
+     * thread-local transcript events are ignored and duplicate live activity
+     * updates become no-ops.
+     */
+    liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether we send
      * focused-diff requests to xAI. When enabled, less-relevant diff
      * hunks are hidden via an xAI judgment call. When disabled, every
@@ -544,6 +551,7 @@ export type DesktopSettingsConfigPatch = {
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
+    liveTranscriptEventFiltering?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */
