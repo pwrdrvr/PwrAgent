@@ -1,9 +1,10 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.0.0-beta.15",
+  "version": "1.0.0-beta.16",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
+  "homepage": "https://pwragent.ai",
   "author": "PwrDrvr LLC",
   "license": "MIT",
   "copyright": "Copyright © 2026 PwrDrvr LLC.",

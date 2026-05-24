@@ -56,6 +56,9 @@ if (desktopPackage.version !== expectedVersion) {
     `apps/desktop/package.json version is ${desktopPackage.version}, but release tag ${tag} requires ${expectedVersion}`,
   );
 }
+if (desktopPackage.homepage !== "https://pwragent.ai") {
+  fail("apps/desktop/package.json must contain homepage metadata for Linux DEB packaging");
+}
 
 let changelog = "";
 try {
@@ -114,6 +117,8 @@ for (const expected of [
   "-linux-amd64.deb",
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
+  "patchStageDependencyManifests",
+  "@larksuiteoapi+node-sdk@1.63.1",
 ]) {
   if (!releaseScript.includes(expected)) {
     fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)}`);

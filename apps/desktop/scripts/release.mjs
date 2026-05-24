@@ -175,6 +175,33 @@ function publishLinuxArtifacts(distDir) {
   );
 }
 
+function patchStageDependencyManifests() {
+  // pnpm overrides can intentionally install a newer dependency than a
+  // package's own manifest range. electron-builder's Linux dependency walker
+  // validates the deployed manifests before packaging, so keep the disposable
+  // release-stage metadata aligned with the tree pnpm deployed.
+  const feishuSdkPackage = join(
+    stageDir,
+    "node_modules",
+    ".pnpm",
+    "@larksuiteoapi+node-sdk@1.63.1",
+    "node_modules",
+    "@larksuiteoapi",
+    "node-sdk",
+    "package.json",
+  );
+  if (!existsSync(feishuSdkPackage)) {
+    return;
+  }
+  const packageJson = JSON.parse(readFileSync(feishuSdkPackage, "utf8"));
+  if (packageJson.dependencies?.axios !== "~1.13.3") {
+    return;
+  }
+  packageJson.dependencies.axios = "^1.16.0";
+  writeFileSync(feishuSdkPackage, `${JSON.stringify(packageJson, null, 2)}\n`);
+  console.log("  patched @larksuiteoapi/node-sdk axios range for release-stage dependency collection");
+}
+
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
 function maybeDecodeAppleApiKey() {
   if (process.env.APPLE_API_KEY && existsSync(process.env.APPLE_API_KEY)) {
@@ -214,6 +241,7 @@ if (!signStageOnly) {
     ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
     { cwd: repoRoot },
   );
+  patchStageDependencyManifests();
 
   // 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
   //    electron-builder finds them at well-known paths.

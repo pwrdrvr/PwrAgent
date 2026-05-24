@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.0-beta.16 - 2026-05-23
+
+- Added Linux Debian package release support for x64/amd64 and arm64, with stable latest-download aliases, manual package upgrades, desktop launcher integration, and published `SHA256SUMS`.
+- Added ACP registry-backed desktop backends with allowlisted agent discovery, install records, Settings management, stdio runtime support, and hardened binary checksum/platform checks.
+- Added ACP runtime mode selection in messaging flows so `/new` and bound-thread status cards expose discovered runtime modes and keep privileged modes gated.
+- Added explicit backend/provider selection for messaging-created new threads, including `/new`, `/resume --new`, and New help actions.
+- Added Telegram forum topic ownership so monitor fanout can create, bind, report permissions for, and safely clean up thread-owned topics.
+- Surfaced Codex config trust warnings in the desktop UI with a Trust action for project-local config, hooks, and exec policy warnings.
+- Surfaced subagent review/collaboration activity in transcripts, including spawned/waited agent status and returned agent output.
+- Fixed long threads opening at the top and made Jump to latest land at the bottom in one click.
+- Fixed messaging Full Access approvals so inherited Full Access can start cleanly while explicit escalation remains guarded.
+- Fixed Workspace worktree handoff controls for non-git workspaces, composer inline-mode escape behavior, thread title hit targets, and repaired-mtime thread timestamps.
+- Fixed Linux Debian metadata so package builds include the required project homepage.
+- Fixed Linux packaging so electron-builder accepts the deployed Feishu SDK dependency tree after the root `axios` security override.
+- Fixed the Linux desktop-entry packaging configuration that caused the `v1.0.0-beta.14` release workflow to fail before artifacts were published.
+
 ## v1.0.0-beta.15 - 2026-05-23
 
 - Added Linux Debian package release support for x64/amd64 and arm64, with stable latest-download aliases, manual package upgrades, desktop launcher integration, and published `SHA256SUMS`.
