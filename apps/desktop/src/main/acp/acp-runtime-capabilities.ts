@@ -22,12 +22,15 @@ export function normalizeAcpRuntimeCapabilities(params: {
   const modes = readModes(record.modes);
   const models = readModels(record.models);
   const agentCapabilities = readAgentCapabilities(
-    record.agentCapabilities ?? record.capabilities,
+    record.agentCapabilities ?? record.agent_capabilities ?? record.capabilities,
+    record.sessionCapabilities ?? record.session_capabilities,
   );
   const agentInfo = readAgentInfo(record.agentInfo ?? record.agent_info);
   const protocolVersion =
     typeof record.protocolVersion === "number"
       ? record.protocolVersion
+      : typeof record.protocol_version === "number"
+        ? record.protocol_version
       : params.initialize?.protocolVersion;
 
   const hasRuntimeData =
@@ -102,6 +105,12 @@ export function acpRuntimeSupportsSessionLoad(
   capabilities: BackendAcpRuntimeCapabilities | undefined,
 ): boolean {
   return capabilities?.agentCapabilities?.loadSession !== false;
+}
+
+export function acpRuntimeSupportsSessionHistoryReplay(
+  capabilities: BackendAcpRuntimeCapabilities | undefined,
+): boolean {
+  return capabilities?.agentCapabilities?.sessionHistoryReplay === true;
 }
 
 export function acpSessionRuntimeStateFromUpdate(
@@ -268,26 +277,39 @@ function readModel(value: unknown): BackendAcpRuntimeModel[] {
 
 function readAgentCapabilities(
   value: unknown,
+  sessionCapabilitiesValue?: unknown,
 ): BackendAcpRuntimeCapabilities["agentCapabilities"] {
   const record = asRecord(value);
-  if (!record) {
+  const sessionCapabilities = asRecord(sessionCapabilitiesValue);
+  const sessionMeta = asRecord(sessionCapabilities?._meta);
+  const kimiMeta = asRecord(sessionMeta?.kimi);
+  if (!record && !sessionCapabilities) {
     return undefined;
   }
   const loadSession =
-    readBoolean(record, "loadSession") ?? readBoolean(asRecord(record.session), "load");
-  const close = readBoolean(asRecord(record.session), "close");
-  const cancel = readBoolean(asRecord(record.session), "cancel");
+    readBoolean(record, "loadSession") ??
+    readBoolean(record, "load_session") ??
+    readBoolean(asRecord(record?.session), "load");
+  const close = readBoolean(asRecord(record?.session), "close");
+  const cancel = readBoolean(asRecord(record?.session), "cancel");
+  const sessionHistoryReplay =
+    readBoolean(kimiMeta, "sessionHistoryReplay") ??
+    readBoolean(kimiMeta, "session_history_replay");
   const hasData =
-    loadSession !== undefined || close !== undefined || cancel !== undefined;
+    loadSession !== undefined ||
+    close !== undefined ||
+    cancel !== undefined ||
+    sessionHistoryReplay !== undefined;
   return hasData
     ? {
         ...(loadSession !== undefined ? { loadSession } : {}),
+        ...(sessionHistoryReplay !== undefined ? { sessionHistoryReplay } : {}),
         ...(close !== undefined || cancel !== undefined
           ? { session: { ...(close !== undefined ? { close } : {}), ...(cancel !== undefined ? { cancel } : {}) } }
           : {}),
-        raw: record,
+        raw: record ?? sessionCapabilities,
       }
-    : { raw: record };
+    : { raw: record ?? sessionCapabilities };
 }
 
 function readAgentInfo(value: unknown): BackendAcpRuntimeCapabilities["agentInfo"] {

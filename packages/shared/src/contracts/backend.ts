@@ -70,6 +70,7 @@ export type BackendAcpRuntimeModelState = {
 
 export type BackendAcpRuntimeAgentCapabilities = {
   loadSession?: boolean;
+  sessionHistoryReplay?: boolean;
   session?: {
     close?: boolean;
     cancel?: boolean;

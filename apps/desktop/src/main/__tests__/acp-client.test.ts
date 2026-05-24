@@ -817,6 +817,62 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
+  it("does not write local rollout history when the ACP agent advertises session replay", async () => {
+    const rolloutStore = {
+      appendUpdate: vi.fn(),
+      readUpdates: vi.fn(() => []),
+      flushAll: vi.fn(),
+    };
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+        sessionCapabilities: {
+          _meta: {
+            kimi: {
+              sessionHistoryReplay: true,
+            },
+          },
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "turn-1",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "Kimi says hi." },
+    });
+
+    await vi.waitFor(() => {
+      expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+        "Kimi says hi.",
+      );
+    });
+    await vi.waitFor(() => {
+      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+    });
+
+    expect(rolloutStore.appendUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not call session/load when the ACP agent says loading is unsupported", async () => {
     const transport = new FakeAcpAgentTransport({
       initialize: {

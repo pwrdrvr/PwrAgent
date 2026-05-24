@@ -15,6 +15,7 @@ import {
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
+  acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
   acpSessionRuntimeStateFromCapabilities,
   acpSessionRuntimeStateFromUpdate,
@@ -862,6 +863,9 @@ export class AcpAgentClient {
     receivedAt: number,
     update: Record<string, unknown>,
   ): void {
+    if (acpRuntimeSupportsSessionHistoryReplay(this.runtimeCapabilities)) {
+      return;
+    }
     this.options.rolloutStore?.appendUpdate({
       backendId: this.options.backendId,
       sessionId,
