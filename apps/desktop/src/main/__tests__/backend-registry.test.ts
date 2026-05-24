@@ -7806,7 +7806,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("prepends automation context to non-automation thread turns", async () => {
+  it("submits non-automation thread turns without synthetic automation context", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/read"] },
     });
@@ -7817,12 +7817,6 @@ command = "pnpm dev"
       }),
       overlayStore: createOverlayStoreMock(),
     });
-    registry.setAutomationTurnContextProvider(() => [
-      {
-        type: "text",
-        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
-      },
-    ]);
 
     await registry.startTurn({
       backend: "codex",
@@ -7831,15 +7825,6 @@ command = "pnpm dev"
     });
 
     expect(codexClient.lastStartTurnParams?.input).toEqual([
-      {
-        type: "text",
-        text: [
-          "## Automation Context",
-          "Recent automation updates for this Agent thread:\n- Weather: rain.",
-          "## User Message",
-          "",
-        ].join("\n\n"),
-      },
       { type: "text", text: "What happened?" },
     ]);
 

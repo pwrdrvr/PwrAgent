@@ -82,7 +82,7 @@ beforeEach(() => {
     publishLocalEvent: vi.fn(async (event: AgentEvent) => {
       publishedEvents.push(event);
     }),
-    setAutomationTurnContextProvider: vi.fn(),
+    setAutomationInspectionHandler: vi.fn(),
   } as unknown as DesktopBackendRegistry;
 });
 
@@ -720,7 +720,7 @@ describe("DesktopAutomationService", () => {
     });
   });
 
-  it("registers recent automation results as Agent turn context", async () => {
+  it("registers automation inspection for Agent tool access", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();
     const created = await service.create({
@@ -758,22 +758,27 @@ describe("DesktopAutomationService", () => {
       },
     });
 
-    const provider = vi.mocked(registry.setAutomationTurnContextProvider).mock
+    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
       .calls.at(-1)?.[0];
-    expect(provider).toBeDefined();
-    const context = await provider!({
-      backend: "codex",
-      threadId: "thread-1",
-    });
-    expect(context).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining("Rain is already underway."),
+    expect(handler).toBeDefined();
+    const response = await handler!({
+      operation: "summarize_automation_status",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
       },
-    ]);
-    expect(context[0]?.type === "text" ? context[0].text : "").toContain(
-      "Hourly forecast shows rain through at least 5 AM.",
-    );
+      args: {},
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        recentRuns: [
+          expect.objectContaining({
+            outputSummary: "Rain is already underway.",
+          }),
+        ],
+      },
+    });
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {

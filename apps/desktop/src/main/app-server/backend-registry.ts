@@ -685,12 +685,6 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
-type AutomationTurnContextProvider = (params: {
-  backend: AppServerBackendKind;
-  origin?: ThreadTurnQueueOrigin;
-  threadId: ThreadIdentifier;
-}) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>;
-
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
 
 type ThreadTitleGenerationLogStatus =
@@ -1009,34 +1003,6 @@ function buildHeadlessAutomationRequestCancelResponse(
   }
 
   return { decision: "cancel" };
-}
-
-function formatAutomationContextForTurnInput(
-  context: AppServerTurnInputItem[],
-): AppServerTurnInputItem[] {
-  const textParts = context
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
-      item.type === "text",
-    )
-    .map((item) => item.text.trim())
-    .filter(Boolean);
-  const nonTextParts = context.filter((item) => item.type !== "text");
-  if (textParts.length === 0) {
-    return context;
-  }
-
-  return [
-    {
-      type: "text",
-      text: [
-        "## Automation Context",
-        ...textParts,
-        "## User Message",
-        "",
-      ].join("\n\n"),
-    },
-    ...nonTextParts,
-  ];
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -1763,7 +1729,6 @@ export class DesktopBackendRegistry {
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
   private readonly threadTurnQueue: ThreadTurnQueue;
-  private automationTurnContextProvider?: AutomationTurnContextProvider;
   private automationInspectionHandler?: AutomationInspectionHandler;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -2171,12 +2136,6 @@ export class DesktopBackendRegistry {
     cleaner: MessagingArchiveCleaner | null | undefined,
   ): void {
     this.messagingArchiveCleaner = cleaner;
-  }
-
-  setAutomationTurnContextProvider(
-    provider: AutomationTurnContextProvider | null | undefined,
-  ): void {
-    this.automationTurnContextProvider = provider ?? undefined;
   }
 
   setAutomationInspectionHandler(
@@ -4088,7 +4047,7 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    let input = params.input;
+    const input = params.input;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -4112,12 +4071,6 @@ export class DesktopBackendRegistry {
               overlay,
             )
           : undefined;
-      input = await this.buildTurnInputWithAutomationContext({
-        backend: params.backend,
-        input: params.input,
-        origin: params.origin,
-        threadId: params.threadId,
-      });
       await this.emit({
         backend: params.backend,
         notification: {
@@ -6289,36 +6242,6 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
-  }
-
-  private async buildTurnInputWithAutomationContext(params: {
-    backend: AppServerBackendKind;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    threadId: ThreadIdentifier;
-  }): Promise<AppServerTurnInputItem[]> {
-    if (!this.automationTurnContextProvider || params.origin === "automation") {
-      return params.input;
-    }
-    try {
-      const context = await this.automationTurnContextProvider({
-        backend: params.backend,
-        origin: params.origin,
-        threadId: params.threadId,
-      });
-      if (context.length === 0) {
-        return params.input;
-      }
-      return [...formatAutomationContextForTurnInput(context), ...params.input];
-    } catch (error) {
-      backendRegistryLog.warn("automation turn context provider failed", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-        origin: params.origin,
-        threadId: params.threadId,
-      });
-      return params.input;
-    }
   }
 
   private async resolveLaunchpadBackend(
