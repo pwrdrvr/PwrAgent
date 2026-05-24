@@ -94,10 +94,12 @@ export type AutomationInspectionRequest<
   TOperation extends AutomationInspectionOperationName =
     AutomationInspectionOperationName,
 > = {
-  operation: TOperation;
-  context: AutomationInspectionContext;
-  args: AutomationInspectionToolArgs<TOperation>;
-};
+  [TOperationKey in TOperation]: {
+    operation: TOperationKey;
+    context: AutomationInspectionContext;
+    args: AutomationInspectionToolArgs<TOperationKey>;
+  };
+}[TOperation];
 
 export type AutomationInspectionAutomationSummary = Pick<
   AutomationDetail,
