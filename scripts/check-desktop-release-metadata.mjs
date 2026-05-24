@@ -92,10 +92,21 @@ for (const expected of [
   "target: deb",
   "arch: [x64, arm64]",
   "artifactName: \"${productName}-${version}-linux-${arch}.${ext}\"",
+  "desktop:",
+  "entry:",
+  "StartupWMClass: PwrAgent",
   "private: false",
 ]) {
   if (!electronBuilderConfig.includes(expected)) {
     fail(`apps/desktop/electron-builder.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const invalid of [/^    Name:/m, /^    Comment:/m, /^    StartupWMClass:/m]) {
+  if (invalid.test(electronBuilderConfig)) {
+    fail(
+      `apps/desktop/electron-builder.yml must nest Linux desktop entries under desktop.entry; matched ${invalid}`,
+    );
   }
 }
 

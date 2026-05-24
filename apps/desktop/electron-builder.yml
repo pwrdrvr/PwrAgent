@@ -118,9 +118,10 @@ linux:
     - target: deb
       arch: [x64, arm64]
   desktop:
-    Name: PwrAgent
-    Comment: Thread-centric coding agent desktop app
-    StartupWMClass: PwrAgent
+    entry:
+      Name: PwrAgent
+      Comment: Thread-centric coding agent desktop app
+      StartupWMClass: PwrAgent
 
 deb:
   priority: optional
