@@ -70,6 +70,13 @@ type AcpRolloutStoreLike = {
   }): AcpRolloutRecord[];
 };
 
+type AcpActiveTurn = {
+  activeAssistantMessageItemId?: string;
+  assistantText: string;
+  assistantMessageSequence: number;
+  turnId: string;
+};
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
@@ -79,6 +86,7 @@ export type AcpAgentClientOptions = {
   transport: AcpJsonRpcTransport;
   now?: () => number;
   onSessionUpdate?: (event: {
+    assistantMessageItemId?: string;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -106,13 +114,7 @@ export type AcpAgentClientOptions = {
 
 export class AcpAgentClient {
   private readonly normalizers = new Map<string, AcpSessionReplayNormalizer>();
-  private readonly activeTurns = new Map<
-    string,
-    {
-      assistantText: string;
-      turnId: string;
-    }
-  >();
+  private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   private readonly suppressedControlPromptSessions = new Map<
     string,
@@ -547,8 +549,21 @@ export class AcpAgentClient {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
     this.appendHistoryUpdate(sessionId, receivedAt, update);
-    if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
-      activeTurn.assistantText += readUpdateText(update) ?? "";
+    const updateKind = readUpdateKind(update);
+    const isAssistantTextUpdate =
+      updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+    const text = readUpdateText(update);
+    let assistantMessageItemId: string | undefined;
+    if (isAssistantTextUpdate && activeTurn && text) {
+      assistantMessageItemId = assistantMessageItemIdForUpdate({
+        activeTurn,
+        update,
+      });
+      if (updateKind === "agent_message_chunk") {
+        activeTurn.assistantText += text;
+      }
+    } else if (!isAssistantTextUpdate && activeTurn) {
+      activeTurn.activeAssistantMessageItemId = undefined;
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
@@ -556,6 +571,7 @@ export class AcpAgentClient {
       receivedAt,
     } satisfies AcpSessionUpdate);
     void this.notifySessionUpdate({
+      assistantMessageItemId,
       sessionId,
       replay,
       title,
@@ -729,6 +745,7 @@ export class AcpAgentClient {
   }
 
   private async notifySessionUpdate(event: {
+    assistantMessageItemId?: string;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -787,6 +804,7 @@ export class AcpAgentClient {
     }
     this.activeTurns.set(sessionId, {
       assistantText: "",
+      assistantMessageSequence: 0,
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");
@@ -1118,6 +1136,28 @@ function selectPermissionOptionId(
 
 function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
+}
+
+function assistantMessageItemIdForUpdate(params: {
+  activeTurn: AcpActiveTurn;
+  update: Record<string, unknown>;
+}): string {
+  const explicitId =
+    typeof params.update.messageId === "string"
+      ? params.update.messageId
+      : typeof params.update.message_id === "string"
+        ? params.update.message_id
+        : undefined;
+  if (explicitId) {
+    params.activeTurn.activeAssistantMessageItemId = explicitId;
+    return explicitId;
+  }
+
+  if (!params.activeTurn.activeAssistantMessageItemId) {
+    params.activeTurn.activeAssistantMessageItemId =
+      `assistant:${params.activeTurn.turnId}:${params.activeTurn.assistantMessageSequence++}`;
+  }
+  return params.activeTurn.activeAssistantMessageItemId;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

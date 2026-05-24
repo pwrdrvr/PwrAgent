@@ -950,7 +950,14 @@ export class AcpBackendAdapter {
             }),
           ]),
         }),
-      onSessionUpdate: async ({ sessionId, replay, title, turnId, update }) => {
+      onSessionUpdate: async ({
+        assistantMessageItemId,
+        sessionId,
+        replay,
+        title,
+        turnId,
+        update,
+      }) => {
         const updateKind = readAcpUpdateKind(update);
         if (title) {
           await this.emit({
@@ -1004,7 +1011,8 @@ export class AcpBackendAdapter {
                 params: {
                   threadId: sessionId,
                   turnId,
-                  itemId: `assistant:${turnId ?? sessionId}`,
+                  itemId:
+                    assistantMessageItemId ?? `assistant:${turnId ?? sessionId}`,
                   delta,
                 },
               },

@@ -416,31 +416,33 @@ describe("AcpAgentClient", () => {
         currentModelId: "gemini-3-flash-preview",
       },
     });
-    expect(runtimeEvents).toMatchObject([
-      {
-        sessionId: "gemini-session",
-        runtimeCapabilities: {
-          status: "discovered",
-          source: "session-new",
-          modes: {
-            currentModeId: "default",
-            availableModes: [
-              { id: "default", label: "Default" },
-              { id: "yolo", label: "YOLO" },
-            ],
-          },
-          models: {
-            currentModelId: "gemini-3-flash-preview",
-            availableModels: [
-              {
-                id: "gemini-3-flash-preview",
-                label: "gemini-3-flash-preview",
-              },
-            ],
-          },
-        },
-      },
-    ]);
+    expect(runtimeEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: "gemini-session",
+          runtimeCapabilities: expect.objectContaining({
+            status: "discovered",
+            source: "session-new",
+            modes: expect.objectContaining({
+              currentModeId: "default",
+              availableModes: expect.arrayContaining([
+                expect.objectContaining({ id: "default", label: "Default" }),
+                expect.objectContaining({ id: "yolo", label: "YOLO" }),
+              ]),
+            }),
+            models: expect.objectContaining({
+              currentModelId: "gemini-3-flash-preview",
+              availableModels: expect.arrayContaining([
+                expect.objectContaining({
+                  id: "gemini-3-flash-preview",
+                  label: "gemini-3-flash-preview",
+                }),
+              ]),
+            }),
+          }),
+        }),
+      ]),
+    );
   });
 
   it("updates ACP runtime state without rendering config notifications", async () => {

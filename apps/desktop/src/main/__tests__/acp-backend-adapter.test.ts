@@ -340,11 +340,102 @@ describe("AcpBackendAdapter", () => {
           params: {
             threadId: session.sessionId,
             turnId: "turn-1",
-            itemId: "assistant:turn-1",
+            itemId: "assistant:turn-1:0",
             delta: "I should inspect the build setup.",
           },
         },
       });
+    });
+
+    await adapter.close();
+  });
+
+  it("uses separate live assistant item ids for ACP text separated by tools", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "does it build?",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "I will inspect the scripts." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "tool_call",
+      tool_call_id: "tool-1",
+      title: "cat package.json",
+      status: "completed",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "Now I will run the build." },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events
+          .filter(
+            (event) => event.notification.method === "item/agentMessage/delta",
+          )
+          .map((event) =>
+            event.notification.method === "item/agentMessage/delta"
+              ? event.notification.params.itemId
+              : undefined,
+          ),
+      ).toEqual(["assistant:turn-1:0", "assistant:turn-1:1"]);
     });
 
     await adapter.close();

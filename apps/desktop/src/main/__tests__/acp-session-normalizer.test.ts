@@ -325,9 +325,9 @@ describe("AcpSessionReplayNormalizer", () => {
 
     expect(replay.messages.map((message) => [message.id, message.text])).toEqual([
       ["user:pending:session-1:1000", "What is this project?"],
-      ["assistant:pending:session-1:1000", "It is PwrSnap."],
+      ["assistant:pending:session-1:1000:0", "It is PwrSnap."],
       ["user:pending:session-1:2000", "What is the CWD?"],
-      ["assistant:pending:session-1:2000", "/repo/project"],
+      ["assistant:pending:session-1:2000:0", "/repo/project"],
     ]);
     expect(replay.lastUserMessage).toBe("What is the CWD?");
     expect(replay.lastAssistantMessage).toBe("/repo/project");
@@ -600,7 +600,7 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([
       expect.objectContaining({
         type: "message",
-        id: "assistant:session-1",
+        id: "assistant:session-1:0",
         role: "assistant",
         text: "Inspecting project files.",
       }),
@@ -657,6 +657,57 @@ describe("AcpSessionReplayNormalizer", () => {
           }),
         ],
       }),
+    ]);
+  });
+
+  it("splits assistant response messages around tool activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "does it build?",
+        turnId: "turn-1",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "I will inspect package scripts." },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-1",
+        title: "cat package.json",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1003,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "The build script is available." },
+      },
+    });
+
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type
+      ),
+    ).toEqual([
+      "user:turn-1:does it build?",
+      "assistant:turn-1:0:I will inspect package scripts.",
+      "activity",
+      "assistant:turn-1:1:The build script is available.",
     ]);
   });
 });
