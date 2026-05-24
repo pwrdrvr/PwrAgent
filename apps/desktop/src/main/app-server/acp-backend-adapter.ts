@@ -257,7 +257,7 @@ export function describeInstalledAcpBackend(
   return {
     kind: agent.backendId,
     source: "acp",
-    label: agent.name,
+    label: formatAcpAgentDisplayName(agent),
     available,
     acp: {
       registryId: agent.registryId,
@@ -287,6 +287,16 @@ export function describeInstalledAcpBackend(
     launchpadOptions: buildAcpLaunchpadOptions(runtimeCapabilities),
     unavailableReason,
   };
+}
+
+function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
+  if (agent.registryId === "gemini") {
+    return "Gemini";
+  }
+  if (agent.registryId === "kimi") {
+    return "Kimi";
+  }
+  return agent.name;
 }
 
 function acpRuntimeCapabilitiesForAgent(

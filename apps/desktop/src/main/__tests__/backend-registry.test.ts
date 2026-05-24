@@ -1436,7 +1436,7 @@ describe("DesktopBackendRegistry", () => {
         expect.objectContaining({
           kind: "acp:gemini",
           source: "acp",
-          label: "Gemini CLI",
+          label: "Gemini",
           available: true,
           acp: expect.objectContaining({
             registryId: "gemini",
@@ -1529,7 +1529,7 @@ describe("DesktopBackendRegistry", () => {
         expect.objectContaining({
           kind: "acp:gemini",
           source: "acp",
-          label: "Gemini CLI",
+          label: "Gemini",
           available: true,
           acp: expect.objectContaining({
             registryId: "gemini",
