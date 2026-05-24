@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.0-beta.14 - 2026-05-23
+
+- Added Linux Debian package release support for x64/amd64 and arm64, with stable latest-download aliases, manual package upgrades, desktop launcher integration, and published `SHA256SUMS`.
+- Added ACP registry-backed desktop backends with allowlisted agent discovery, install records, Settings management, stdio runtime support, and hardened binary checksum/platform checks.
+- Added ACP runtime mode selection in messaging flows so `/new` and bound-thread status cards expose discovered runtime modes and keep privileged modes gated.
+- Added explicit backend/provider selection for messaging-created new threads, including `/new`, `/resume --new`, and New help actions.
+- Added Telegram forum topic ownership so monitor fanout can create, bind, report permissions for, and safely clean up thread-owned topics.
+- Surfaced Codex config trust warnings in the desktop UI with a Trust action for project-local config, hooks, and exec policy warnings.
+- Surfaced subagent review/collaboration activity in transcripts, including spawned/waited agent status and returned agent output.
+- Fixed long threads opening at the top and made Jump to latest land at the bottom in one click.
+- Fixed messaging Full Access approvals so inherited Full Access can start cleanly while explicit escalation remains guarded.
+- Fixed Workspace worktree handoff controls for non-git workspaces, composer inline-mode escape behavior, thread title hit targets, and repaired-mtime thread timestamps.
+
 ## v1.0.0-beta.13 - 2026-05-22
 
 - Added transcript copy controls for full messages, code blocks, blockquotes, and launchpad error text.
@@ -8,7 +21,6 @@
 - Added the first-run onboarding wizard, including theme/density setup, Codex profile model selection, optional messaging setup, paired PwrAgent/Codex profile provisioning, and replay support.
 - Added bootstrap-mode startup so fresh installs and missing profile names no longer silently create or bind to the operator's existing `default` Codex profile.
 - Added onboarding prerequisite checks for Codex CLI discovery and xAI API key setup, with Linux discovery paths and deferred Codex spawning while onboarding is incomplete.
-- Added Linux Debian package release support for x64/amd64 and arm64, with manual package upgrades, desktop launcher integration, and published checksums.
 - Fixed onboarding messaging setup so provider secrets start the runtime during the wizard, pairing can be approved inline, and Telegram pairing is more tolerant of whitespace and typo cases.
 - Fixed queued-turn release handling to prevent duplicate queued turn submission.
 - Fixed Linux auxiliary window menus and Linux onboarding startup behavior.
