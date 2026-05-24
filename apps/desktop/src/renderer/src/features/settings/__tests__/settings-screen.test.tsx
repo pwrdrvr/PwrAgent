@@ -74,6 +74,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      liveTranscriptEventFiltering: {
+        value: false,
+        source: "default",
+      },
       diffCondensation: {
         enabled: { value: false, source: "default" },
         model: { value: "auto", source: "default" },
@@ -413,6 +417,17 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { diffCondensation: { enabled: true } },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Enable live transcript event filtering",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { liveTranscriptEventFiltering: true },
       });
     });
 

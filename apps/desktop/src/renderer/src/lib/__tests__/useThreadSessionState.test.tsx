@@ -2970,6 +2970,7 @@ describe("useThreadSessionState", () => {
     const { result } = renderHook(() =>
       useThreadSessionState({
         desktopApi,
+        liveTranscriptEventFiltering: true,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
@@ -2999,6 +3000,65 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.entries).toEqual([]);
     expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBeUndefined();
+  });
+
+  it("keeps unrelated live transcript activity when filtering is disabled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-2",
+              turnId: "turn-2",
+              item: {
+                id: "tool-2",
+                type: "commandExecution",
+                command: "pnpm test",
+                status: "inProgress",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-2"]).toBe(true);
   });
 
   it("keeps non-focused compaction invalidations for cached threads", async () => {
@@ -3055,6 +3115,7 @@ describe("useThreadSessionState", () => {
       ({ thread }) =>
         useThreadSessionState({
           desktopApi,
+          liveTranscriptEventFiltering: true,
           thread,
         }),
       {
@@ -3125,6 +3186,7 @@ describe("useThreadSessionState", () => {
       renderCount += 1;
       return useThreadSessionState({
         desktopApi,
+        liveTranscriptEventFiltering: true,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       });
     });

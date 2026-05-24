@@ -1378,6 +1378,37 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults live transcript event filtering to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.liveTranscriptEventFiltering).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        liveTranscriptEventFiltering: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.liveTranscriptEventFiltering).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "live_transcript_event_filtering = true",
+    );
+  });
+
   it("preserves unknown sections written by other builds when saving a patch", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

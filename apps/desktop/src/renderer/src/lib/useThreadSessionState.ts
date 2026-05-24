@@ -1808,6 +1808,7 @@ function didHydrateCompletedTurn(
 
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
+  liveTranscriptEventFiltering?: boolean;
   thread?: NavigationThreadSummary;
 }): {
   activeTurnId?: string;
@@ -1848,7 +1849,7 @@ export function useThreadSessionState(params: {
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
 } {
-  const { desktopApi, thread } = params;
+  const { desktopApi, liveTranscriptEventFiltering = false, thread } = params;
   const threadKey = thread
     ? buildThreadIdentityKey(thread.source, thread.id)
     : undefined;
@@ -2212,22 +2213,25 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = buildThreadIdentityKey(event.backend, notificationThreadId);
       if (
+        liveTranscriptEventFiltering &&
         targetThreadKey !== selectedThreadKeyRef.current &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
       }
 
-      const liveActivitySignature = liveActivityNotificationSignature({
-        backend: event.backend,
-        notification: event.notification,
-        threadId: notificationThreadId,
-      });
-      if (liveActivitySignature) {
-        if (lastLiveActivitySignatureRef.current[targetThreadKey] === liveActivitySignature) {
-          return;
+      if (liveTranscriptEventFiltering) {
+        const liveActivitySignature = liveActivityNotificationSignature({
+          backend: event.backend,
+          notification: event.notification,
+          threadId: notificationThreadId,
+        });
+        if (liveActivitySignature) {
+          if (lastLiveActivitySignatureRef.current[targetThreadKey] === liveActivitySignature) {
+            return;
+          }
+          lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
         }
-        lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
       }
 
       updateSession(targetThreadKey, (current) => {
@@ -2840,7 +2844,7 @@ export function useThreadSessionState(params: {
         return current;
       });
     });
-  }, [desktopApi, thread, threadKey, updateSession]);
+  }, [desktopApi, liveTranscriptEventFiltering, thread, threadKey, updateSession]);
 
   const selectedSession = threadKey ? sessions[threadKey] : undefined;
 

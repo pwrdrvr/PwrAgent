@@ -43,6 +43,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        liveTranscriptEventFiltering: {
+          value: false,
+          source: "default",
+        },
         diffCondensation: {
           enabled: { value: false, source: "default" },
           model: { value: "auto", source: "default" },

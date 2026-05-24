@@ -362,6 +362,10 @@ export class DesktopSettingsService {
           config.experimental?.fullAccessRiskWarningDismissed,
           false,
         ),
+        liveTranscriptEventFiltering: this.resolveConfigBoolean(
+          config.experimental?.liveTranscriptEventFiltering,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
