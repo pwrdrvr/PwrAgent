@@ -3831,6 +3831,55 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes dynamic tool specs when creating a thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      dynamicTools: [
+        {
+          namespace: "pwragent_automations",
+          name: "list_automations",
+          description: "List attached automations.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          deferLoading: false,
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const startPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/start");
+
+    expect(startPayload?.params).toMatchObject({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      dynamicTools: [
+        {
+          namespace: "pwragent_automations",
+          name: "list_automations",
+          description: "List attached automations.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          deferLoading: false,
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("starts the first turn on a newly created thread without a resume preflight", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {

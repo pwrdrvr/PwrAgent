@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwragent/codex-app-server-protocol/v2";
 import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -127,6 +128,12 @@ import {
 } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
+import {
+  buildAutomationInspectionDynamicToolSpecs,
+  handleAutomationInspectionDynamicToolCall,
+  readAutomationInspectionDynamicToolCall,
+  type AutomationInspectionHandler,
+} from "../automations/automation-inspection-codex-tools";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -291,6 +298,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -1756,6 +1764,7 @@ export class DesktopBackendRegistry {
   private readonly activeTurnKeys = new Set<string>();
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationTurnContextProvider?: AutomationTurnContextProvider;
+  private automationInspectionHandler?: AutomationInspectionHandler;
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -2168,6 +2177,12 @@ export class DesktopBackendRegistry {
     provider: AutomationTurnContextProvider | null | undefined,
   ): void {
     this.automationTurnContextProvider = provider ?? undefined;
+  }
+
+  setAutomationInspectionHandler(
+    handler: AutomationInspectionHandler | null | undefined,
+  ): void {
+    this.automationInspectionHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -3876,6 +3891,10 @@ export class DesktopBackendRegistry {
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           sandbox: request.sandbox ?? modeSettings.sandbox,
           codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+          dynamicTools:
+            backend === "codex"
+              ? buildAutomationInspectionDynamicToolSpecs()
+              : undefined,
         });
     const startedAt = Date.now();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
@@ -8205,6 +8224,26 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    const dynamicToolCall = readAutomationInspectionDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (dynamicToolCall?.namespace === "pwragent_automations") {
+      backendRegistryLog.info("handling automation inspection dynamic tool call", {
+        backend,
+        callId: dynamicToolCall.callId,
+        namespace: dynamicToolCall.namespace,
+        threadId: dynamicToolCall.threadId,
+        tool: dynamicToolCall.tool,
+        turnId: dynamicToolCall.turnId,
+      });
+      return await handleAutomationInspectionDynamicToolCall({
+        backend,
+        call: dynamicToolCall,
+        handler: this.automationInspectionHandler,
+      });
+    }
+
     const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
       backend,
       request,

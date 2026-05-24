@@ -27,6 +27,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { getAppAutomationStore } from "../state/app-state.js";
+import { AutomationInspectionBus } from "./automation-inspection-bus.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
@@ -67,6 +68,7 @@ export function disposeDesktopAutomationService(): void {
 
 export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
+  private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
 
   constructor(
@@ -80,6 +82,7 @@ export class DesktopAutomationService {
       runner: new HeadlessAutomationRunner(options.registry),
       gateRunner: new ShellAutomationGateRunner(),
     });
+    this.inspectionBus = new AutomationInspectionBus(options.store);
     this.reconcileStartupRuns();
   }
 
@@ -92,6 +95,9 @@ export class DesktopAutomationService {
     this.options.registry.setAutomationTurnContextProvider?.((params) =>
       this.buildThreadAutomationContextInput(params),
     );
+    this.options.registry.setAutomationInspectionHandler?.((request) =>
+      this.inspectionBus.inspect(request),
+    );
     this.scheduler.start();
   }
 
@@ -100,6 +106,7 @@ export class DesktopAutomationService {
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
     this.options.registry.setAutomationTurnContextProvider?.(null);
+    this.options.registry.setAutomationInspectionHandler?.(null);
   }
 
   list(request: ListAutomationsRequest = {}): ListAutomationsResponse {

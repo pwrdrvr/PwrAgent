@@ -509,6 +509,7 @@ class MockBackendClient {
   };
   lastStartThreadParams?: {
     cwd?: string;
+    dynamicTools?: unknown;
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
@@ -756,6 +757,7 @@ class MockBackendClient {
 
   async startThread(params?: {
     cwd?: string;
+    dynamicTools?: unknown;
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
@@ -3579,6 +3581,40 @@ script = "echo setup"
       },
     ]);
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
+
+    await registry.close();
+  });
+
+  it("passes automation inspection dynamic tools when starting Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({ backend: "codex" });
+
+    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "get_automation_run_artifact",
+        }),
+      ]),
+    );
 
     await registry.close();
   });
@@ -7862,6 +7898,122 @@ command = "pnpm dev"
         },
       },
     });
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("handles automation inspection dynamic tool calls without surfacing pending requests", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    registry.setAutomationInspectionHandler((request) => {
+      expect(request).toEqual({
+        operation: "list_automations",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {
+          limit: 2,
+        },
+      });
+      return {
+        ok: true,
+        operation: "list_automations",
+        data: {
+          automations: [],
+        },
+      };
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "list_automations",
+        arguments: {
+          limit: 2,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({ automations: [] }, null, 2),
+        },
+      ],
+    });
+    expect(events).toEqual([]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("returns a tool error for unknown PwrAgent automation dynamic tools", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "unknown_tool",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "unsupported_operation",
+              message: "Unsupported PwrAgent automation tool.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(events).toEqual([]);
 
     unsubscribe();
     await registry.close();
