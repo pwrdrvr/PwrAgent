@@ -19,6 +19,7 @@ if (args.help || args.h) {
 const cwd = args.cwd ?? process.cwd();
 const firstPrompt = args.first ?? DEFAULT_FIRST_PROMPT;
 const secondPrompt = args.second ?? DEFAULT_SECOND_PROMPT;
+const kimiCommand = args.kimiCommand ?? args["kimi-command"] ?? "kimi";
 const timeoutMs = Number(args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 const idleTimeoutMs = Number(
   args.idleTimeoutMs ?? args["idle-timeout-ms"] ?? DEFAULT_IDLE_TIMEOUT_MS,
@@ -47,13 +48,13 @@ async function main() {
   const kimiArgs = enableYolo ? ["--yolo", "acp"] : ["acp"];
   console.log("Starting kimi acp");
   console.log(`cwd: ${cwd}`);
-  console.log(`command: kimi ${kimiArgs.join(" ")}`);
+  console.log(`command: ${kimiCommand} ${kimiArgs.join(" ")}`);
   console.log(`yolo: ${enableYolo ? "enabled via top-level --yolo" : "disabled"}`);
   console.log(`idle timeout: ${idleTimeoutMs}ms`);
   console.log(`first prompt: ${firstPrompt}`);
   console.log(`second prompt: ${secondPrompt}`);
 
-  child = spawn("kimi", kimiArgs, {
+  child = spawn(kimiCommand, kimiArgs, {
     cwd,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -250,9 +251,16 @@ function handleLine(line) {
     `gapMs=${gapMs}`,
     `method=${method}`,
     `kind=${updateKind}`,
+    update?.messageId || update?.message_id
+      ? `messageId=${shortId(String(update.messageId ?? update.message_id))}`
+      : undefined,
+    update?.itemId || update?.item_id
+      ? `itemId=${shortId(String(update.itemId ?? update.item_id))}`
+      : undefined,
     update?.status ? `status=${update.status}` : undefined,
     update?.title ? `title=${JSON.stringify(truncate(String(update.title), 80))}` : undefined,
     update?.toolCallId ? `toolCallId=${shortId(String(update.toolCallId))}` : undefined,
+    update?.tool_call_id ? `toolCallId=${shortId(String(update.tool_call_id))}` : undefined,
     text ? `textChars=${text.length}` : undefined,
     overlap === undefined ? undefined : `overlapPrevPct=${overlap.toFixed(1)}`,
     text ? `text=${JSON.stringify(truncate(text))}` : undefined,
@@ -393,6 +401,7 @@ ACP traffic during the second prompt with timing, text length, and immediate
 prior-message overlap metrics.
 
 Options:
+  --kimi-command <path> ACP executable. Defaults to resolving "kimi" from PATH.
   --cwd <path>          Working directory for the ACP session. Defaults to cwd.
   --first <prompt>      First prompt. Defaults to: ${DEFAULT_FIRST_PROMPT}
   --second <prompt>     Second prompt. Defaults to the bundle-size repro prompt.
