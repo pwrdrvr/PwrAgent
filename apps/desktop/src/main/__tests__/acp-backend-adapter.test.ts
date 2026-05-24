@@ -268,6 +268,89 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("emits ACP thought chunks as live assistant commentary", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "I should inspect the build setup." },
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        backend: backendId,
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "thought:turn-1",
+            delta: "I should inspect the build setup.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    await adapter.close();
+  });
+
   it("reads Kimi replay from local rollout history instead of session/load", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {

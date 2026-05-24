@@ -238,7 +238,7 @@ function handleLine(line) {
   }
 
   const text = extractText(envelope);
-  const overlap = text ? overlapPercent(previousText, text) : undefined;
+  const overlap = text ? retransmittedPrefixPercent(previousText, text) : undefined;
   if (text) {
     previousText = text;
   }
@@ -321,19 +321,20 @@ function extractContentText(content) {
   return extractContentText(record.content);
 }
 
-function overlapPercent(previous, current) {
-  if (!previous || !current) {
+function retransmittedPrefixPercent(previous, current) {
+  const normalizedPrevious = previous.trimStart();
+  const normalizedCurrent = current.trimStart();
+  if (
+    !normalizedPrevious ||
+    !normalizedCurrent ||
+    normalizedCurrent.length <= normalizedPrevious.length
+  ) {
     return 0;
   }
-  const limit = Math.min(previous.length, current.length);
-  let commonPrefix = 0;
-  while (
-    commonPrefix < limit &&
-    previous.charCodeAt(commonPrefix) === current.charCodeAt(commonPrefix)
-  ) {
-    commonPrefix += 1;
+  if (!normalizedCurrent.startsWith(normalizedPrevious)) {
+    return 0;
   }
-  return (commonPrefix / Math.max(1, current.length)) * 100;
+  return (normalizedPrevious.length / normalizedCurrent.length) * 100;
 }
 
 function truncate(value, limit = PREVIEW_LIMIT) {
