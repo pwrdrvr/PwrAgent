@@ -4564,7 +4564,7 @@ export function Composer(props: ComposerProps) {
 
           {acpRuntimeModeControl ? (
             <ComposerDropdown
-              ariaLabel="ACP mode"
+              ariaLabel="Agent mode"
               compact
               disabled={
                 launchpadSubmitting ||

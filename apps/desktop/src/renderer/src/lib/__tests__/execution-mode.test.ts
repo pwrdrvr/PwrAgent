@@ -86,6 +86,25 @@ describe("ACP execution mode labels", () => {
       source: "configOption",
       value: "yolo",
     });
-    expect(formatAccessModeLabel(thread, acpBackend)).toBe("Yolo");
+    expect(formatAccessModeLabel(thread, acpBackend)).toBe("Default Access");
+  });
+
+  it("does not expose single-option ACP runtime modes as composer controls", () => {
+    const singleModeBackend = {
+      ...acpBackend,
+      acp: {
+        ...acpBackend.acp,
+        runtime: {
+          schemaVersion: 1,
+          status: "discovered",
+          modes: {
+            availableModes: [{ id: "default", label: "Default" }],
+            currentModeId: "default",
+          },
+        },
+      },
+    } satisfies BackendSummary;
+
+    expect(getAcpRuntimeModeControl(singleModeBackend, thread)).toBeUndefined();
   });
 });

@@ -4841,7 +4841,7 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("ACP mode", "Yolo");
+    chooseDropdownOption("Agent mode", "Yolo");
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(

@@ -35,6 +35,9 @@ export function getAcpRuntimeModeControl(
     (option) => option.category === "mode" && option.values.length > 0,
   );
   if (modeConfigOption) {
+    if (modeConfigOption.values.length < 2) {
+      return undefined;
+    }
     const currentModeValue =
       settings?.acpRuntime?.currentModeId &&
       modeConfigOption.values.some(
@@ -60,7 +63,7 @@ export function getAcpRuntimeModeControl(
   }
 
   const modeOptions = runtime.modes?.availableModes ?? [];
-  if (modeOptions.length === 0) {
+  if (modeOptions.length < 2) {
     return undefined;
   }
 
@@ -81,15 +84,8 @@ export function getAcpRuntimeModeControl(
 
 export function formatAccessModeLabel(
   settings: NavigationLaunchpadDraft | NavigationThreadSummary,
-  backend?: BackendSummary,
+  _backend?: BackendSummary,
 ): string {
-  const acpMode = getAcpRuntimeModeControl(backend, settings);
-  if (acpMode) {
-    return (
-      acpMode.options.find((option) => option.value === acpMode.value)?.label ??
-      formatAcpRuntimeModeLabel(acpMode.value)
-    );
-  }
   return formatExecutionModeLabel(settings.executionMode);
 }
 
