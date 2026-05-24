@@ -222,6 +222,68 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual([]);
   });
 
+  it("passes configured MCP servers when an ACP session id is known", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers: ({ backendId, cwd, sessionId }) =>
+        sessionId
+          ? [
+              {
+                name: "pwragent_automations",
+                command: "pwragent-automation-tools",
+                args: [backendId, cwd, sessionId],
+              },
+            ]
+          : [],
+    });
+
+    await client.initialize();
+    await client.startSession({
+      sessionId: "app-session-1",
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "loaded-session-1",
+      title: "Loaded ACP session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 950,
+      executionMode: "default",
+      status: "idle",
+    });
+    await client.refreshSession(
+      store.getSession("acp:gemini", "loaded-session-1")!,
+    );
+
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        {
+          name: "pwragent_automations",
+          command: "pwragent-automation-tools",
+          args: ["acp:gemini", "/repo", "app-session-1"],
+        },
+      ],
+    });
+    expect(transport.requests[2]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        {
+          name: "pwragent_automations",
+          command: "pwragent-automation-tools",
+          args: ["acp:gemini", "/repo", "loaded-session-1"],
+        },
+      ],
+      sessionId: "loaded-session-1",
+    });
+  });
+
   it("sends pasted images as ACP image content and keeps structured parts in live replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";
