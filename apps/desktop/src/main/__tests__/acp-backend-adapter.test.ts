@@ -268,7 +268,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("emits ACP thought chunks as live assistant commentary", async () => {
+  it("emits ACP thought chunks as live assistant response text", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];
@@ -340,9 +340,8 @@ describe("AcpBackendAdapter", () => {
           params: {
             threadId: session.sessionId,
             turnId: "turn-1",
-            itemId: "thought:turn-1",
+            itemId: "assistant:turn-1",
             delta: "I should inspect the build setup.",
-            phase: "commentary",
           },
         },
       });

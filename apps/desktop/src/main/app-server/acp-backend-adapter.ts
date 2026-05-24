@@ -997,7 +997,6 @@ export class AcpBackendAdapter {
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {
-            const isThoughtChunk = updateKind === "agent_thought_chunk";
             await this.emit({
               backend: agent.backendId,
               notification: {
@@ -1005,11 +1004,8 @@ export class AcpBackendAdapter {
                 params: {
                   threadId: sessionId,
                   turnId,
-                  itemId: `${isThoughtChunk ? "thought" : "assistant"}:${
-                    turnId ?? sessionId
-                  }`,
+                  itemId: `assistant:${turnId ?? sessionId}`,
                   delta,
-                  ...(isThoughtChunk ? { phase: "commentary" } : {}),
                 },
               },
             });

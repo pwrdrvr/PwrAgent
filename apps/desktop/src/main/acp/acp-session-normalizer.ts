@@ -202,10 +202,9 @@ export class AcpSessionReplayNormalizer {
     }
     const id =
       readString(update.update, "messageId") ??
-      `thought:${this.currentTurnId ?? update.sessionId}`;
+      `assistant:${this.currentTurnId ?? update.sessionId}`;
     this.appendMessageChunk({
       id,
-      phase: "commentary",
       role: "assistant",
       text,
       createdAt,

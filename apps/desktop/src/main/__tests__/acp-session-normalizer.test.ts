@@ -585,7 +585,7 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([]);
   });
 
-  it("records thought chunks as assistant commentary", () => {
+  it("records thought chunks as assistant response messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
     const replay = normalizer.apply({
@@ -600,12 +600,12 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([
       expect.objectContaining({
         type: "message",
-        id: "thought:session-1",
+        id: "assistant:session-1",
         role: "assistant",
-        phase: "commentary",
         text: "Inspecting project files.",
       }),
     ]);
+    expect(replay.lastAssistantMessage).toBe("Inspecting project files.");
   });
 
   it("preserves unknown update variants as structured activity", () => {
