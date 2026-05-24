@@ -83,6 +83,21 @@ export async function handleAutomationInspectionDynamicToolCall(params: {
   return toDynamicToolResponse(response);
 }
 
+export function buildAutomationInspectionDynamicToolErrorResponse(params: {
+  code: "forbidden" | "internal_error" | "unsupported_operation";
+  message: string;
+  operation?: AutomationInspectionOperationName;
+}): DynamicToolCallResponse {
+  return toDynamicToolResponse({
+    ok: false,
+    operation: params.operation ?? "list_automations",
+    error: {
+      code: params.code,
+      message: params.message,
+    },
+  });
+}
+
 export function readAutomationInspectionDynamicToolCall(
   request: {
     method: string;

@@ -7928,7 +7928,18 @@ command = "pnpm dev"
         },
       };
     });
-
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    events.length = 0;
     const response = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
@@ -7959,6 +7970,65 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rejects automation inspection dynamic tool calls that do not match an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const handler = vi.fn();
+    registry.setAutomationInspectionHandler(handler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread-2",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "list_automations",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "Automation inspection tool calls must originate from an active turn on the same thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(handler).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("returns a tool error for unknown PwrAgent automation dynamic tools", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -7974,6 +8044,18 @@ command = "pnpm dev"
     const unsubscribe = registry.onEvent((event) => {
       events.push(event);
     });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    events.length = 0;
 
     const response = await codexClient.emitRequest({
       method: "item/tool/call",

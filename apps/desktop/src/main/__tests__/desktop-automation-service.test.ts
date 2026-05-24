@@ -819,6 +819,8 @@ describe("DesktopAutomationService", () => {
     });
     service.start();
 
+    expect(registry.onEvent).not.toHaveBeenCalled();
+
     const created = await service.create({
       backend: "codex",
       threadId: "thread-1",

@@ -98,11 +98,6 @@ export class DesktopAutomationService {
   }
 
   start(): void {
-    if (!this.unsubscribeRegistryEvents) {
-      this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
-        this.handleRegistryEvent(event),
-      );
-    }
     this.options.registry.setAutomationInspectionHandler?.(async (request) => {
       const agent = await this.options.registry.getThreadAgentMetadata({
         backend: request.context.backend,
@@ -140,6 +135,11 @@ export class DesktopAutomationService {
         reason: this.options.runtime.disabledReason,
       });
       return;
+    }
+    if (!this.unsubscribeRegistryEvents) {
+      this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
+        this.handleRegistryEvent(event),
+      );
     }
     this.reconcileStartupRuns();
     this.scheduler.start();

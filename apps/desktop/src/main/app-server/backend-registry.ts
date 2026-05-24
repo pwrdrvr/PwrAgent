@@ -129,6 +129,7 @@ import {
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import {
+  buildAutomationInspectionDynamicToolErrorResponse,
   buildAutomationInspectionDynamicToolSpecs,
   handleAutomationInspectionDynamicToolCall,
   readAutomationInspectionDynamicToolCall,
@@ -8163,6 +8164,21 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (dynamicToolCall?.namespace === "pwragent_automations") {
+      if (!this.isLiveAutomationInspectionToolCall(backend, dynamicToolCall)) {
+        backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
+          backend,
+          callId: dynamicToolCall.callId,
+          namespace: dynamicToolCall.namespace,
+          threadId: dynamicToolCall.threadId,
+          tool: dynamicToolCall.tool,
+          turnId: dynamicToolCall.turnId,
+        });
+        return buildAutomationInspectionDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Automation inspection tool calls must originate from an active turn on the same thread.",
+        });
+      }
       backendRegistryLog.info("handling automation inspection dynamic tool call", {
         backend,
         callId: dynamicToolCall.callId,
@@ -8215,6 +8231,15 @@ export class DesktopBackendRegistry {
         reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
+  }
+
+  private isLiveAutomationInspectionToolCall(
+    backend: AppServerBackendKind,
+    call: { threadId: string; turnId?: string },
+  ): boolean {
+    const turnId = call.turnId?.trim();
+    if (!turnId) return false;
+    return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
   }
 
   private async emit(event: AgentEvent): Promise<void> {
