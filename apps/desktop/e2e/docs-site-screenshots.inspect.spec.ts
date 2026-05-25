@@ -939,3 +939,120 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     await rm(tmpRoot, { recursive: true, force: true });
   }
 });
+
+// ────────────────────── First-run onboarding wizard ──────────────────────
+
+test("desktop-onboarding-wizard — Codex profile step", async () => {
+  test.setTimeout(120_000);
+
+  // No fixturePath: the wizard runs against a fresh PWRAGENT_HOME (no
+  // ~/.pwragent/profiles/default/ pre-seeded), so the boot decision
+  // returns `no-profile-configured` and the wizard fires for real.
+  // `suppressOnboarding: false` is the explicit opt-in, and the
+  // wizard doesn't need the replay driver until it tries to spawn a
+  // thread (which we won't do — we stop on the Codex Profile step).
+  const app = await launchElectronApp({
+    suppressOnboarding: false,
+    requiresReplayDriver: false,
+    windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
+  });
+
+  try {
+    // Welcome → Thread presentation → Models / Providers → Codex
+    // profile. The Codex profile step is the most distinctive shot —
+    // it shows the Shared / Isolated / Multiple cards that frame how
+    // PwrAgent relates to a Codex install.
+    await expect(
+      app.window.getByRole("heading", { name: /A few short choices/i }),
+    ).toBeVisible();
+    await app.window.getByRole("button", { name: /Get started/i }).click();
+
+    // Thread presentation — accept defaults.
+    await expect(
+      app.window.getByRole("heading", {
+        name: /Pick your appearance and thread density/i,
+      }),
+    ).toBeVisible();
+    await app.window.getByRole("button", { name: /^Continue/i }).click();
+
+    // Models / Providers — paste a dummy xAI key to clear the gate
+    // (Codex CLI isn't on PATH in the screenshot run env).
+    await expect(
+      app.window.getByRole("heading", {
+        name: /Pick at least one model backend/i,
+      }),
+    ).toBeVisible();
+    await app.window
+      .locator('input[type="password"]')
+      .first()
+      .fill("xai-screenshot-placeholder-key");
+    await app.window.getByRole("button", { name: /Use this key/i }).click();
+    await app.window.getByRole("button", { name: /^Continue/i }).click();
+
+    // Codex profile — this is the screenshot target.
+    await expect(
+      app.window.getByRole("heading", {
+        name: /How should PwrAgent relate to your Codex install/i,
+      }),
+    ).toBeVisible();
+
+    await bringToFront(app.electronApp);
+    captureNative("desktop-onboarding-codex-profile.png");
+  } finally {
+    await app.close();
+  }
+});
+
+// ────────────────────── Live work rail ──────────────────────
+
+test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", async () => {
+  test.setTimeout(120_000);
+
+  // Reuses the existing live-work-rail-toggle fixture from the e2e
+  // test suite. That fixture's turn/diff/updated landing ends with
+  // the protocol-summary "Edited 2 files, +4, -1" — a tight, visually
+  // interesting state for the rail.
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/live-work-rail-toggle/replay.fixture.json",
+    ),
+    windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /LiveWorkRail chevron toggle replay/i })
+      .first()
+      .click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "LiveWorkRail chevron toggle replay",
+      }),
+    ).toBeVisible();
+
+    // Kick the turn so the rail populates with diff + plan content.
+    await app.window
+      .getByLabel("Reply")
+      .fill("Make a small disposable edit to two files.");
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    // Advance the replay through the diff lifecycle.
+    await app.advance({ stepId: "status-active-1" });
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "turn-diff-updated-1" });
+
+    // The rail's landmark name reflects the cumulative diff summary.
+    await expect(
+      app.window.getByRole("complementary", { name: /Edited 2 files/i }),
+    ).toBeVisible();
+
+    await bringToFront(app.electronApp);
+    captureNative("desktop-live-work-rail.png");
+  } finally {
+    await app.close();
+  }
+});
