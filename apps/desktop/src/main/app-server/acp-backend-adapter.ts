@@ -33,6 +33,7 @@ import {
   type AcpJsonRpcTransport,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
+import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
@@ -110,6 +111,7 @@ export type AcpBackendAdapterOptions = {
   acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
+  automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
   discoverLocalAcpAgents?: LocalAcpDiscovery;
@@ -618,6 +620,7 @@ export class AcpBackendAdapter {
   >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
+  private readonly automationInspectionMcpCommand?: string;
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
@@ -632,6 +635,7 @@ export class AcpBackendAdapter {
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
+    this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.acpAgentStore =
@@ -1306,6 +1310,13 @@ export class AcpBackendAdapter {
       },
       onRequest: async (request) =>
         await this.handleServerRequest(agent.backendId, request),
+      mcpServers: ({ backendId, sessionId }) =>
+        buildAutomationInspectionAcpMcpServers({
+          backend: backendId,
+          command: this.automationInspectionMcpCommand,
+          runtimeCapabilities: agent.runtimeCapabilities,
+          threadId: sessionId,
+        }),
     });
   }
 }

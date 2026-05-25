@@ -59,6 +59,7 @@ import type {
   TurnInterruptParams as CodexTurnInterruptParams,
   TurnStartParams as CodexTurnStartParams,
   TurnSteerParams as CodexTurnSteerParams,
+  DynamicToolSpec as CodexDynamicToolSpec,
   UserInput as CodexUserInput,
 } from "@pwragent/codex-app-server-protocol/v2";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -253,7 +254,8 @@ function isHandledServerRequestMethod(method: string): boolean {
   return (
     isApprovalLikeMethod(method) ||
     method === "item/tool/requestUserInput" ||
-    method === "mcpServer/elicitation/request"
+    method === "mcpServer/elicitation/request" ||
+    method === "item/tool/call"
   );
 }
 
@@ -3507,6 +3509,7 @@ function buildThreadStartPayload(params: {
   ephemeral?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadStartParams["config"];
+  dynamicTools?: CodexDynamicToolSpec[];
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
@@ -3539,6 +3542,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.config) {
     base.config = params.config;
+  }
+  if (params.dynamicTools) {
+    base.dynamicTools = params.dynamicTools;
   }
   if (
     params.codexEnvironmentRuntime?.executionTarget === "remote" &&
@@ -4506,6 +4512,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 

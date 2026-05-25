@@ -53,6 +53,14 @@ export type AcpJsonRpcTransport = {
 
 const ACP_PROTOCOL_VERSION = 1;
 const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+
+export type AcpMcpServerConfig = {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -111,6 +119,11 @@ export type AcpAgentClientOptions = {
   onRequest?: (
     request: AppServerPendingRequestNotification
   ) => Promise<unknown> | unknown;
+  mcpServers?: (context: {
+    backendId: AcpBackendId;
+    cwd: string;
+    sessionId?: string;
+  }) => AcpMcpServerConfig[];
 };
 
 export class AcpAgentClient {
@@ -192,9 +205,13 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
+    const mcpServers = this.buildMcpServers({
+      cwd,
+      sessionId: params.sessionId,
+    });
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers: [],
+      mcpServers,
     });
     const now = this.now();
     const record = asRecord(result);
@@ -764,9 +781,13 @@ export class AcpAgentClient {
     }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    const mcpServers = this.buildMcpServers({
+      cwd,
+      sessionId: metadata.sessionId,
+    });
     const result = await this.options.transport.request("session/load", {
       cwd,
-      mcpServers: [],
+      mcpServers,
       sessionId: protocolSessionId,
     });
     const runtimeCapabilities = this.captureRuntimeCapabilities({
@@ -797,6 +818,19 @@ export class AcpAgentClient {
 
   private supportsSessionLoad(): boolean {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
+  }
+
+  private buildMcpServers(params: {
+    cwd: string;
+    sessionId?: string;
+  }): AcpMcpServerConfig[] {
+    return (
+      this.options.mcpServers?.({
+        backendId: this.options.backendId,
+        cwd: params.cwd,
+        sessionId: params.sessionId,
+      }) ?? []
+    );
   }
 
   private startTrackedTurn(sessionId: string, turnId: string): void {

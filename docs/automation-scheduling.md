@@ -68,6 +68,39 @@ On app restart, stale local pending, queued, or running automation records are
 closed as cancelled because queued desktop-local work is not durable across
 process lifetimes.
 
+## Runtime Disable
+
+Use `--disable-automations` or `PWRAGENT_DISABLE_AUTOMATIONS=1` to keep a
+desktop instance from scheduling or manually running automations. The UI and
+read-only history/inspection paths remain available so secondary dev instances
+can inspect the same profile without also executing the profile's schedules.
+
+## Agent Tool Access
+
+Agent-attached automations publish timeline cards out of band. They are not
+inserted into the next user message as fake context. Codex-backed Agent threads
+receive read-only `pwragent_automations` dynamic tools so the Agent can list its
+own attached automations, inspect recent runs, and fetch stored run artifacts
+when a user asks what happened. PwrAgent authorizes the tool call at execution
+time; ordinary work threads receive a forbidden response even if the Codex
+thread was born with the dynamic tool catalog.
+
+ACP-backed Agent threads use the same inspection operations through MCP/CLI
+adapters when the runtime supports MCP server configuration. Unsupported ACP
+runtimes keep starting with an empty MCP server list instead of failing session
+creation. Set `PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` to the command that
+serves the automation inspection MCP bridge for ACP runtimes that support MCP
+server launch configuration.
+
+Manual smoke test:
+
+1. Create or open an Agent thread.
+2. Attach an interval automation and let it complete a run.
+3. Ask the Agent what happened with that automation.
+4. Confirm the submitted user message remains unchanged and logs show
+   `automation inspection request handled` rather than a synthetic
+   `Automation Context` message.
+
 ## Future Personality Profiles
 
 Personality profile selection is intentionally deferred. If future versions add

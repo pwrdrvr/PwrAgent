@@ -2,8 +2,10 @@ import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
-  AppServerTurnInputItem,
   AutomationDetail,
+  AutomationInspectionFailure,
+  AutomationInspectionErrorCode,
+  AutomationInspectionResponse,
   AutomationIdRequest,
   AutomationMutationResponse,
   AutomationRunSummary,
@@ -26,7 +28,9 @@ import { validateAutomationScheduleDefinition } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
+import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAppAutomationStore } from "../state/app-state.js";
+import { AutomationInspectionBus } from "./automation-inspection-bus.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
@@ -51,8 +55,13 @@ export function getDesktopAutomationService(
   registry = getDesktopBackendRegistry(),
 ): DesktopAutomationService {
   if (!service) {
+    const runtimeOverride = resolveRuntimeAutomationsOverride();
     service = new DesktopAutomationService({
       registry,
+      runtime: {
+        disabled: runtimeOverride.disabled,
+        disabledReason: runtimeOverride.reason,
+      },
       store: getDesktopAutomationStore(),
     });
     service.start();
@@ -67,11 +76,16 @@ export function disposeDesktopAutomationService(): void {
 
 export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
+  private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
 
   constructor(
     private readonly options: {
       registry: DesktopBackendRegistry;
+      runtime?: {
+        disabled?: boolean;
+        disabledReason?: string;
+      };
       store: AutomationStore;
     },
   ) {
@@ -80,18 +94,54 @@ export class DesktopAutomationService {
       runner: new HeadlessAutomationRunner(options.registry),
       gateRunner: new ShellAutomationGateRunner(),
     });
-    this.reconcileStartupRuns();
+    this.inspectionBus = new AutomationInspectionBus(options.store);
   }
 
   start(): void {
+    this.options.registry.setAutomationInspectionHandler?.(async (request) => {
+      const agent = await this.options.registry.getThreadAgentMetadata({
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+      });
+      if (!agent) {
+        const response = automationInspectionFailure(
+          request.operation,
+          "forbidden",
+          "Automation inspection is only available to Agent threads.",
+        );
+        automationServiceLog.info("automation inspection request denied", {
+          backend: request.context.backend,
+          errorCode: "forbidden",
+          ok: response.ok,
+          operation: request.operation,
+          threadId: request.context.threadId,
+        });
+        return response;
+      }
+      const response = this.inspectionBus.inspect(request);
+      const payload = response.ok ? response.data : response.error;
+      automationServiceLog.info("automation inspection request handled", {
+        backend: request.context.backend,
+        errorCode: response.ok ? undefined : response.error.code,
+        ok: response.ok,
+        operation: request.operation,
+        resultBytes: JSON.stringify(payload).length,
+        threadId: request.context.threadId,
+      });
+      return response;
+    });
+    if (this.options.runtime?.disabled) {
+      automationServiceLog.info("automation scheduler disabled for this app instance", {
+        reason: this.options.runtime.disabledReason,
+      });
+      return;
+    }
     if (!this.unsubscribeRegistryEvents) {
       this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
         this.handleRegistryEvent(event),
       );
     }
-    this.options.registry.setAutomationTurnContextProvider?.((params) =>
-      this.buildThreadAutomationContextInput(params),
-    );
+    this.reconcileStartupRuns();
     this.scheduler.start();
   }
 
@@ -99,7 +149,7 @@ export class DesktopAutomationService {
     this.scheduler.stop();
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
-    this.options.registry.setAutomationTurnContextProvider?.(null);
+    this.options.registry.setAutomationInspectionHandler?.(null);
   }
 
   list(request: ListAutomationsRequest = {}): ListAutomationsResponse {
@@ -209,7 +259,7 @@ export class DesktopAutomationService {
       now,
     });
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -276,7 +326,7 @@ export class DesktopAutomationService {
       await this.notifyThreadAutomationsUpdated(current);
     }
     await this.notifyThreadAutomationsUpdated(updated);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(updated) };
   }
 
@@ -287,7 +337,7 @@ export class DesktopAutomationService {
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -299,7 +349,7 @@ export class DesktopAutomationService {
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -317,11 +367,12 @@ export class DesktopAutomationService {
       );
     }
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
   async runNow(request: AutomationIdRequest): Promise<RunAutomationNowResponse> {
+    this.assertAutomationsEnabled();
     const result = await this.scheduler.runNow(request.automationId);
     const [run] = this.options.store.listRunsForAutomation(request.automationId, 1);
     if (!run) {
@@ -628,60 +679,19 @@ export class DesktopAutomationService {
     this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
   }
 
-  private buildThreadAutomationContextInput(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): AppServerTurnInputItem[] {
-    const lines = this.options.store
-      .listRunsForThread({
-        backend: params.backend,
-        threadId: params.threadId,
-        limit: 10,
-      })
-      .filter((run) =>
-        run.status === "completed" ||
-        run.status === "failed" ||
-        run.status === "cancelled" ||
-        run.status === "skipped"
-      )
-      .slice(0, 5)
-      .map((run) => {
-        const automation = this.options.store.getAutomation(run.automationId, {
-          includeDeleted: true,
-        });
-        const artifact = this.options.store.getRunArtifact(run.id);
-        const when =
-          run.completedAt ??
-          run.startedAt ??
-          run.queuedAt ??
-          run.scheduledFor;
-        const summary =
-          artifact?.outputDecision?.summary ??
-          firstLine(artifact?.finalText) ??
-          artifact?.errorMessage ??
-          run.errorMessage ??
-          run.status;
-        const details = artifact?.outputDecision?.details;
-        return [
-          `- ${automation?.name ?? "Automation"} (${run.status}${when ? ` at ${new Date(when).toISOString()}` : ""}): ${summary}`,
-          details ? `  Details: ${details}` : undefined,
-        ]
-          .filter((line): line is string => Boolean(line))
-          .join("\n");
-      });
-    if (lines.length === 0) {
-      return [];
+  private startSchedulerIfEnabled(): void {
+    if (!this.options.runtime?.disabled) {
+      this.scheduler.start();
     }
-    return [
-      {
-        type: "text",
-        text: [
-          "Recent automation updates for this Agent thread:",
-          ...lines,
-          "These automation updates were delivered out of band and may not appear in the Codex transcript above. Use them when answering questions about automation runs.",
-        ].join("\n"),
-      },
-    ];
+  }
+
+  private assertAutomationsEnabled(): void {
+    if (!this.options.runtime?.disabled) return;
+    throw new Error(
+      this.options.runtime.disabledReason
+        ? `Automations are disabled for this app instance: ${this.options.runtime.disabledReason}`
+        : "Automations are disabled for this app instance.",
+    );
   }
 
   private assertValidSchedule(schedule: CreateAutomationRequest["schedule"]): void {
@@ -714,6 +724,21 @@ export class DesktopAutomationService {
       },
     });
   }
+}
+
+function automationInspectionFailure(
+  operation: AutomationInspectionResponse["operation"],
+  code: AutomationInspectionErrorCode,
+  message: string,
+): AutomationInspectionFailure {
+  return {
+    ok: false,
+    operation,
+    error: {
+      code,
+      message,
+    },
+  };
 }
 
 function toAutomationDetail(

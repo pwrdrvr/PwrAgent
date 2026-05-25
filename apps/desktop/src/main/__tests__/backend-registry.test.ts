@@ -509,6 +509,7 @@ class MockBackendClient {
   };
   lastStartThreadParams?: {
     cwd?: string;
+    dynamicTools?: unknown;
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
@@ -756,6 +757,7 @@ class MockBackendClient {
 
   async startThread(params?: {
     cwd?: string;
+    dynamicTools?: unknown;
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
@@ -3583,6 +3585,40 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("passes automation inspection dynamic tools when starting Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({ backend: "codex" });
+
+    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "get_automation_run_artifact",
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
   it("reads Grok models once from the default client and reuses them", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
@@ -4987,7 +5023,7 @@ script = "pnpm install"
       threadId: "thread-1",
       executionMode: "default",
     });
-    expect(codexClient.lastStartThreadParams).toEqual({
+    expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
       model: "gpt-5.5",
       reasoningEffort: "medium",
@@ -4995,6 +5031,12 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
+      dynamicTools: expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+      ]),
     });
 
     await registry.close();
@@ -7770,7 +7812,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("prepends automation context to non-automation thread turns", async () => {
+  it("submits non-automation thread turns without synthetic automation context", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/read"] },
     });
@@ -7781,12 +7823,6 @@ command = "pnpm dev"
       }),
       overlayStore: createOverlayStoreMock(),
     });
-    registry.setAutomationTurnContextProvider(() => [
-      {
-        type: "text",
-        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
-      },
-    ]);
 
     await registry.startTurn({
       backend: "codex",
@@ -7795,15 +7831,6 @@ command = "pnpm dev"
     });
 
     expect(codexClient.lastStartTurnParams?.input).toEqual([
-      {
-        type: "text",
-        text: [
-          "## Automation Context",
-          "Recent automation updates for this Agent thread:\n- Weather: rain.",
-          "## User Message",
-          "",
-        ].join("\n\n"),
-      },
       { type: "text", text: "What happened?" },
     ]);
 
@@ -7862,6 +7889,204 @@ command = "pnpm dev"
         },
       },
     });
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("handles automation inspection dynamic tool calls without surfacing pending requests", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    registry.setAutomationInspectionHandler((request) => {
+      expect(request).toEqual({
+        operation: "list_automations",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {
+          limit: 2,
+        },
+      });
+      return {
+        ok: true,
+        operation: "list_automations",
+        data: {
+          automations: [],
+        },
+      };
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    events.length = 0;
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "list_automations",
+        arguments: {
+          limit: 2,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({ automations: [] }, null, 2),
+        },
+      ],
+    });
+    expect(events).toEqual([]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("rejects automation inspection dynamic tool calls that do not match an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const handler = vi.fn();
+    registry.setAutomationInspectionHandler(handler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread-2",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "list_automations",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "Automation inspection tool calls must originate from an active turn on the same thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(handler).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("returns a tool error for unknown PwrAgent automation dynamic tools", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    events.length = 0;
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_automations",
+        tool: "unknown_tool",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "unsupported_operation",
+              message: "Unsupported PwrAgent automation tool.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(events).toEqual([]);
 
     unsubscribe();
     await registry.close();

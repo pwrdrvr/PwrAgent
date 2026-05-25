@@ -82,7 +82,7 @@ beforeEach(() => {
     publishLocalEvent: vi.fn(async (event: AgentEvent) => {
       publishedEvents.push(event);
     }),
-    setAutomationTurnContextProvider: vi.fn(),
+    setAutomationInspectionHandler: vi.fn(),
   } as unknown as DesktopBackendRegistry;
 });
 
@@ -720,7 +720,7 @@ describe("DesktopAutomationService", () => {
     });
   });
 
-  it("registers recent automation results as Agent turn context", async () => {
+  it("registers automation inspection for Agent tool access", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();
     const created = await service.create({
@@ -758,22 +758,90 @@ describe("DesktopAutomationService", () => {
       },
     });
 
-    const provider = vi.mocked(registry.setAutomationTurnContextProvider).mock
+    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
       .calls.at(-1)?.[0];
-    expect(provider).toBeDefined();
-    const context = await provider!({
+    expect(handler).toBeDefined();
+    const response = await handler!({
+      operation: "summarize_automation_status",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      args: {},
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        recentRuns: [
+          expect.objectContaining({
+            outputSummary: "Rain is already underway.",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("denies automation inspection for ordinary work threads", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
+      .calls.at(-1)?.[0];
+    expect(handler).toBeDefined();
+
+    registry.getThreadAgentMetadata = vi.fn(async () => undefined);
+
+    await expect(
+      handler!({
+        operation: "list_automations",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "forbidden",
+        message: "Automation inspection is only available to Agent threads.",
+      },
+    });
+  });
+
+  it("keeps automation state inspectable but blocks runs when automations are disabled", async () => {
+    const service = new DesktopAutomationService({
+      registry,
+      runtime: {
+        disabled: true,
+        disabledReason: "PWRAGENT_DISABLE_AUTOMATIONS is enabled",
+      },
+      store,
+    });
+    service.start();
+
+    expect(registry.onEvent).not.toHaveBeenCalled();
+
+    const created = await service.create({
       backend: "codex",
       threadId: "thread-1",
-    });
-    expect(context).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining("Rain is already underway."),
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
       },
-    ]);
-    expect(context[0]?.type === "text" ? context[0].text : "").toContain(
-      "Hourly forecast shows rain through at least 5 AM.",
+    });
+
+    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
+      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    await expect(
+      service.runNow({ automationId: created.automation.id }),
+    ).rejects.toThrow(
+      "Automations are disabled for this app instance: PWRAGENT_DISABLE_AUTOMATIONS is enabled",
     );
+    expect(registry.submitTurn).not.toHaveBeenCalled();
+    expect(registry.startAutomationHeadlessTurn).not.toHaveBeenCalled();
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {

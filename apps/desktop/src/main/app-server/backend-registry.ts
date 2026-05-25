@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwragent/codex-app-server-protocol/v2";
 import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -127,6 +128,14 @@ import {
 } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
+import {
+  buildAutomationInspectionDynamicToolErrorResponse,
+  buildAutomationInspectionDynamicToolSpecs,
+  handleAutomationInspectionDynamicToolCall,
+  readAutomationInspectionDynamicToolCall,
+  type AutomationInspectionHandler,
+} from "../automations/automation-inspection-codex-tools";
+import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -291,6 +300,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -677,12 +687,6 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
-type AutomationTurnContextProvider = (params: {
-  backend: AppServerBackendKind;
-  origin?: ThreadTurnQueueOrigin;
-  threadId: ThreadIdentifier;
-}) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>;
-
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
 
 type ThreadTitleGenerationLogStatus =
@@ -1001,34 +1005,6 @@ function buildHeadlessAutomationRequestCancelResponse(
   }
 
   return { decision: "cancel" };
-}
-
-function formatAutomationContextForTurnInput(
-  context: AppServerTurnInputItem[],
-): AppServerTurnInputItem[] {
-  const textParts = context
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
-      item.type === "text",
-    )
-    .map((item) => item.text.trim())
-    .filter(Boolean);
-  const nonTextParts = context.filter((item) => item.type !== "text");
-  if (textParts.length === 0) {
-    return context;
-  }
-
-  return [
-    {
-      type: "text",
-      text: [
-        "## Automation Context",
-        ...textParts,
-        "## User Message",
-        "",
-      ].join("\n\n"),
-    },
-    ...nonTextParts,
-  ];
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -1755,7 +1731,7 @@ export class DesktopBackendRegistry {
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
   private readonly threadTurnQueue: ThreadTurnQueue;
-  private automationTurnContextProvider?: AutomationTurnContextProvider;
+  private automationInspectionHandler?: AutomationInspectionHandler;
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -1850,6 +1826,7 @@ export class DesktopBackendRegistry {
     createAcpClient?: AcpClientFactory;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
+    automationInspectionMcpCommand?: string;
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
@@ -1957,6 +1934,9 @@ export class DesktopBackendRegistry {
       emit: async (event) => await this.emit(event),
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
+      automationInspectionMcpCommand:
+        options?.automationInspectionMcpCommand ??
+        resolveAutomationInspectionMcpCommand(),
     });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
@@ -2164,10 +2144,10 @@ export class DesktopBackendRegistry {
     this.messagingArchiveCleaner = cleaner;
   }
 
-  setAutomationTurnContextProvider(
-    provider: AutomationTurnContextProvider | null | undefined,
+  setAutomationInspectionHandler(
+    handler: AutomationInspectionHandler | null | undefined,
   ): void {
-    this.automationTurnContextProvider = provider ?? undefined;
+    this.automationInspectionHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -3861,6 +3841,15 @@ export class DesktopBackendRegistry {
       executionMode,
       runtime: acpRuntimeWithModel,
     });
+    const dynamicTools =
+      backend === "codex" ? buildAutomationInspectionDynamicToolSpecs() : undefined;
+    if (dynamicTools?.length) {
+      backendRegistryLog.info("attaching automation inspection dynamic tools", {
+        backend,
+        toolCount: dynamicTools.length,
+        tools: dynamicTools.map((tool) => tool.name),
+      });
+    }
 
     const result = isAcpBackendId(backend)
       ? await this.startAcpSession({
@@ -3876,6 +3865,7 @@ export class DesktopBackendRegistry {
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           sandbox: request.sandbox ?? modeSettings.sandbox,
           codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+          dynamicTools,
         });
     const startedAt = Date.now();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
@@ -4069,7 +4059,7 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    let input = params.input;
+    const input = params.input;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -4093,12 +4083,6 @@ export class DesktopBackendRegistry {
               overlay,
             )
           : undefined;
-      input = await this.buildTurnInputWithAutomationContext({
-        backend: params.backend,
-        input: params.input,
-        origin: params.origin,
-        threadId: params.threadId,
-      });
       await this.emit({
         backend: params.backend,
         notification: {
@@ -6272,36 +6256,6 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async buildTurnInputWithAutomationContext(params: {
-    backend: AppServerBackendKind;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    threadId: ThreadIdentifier;
-  }): Promise<AppServerTurnInputItem[]> {
-    if (!this.automationTurnContextProvider || params.origin === "automation") {
-      return params.input;
-    }
-    try {
-      const context = await this.automationTurnContextProvider({
-        backend: params.backend,
-        origin: params.origin,
-        threadId: params.threadId,
-      });
-      if (context.length === 0) {
-        return params.input;
-      }
-      return [...formatAutomationContextForTurnInput(context), ...params.input];
-    } catch (error) {
-      backendRegistryLog.warn("automation turn context provider failed", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-        origin: params.origin,
-        threadId: params.threadId,
-      });
-      return params.input;
-    }
-  }
-
   private async resolveLaunchpadBackend(
     preferred: AppServerBackendKind,
   ): Promise<BackendSummary> {
@@ -8205,6 +8159,41 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    const dynamicToolCall = readAutomationInspectionDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (dynamicToolCall?.namespace === "pwragent_automations") {
+      if (!this.isLiveAutomationInspectionToolCall(backend, dynamicToolCall)) {
+        backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
+          backend,
+          callId: dynamicToolCall.callId,
+          namespace: dynamicToolCall.namespace,
+          threadId: dynamicToolCall.threadId,
+          tool: dynamicToolCall.tool,
+          turnId: dynamicToolCall.turnId,
+        });
+        return buildAutomationInspectionDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Automation inspection tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling automation inspection dynamic tool call", {
+        backend,
+        callId: dynamicToolCall.callId,
+        namespace: dynamicToolCall.namespace,
+        threadId: dynamicToolCall.threadId,
+        tool: dynamicToolCall.tool,
+        turnId: dynamicToolCall.turnId,
+      });
+      return await handleAutomationInspectionDynamicToolCall({
+        backend,
+        call: dynamicToolCall,
+        handler: this.automationInspectionHandler,
+      });
+    }
+
     const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
       backend,
       request,
@@ -8242,6 +8231,15 @@ export class DesktopBackendRegistry {
         reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
+  }
+
+  private isLiveAutomationInspectionToolCall(
+    backend: AppServerBackendKind,
+    call: { threadId: string; turnId?: string },
+  ): boolean {
+    const turnId = call.turnId?.trim();
+    if (!turnId) return false;
+    return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
   }
 
   private async emit(event: AgentEvent): Promise<void> {
