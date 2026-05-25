@@ -19,6 +19,13 @@ updates:
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 7
+    # @types/node tracks the Node runtime, which is pinned to v24
+    # (.nvmrc + CI node-version: 24.x). Block major bumps so v25+ types
+    # don't sneak ahead of the runtime via a grouped dev-dep PR.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
     groups:
       npm-production-minor-patch:
         patterns:
