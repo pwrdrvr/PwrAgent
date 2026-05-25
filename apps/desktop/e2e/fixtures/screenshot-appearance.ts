@@ -8,9 +8,10 @@
  *
  * Defaults match what `launchElectronApp` already does for every E2E
  * launch (theme=dark, density=mission-control) — the committed PNGs
- * under `docs/assets/screenshots/` and `docs-site/assets/screenshots/`
- * were all captured under those defaults, so omitting the env vars
- * keeps the existing pipeline pixel-stable.
+ * (README captures under `docs/assets/screenshots/` here; docs-site
+ * captures in the sibling pwrdrvr/docs.pwragent.ai repo) were all
+ * captured under those defaults, so omitting the env vars keeps the
+ * existing pipeline pixel-stable.
  *
  * Setting either variable just flows the value through into
  * `launchElectronApp({ appearance: { theme, density } })`, which seeds

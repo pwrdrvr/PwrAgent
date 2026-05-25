@@ -21,8 +21,9 @@ truth for:
 - **The webhook security note** for HTTP-callback platforms —
   <https://docs.pwragent.ai/webhook-dangers/>.
 
-The Pages source for that site lives in the repo under
-[`docs-site/`](../docs-site/).
+The Pages source for that site lives in its own repo at
+[pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai)
+(split out from this repo on 2026-05-25).
 
 ## Contributor cross-references
 
@@ -41,10 +42,11 @@ stay in this repo:
 
 ## New-thread backend selection smoke
 
-The operator-facing `/new` walkthrough lives in
-[`docs-site/using-codex.md`](../docs-site/using-codex.md), but
-contributors changing messaging workflow should keep these checks in
-sync with tests:
+The operator-facing `/new` walkthrough lives at
+<https://docs.pwragent.ai/using-codex/> (source in the
+[pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai)
+repo's `using-codex.md`), but contributors changing messaging workflow
+should keep these checks in sync with tests:
 
 - With one create-capable backend, `/new`, **New** from `/help`, and
   `/resume --new` open the same project picker and Start Card without a

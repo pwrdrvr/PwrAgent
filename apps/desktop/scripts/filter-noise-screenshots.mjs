@@ -24,19 +24,46 @@
 //
 // macOS-only because the screenshot pipeline is macOS-only (Swift
 // `screencapture` + Screen Recording permission).
+//
+// Usage:
+//   node filter-noise-screenshots.mjs
+//     Default — scans PwrAgent's `docs/assets/screenshots/` (the
+//     README capture set).
+//   node filter-noise-screenshots.mjs --root <path>
+//     Treats <path> as a separate git repo and scans every
+//     modified PNG inside it (used after `screenshot:docs-site` to
+//     filter PNGs landing in the sibling docs.pwragent.ai
+//     checkout, which is a screenshots-only repo so no dir filter
+//     is needed).
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const TARGET_DIRS = [
-  "docs/assets/screenshots/",
-  "docs-site/assets/screenshots/",
-];
+const args = process.argv.slice(2);
+const rootArgIndex = args.indexOf("--root");
+const externalRoot =
+  rootArgIndex !== -1 && rootArgIndex + 1 < args.length
+    ? args[rootArgIndex + 1]
+    : null;
+
+// In default mode we filter to known screenshot dirs to avoid
+// touching random PNGs elsewhere in the repo. In --root mode the
+// target repo is assumed to be screenshots-only (e.g.
+// docs.pwragent.ai) so we scan every modified .png.
+const TARGET_DIRS = ["docs/assets/screenshots/"];
 
 function repoRoot() {
+  if (externalRoot) {
+    const resolved = path.resolve(externalRoot.replace(/^~(?=$|\/)/, process.env.HOME ?? ""));
+    if (!existsSync(resolved)) {
+      console.error(`filter-noise-screenshots: --root path not found: ${resolved}`);
+      process.exit(1);
+    }
+    return resolved;
+  }
   return execFileSync("git", ["rev-parse", "--show-toplevel"], {
     encoding: "utf8",
   }).trim();
@@ -47,12 +74,13 @@ function listModifiedPngs(root) {
     cwd: root,
     encoding: "utf8",
   });
-  return status
+  const paths = status
     .split("\n")
     .filter((line) => /^[ MA]M /.test(line) || /^M[ MA] /.test(line))
     .map((line) => line.slice(3).trim())
-    .filter((p) => p.endsWith(".png"))
-    .filter((p) => TARGET_DIRS.some((dir) => p.startsWith(dir)));
+    .filter((p) => p.endsWith(".png"));
+  if (externalRoot) return paths;
+  return paths.filter((p) => TARGET_DIRS.some((dir) => p.startsWith(dir)));
 }
 
 function extractHeadBlob(root, relPath, outPath) {

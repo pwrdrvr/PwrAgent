@@ -14,7 +14,7 @@ An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack,
   </a>
 </p>
 
-![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](docs-site/assets/screenshots/desktop-hero.png)
+![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)
 
 ## Why you might want it
 

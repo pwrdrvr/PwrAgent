@@ -7,7 +7,7 @@
 - UI theme tokens and visual language live in [docs/UI-THEME.md](docs/UI-THEME.md)
 - Desktop UI direction lives in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md)
 - The PwrAgent v2 design source bundle (HTML/CSS/JSX prototypes + chat transcripts) lives in [docs/design/pwragent-v2/](docs/design/pwragent-v2/) — see [docs/design/pwragent-v2/SOURCE.md](docs/design/pwragent-v2/SOURCE.md) for provenance and the "reference, not copy verbatim" policy
-- The operator-facing site at <https://docs.pwragent.ai> is served by GitHub Pages from [docs-site/](docs-site/). Edit there for per-platform setup walkthroughs, streaming/webhook explainers, and Settings → Messaging reference content. Contributor-facing messaging docs stay in [docs/messaging-*.md](docs/).
+- The operator-facing site at <https://docs.pwragent.ai> lives in its own repo at [pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai) (split out from this repo on 2026-05-25). Edit there for per-platform setup walkthroughs, streaming/webhook explainers, and Settings → Messaging reference content. Contributor-facing messaging docs stay in [docs/messaging-*.md](docs/).
 
 ## Workflow
 

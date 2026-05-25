@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
@@ -17,11 +18,16 @@ import {
 
 // docs-site screenshot capture spec.
 //
-// Produces the native PNGs the docs.pwragent.ai site references under
-// `docs-site/assets/screenshots/`. Mirrors the README screenshot spec
-// at `readme-screenshots.inspect.spec.ts` but targets the docs-site
-// output directory and a different set of surfaces (Settings panels +
-// a workspace Recents hero).
+// Produces the native PNGs the docs.pwragent.ai site references.
+// The docs themselves live in a SEPARATE repo at
+// pwrdrvr/docs.pwragent.ai (split out from this repo on 2026-05-25);
+// the capture pipeline stays here because it depends on the desktop
+// app's Electron build + replay fixtures + sqlite seeders.
+//
+// PNGs land in the sibling docs.pwragent.ai checkout's
+// `assets/screenshots/` directory. Default location:
+// `~/github/docs.pwragent.ai/`. Override with PWRAGENT_DOCS_SITE_REPO
+// if your docs checkout lives elsewhere.
 //
 // Run with:
 //   pnpm --filter @pwragent/desktop screenshot:docs-site
@@ -33,8 +39,10 @@ import {
 // in most setups).
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(specDir, "../../..");
-const screenshotDir = path.join(repoRoot, "docs-site/assets/screenshots");
+const docsSiteRepo =
+  process.env.PWRAGENT_DOCS_SITE_REPO?.replace(/^~(?=$|\/)/, os.homedir()) ??
+  path.join(os.homedir(), "github", "docs.pwragent.ai");
+const screenshotDir = path.join(docsSiteRepo, "assets", "screenshots");
 const captureScript = path.resolve(specDir, "../scripts/capture-window.swift");
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
@@ -50,6 +58,19 @@ test.skip(
   process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE !== "1",
   "Set PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1 via the package script to capture docs-site screenshots.",
 );
+
+// Sanity-check the docs-site checkout exists before any capture runs.
+// Refuses to silently create PNGs in a random directory if the docs
+// repo isn't where we expect it.
+if (process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE === "1") {
+  if (!existsSync(docsSiteRepo)) {
+    throw new Error(
+      `docs.pwragent.ai checkout not found at ${docsSiteRepo}. ` +
+        `Clone pwrdrvr/docs.pwragent.ai there, or set ` +
+        `PWRAGENT_DOCS_SITE_REPO to point at your checkout.`,
+    );
+  }
+}
 
 async function bringToFront(electronApp: ElectronApplication): Promise<void> {
   await electronApp.evaluate(({ BrowserWindow }) => {
