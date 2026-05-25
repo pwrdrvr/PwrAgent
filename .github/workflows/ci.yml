@@ -4,18 +4,12 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - 'docs-site/**'
-      - '.github/workflows/pages.yml'
   pull_request:
     types:
       - opened
       - synchronize
       - reopened
       - labeled
-    paths-ignore:
-      - 'docs-site/**'
-      - '.github/workflows/pages.yml'
 
 permissions:
   contents: read

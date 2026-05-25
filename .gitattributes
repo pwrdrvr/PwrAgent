@@ -1,7 +1,7 @@
 # Binary asset handling.
 #
 # Tag image / icon / packaging artifacts as binary so git doesn't
-# try to text-diff them on every regeneration (README and docs-site
+# try to text-diff them on every regeneration (README screenshot
 # captures, vendor brand-kit refreshes, packaging builds) and
 # doesn't apply EOL conversion on Windows checkouts.
 

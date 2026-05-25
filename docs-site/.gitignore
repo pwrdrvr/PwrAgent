@@ -1,7 +1,0 @@
-_site/
-.jekyll-cache/
-.jekyll-metadata
-.bundle/
-vendor/
-Gemfile.lock
-.dockerignore.bak
