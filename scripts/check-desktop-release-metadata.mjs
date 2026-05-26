@@ -9,7 +9,7 @@ const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
 const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml");
 const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
-const linuxDocsPath = resolve(repoRoot, "docs-site/linux.md");
+const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
 
 function usage() {
@@ -79,7 +79,7 @@ if (!headingPattern.test(changelog)) {
 const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
-const linuxDocs = readFileSync(linuxDocsPath, "utf8");
+const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
 if (desktopScripts["package:linux"] !== "node ./scripts/release.mjs --linux --no-publish") {
@@ -140,12 +140,10 @@ for (const expected of [
 for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
-  "sudo apt install",
-  "sudo apt remove pwragent",
-  "Codex CLI",
+  "SHA256SUMS",
 ]) {
-  if (!linuxDocs.includes(expected)) {
-    fail(`docs-site/linux.md must contain ${JSON.stringify(expected)}`);
+  if (!desktopReleaseRunbook.includes(expected)) {
+    fail(`docs/desktop-release-runbook.md must contain ${JSON.stringify(expected)}`);
   }
 }
 

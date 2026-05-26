@@ -49,6 +49,7 @@ ISC
 - ini@1.3.8 | https://github.com/isaacs/ini
 - once@1.4.0 | https://github.com/isaacs/once
 - semver@7.7.4 | https://github.com/npm/node-semver
+- semver@7.8.0 | https://github.com/npm/node-semver
 - wrappy@1.0.2 | https://github.com/npm/wrappy
 
 MIT
@@ -88,7 +89,7 @@ MIT
 - @tiptap/starter-kit@3.22.5 | https://github.com/ueberdosis/tiptap
 - @tiptap/suggestion@3.22.5 | https://github.com/ueberdosis/tiptap
 - @types/debug@4.1.13 | https://github.com/DefinitelyTyped/DefinitelyTyped
-- @types/estree@1.0.8 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/estree@1.0.9 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/estree-jsx@1.0.5 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/hast@3.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/mdast@4.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -393,7 +394,7 @@ SOFTWARE.
 
 Applies to:
 - @types/debug@4.1.13 (MIT)
-- @types/estree@1.0.8 (MIT)
+- @types/estree@1.0.9 (MIT)
 - @types/estree-jsx@1.0.5 (MIT)
 - @types/hast@3.0.4 (MIT)
 - @types/mdast@4.0.4 (MIT)
@@ -986,6 +987,7 @@ Applies to:
 - ini@1.3.8 (ISC)
 - once@1.4.0 (ISC)
 - semver@7.7.4 (ISC)
+- semver@7.8.0 (ISC)
 - wrappy@1.0.2 (ISC)
 
 Representative file: chownr@1.1.4/LICENSE
