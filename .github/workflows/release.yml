@@ -44,6 +44,8 @@ jobs:
         run: pnpm release:check
 
       - name: Typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm typecheck
 
       - name: Test (unit)

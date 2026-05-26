@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.0-beta.18 - 2026-05-26
+
+- Added Agent-attached automation scheduling with interval, weekday, and weekly schedules, run history, startup reconciliation, manual runs, messaging delivery, and global Automations management.
+- Added automation inspection tools for Agent threads so agents can inspect attached automations, recent runs, and captured run artifacts without injecting synthetic transcript context.
+- Added Kimi Code CLI as a first-class ACP backend with local discovery, backend labels, launchpad/runtime plumbing, permission-mode handling, and serialized hidden control prompts for Full Access.
+- Improved ACP transcript and history handling with metadata-only session rows, append-only rollout JSONL fallback history, provider `session/load` replay preference, thought/commentary streaming, and protocol capture coverage.
+- Added an experimental setting to filter unrelated live transcript events so noisy background threads do not churn the selected thread session state.
+- Moved the operator docs site out of this repo into `pwrdrvr/docs.pwragent.ai`, with screenshot capture tooling updated for the sibling docs checkout.
+- Added docs screenshot capture coverage for onboarding wizard and LiveWorkRail.
+- Updated production dependencies, including Tiptap, React, better-sqlite3, electron-log, AI SDK/xAI, Discord, Feishu, Slack, and Grammy.
+- Fixed dependency hygiene with a `qs` security override for Feishu SDK, a Node v24-aligned `@types/node` pin, and minor dev-tool updates.
+- Fixed the release workflow typecheck heap limit that caused the `v1.0.0-beta.17` prepare job to abort before publishing.
+
 ## v1.0.0-beta.17 - 2026-05-26
 
 - Added Agent-attached automation scheduling with interval, weekday, and weekly schedules, run history, startup reconciliation, manual runs, messaging delivery, and global Automations management.
