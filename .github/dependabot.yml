@@ -26,10 +26,47 @@ updates:
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
+      # Electron majors need a planned desktop runtime migration. Native module
+      # prebuild availability, packaging behavior, and Electron breaking changes
+      # need human review before a PR is worth opening.
+      - dependency-name: "electron"
+        update-types:
+          - "version-update:semver-major"
     groups:
+      vite-toolchain:
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-react"
+          - "electron-vite"
+        dependency-type: "development"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      electron-runtime-minor-patch:
+        patterns:
+          - "electron"
+          - "@electron/*"
+          - "electron-builder"
+          - "electron-updater"
+        update-types:
+          - "minor"
+          - "patch"
+      tiptap-prosemirror:
+        patterns:
+          - "@tiptap/*"
+          - "prosemirror-*"
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
       npm-production-minor-patch:
         patterns:
           - "*"
+        exclude-patterns:
+          - "@tiptap/*"
+          - "prosemirror-*"
+          - "electron-updater"
         dependency-type: "production"
         update-types:
           - "minor"
@@ -37,6 +74,13 @@ updates:
       npm-development-minor-patch:
         patterns:
           - "*"
+        exclude-patterns:
+          - "vite"
+          - "@vitejs/plugin-react"
+          - "electron-vite"
+          - "electron"
+          - "@electron/*"
+          - "electron-builder"
         dependency-type: "development"
         update-types:
           - "minor"
