@@ -8266,8 +8266,9 @@ export class DesktopBackendRegistry {
     if (!ATTENTION_NOTIFICATION_METHODS.has(event.notification.method)) {
       return;
     }
-    const requestId = event.notification.params.requestId;
-    const threadId = event.notification.params.threadId;
+    const params = event.notification.params as Record<string, unknown>;
+    const requestId = params.requestId;
+    const threadId = params.threadId;
     if (typeof requestId !== "string" || typeof threadId !== "string") {
       return;
     }
