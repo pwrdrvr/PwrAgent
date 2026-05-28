@@ -82,6 +82,7 @@ function createSnapshot(
         enabled: { value: false, source: "default" },
         model: { value: "auto", source: "default" },
       },
+      agentCoreGrok: { value: false, source: "default" },
     },
     imageUploads: {
       pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -227,6 +228,9 @@ function createSnapshot(
       grok: {
         apiKey: { configured: false, source: "unset", writable: true },
       },
+    },
+    acpAgents: {
+      grok: { cliPath: { value: "", source: "default" } },
     },
     applications: {
       editors: [

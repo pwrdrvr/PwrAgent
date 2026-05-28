@@ -51,6 +51,10 @@ describe("desktop settings contracts", () => {
           enabled: { value: false, source: "default" },
           model: { value: "auto", source: "default" },
         },
+        agentCoreGrok: {
+          value: false,
+          source: "default",
+        },
       },
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -224,6 +228,11 @@ describe("desktop settings contracts", () => {
             source: "unset",
             writable: true,
           },
+        },
+      },
+      acpAgents: {
+        grok: {
+          cliPath: { value: "", source: "default" },
         },
       },
       applications: {

@@ -158,6 +158,7 @@ import {
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { resolveAgentCoreGrokEnabled } from "../settings/desktop-config";
 import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
@@ -709,8 +710,31 @@ type WorktreeRestoreCandidate = {
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
-  grok: "Grok",
+  grok: "AgentCore - Grok",
 };
+
+const DISABLED_AGENT_CORE_GROK_REASON =
+  "AgentCore - Grok is experimental and disabled. Enable it in Settings → Experimental.";
+
+function disabledAgentCoreGrokSummary(): BackendSummary {
+  return {
+    kind: "grok",
+    label: BACKEND_LABELS.grok,
+    available: false,
+    methods: [],
+    capabilities: buildCapabilities([], "grok"),
+    executionModes: [
+      {
+        mode: "default",
+        label: EXECUTION_MODE_SUMMARIES.default.label,
+        available: false,
+        isDefault: true,
+        unavailableReason: DISABLED_AGENT_CORE_GROK_REASON,
+      },
+    ],
+    unavailableReason: DISABLED_AGENT_CORE_GROK_REASON,
+  };
+}
 
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
@@ -2369,9 +2393,12 @@ export class DesktopBackendRegistry {
   async listBackends(
     request: ListBackendsRequest = {}
   ): Promise<ListBackendsResponse> {
+    const agentCoreGrokEnabled = resolveAgentCoreGrokEnabled();
     const summaries = await Promise.all([
       this.describeCodexBackend(),
-      this.describeSingleBackend("grok", this.grokClient),
+      agentCoreGrokEnabled
+        ? this.describeSingleBackend("grok", this.grokClient)
+        : Promise.resolve(disabledAgentCoreGrokSummary()),
     ]);
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
@@ -2739,7 +2766,9 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
-    const initialExecutionMode = this.usesKimiSlashExecutionModes(params.backend)
+    const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
+      params.backend,
+    )
       ? "default"
       : params.executionMode;
     const session = await client.startSession({
@@ -2748,10 +2777,10 @@ export class DesktopBackendRegistry {
       acpRuntime: params.acpRuntime,
     });
     if (
-      this.usesKimiSlashExecutionModes(params.backend) &&
+      this.usesSlashControlledAcpExecutionModes(params.backend) &&
       params.executionMode !== "default"
     ) {
-      await this.applyKimiAcpThreadExecutionMode({
+      await this.applySlashControlledAcpThreadExecutionMode({
         backend: params.backend,
         threadId: session.sessionId,
         executionMode: params.executionMode,
@@ -4019,7 +4048,7 @@ export class DesktopBackendRegistry {
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
       try {
-        if (this.usesKimiSlashExecutionModes(params.backend)) {
+        if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
             params.threadId,
             params.backend,
@@ -4443,18 +4472,19 @@ export class DesktopBackendRegistry {
     if (params.backend !== "codex") {
       if (
         isAcpBackendId(params.backend) &&
-        this.usesKimiSlashExecutionModes(params.backend)
+        this.usesSlashControlledAcpExecutionModes(params.backend)
       ) {
         return await this.setSlashControlledAcpExecutionMode({
           ...params,
           backend: params.backend,
         });
       }
-      // Non-codex backends (e.g. Grok) currently no-op on execution
-      // mode — no overlay write, no backend change. We still emit on
-      // the bus so all surfaces stay visually consistent with the
-      // user's click. The optimistic UI is the same lie either way;
-      // symmetric emission is better than partial fan-out.
+      // ACP backends without a slash-driven approval-policy toggle (e.g.
+      // Gemini today) currently no-op on execution mode — no overlay
+      // write, no backend change. We still emit on the bus so all
+      // surfaces stay visually consistent with the user's click. The
+      // optimistic UI is the same lie either way; symmetric emission is
+      // better than partial fan-out.
       await this.emit({
         backend: params.backend,
         notification: {
@@ -4594,10 +4624,40 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private usesGrokSlashExecutionModes(
+    backend: AppServerBackendKind,
+  ): backend is AcpBackendId {
+    return (
+      isAcpBackendId(backend) &&
+      this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
+    );
+  }
+
+  /**
+   * Umbrella for ACP backends whose Default/Full Access toggle is driven by
+   * a slash command sent over `session/prompt` (rather than a first-class
+   * protocol method or a relaunch). Kimi uses `/yolo`; Grok uses
+   * `/always-approve on|off`. Both share the same orchestration: queue
+   * during active turns, flush at turn-end, write per-thread audit log,
+   * emit `thread/executionMode/updated` on the bus. The per-agent slash
+   * command text + response handling lives in the apply*ControlPrompt
+   * helpers.
+   */
+  private usesSlashControlledAcpExecutionModes(
+    backend: AppServerBackendKind,
+  ): backend is AcpBackendId {
+    return (
+      this.usesKimiSlashExecutionModes(backend) ||
+      this.usesGrokSlashExecutionModes(backend)
+    );
+  }
+
   private backendUsesQueuedExecutionModes(
     backend: AppServerBackendKind,
   ): boolean {
-    return backend === "codex" || this.usesKimiSlashExecutionModes(backend);
+    return (
+      backend === "codex" || this.usesSlashControlledAcpExecutionModes(backend)
+    );
   }
 
   private async readAppliedExecutionMode(
@@ -4611,7 +4671,7 @@ export class DesktopBackendRegistry {
       });
       return overlay?.executionMode ?? "default";
     }
-    if (this.usesKimiSlashExecutionModes(backend)) {
+    if (this.usesSlashControlledAcpExecutionModes(backend)) {
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend,
         threadId,
@@ -4785,9 +4845,9 @@ export class DesktopBackendRegistry {
     if (params.backend !== "codex") {
       if (
         isAcpBackendId(params.backend) &&
-        this.usesKimiSlashExecutionModes(params.backend)
+        this.usesSlashControlledAcpExecutionModes(params.backend)
       ) {
-        return await this.applyKimiAcpThreadExecutionMode(
+        return await this.applySlashControlledAcpThreadExecutionMode(
           {
             ...params,
             backend: params.backend,
@@ -4795,10 +4855,10 @@ export class DesktopBackendRegistry {
           options,
         );
       }
-      // The non-codex grok no-op path — preserved for symmetry. Direct
-      // callers route through setThreadExecutionMode which short-circuits
-      // before reaching this method, so we should never get here, but
-      // guard anyway.
+      // No-op path for ACP backends without a slash-driven toggle.
+      // Direct callers route through setThreadExecutionMode which
+      // short-circuits before reaching this method, so we should never
+      // get here, but guard anyway.
       return {
         backend: params.backend,
         threadId: params.threadId,
@@ -4893,7 +4953,7 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async applyKimiAcpThreadExecutionMode(
+  private async applySlashControlledAcpThreadExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
     options?: { fromQueue?: boolean; queueId?: string },
   ): Promise<SetThreadExecutionModeResponse> {
@@ -4904,13 +4964,29 @@ export class DesktopBackendRegistry {
     const previousApplied = session.executionMode ?? "default";
     const client = await this.acpBackend.getClient(params.backend);
     await client.ensureSession?.(session);
-    await this.applyKimiAcpExecutionModeControlPrompt({
-      backend: params.backend,
-      client,
-      sessionId: params.threadId,
-      fromExecutionMode: previousApplied,
-      toExecutionMode: params.executionMode,
-    });
+    const registryId = this.acpBackend.getInstalledAgent(params.backend)
+      ?.registryId;
+    if (registryId === "kimi") {
+      await this.applyKimiAcpExecutionModeControlPrompt({
+        backend: params.backend,
+        client,
+        sessionId: params.threadId,
+        fromExecutionMode: previousApplied,
+        toExecutionMode: params.executionMode,
+      });
+    } else if (registryId === "grok") {
+      await this.applyGrokAcpExecutionModeControlPrompt({
+        backend: params.backend,
+        client,
+        sessionId: params.threadId,
+        fromExecutionMode: previousApplied,
+        toExecutionMode: params.executionMode,
+      });
+    } else {
+      throw new Error(
+        `Unsupported slash-controlled ACP registry: ${registryId ?? "<unknown>"}`,
+      );
+    }
 
     const updatedAt = Date.now();
     this.acpBackend.upsertSession({
@@ -4998,6 +5074,49 @@ export class DesktopBackendRegistry {
         `Kimi ACP /yolo did not confirm ${target}; observed ${observed}`,
       );
     }
+  }
+
+  /**
+   * Grok exposes Default/Full Access via `/always-approve on` and
+   * `/always-approve off` (per the `availableCommands` advertised in its
+   * `initialize` response — name "always-approve", hint "on|off"). Unlike
+   * Kimi's `/yolo`, Grok's slash command returns no `agent_message_chunk`
+   * — the only success signal is a clean `end_turn` `session/prompt`
+   * response, and `/session-info` does NOT reflect the toggled state
+   * (verified by probe). So we trust `sendControlPrompt` resolving
+   * without a JSON-RPC error as success; the only failure modes we can
+   * detect are transport errors and a non-end_turn stopReason, both of
+   * which surface as thrown exceptions from the client.
+   */
+  private async applyGrokAcpExecutionModeControlPrompt(params: {
+    backend: AcpBackendId;
+    client: AcpRuntimeClient;
+    sessionId: string;
+    fromExecutionMode: ThreadExecutionMode;
+    toExecutionMode: ThreadExecutionMode;
+  }): Promise<void> {
+    if (!this.usesGrokSlashExecutionModes(params.backend)) {
+      return;
+    }
+    if (params.fromExecutionMode === params.toExecutionMode) {
+      return;
+    }
+    const client = params.client;
+    if (!client.sendControlPrompt) {
+      throw new Error("Grok ACP execution mode updates require control prompts");
+    }
+    const command =
+      params.toExecutionMode === "full-access"
+        ? "/always-approve on"
+        : "/always-approve off";
+    await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(params.backend, params.sessionId),
+      async () =>
+        await client.sendControlPrompt!({
+          sessionId: params.sessionId,
+          prompt: command,
+        }),
+    );
   }
 
   /**
@@ -8334,7 +8453,7 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
       } else if (isAcpBackendId(event.backend)) {
-        if (this.usesKimiSlashExecutionModes(event.backend)) {
+        if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
           void this.flushQueuedExecutionModeIfPresent(
             notification.params.threadId,
             event.backend,
@@ -8359,7 +8478,7 @@ export class DesktopBackendRegistry {
       }
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
-          if (this.usesKimiSlashExecutionModes(event.backend)) {
+          if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
             void this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,
               event.backend,

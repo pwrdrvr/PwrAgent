@@ -35,6 +35,7 @@ import {
 } from "../acp/acp-client";
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
+import { resolveGrokCliPathOverride } from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -327,7 +328,11 @@ function buildAcpExecutionModes(
   available: boolean,
   unavailableReason: string | undefined,
 ): BackendSummary["executionModes"] {
-  if (agent.registryId !== "kimi") {
+  // Kimi exposes /yolo, Grok exposes /always-approve on|off. Both flip the
+  // session-wide approval policy via slash command; the registry treats them
+  // identically at this layer (the per-agent slash command text + response
+  // parsing lives in backend-registry.ts).
+  if (agent.registryId !== "kimi" && agent.registryId !== "grok") {
     return [];
   }
   return [
@@ -660,7 +665,13 @@ export class AcpBackendAdapter {
             ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
             : undefined);
     this.discoverLocalAcpAgents =
-      options.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
+      options.discoverLocalAcpAgents ??
+      (async () => {
+        const grokOverride = resolveGrokCliPathOverride();
+        return await discoverLocalAcpAgents({
+          overrides: grokOverride ? { grok: grokOverride } : undefined,
+        });
+      });
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
       options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
