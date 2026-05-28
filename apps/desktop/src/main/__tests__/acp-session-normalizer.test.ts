@@ -585,6 +585,37 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([]);
   });
 
+  it("extracts Grok's session_summary_generated as a topic title", () => {
+    // Grok ACP carries the auto-generated thread name in the vendor
+    // notification `_x.ai/session_notification`; the inner `update` looks
+    // like `{ sessionUpdate: "session_summary_generated", session_summary:
+    // "<title>" }`. The acp-client routes that through the same path as
+    // session/update, so readAcpTopicTitle must recognize the kind and
+    // return the summary verbatim (no "Update topic to: …" parsing).
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "session_summary_generated",
+        session_summary: "Haiku About Debugging Code in Software",
+      }),
+    ).toBe("Haiku About Debugging Code in Software");
+    // Tolerate camelCase too, since other parts of the codebase normalize
+    // to camelCase keys when re-encoding agent updates.
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "session_summary_generated",
+        sessionSummary: "Refactor toolchain config",
+      }),
+    ).toBe("Refactor toolchain config");
+    // Empty/whitespace summary still bails to undefined so the existing
+    // fallback path keeps the seed title (e.g. "ACP session").
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "session_summary_generated",
+        session_summary: "   ",
+      }),
+    ).toBeUndefined();
+  });
+
   it("records thought chunks as assistant response messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

@@ -152,6 +152,17 @@ export class AcpAgentClient {
     this.unsubscribe = this.options.transport.onNotification((method, params) => {
       if (method === "session/update") {
         this.applySessionUpdate(params);
+        return;
+      }
+      // Grok's vendor notification carries the auto-generated session
+      // summary at the end of the first turn. Its envelope shape matches
+      // session/update (`{ sessionId, update: { sessionUpdate, ... } }`), so
+      // the same dispatch path handles it — readAcpTopicTitle picks the
+      // title out of the "session_summary_generated" kind, and the
+      // normalizer treats the inner update as thread metadata rather than
+      // a transcript entry (see acp-session-normalizer.ts:118).
+      if (method === "_x.ai/session_notification") {
+        this.applySessionUpdate(params);
       }
     });
     this.unsubscribeRequest = this.options.transport.onRequest?.(
