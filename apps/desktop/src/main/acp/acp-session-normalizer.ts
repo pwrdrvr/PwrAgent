@@ -368,6 +368,23 @@ export function readAcpTopicTitle(
 ): string | undefined {
   const sessionUpdate =
     readString(update, "sessionUpdate") ?? readString(update, "session_update");
+
+  // Grok ACP emits a dedicated vendor notification at the end of the first
+  // turn carrying the auto-generated session title:
+  //   { method: "_x.ai/session_notification",
+  //     params: { sessionId, update: { sessionUpdate: "session_summary_generated",
+  //                                    session_summary: "<title text>" } } }
+  // The acp-client routes that vendor method through the same applySessionUpdate
+  // path as standard session/update, so the inner `update` lands here. Extract
+  // the summary verbatim — no parsing required, unlike the tool-call path below.
+  if (sessionUpdate === "session_summary_generated") {
+    const summary = (
+      readString(update, "session_summary") ??
+      readString(update, "sessionSummary")
+    )?.trim();
+    return summary || undefined;
+  }
+
   const kind = readString(update, "kind");
   const isToolUpdate =
     sessionUpdate === "tool_call" ||

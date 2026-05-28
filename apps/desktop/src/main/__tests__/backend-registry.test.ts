@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -42,6 +42,25 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+
+// These tests pre-date the agent-core Grok experimental flag and exercise
+// the direct xAI HTTP provider's behavior (model warm-up, availability
+// reporting, etc.). The flag now defaults to off; enable it for this file
+// so the registry continues to instantiate the Grok provider rather than
+// emitting the "experimental and disabled" stub summary. Production
+// gating is exercised elsewhere.
+const PRIOR_AGENT_CORE_GROK_ENV =
+  process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+beforeAll(() => {
+  process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "1";
+});
+afterAll(() => {
+  if (PRIOR_AGENT_CORE_GROK_ENV === undefined) {
+    delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+  } else {
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = PRIOR_AGENT_CORE_GROK_ENV;
+  }
+});
 
 const execFileAsync = promisify(execFileCallback);
 
@@ -1292,7 +1311,7 @@ describe("DesktopBackendRegistry", () => {
       },
       {
         kind: "grok",
-        label: "Grok",
+        label: "AgentCore - Grok",
         available: false,
         methods: [],
         capabilities: {
@@ -2414,6 +2433,150 @@ describe("DesktopBackendRegistry", () => {
     expect(sendControlPrompt).toHaveBeenCalledWith({
       sessionId: "kimi-session-1",
       prompt: "/yolo",
+    });
+    expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
+  it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
+    // Regression test for the Grok-ACP Full Access bug: creating a Grok
+    // thread with executionMode="full-access" must persist that mode to
+    // session metadata AND surface it via listThreads, so the chip and
+    // composer dropdown both read "Full Access" right after thread
+    // creation. The slash command itself is fire-and-forget — Grok
+    // returns no text confirmation, unlike Kimi's /yolo — so we trust a
+    // clean resolve from sendControlPrompt.
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const sendControlPrompt = vi
+      .fn(async () => ({ text: "" }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "grok-session-1",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          // Slash-controlled backends start the agent in "default" and
+          // immediately flip via the slash command — so the seed mode
+          // here is whatever startAcpSession passes, NOT the
+          // user-requested target.
+          executionMode: params.executionMode,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      sendControlPrompt,
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "grok",
+          name: "Grok",
+          version: "0.2.3",
+          distributionKind: "local",
+          distributionSource: "grok agent stdio",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-grok-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "grok",
+            distributionKind: "local",
+            command: "grok",
+            args: ["agent", "stdio"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    const backends = await registry.listBackends({ includeUnavailable: true });
+    expect(backends.backends.find((backend) => backend.kind === acpBackendId))
+      .toMatchObject({
+        executionModes: [
+          { mode: "default", available: true },
+          { mode: "full-access", available: true },
+        ],
+      });
+
+    const startResponse = await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      executionMode: "full-access",
+    });
+    expect(startResponse).toMatchObject({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      executionMode: "full-access",
+    });
+
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "grok-session-1",
+      prompt: "/always-approve on",
+    });
+    expect(sessions[0]?.executionMode).toBe("full-access");
+
+    // This is the assertion the user-reported bug fails on: listThreads
+    // must surface the just-applied "full-access" mode so the renderer
+    // chip + composer dropdown both reflect the user's choice the moment
+    // the thread opens.
+    const threads = await registry.listThreads({ backend: acpBackendId });
+    const thread = threads.find(
+      (candidate) => candidate.id === "grok-session-1",
+    );
+    expect(thread).toBeDefined();
+    expect(thread?.executionMode).toBe("full-access");
+
+    sendControlPrompt.mockClear();
+    await expect(
+      registry.setThreadExecutionMode({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+        executionMode: "default",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      executionMode: "default",
+    });
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "grok-session-1",
+      prompt: "/always-approve off",
     });
     expect(sessions[0]?.executionMode).toBe("default");
 

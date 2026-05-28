@@ -18,7 +18,33 @@ export type AcpAgentAllowlistRule = {
 
 const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
 
-export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [];
+/**
+ * The `local-grok-cli` rule is **decorative for the local-discovery path**
+ * (mirroring how Gemini and Kimi are surfaced today). Locally-discovered
+ * agents are installed by the user out-of-band — `discoverLocalAcpAgents`
+ * probes the binary, builds an `AcpInstalledAgentRecord` with
+ * `distributionKind: "local"`, and surfaces it to the renderer without
+ * routing through {@link AcpAgentAllowlist.evaluate}. The allowlist's
+ * `distributionSourceAllowed` helper also rejects any kind outside
+ * `npx | uvx | binary`, so even if a registry payload for "grok" arrived
+ * tomorrow with `distributionKinds: ["local"]`, it would be denied at
+ * the source check.
+ *
+ * The rule is retained for:
+ *   1. Symmetry with the Kimi/Gemini precedent (their installed-agent
+ *      records carry `allowlistRuleId: "local-<id>-cli"`).
+ *   2. Forward-compat for a future registry distribution of the Grok
+ *      CLI — at that point this rule expands with `distributionKinds:
+ *      ["binary", "npx", ...]` plus archive-host / package-name
+ *      pinning.
+ */
+export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
+  {
+    id: "local-grok-cli",
+    registryId: "grok",
+    distributionKinds: ["local"],
+  },
+];
 
 export class AcpAgentAllowlist {
   constructor(private readonly rules: AcpAgentAllowlistRule[]) {}

@@ -13,6 +13,9 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   kimi: {
     liveWorkspaceHandoff: false,
   },
+  grok: {
+    liveWorkspaceHandoff: false,
+  },
 };
 
 export function acpAgentCapabilitiesForRegistryId(

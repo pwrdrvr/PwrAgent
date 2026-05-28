@@ -86,6 +86,23 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     }
   }
 
+  /**
+   * Emit a vendor-prefixed notification (e.g. Grok's
+   * `_x.ai/session_notification`). Same envelope shape as session/update —
+   * `{ sessionId, update }` — but routed under a custom method name. Lets
+   * tests cover the vendor-extension dispatch in acp-client without a real
+   * stdio transport.
+   */
+  emitVendorNotification(params: {
+    method: string;
+    sessionId: string;
+    update: Record<string, unknown>;
+  }): void {
+    for (const listener of this.listeners) {
+      listener(params.method, { sessionId: params.sessionId, update: params.update });
+    }
+  }
+
   async emitRequest(
     method: string,
     params: Record<string, unknown>,

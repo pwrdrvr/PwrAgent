@@ -329,6 +329,11 @@ function SettingsSectionBody(props: {
             experimental: { liveTranscriptEventFiltering: enabled },
           });
         }}
+        onAgentCoreGrokChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { agentCoreGrok: enabled },
+          });
+        }}
       />
     );
   }
@@ -467,7 +472,18 @@ function SettingsSectionBody(props: {
   }
 
   if (props.section === "agents") {
-    return <AcpAgentsSettings desktopApi={props.desktopApi} />;
+    return (
+      <AcpAgentsSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onGrokCliPathChange={async (cliPath: string) => {
+          await props.settings.writeConfig({
+            acpAgents: { grok: { cliPath } },
+          });
+        }}
+      />
+    );
   }
 
   if (props.section === "applications") {

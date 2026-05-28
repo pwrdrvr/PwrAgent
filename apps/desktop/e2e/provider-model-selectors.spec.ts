@@ -88,13 +88,23 @@ async function createProviderSelectorFixture(params: {
     "utf8",
   );
 
+  // The agent-core Grok provider is gated behind the experimental flag
+  // (default off — see desktop-config.ts:resolveAgentCoreGrokEnabled).
+  // When the test scenario primarily exercises that provider (i.e.
+  // `backend === "grok"`), flip the flag on so the provider is visible
+  // and instantiable. Scenarios that pass `backend: "codex"` with a
+  // sticky Grok launchpad default intentionally test the
+  // grok-unavailable fallback path and leave the flag off.
+  const homeEnv = params.launchpadDefaults ? { HOME: rootDir } : undefined;
+  const flagEnv =
+    params.backend === "grok"
+      ? { PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK: "1" }
+      : undefined;
+  const env =
+    homeEnv || flagEnv ? { ...(homeEnv ?? {}), ...(flagEnv ?? {}) } : undefined;
   return {
     fixturePath,
-    env: params.launchpadDefaults
-      ? {
-          HOME: rootDir,
-        }
-      : undefined,
+    env,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },

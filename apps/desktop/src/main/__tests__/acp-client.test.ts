@@ -1286,6 +1286,53 @@ describe("AcpAgentClient", () => {
     expect(titleUpdates).toEqual(["Cleaning up formatting"]);
   });
 
+  it("adopts Grok's session_summary_generated vendor notification as the thread title", async () => {
+    // Grok ACP doesn't use Gemini/Kimi's "Update topic to: …" tool-call
+    // convention. Instead, at the end of the first real turn, Grok pushes
+    // a vendor notification `_x.ai/session_notification` carrying an
+    // auto-generated 5-7 word summary in `session_summary`. The ACP client
+    // routes that vendor method through the same applySessionUpdate path
+    // as a standard session/update, and readAcpTopicTitle picks the title
+    // out of the `session_summary_generated` kind without parsing.
+    const transport = new FakeAcpAgentTransport();
+    const titleUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ title }) => {
+        if (title) {
+          titleUpdates.push(title);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "session_summary_generated",
+        session_summary: "Haiku About Debugging Code in Software",
+      },
+    });
+
+    expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
+      title: "Haiku About Debugging Code in Software",
+      titleSource: "derived",
+    });
+    expect(titleUpdates).toEqual(["Haiku About Debugging Code in Software"]);
+    // Vendor session-summary notifications must not show up as transcript
+    // entries — the normalizer's readAcpTopicTitle fallthrough at line 118
+    // routes them to thread metadata instead.
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const quotaError =

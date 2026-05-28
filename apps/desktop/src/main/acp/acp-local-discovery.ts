@@ -1,4 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { homedir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { AcpBackendId } from "@pwragent/shared";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
@@ -17,13 +19,25 @@ export type LocalAcpAgentProbe = (
   args: string[],
 ) => Promise<LocalAcpProbeResult>;
 
-export async function discoverLocalAcpAgents(options?: {
+export type LocalAcpDiscoveryOptions = {
   probe?: LocalAcpAgentProbe;
   now?: () => number;
-}): Promise<AcpInstalledAgentRecord[]> {
+  /**
+   * Per-agent path overrides. When set, the override path is tried first;
+   * if it succeeds the bare command name probe is skipped.
+   */
+  overrides?: {
+    grok?: string;
+  };
+};
+
+export async function discoverLocalAcpAgents(
+  options?: LocalAcpDiscoveryOptions,
+): Promise<AcpInstalledAgentRecord[]> {
   const discovered = await Promise.all([
     discoverLocalGemini(options),
     discoverLocalKimi(options),
+    discoverLocalGrok(options),
   ]);
   return discovered.filter((agent): agent is AcpInstalledAgentRecord =>
     Boolean(agent)
@@ -142,6 +156,96 @@ async function discoverLocalKimi(options?: {
       raw: { source: "local-cli" },
     },
   };
+}
+
+async function discoverLocalGrok(
+  options?: LocalAcpDiscoveryOptions,
+): Promise<AcpInstalledAgentRecord | undefined> {
+  const probe = options?.probe ?? defaultProbe;
+  const candidates = grokCandidatePaths(options?.overrides?.grok);
+  for (const command of candidates) {
+    const [versionResult, stdioHelpResult] = await Promise.all([
+      probeCommand(probe, command, ["--version"]),
+      probeCommand(probe, command, ["agent", "stdio", "--help"]),
+    ]);
+    if (!versionResult || !stdioHelpResult) {
+      continue;
+    }
+    if (!/Run the agent over stdio/i.test(resultText(stdioHelpResult))) {
+      continue;
+    }
+    const now = options?.now?.() ?? Date.now();
+    const backendId = "acp:grok" as AcpBackendId;
+    const version = parseCliVersion(resultText(versionResult));
+    return {
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version,
+      distributionKind: "local",
+      distributionSource: `${command} agent stdio`,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-grok-cli",
+      installedAt: now,
+      updatedAt: now,
+      capabilities: acpAgentCapabilitiesForRegistryId("grok"),
+      launchDescriptor: normalizeAcpLaunchDescriptor({
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command,
+        args: ["agent", "stdio"],
+        env: {},
+      }),
+      registryAgent: {
+        id: "grok",
+        backendId,
+        name: "Grok",
+        version,
+        authors: ["xAI"],
+        distributions: [],
+        distributionKinds: ["local"],
+        auth: { required: false, methods: ["agent-managed"] },
+        raw: { source: "local-cli" },
+      },
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Build the ordered list of Grok CLI candidate paths to probe.
+ *
+ * The override (Settings → ACP Agents → "Grok CLI path", or the
+ * `PWRAGENT_ACP_AGENTS_GROK_CLI_PATH` env var) is checked first, then
+ * `$PATH`, then the official-installer location, then the standard
+ * Homebrew prefixes.
+ *
+ * **Trust model.** The override is passed verbatim to {@link execFile}
+ * (no shell), so shell metacharacters cannot escape the process
+ * boundary — but the path *is* the binary that gets run. Anyone who
+ * can write to `~/.pwragent/profiles/<name>/config.toml` or set the
+ * env var in this process's environment can pick which executable
+ * runs on every discovery refresh. This matches Codex's `command` and
+ * Gemini/Kimi's launch-descriptor trust model: the user (or anyone
+ * with write access to their per-profile config) is implicitly
+ * trusted. We do NOT validate that the override is a "real" grok
+ * binary beyond the `--help` probe in {@link discoverLocalGrok},
+ * which only confirms the binary advertises the expected ACP stdio
+ * subcommand.
+ */
+function grokCandidatePaths(override?: string): string[] {
+  const candidates: string[] = [];
+  if (override && override.trim().length > 0) {
+    candidates.push(override.trim());
+  }
+  candidates.push("grok");
+  candidates.push(path.join(homedir(), ".grok", "bin", "grok"));
+  candidates.push("/opt/homebrew/bin/grok");
+  candidates.push("/usr/local/bin/grok");
+  return Array.from(new Set(candidates));
 }
 
 async function defaultProbe(
