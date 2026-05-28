@@ -226,8 +226,34 @@ export function readDesktopSettingsConfig(
 }
 
 /**
+ * Memoized disk-read result for {@link resolveAgentCoreGrokEnabled}. The env
+ * var fast-path bypasses the cache entirely (so a runtime
+ * `PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK=…` change is reflected immediately).
+ * For the disk-read branch we cache the result indefinitely and explicitly
+ * invalidate from {@link applyDesktopSettingsPatch} whenever a write touches
+ * `experimental.agent_core_grok`. The resolver is called once per
+ * `listBackends` call (i.e. once per navigation snapshot refresh) — without
+ * the cache, each refresh would re-`readFileSync` the TOML file.
+ */
+let cachedAgentCoreGrokDiskValue: boolean | undefined;
+
+/**
+ * Drop the memoized disk-read result for {@link resolveAgentCoreGrokEnabled}.
+ * Called from {@link applyDesktopSettingsPatch} on every write that touches
+ * the `experimental.agent_core_grok` field, and exposed for tests that toggle
+ * the on-disk config mid-suite.
+ */
+export function invalidateAgentCoreGrokEnabledCache(): void {
+  cachedAgentCoreGrokDiskValue = undefined;
+}
+
+/**
  * Resolve whether the legacy direct-xAI agent-core Grok backend is enabled.
  * Defaults to disabled. Order: env var > on-disk config > false.
+ *
+ * The env var is checked on every call (so a runtime change is honored
+ * immediately). The disk read is memoized — see
+ * {@link invalidateAgentCoreGrokEnabledCache} for the invalidation contract.
  */
 export function resolveAgentCoreGrokEnabled(
   options?: { env?: NodeJS.ProcessEnv },
@@ -238,10 +264,15 @@ export function resolveAgentCoreGrokEnabled(
     if (["true", "1", "yes", "on"].includes(raw)) return true;
     if (["false", "0", "no", "off"].includes(raw)) return false;
   }
+  if (cachedAgentCoreGrokDiskValue !== undefined) {
+    return cachedAgentCoreGrokDiskValue;
+  }
   try {
     const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
-    return config.experimental?.agentCoreGrok === true;
+    cachedAgentCoreGrokDiskValue = config.experimental?.agentCoreGrok === true;
+    return cachedAgentCoreGrokDiskValue;
   } catch {
+    cachedAgentCoreGrokDiskValue = false;
     return false;
   }
 }
@@ -417,6 +448,9 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "agent_core_grok"],
       patch.experimental.agentCoreGrok,
     );
+    // Drop the memoized disk-read in resolveAgentCoreGrokEnabled so the next
+    // listBackends call sees the new value without waiting for a TTL.
+    invalidateAgentCoreGrokEnabledCache();
   }
 
   if (patch.general?.appearance?.theme !== undefined) {

@@ -30,6 +30,9 @@ import type {
   AcpRolloutStoreAppendParams,
 } from "./acp-rollout-store.js";
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
+import { getMainLogger } from "../log.js";
+
+const acpClientLog = getMainLogger("pwragent:acp-client");
 
 export type AcpJsonRpcTransport = {
   request(
@@ -162,6 +165,22 @@ export class AcpAgentClient {
       // normalizer treats the inner update as thread metadata rather than
       // a transcript entry (see acp-session-normalizer.ts:118).
       if (method === "_x.ai/session_notification") {
+        // Log the raw shape at debug so a future Grok CLI release that
+        // renames the kind or moves the title field surfaces visibly
+        // instead of silently degrading to "ACP session" forever. Kept
+        // off the info channel because this fires once per turn-end.
+        const update = (params as { update?: { sessionUpdate?: string } })
+          .update;
+        acpClientLog.debug("grok vendor notification", {
+          backendId: this.options.backendId,
+          sessionUpdate: update?.sessionUpdate,
+          hasSummary: Boolean(
+            (update as { session_summary?: string } | undefined)
+              ?.session_summary?.trim()
+              || (update as { sessionSummary?: string } | undefined)
+                ?.sessionSummary?.trim(),
+          ),
+        });
         this.applySessionUpdate(params);
       }
     });

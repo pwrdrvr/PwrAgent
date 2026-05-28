@@ -215,6 +215,27 @@ async function discoverLocalGrok(
   return undefined;
 }
 
+/**
+ * Build the ordered list of Grok CLI candidate paths to probe.
+ *
+ * The override (Settings → ACP Agents → "Grok CLI path", or the
+ * `PWRAGENT_ACP_AGENTS_GROK_CLI_PATH` env var) is checked first, then
+ * `$PATH`, then the official-installer location, then the standard
+ * Homebrew prefixes.
+ *
+ * **Trust model.** The override is passed verbatim to {@link execFile}
+ * (no shell), so shell metacharacters cannot escape the process
+ * boundary — but the path *is* the binary that gets run. Anyone who
+ * can write to `~/.pwragent/profiles/<name>/config.toml` or set the
+ * env var in this process's environment can pick which executable
+ * runs on every discovery refresh. This matches Codex's `command` and
+ * Gemini/Kimi's launch-descriptor trust model: the user (or anyone
+ * with write access to their per-profile config) is implicitly
+ * trusted. We do NOT validate that the override is a "real" grok
+ * binary beyond the `--help` probe in {@link discoverLocalGrok},
+ * which only confirms the binary advertises the expected ACP stdio
+ * subcommand.
+ */
 function grokCandidatePaths(override?: string): string[] {
   const candidates: string[] = [];
   if (override && override.trim().length > 0) {
