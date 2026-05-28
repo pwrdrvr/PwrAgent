@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
   DesktopCodexProfileModel,
+  DesktopNotificationPermissionState,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
 } from "@pwragent/shared";
@@ -107,6 +108,20 @@ function releaseHelpText(
   return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
 }
 
+function readBrowserNotificationPermission(): DesktopNotificationPermissionState {
+  if (!("Notification" in window)) {
+    return "unsupported";
+  }
+  return window.Notification.permission;
+}
+
+async function requestBrowserNotificationPermission(): Promise<DesktopNotificationPermissionState> {
+  if (!("Notification" in window)) {
+    return "unsupported";
+  }
+  return await window.Notification.requestPermission();
+}
+
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -116,14 +131,18 @@ export function GeneralSettings(props: {
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
   onCodexProfileModelChange: (value: DesktopCodexProfileModel) => Promise<void>;
+  onNotificationsEnabledChange: (value: boolean) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
     AppUpdateReleaseVersions | undefined
   >();
+  const [notificationPermission, setNotificationPermission] =
+    useState<DesktopNotificationPermissionState>("default");
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const developerMode = props.snapshot.general.developerMode;
+  const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const codexProfileModel = props.snapshot.general.codexProfileModel;
   const messagingAcknowledgment =
@@ -143,6 +162,10 @@ export function GeneralSettings(props: {
       canceled = true;
     };
   }, [props.desktopApi]);
+
+  useEffect(() => {
+    setNotificationPermission(readBrowserNotificationPermission());
+  }, []);
 
   const appearance = props.appearanceController?.appearance;
 
@@ -227,6 +250,49 @@ export function GeneralSettings(props: {
           </div>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        eyebrow="General"
+        title="Notifications"
+        chip={sourceBadge(notificationsEnabled)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Desktop notifications"
+            sub="Native alerts for approval/questions and turn completion while PwrAgent is unfocused or minimized."
+            source={sourceBadge(notificationsEnabled)}
+            help={
+              notificationPermission === "denied"
+                ? "Permission denied by the OS. Keep this enabled, then allow notifications for PwrAgent in system settings."
+                : undefined
+            }
+            error={
+              notificationPermission === "denied"
+                ? "Notification permission is denied."
+                : undefined
+            }
+            control={
+              <SettingsSwitch
+                checked={notificationsEnabled.value}
+                disabled={props.saving}
+                label="Desktop notifications"
+                onChange={(next) => {
+                  void (async () => {
+                    await props.onNotificationsEnabledChange(next);
+                    if (next) {
+                      const permission =
+                        await requestBrowserNotificationPermission();
+                      setNotificationPermission(permission);
+                      return;
+                    }
+                    setNotificationPermission(readBrowserNotificationPermission());
+                  })();
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"

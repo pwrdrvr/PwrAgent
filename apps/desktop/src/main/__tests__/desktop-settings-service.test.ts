@@ -32,6 +32,7 @@ describe("DesktopSettingsService", () => {
         "",
         "[general]",
         "developer_mode = true",
+        "notifications_enabled = true",
         "",
         "[messaging]",
         "allow_full_access_thread_resume = false",
@@ -91,6 +92,10 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(snapshot.general.developerMode).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(snapshot.general.notificationsEnabled).toEqual({
       value: true,
       source: "config",
     });
@@ -257,6 +262,36 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(service.resolveDeveloperMode()).toBe(true);
+  });
+
+  it("defaults notifications to disabled and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.general.notificationsEnabled).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      general: {
+        notificationsEnabled: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
+    expect(saved).toContain("notifications_enabled = true");
+    expect((await service.readSettings()).general.notificationsEnabled).toEqual({
+      value: true,
+      source: "config",
+    });
   });
 
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {

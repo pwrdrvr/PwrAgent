@@ -224,6 +224,7 @@ export type DesktopAppearanceSnapshot = {
 
 export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
+  notificationsEnabled: DesktopSettingsValue<boolean>;
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
   messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
@@ -537,6 +538,7 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     developerMode?: boolean;
+    notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
@@ -681,6 +683,24 @@ export type ReadDesktopSettingsRequest = Record<string, never>;
 
 export type ReadDesktopSettingsResponse = {
   snapshot: DesktopSettingsSnapshot;
+};
+
+export type DesktopNotificationPermissionState =
+  | "default"
+  | "granted"
+  | "denied"
+  | "unsupported";
+
+export type ReadDesktopNotificationPermissionRequest = Record<string, never>;
+
+export type ReadDesktopNotificationPermissionResponse = {
+  permission: DesktopNotificationPermissionState;
+};
+
+export type RequestDesktopNotificationPermissionRequest = Record<string, never>;
+
+export type RequestDesktopNotificationPermissionResponse = {
+  permission: DesktopNotificationPermissionState;
 };
 
 export type WriteDesktopSettingsConfigRequest = {

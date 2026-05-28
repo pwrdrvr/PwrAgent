@@ -215,6 +215,10 @@ export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
+export const SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL =
+  "settings:read-notification-permission";
+export const SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL =
+  "settings:request-notification-permission";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";

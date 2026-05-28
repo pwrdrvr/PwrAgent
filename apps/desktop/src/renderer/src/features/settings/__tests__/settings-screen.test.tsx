@@ -54,6 +54,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      notificationsEnabled: {
+        value: false,
+        source: "default",
+      },
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
@@ -333,6 +337,12 @@ describe("SettingsScreen", () => {
         latest: { version: "v1.0.0" },
         prerelease: { version: "v1.0.0-beta.7" },
       })),
+      readNotificationPermission: vi.fn(async () => ({
+        permission: "default" as const,
+      })),
+      requestNotificationPermission: vi.fn(async () => ({
+        permission: "granted" as const,
+      })),
     };
     render(
       <SettingsScreen
@@ -362,6 +372,18 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           developerMode: true,
+        },
+      });
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Desktop notifications" }),
+    ).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Desktop notifications" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          notificationsEnabled: true,
         },
       });
     });

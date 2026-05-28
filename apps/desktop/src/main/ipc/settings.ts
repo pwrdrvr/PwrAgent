@@ -20,10 +20,14 @@ import type {
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
+  ReadDesktopNotificationPermissionRequest,
+  ReadDesktopNotificationPermissionResponse,
   ReadDesktopSettingsResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
+  RequestDesktopNotificationPermissionRequest,
+  RequestDesktopNotificationPermissionResponse,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
@@ -44,9 +48,11 @@ import {
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
+  SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
+  SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
@@ -87,6 +93,7 @@ import type {
 } from "../acp/acp-registry-types";
 import { getAppStateDb } from "../state/app-state";
 import { resolveActiveProfileDir } from "../profile";
+import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const activeCodexLoginProcesses = new Map<
@@ -861,6 +868,28 @@ export function registerSettingsIpcHandlers(
     }),
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL,
+    async (
+      _event,
+      _request?: ReadDesktopNotificationPermissionRequest,
+    ): Promise<ReadDesktopNotificationPermissionResponse> => ({
+      permission: getDesktopNotificationService().readPermission(),
+    }),
+  );
+
+  ipcMain.removeHandler(SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL,
+    async (
+      _event,
+      _request?: RequestDesktopNotificationPermissionRequest,
+    ): Promise<RequestDesktopNotificationPermissionResponse> => ({
+      permission: await getDesktopNotificationService().requestPermission(),
+    }),
+  );
+
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.handle(
     SETTINGS_WRITE_CONFIG_CHANNEL,
@@ -1103,6 +1132,8 @@ export function disposeSettingsIpcHandlers(): void {
   activeCodexLoginProcesses.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);

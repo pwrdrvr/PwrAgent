@@ -253,6 +253,8 @@ function isApprovalLikeMethod(method: string): boolean {
 function isHandledServerRequestMethod(method: string): boolean {
   return (
     isApprovalLikeMethod(method) ||
+    method === "applyPatchApproval" ||
+    method === "execCommandApproval" ||
     method === "item/tool/requestUserInput" ||
     method === "mcpServer/elicitation/request" ||
     method === "item/tool/call"
@@ -551,7 +553,16 @@ function extractRequestMetadata(value: unknown): {
       pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
       pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
     requestId:
-      pickString(record, ["requestId", "request_id", "serverRequestId"]) ??
+      pickString(record, [
+        "requestId",
+        "request_id",
+        "serverRequestId",
+        "approvalId",
+        "approval_id",
+        "callId",
+        "call_id",
+        "id",
+      ]) ??
       pickString(asRecord(record.serverRequest) ?? {}, ["id", "requestId", "request_id"]),
   };
 }

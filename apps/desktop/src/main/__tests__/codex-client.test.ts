@@ -5145,4 +5145,59 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("normalizes legacy exec command approval ids for notification handling", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onRequest((request) => {
+      requests.push(request as { method: string; params: Record<string, unknown> });
+      return { decision: "decline" };
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "rpc-legacy-approval-1",
+      method: "execCommandApproval",
+      params: {
+        conversationId: "thread-legacy-1",
+        callId: "call-1",
+        approvalId: "approval-legacy-1",
+        command: ["date"],
+        cwd: "/tmp",
+        reason: "requires approval",
+        parsedCmd: []
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests).toEqual([
+      {
+        method: "execCommandApproval",
+        params: expect.objectContaining({
+          threadId: "thread-legacy-1",
+          requestId: "approval-legacy-1",
+          approvalId: "approval-legacy-1",
+          callId: "call-1",
+          command: ["date"],
+          cwd: "/tmp",
+          reason: "requires approval",
+          parsedCmd: []
+        })
+      }
+    ]);
+
+    await client.close();
+  });
+
 });

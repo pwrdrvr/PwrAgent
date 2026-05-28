@@ -158,6 +158,7 @@ import {
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
@@ -208,6 +209,17 @@ const ACTIVE_TURN_HANDOFF_ERROR =
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const ATTENTION_NOTIFICATION_METHODS = new Set([
+  "turn/requestApproval",
+  "review/requestApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "applyPatchApproval",
+  "execCommandApproval",
+]);
 const execFile = promisify(execFileCallback);
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -8242,6 +8254,60 @@ export class DesktopBackendRegistry {
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
   }
 
+  private notificationsEnabled(): boolean {
+    try {
+      return getDesktopSettingsService().resolveNotificationsEnabled();
+    } catch {
+      return false;
+    }
+  }
+
+  private notifyForAttentionRequired(event: AgentEvent): void {
+    if (!ATTENTION_NOTIFICATION_METHODS.has(event.notification.method)) {
+      return;
+    }
+    const requestId = event.notification.params.requestId;
+    const threadId = event.notification.params.threadId;
+    if (typeof requestId !== "string" || typeof threadId !== "string") {
+      return;
+    }
+    const title =
+      event.notification.method === "item/tool/requestUserInput"
+        ? "PwrAgent question waiting"
+        : "PwrAgent approval needed";
+    const body =
+      event.notification.method === "item/tool/requestUserInput"
+        ? "A turn is waiting for your response."
+        : "A turn is waiting for your approval.";
+    getDesktopNotificationService().notifyAttention({
+      enabled: this.notificationsEnabled(),
+      key: `${event.backend}:${threadId}:${requestId}`,
+      title,
+      body,
+    });
+  }
+
+  private notifyForTerminalOutcome(event: AgentEvent): void {
+    if (
+      event.notification.method !== "turn/completed" &&
+      event.notification.method !== "turn/failed" &&
+      event.notification.method !== "turn/cancelled"
+    ) {
+      return;
+    }
+    const status =
+      event.notification.method === "turn/completed"
+        ? "completed"
+        : event.notification.method === "turn/failed"
+          ? "failed"
+          : "cancelled";
+    getDesktopNotificationService().notifyTerminal({
+      enabled: this.notificationsEnabled(),
+      title: `PwrAgent turn ${status}`,
+      body: `A turn ${status}.`,
+    });
+  }
+
   private async emit(event: AgentEvent): Promise<void> {
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
@@ -8413,7 +8479,11 @@ export class DesktopBackendRegistry {
         this.pendingServerRequests.delete(key);
         pending.resolve({ decision: "cancel" });
       }
+      getDesktopNotificationService().clearAttentionKey(key);
     }
+
+    this.notifyForAttentionRequired(event);
+    this.notifyForTerminalOutcome(event);
 
     for (const listener of this.eventListeners) {
       await listener(event);
