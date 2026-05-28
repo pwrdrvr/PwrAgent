@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -42,6 +42,25 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+
+// These tests pre-date the agent-core Grok experimental flag and exercise
+// the direct xAI HTTP provider's behavior (model warm-up, availability
+// reporting, etc.). The flag now defaults to off; enable it for this file
+// so the registry continues to instantiate the Grok provider rather than
+// emitting the "experimental and disabled" stub summary. Production
+// gating is exercised elsewhere.
+const PRIOR_AGENT_CORE_GROK_ENV =
+  process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+beforeAll(() => {
+  process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "1";
+});
+afterAll(() => {
+  if (PRIOR_AGENT_CORE_GROK_ENV === undefined) {
+    delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+  } else {
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = PRIOR_AGENT_CORE_GROK_ENV;
+  }
+});
 
 const execFileAsync = promisify(execFileCallback);
 
@@ -1292,7 +1311,7 @@ describe("DesktopBackendRegistry", () => {
       },
       {
         kind: "grok",
-        label: "Grok",
+        label: "AgentCore - Grok",
         available: false,
         methods: [],
         capabilities: {

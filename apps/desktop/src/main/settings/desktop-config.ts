@@ -33,6 +33,10 @@ import {
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
+  ACP_AGENTS_GROK_CLI_PATH_ENV,
+  AGENT_CORE_GROK_ENV,
+} from "./desktop-settings-env";
+import {
   applyTomlEdits,
   parseTomlTables,
   type TomlEdit,
@@ -79,6 +83,7 @@ export type DesktopSettingsConfig = {
       enabled?: boolean;
       model?: string;
     };
+    agentCoreGrok?: boolean;
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -162,6 +167,11 @@ export type DesktopSettingsConfig = {
       profile?: string;
     };
   };
+  acpAgents?: {
+    grok?: {
+      cliPath?: string;
+    };
+  };
   applications?: {
     editor?: {
       preferredId?: string;
@@ -213,6 +223,49 @@ export function readDesktopSettingsConfig(
   }
 
   return parseDesktopSettingsToml(fs.readFileSync(configPath, "utf8"), configPath);
+}
+
+/**
+ * Resolve whether the legacy direct-xAI agent-core Grok backend is enabled.
+ * Defaults to disabled. Order: env var > on-disk config > false.
+ */
+export function resolveAgentCoreGrokEnabled(
+  options?: { env?: NodeJS.ProcessEnv },
+): boolean {
+  const env = options?.env ?? process.env;
+  const raw = env[AGENT_CORE_GROK_ENV]?.trim().toLowerCase();
+  if (raw !== undefined && raw !== "") {
+    if (["true", "1", "yes", "on"].includes(raw)) return true;
+    if (["false", "0", "no", "off"].includes(raw)) return false;
+  }
+  try {
+    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
+    return config.experimental?.agentCoreGrok === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the active override path for the Grok CLI executable, used by the
+ * ACP local-discovery probe. Order: env var > on-disk config > undefined.
+ * Reads synchronously from disk; safe to call from discovery hot paths since
+ * discovery itself is on-demand (refresh button / startup).
+ */
+export function resolveGrokCliPathOverride(
+  options?: { env?: NodeJS.ProcessEnv },
+): string | undefined {
+  const env = options?.env ?? process.env;
+  const envOverride = env[ACP_AGENTS_GROK_CLI_PATH_ENV]?.trim() || undefined;
+  if (envOverride) {
+    return envOverride;
+  }
+  try {
+    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
+    return config.acpAgents?.grok?.cliPath?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -357,6 +410,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "diff_condensation", "model"],
       patch.experimental.diffCondensation.model,
+    );
+  }
+  if (patch.experimental?.agentCoreGrok !== undefined) {
+    set(
+      ["experimental", "agent_core_grok"],
+      patch.experimental.agentCoreGrok,
     );
   }
 
@@ -753,6 +812,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.acpAgents?.grok?.cliPath !== undefined) {
+    set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -798,6 +860,7 @@ function normalizeDesktopConfig(
   const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
   const codex = tables["models.codex"];
+  const acpAgentsGrok = tables["acp_agents.grok"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
@@ -833,6 +896,7 @@ function normalizeDesktopConfig(
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),
       },
+      agentCoreGrok: readBoolean(experimental?.agent_core_grok),
     },
     imageUploads: {
       pastedImageMaxPatches: readNumber(
@@ -977,6 +1041,11 @@ function normalizeDesktopConfig(
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
+      },
+    },
+    acpAgents: {
+      grok: {
+        cliPath: readString(acpAgentsGrok?.cli_path),
       },
     },
     applications: {
@@ -1125,6 +1194,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const codex = config.models?.codex;
   if (codex && hasDefinedValue(codex)) {
     pruned.models = { codex };
+  }
+
+  const acpAgentsGrok = config.acpAgents?.grok;
+  if (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) {
+    pruned.acpAgents = { grok: acpAgentsGrok };
   }
 
   const editor = config.applications?.editor;

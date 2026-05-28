@@ -434,6 +434,13 @@ export type DesktopSettingsSnapshot = {
       enabled: DesktopSettingsValue<boolean>;
       model: DesktopSettingsValue<string>;
     };
+    /**
+     * Gates the legacy direct-xAI agent-core Grok backend. When disabled
+     * (default), the kind="grok" backend is filtered out of the
+     * available-backends list. The ACP-backed Grok CLI (kind="acp:grok")
+     * is unaffected.
+     */
+    agentCoreGrok: DesktopSettingsValue<boolean>;
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
@@ -527,6 +534,16 @@ export type DesktopSettingsSnapshot = {
       apiKey: DesktopSettingsSecretState;
     };
   };
+  acpAgents: {
+    grok: {
+      /**
+       * Optional override for the Grok CLI executable path. When empty,
+       * discovery probes the standard locations ($PATH, ~/.grok/bin/grok,
+       * /opt/homebrew/bin/grok, /usr/local/bin/grok).
+       */
+      cliPath: DesktopSettingsValue<string>;
+    };
+  };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
@@ -557,6 +574,7 @@ export type DesktopSettingsConfigPatch = {
       /** "auto" or a specific model id. Empty string is coerced to "auto". */
       model?: string;
     };
+    agentCoreGrok?: boolean;
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -638,6 +656,11 @@ export type DesktopSettingsConfigPatch = {
     codex?: {
       path?: string;
       profile?: string;
+    };
+  };
+  acpAgents?: {
+    grok?: {
+      cliPath?: string;
     };
   };
   applications?: {

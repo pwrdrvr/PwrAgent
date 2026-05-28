@@ -31,17 +31,25 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   source: "default" as const,
 };
 
+const DEFAULT_AGENT_CORE_GROK = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
+  onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+  const agentCoreGrok =
+    props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
   );
@@ -118,6 +126,32 @@ export function ExperimentalSettings(props: {
                   </button>
                 ) : null}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="AgentCore - Grok"
+        description="Legacy direct-xAI Grok backend. Disabled by default. Prefer the Grok CLI (ACP) backend instead — set up under Settings → ACP Agents."
+        chip={agentCoreGrok.value ? "On" : "Off"}
+        chipKind={agentCoreGrok.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable AgentCore - Grok"
+            sub="When on, the legacy agent-core Grok backend appears in the backend picker. Uses the Grok API key from Settings → Models → Grok."
+            source={sourceBadge(agentCoreGrok)}
+            control={
+              <SettingsSwitch
+                checked={agentCoreGrok.value}
+                disabled={props.saving}
+                label="Enable AgentCore - Grok"
+                onChange={(enabled) => {
+                  void props.onAgentCoreGrokChange(enabled);
+                }}
+              />
             }
           />
         </div>

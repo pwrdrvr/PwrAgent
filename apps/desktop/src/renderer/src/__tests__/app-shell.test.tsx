@@ -350,6 +350,7 @@ describe("App", () => {
           enabled: { value: false, source: "default" },
           model: { value: "auto", source: "default" },
         },
+        agentCoreGrok: { value: false, source: "default" },
       },
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -457,6 +458,9 @@ describe("App", () => {
         grok: {
           apiKey: { configured: false, source: "unset", writable: true },
         },
+      },
+      acpAgents: {
+        grok: { cliPath: { value: "", source: "default" } },
       },
       applications: {
         editors: [],
@@ -1479,7 +1483,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Grok").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Grok/).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
         "The Grok thread is live and selected."

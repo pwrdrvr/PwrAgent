@@ -18,7 +18,13 @@ export type AcpAgentAllowlistRule = {
 
 const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
 
-export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [];
+export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
+  {
+    id: "local-grok-cli",
+    registryId: "grok",
+    distributionKinds: ["local"],
+  },
+];
 
 export class AcpAgentAllowlist {
   constructor(private readonly rules: AcpAgentAllowlistRule[]) {}

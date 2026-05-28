@@ -223,7 +223,11 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
 
-      <SettingsSection eyebrow="Models" title="Grok">
+      <SettingsSection
+        eyebrow="Models"
+        title="Grok"
+        description="Only used by the experimental AgentCore - Grok backend (Settings → Experimental). The Grok CLI (ACP) backend authenticates separately through the Grok CLI itself."
+      >
         <div className="settings-fields">
           <SettingsField
             label="API Key"

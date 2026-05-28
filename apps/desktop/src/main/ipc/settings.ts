@@ -54,6 +54,7 @@ import {
 } from "../../shared/ipc";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { resolveGrokCliPathOverride } from "../settings/desktop-config";
 import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
@@ -166,7 +167,10 @@ async function listInstalledAndLocalAcpAgents(
   let discovered: AcpInstalledAgentRecord[] = [];
   if (options?.refreshLocal) {
     try {
-      discovered = await discoverLocalAcpAgents();
+      const grokOverride = resolveGrokCliPathOverride();
+      discovered = await discoverLocalAcpAgents({
+        overrides: grokOverride ? { grok: grokOverride } : undefined,
+      });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       for (const record of discovered) {
         const current = store.getInstalledAgent(record.backendId);

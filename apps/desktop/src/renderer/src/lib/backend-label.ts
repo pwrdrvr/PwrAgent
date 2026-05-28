@@ -18,7 +18,7 @@ export function formatBackendLabel(
     return "OpenAI";
   }
   if (backend === "grok") {
-    return "Grok";
+    return "AgentCore - Grok";
   }
   if (backend.startsWith("acp:")) {
     const registryId = backend.slice("acp:".length);

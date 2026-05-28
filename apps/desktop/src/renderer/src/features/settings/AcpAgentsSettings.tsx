@@ -1,18 +1,35 @@
 import { useEffect, useState } from "react";
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type {
+  AcpAgentSettingsEntry,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SettingsField,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import { sourceBadge } from "./settings-fields";
 import { acpStatusLabel } from "./acp-agent-copy";
 
-export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
+export function AcpAgentsSettings(props: {
+  desktopApi?: DesktopApi;
+  saving?: boolean;
+  snapshot?: DesktopSettingsSnapshot;
+  onGrokCliPathChange?: (cliPath: string) => Promise<void>;
+}) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const grokCliPathSnapshot = props.snapshot?.acpAgents?.grok?.cliPath;
+  const [grokCliPathDraft, setGrokCliPathDraft] = useState<string>(
+    grokCliPathSnapshot?.value ?? "",
+  );
+  useEffect(() => {
+    setGrokCliPathDraft(grokCliPathSnapshot?.value ?? "");
+  }, [grokCliPathSnapshot?.value]);
 
   async function refresh(refreshRegistry = false): Promise<void> {
     if (!props.desktopApi?.listAcpAgents) {
@@ -51,6 +68,64 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
         title="ACP Agents"
         help="Manage discovered ACP coding agents and their local runtime capabilities."
       />
+
+      {props.snapshot && props.onGrokCliPathChange ? (
+        <SettingsSection
+          eyebrow="ACP"
+          title="Grok CLI path"
+          description="Override the executable used by Grok CLI auto-discovery. Leave empty to probe $PATH, ~/.grok/bin/grok, /opt/homebrew/bin/grok, and /usr/local/bin/grok in that order."
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="Custom path"
+              sub="Absolute path to the grok executable. Click Discover new after saving to re-probe."
+              source={
+                grokCliPathSnapshot ? sourceBadge(grokCliPathSnapshot) : undefined
+              }
+              control={
+                <div className="settings-secret">
+                  <input
+                    aria-label="Grok CLI path"
+                    className="settings-input"
+                    disabled={props.saving}
+                    placeholder="/Users/you/.grok/bin/grok"
+                    type="text"
+                    value={grokCliPathDraft}
+                    onChange={(event) =>
+                      setGrokCliPathDraft(event.currentTarget.value)
+                    }
+                  />
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      props.saving ||
+                      grokCliPathDraft.trim() ===
+                        (grokCliPathSnapshot?.value ?? "").trim()
+                    }
+                    type="button"
+                    onClick={() => {
+                      void props.onGrokCliPathChange?.(grokCliPathDraft.trim());
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="button button--ghost"
+                    disabled={props.saving || grokCliPathDraft === ""}
+                    type="button"
+                    onClick={() => {
+                      setGrokCliPathDraft("");
+                      void props.onGrokCliPathChange?.("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              }
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection eyebrow="ACP" title="Known agents">
         <div className="settings-inline-actions">

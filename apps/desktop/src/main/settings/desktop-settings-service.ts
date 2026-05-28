@@ -37,6 +37,8 @@ import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_GROK_CLI_PATH_ENV,
+  AGENT_CORE_GROK_ENV,
   CODEX_COMMAND_ENV,
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_GUILDS_ENV,
@@ -374,6 +376,11 @@ export class DesktopSettingsService {
             config.experimental?.diffCondensation?.model,
           ),
         },
+        agentCoreGrok: this.resolveBoolean(
+          config.experimental?.agentCoreGrok,
+          false,
+          AGENT_CORE_GROK_ENV,
+        ),
       },
       imageUploads: {
         pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
@@ -649,6 +656,14 @@ export class DesktopSettingsService {
         },
         grok: {
           apiKey: grokApiKey,
+        },
+      },
+      acpAgents: {
+        grok: {
+          cliPath: this.resolveString(
+            config.acpAgents?.grok?.cliPath,
+            ACP_AGENTS_GROK_CLI_PATH_ENV,
+          ),
         },
       },
       applications: {

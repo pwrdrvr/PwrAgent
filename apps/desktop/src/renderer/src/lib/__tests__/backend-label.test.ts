@@ -89,7 +89,7 @@ describe("formatBackendLabel", () => {
 
   it("falls back to stable built-in and ACP labels", () => {
     expect(formatBackendLabel("codex")).toBe("OpenAI");
-    expect(formatBackendLabel("grok")).toBe("Grok");
+    expect(formatBackendLabel("grok")).toBe("AgentCore - Grok");
     expect(formatBackendLabel("acp:gemini")).toBe("Gemini");
     expect(formatBackendLabel("acp:kimi")).toBe("Kimi");
     expect(formatBackendLabel("acp:unknown")).toBe("unknown");
