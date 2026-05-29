@@ -3,31 +3,20 @@ import { getMainLogger } from "../log";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 
-export type DesktopNotificationPermissionState =
-  | "default"
-  | "granted"
-  | "denied"
-  | "unsupported";
-
+/**
+ * Native attention/terminal notifications for unattended turns.
+ *
+ * Permission is intentionally NOT introspected here. Electron does not expose
+ * a programmatic API for the OS-level notification grant on macOS/Windows
+ * (see electron/electron#45570, closed "not planned"), and the renderer-side
+ * Web Notification `permission` value is unreliable on macOS in both
+ * directions (electron/electron#11221). So we emit unconditionally; the OS
+ * silently drops if the user has denied notifications for this bundle, and
+ * we surface that possibility in the Settings help copy instead of a
+ * runtime banner that would lie roughly half the time.
+ */
 export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
-
-  readPermission(): DesktopNotificationPermissionState {
-    if (!Notification.isSupported()) {
-      return "unsupported";
-    }
-    // Electron's main-process Notification API has native support/show only.
-    // Permission prompting and denied/readback state are handled by the renderer
-    // Web Notification API, which maps to the app's OS notification permission.
-    return "granted";
-  }
-
-  async requestPermission(): Promise<DesktopNotificationPermissionState> {
-    if (!Notification.isSupported()) {
-      return "unsupported";
-    }
-    return "granted";
-  }
 
   clearAttentionKey(key: string): void {
     this.attentionKeys.delete(key);

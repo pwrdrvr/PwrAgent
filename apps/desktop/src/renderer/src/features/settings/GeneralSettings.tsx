@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
   DesktopCodexProfileModel,
-  DesktopNotificationPermissionState,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
 } from "@pwragent/shared";
@@ -108,20 +107,6 @@ function releaseHelpText(
   return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
 }
 
-function readBrowserNotificationPermission(): DesktopNotificationPermissionState {
-  if (!("Notification" in window)) {
-    return "unsupported";
-  }
-  return window.Notification.permission;
-}
-
-async function requestBrowserNotificationPermission(): Promise<DesktopNotificationPermissionState> {
-  if (!("Notification" in window)) {
-    return "unsupported";
-  }
-  return await window.Notification.requestPermission();
-}
-
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -137,8 +122,6 @@ export function GeneralSettings(props: {
   const [releaseVersions, setReleaseVersions] = useState<
     AppUpdateReleaseVersions | undefined
   >();
-  const [notificationPermission, setNotificationPermission] =
-    useState<DesktopNotificationPermissionState>("default");
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const developerMode = props.snapshot.general.developerMode;
@@ -162,10 +145,6 @@ export function GeneralSettings(props: {
       canceled = true;
     };
   }, [props.desktopApi]);
-
-  useEffect(() => {
-    setNotificationPermission(readBrowserNotificationPermission());
-  }, []);
 
   const appearance = props.appearanceController?.appearance;
 
@@ -261,32 +240,14 @@ export function GeneralSettings(props: {
             label="Desktop notifications"
             sub="Native alerts for approval/questions and turn completion while PwrAgent is unfocused or minimized."
             source={sourceBadge(notificationsEnabled)}
-            help={
-              notificationPermission === "denied"
-                ? "Permission denied by the OS. Keep this enabled, then allow notifications for PwrAgent in system settings."
-                : undefined
-            }
-            error={
-              notificationPermission === "denied"
-                ? "Notification permission is denied."
-                : undefined
-            }
+            help="If you don't see notifications, allow them for PwrAgent in your OS notification settings."
             control={
               <SettingsSwitch
                 checked={notificationsEnabled.value}
                 disabled={props.saving}
                 label="Desktop notifications"
                 onChange={(next) => {
-                  void (async () => {
-                    await props.onNotificationsEnabledChange(next);
-                    if (next) {
-                      const permission =
-                        await requestBrowserNotificationPermission();
-                      setNotificationPermission(permission);
-                      return;
-                    }
-                    setNotificationPermission(readBrowserNotificationPermission());
-                  })();
+                  void props.onNotificationsEnabledChange(next);
                 }}
               />
             }

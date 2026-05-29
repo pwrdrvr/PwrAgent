@@ -112,8 +112,6 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
-  RequestDesktopNotificationPermissionRequest,
-  RequestDesktopNotificationPermissionResponse,
   RunAutomationNowResponse,
   StartReviewRequest,
   StartReviewResponse,
@@ -149,8 +147,6 @@ import type {
   OpenDesktopApplicationResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
-  ReadDesktopNotificationPermissionRequest,
-  ReadDesktopNotificationPermissionResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -303,11 +299,9 @@ import {
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
-  SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
-  SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
@@ -507,14 +501,6 @@ const desktopApi = Object.freeze({
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_READ_CHANNEL, request),
-  readNotificationPermission: async (
-    request?: ReadDesktopNotificationPermissionRequest,
-  ): Promise<ReadDesktopNotificationPermissionResponse> =>
-    await ipcRenderer.invoke(SETTINGS_READ_NOTIFICATION_PERMISSION_CHANNEL, request),
-  requestNotificationPermission: async (
-    request?: RequestDesktopNotificationPermissionRequest,
-  ): Promise<RequestDesktopNotificationPermissionResponse> =>
-    await ipcRenderer.invoke(SETTINGS_REQUEST_NOTIFICATION_PERMISSION_CHANNEL, request),
   writeSettingsConfig: async (
     request: WriteDesktopSettingsConfigRequest,
   ): Promise<DesktopSettingsWriteResponse> =>

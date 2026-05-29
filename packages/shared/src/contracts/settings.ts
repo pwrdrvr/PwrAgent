@@ -708,24 +708,6 @@ export type ReadDesktopSettingsResponse = {
   snapshot: DesktopSettingsSnapshot;
 };
 
-export type DesktopNotificationPermissionState =
-  | "default"
-  | "granted"
-  | "denied"
-  | "unsupported";
-
-export type ReadDesktopNotificationPermissionRequest = Record<string, never>;
-
-export type ReadDesktopNotificationPermissionResponse = {
-  permission: DesktopNotificationPermissionState;
-};
-
-export type RequestDesktopNotificationPermissionRequest = Record<string, never>;
-
-export type RequestDesktopNotificationPermissionResponse = {
-  permission: DesktopNotificationPermissionState;
-};
-
 export type WriteDesktopSettingsConfigRequest = {
   patch: DesktopSettingsConfigPatch;
 };

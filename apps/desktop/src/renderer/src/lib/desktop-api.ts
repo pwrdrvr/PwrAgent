@@ -154,10 +154,6 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
-  ReadDesktopNotificationPermissionRequest,
-  ReadDesktopNotificationPermissionResponse,
-  RequestDesktopNotificationPermissionRequest,
-  RequestDesktopNotificationPermissionResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -387,12 +383,6 @@ export type DesktopApi = {
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
-  readNotificationPermission?: (
-    request?: ReadDesktopNotificationPermissionRequest,
-  ) => Promise<ReadDesktopNotificationPermissionResponse>;
-  requestNotificationPermission?: (
-    request?: RequestDesktopNotificationPermissionRequest,
-  ) => Promise<RequestDesktopNotificationPermissionResponse>;
   writeSettingsConfig?: (
     request: WriteDesktopSettingsConfigRequest
   ) => Promise<DesktopSettingsWriteResponse>;

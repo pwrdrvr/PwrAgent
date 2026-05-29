@@ -341,12 +341,6 @@ describe("SettingsScreen", () => {
         latest: { version: "v1.0.0" },
         prerelease: { version: "v1.0.0-beta.7" },
       })),
-      readNotificationPermission: vi.fn(async () => ({
-        permission: "default" as const,
-      })),
-      requestNotificationPermission: vi.fn(async () => ({
-        permission: "granted" as const,
-      })),
     };
     render(
       <SettingsScreen

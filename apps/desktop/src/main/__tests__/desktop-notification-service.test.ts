@@ -44,18 +44,6 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([]);
   });
 
-  it("reads unsupported permission state", () => {
-    const service = new DesktopNotificationService();
-    MockNotification.isSupported.mockReturnValue(false);
-    expect(service.readPermission()).toBe("unsupported");
-  });
-
-  it("reports granted permission when native notifications are supported", async () => {
-    const service = new DesktopNotificationService();
-    expect(service.readPermission()).toBe("granted");
-    await expect(service.requestPermission()).resolves.toBe("granted");
-  });
-
   it("emits attention notifications only once per key", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
