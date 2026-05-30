@@ -408,6 +408,53 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("copies failed activity details from the transcript", async () => {
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "activity",
+            id: "turn-failed:turn-1",
+            summary: "Turn failed",
+            status: "failed",
+            tone: "warning",
+            details: [
+              {
+                id: "turn-failed:turn-1:detail",
+                kind: "read",
+                label: "json-rpc error (-32603): Internal error: invalid API key",
+                status: "failed",
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const activity = screen.getByText("Turn failed").closest(".transcript-activity");
+    expect(activity).toHaveClass("transcript-activity--warning");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy activity" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "Turn failed\njson-rpc error (-32603): Internal error: invalid API key"
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Turn failed/i }));
+
+    expect(
+      screen.getByText("json-rpc error (-32603): Internal error: invalid API key")
+    ).toBeInTheDocument();
+  });
+
   it("preserves reference-style links inside split wide markdown tables", () => {
     const { container } = render(
       <TranscriptList
@@ -1115,6 +1162,58 @@ describe("TranscriptList", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
+    });
+  });
+
+  it("copies grouped work activity details through the injected desktop API", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const completedTurn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 72_000,
+      durationMs: 71_000,
+    };
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "activity",
+            id: "tool-usage-1",
+            summary: "Used 2 tools",
+            details: [
+              {
+                id: "tool-detail-1",
+                kind: "command",
+                label: "rg -n transcript activity",
+              },
+            ],
+            turn: completedTurn,
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Fixed.",
+            turn: completedTurn,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Worked for 1m 11s/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy activity" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "Used 2 tools\nrg -n transcript activity"
+      );
     });
   });
 

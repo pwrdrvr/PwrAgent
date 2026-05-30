@@ -1,9 +1,12 @@
 import { useId, useState } from "react";
 import type { AppServerThreadActivityEntry } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptDiff } from "./TranscriptDiff";
 
 type TranscriptActivityProps = {
+  desktopApi?: Pick<DesktopApi, "copyText">;
   entry: AppServerThreadActivityEntry;
 };
 
@@ -12,6 +15,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
   const hasDetails = props.entry.details.length > 0;
+  const activityCopyText = buildActivityCopyText(props.entry);
   const className =
     props.entry.tone === "warning"
       ? "transcript-activity transcript-activity--warning"
@@ -21,17 +25,27 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
     <aside className={className}>
       <header className="transcript-activity__header">
         {hasDetails ? (
-          <button
-            type="button"
-            className="transcript-activity__toggle"
-            aria-controls={detailsId}
-            aria-expanded={isExpanded}
-            onClick={() => {
-              setIsExpanded((current) => !current);
-            }}
-          >
-            <span className="transcript-activity__label">{props.entry.summary}</span>
-            <span className="transcript-activity__meta">
+          <>
+            <button
+              type="button"
+              className="transcript-activity__toggle"
+              aria-controls={detailsId}
+              aria-expanded={isExpanded}
+              onClick={() => {
+                setIsExpanded((current) => !current);
+              }}
+            >
+              <span className="transcript-activity__label">{props.entry.summary}</span>
+              <span className="transcript-activity__chevron" aria-hidden="true" />
+            </button>
+            <span className="transcript-activity__header-actions">
+              <TranscriptCopyButton
+                className="transcript-copy-button--activity"
+                copiedLabel="Copied activity"
+                desktopApi={props.desktopApi}
+                label="Copy activity"
+                text={activityCopyText}
+              />
               {props.entry.createdAt ? (
                 <time className="transcript-activity__time">
                   {new Intl.DateTimeFormat(undefined, {
@@ -42,22 +56,30 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                   }).format(props.entry.createdAt)}
                 </time>
               ) : null}
-              <span className="transcript-activity__chevron" aria-hidden="true" />
             </span>
-          </button>
+          </>
         ) : (
           <>
             <span className="transcript-activity__label">{props.entry.summary}</span>
-            {props.entry.createdAt ? (
-              <time className="transcript-activity__time">
-                {new Intl.DateTimeFormat(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit"
-                }).format(props.entry.createdAt)}
-              </time>
-            ) : null}
+            <span className="transcript-activity__header-actions">
+              <TranscriptCopyButton
+                className="transcript-copy-button--activity"
+                copiedLabel="Copied activity"
+                desktopApi={props.desktopApi}
+                label="Copy activity"
+                text={activityCopyText}
+              />
+              {props.entry.createdAt ? (
+                <time className="transcript-activity__time">
+                  {new Intl.DateTimeFormat(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit"
+                  }).format(props.entry.createdAt)}
+                </time>
+              ) : null}
+            </span>
           </>
         )}
       </header>
@@ -142,6 +164,12 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
       ) : null}
     </aside>
   );
+}
+
+function buildActivityCopyText(entry: AppServerThreadActivityEntry): string {
+  return [entry.summary, ...entry.details.map((detail) => detail.label)]
+    .filter((text) => text.trim().length > 0)
+    .join("\n");
 }
 
 function formatActivityDetailStatus(
