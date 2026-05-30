@@ -158,6 +158,7 @@ import {
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { resolveAgentCoreGrokEnabled } from "../settings/desktop-config";
 import {
   BackendModelCatalog,
@@ -209,6 +210,17 @@ const ACTIVE_TURN_HANDOFF_ERROR =
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const ATTENTION_NOTIFICATION_METHODS = new Set([
+  "turn/requestApproval",
+  "review/requestApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "applyPatchApproval",
+  "execCommandApproval",
+]);
 const execFile = promisify(execFileCallback);
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -1754,6 +1766,15 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  /**
+   * Best-effort cache of thread titles keyed by `${backend}:${threadId}`, used
+   * only to label native attention/terminal notifications so multiple
+   * background turns are distinguishable. Populated from `thread/started` and
+   * `thread/name/updated` notifications as they fan out through `emit()`.
+   * Falls back to a generic body when a title hasn't been observed yet.
+   */
+  private readonly notificationThreadTitles = new Map<string, string>();
+  private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
   private readonly headlessAutomationTurns = new Map<
@@ -8361,6 +8382,126 @@ export class DesktopBackendRegistry {
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
   }
 
+  private notificationsEnabled(): boolean {
+    try {
+      return getDesktopSettingsService().resolveNotificationsEnabled();
+    } catch (error) {
+      if (!this.hasLoggedNotificationsEnabledError) {
+        this.hasLoggedNotificationsEnabledError = true;
+        backendRegistryLog.warn(
+          "failed to read notificationsEnabled setting; suppressing notifications",
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+      return false;
+    }
+  }
+
+  private rememberThreadTitleFromEvent(event: AgentEvent): void {
+    const method = event.notification.method;
+    if (method === "thread/name/updated") {
+      const params = event.notification.params as {
+        threadId?: unknown;
+        threadName?: unknown;
+      };
+      const threadId = params.threadId;
+      const threadName = params.threadName;
+      if (typeof threadId === "string" && typeof threadName === "string") {
+        const trimmed = threadName.trim();
+        if (trimmed) {
+          this.notificationThreadTitles.set(
+            `${event.backend}:${threadId}`,
+            trimmed,
+          );
+        }
+      }
+      return;
+    }
+    if (method === "thread/started") {
+      const params = event.notification.params as {
+        threadId?: unknown;
+        thread?: Record<string, unknown>;
+      };
+      const threadId = params.threadId;
+      if (typeof threadId !== "string") {
+        return;
+      }
+      const thread = params.thread;
+      const candidate =
+        (typeof thread?.title === "string" ? thread.title : undefined) ??
+        (typeof thread?.name === "string" ? thread.name : undefined);
+      const trimmed = candidate?.trim();
+      if (trimmed) {
+        this.notificationThreadTitles.set(
+          `${event.backend}:${threadId}`,
+          trimmed,
+        );
+      }
+    }
+  }
+
+  private notifyForAttentionRequired(event: AgentEvent): void {
+    if (!ATTENTION_NOTIFICATION_METHODS.has(event.notification.method)) {
+      return;
+    }
+    const params = event.notification.params as Record<string, unknown>;
+    const requestId = params.requestId;
+    const threadId = params.threadId;
+    if (typeof requestId !== "string" || typeof threadId !== "string") {
+      return;
+    }
+    const isQuestion =
+      event.notification.method === "item/tool/requestUserInput";
+    const title = isQuestion
+      ? "PwrAgent question waiting"
+      : "PwrAgent approval needed";
+    const threadTitle = this.notificationThreadTitles.get(
+      `${event.backend}:${threadId}`,
+    );
+    const baseBody = isQuestion
+      ? "waiting for your response"
+      : "waiting for your approval";
+    const body = threadTitle ? `${threadTitle} · ${baseBody}.` : `A turn ${baseBody}.`;
+    getDesktopNotificationService().notifyAttention({
+      enabled: this.notificationsEnabled(),
+      key: `${event.backend}:${threadId}:${requestId}`,
+      title,
+      body,
+    });
+  }
+
+  private notifyForTerminalOutcome(event: AgentEvent): void {
+    if (
+      event.notification.method !== "turn/completed" &&
+      event.notification.method !== "turn/failed" &&
+      event.notification.method !== "turn/cancelled"
+    ) {
+      return;
+    }
+    const status =
+      event.notification.method === "turn/completed"
+        ? "completed"
+        : event.notification.method === "turn/failed"
+          ? "failed"
+          : "cancelled";
+    const threadId = (event.notification.params as { threadId?: unknown })
+      .threadId;
+    const threadTitle =
+      typeof threadId === "string"
+        ? this.notificationThreadTitles.get(`${event.backend}:${threadId}`)
+        : undefined;
+    const body = threadTitle
+      ? `${threadTitle} · turn ${status}.`
+      : `A turn ${status}.`;
+    getDesktopNotificationService().notifyTerminal({
+      enabled: this.notificationsEnabled(),
+      title: `PwrAgent turn ${status}`,
+      body,
+    });
+  }
+
   private async emit(event: AgentEvent): Promise<void> {
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
@@ -8532,7 +8673,12 @@ export class DesktopBackendRegistry {
         this.pendingServerRequests.delete(key);
         pending.resolve({ decision: "cancel" });
       }
+      getDesktopNotificationService().clearAttentionKey(key);
     }
+
+    this.rememberThreadTitleFromEvent(event);
+    this.notifyForAttentionRequired(event);
+    this.notifyForTerminalOutcome(event);
 
     for (const listener of this.eventListeners) {
       await listener(event);

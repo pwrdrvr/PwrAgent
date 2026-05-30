@@ -290,6 +290,11 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onNotificationsEnabledChange={async (notificationsEnabled) => {
+          await props.settings.writeConfig({
+            general: { notificationsEnabled },
+          });
+        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },

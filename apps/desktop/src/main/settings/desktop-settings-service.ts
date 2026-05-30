@@ -336,6 +336,10 @@ export class DesktopSettingsService {
           config.general?.developerMode,
           this.defaultDeveloperMode(),
         ),
+        notificationsEnabled: this.resolveConfigBoolean(
+          config.general?.notificationsEnabled,
+          false,
+        ),
         appearance: {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
@@ -696,6 +700,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.developerMode,
       this.defaultDeveloperMode(),
+    ).value;
+  }
+
+  resolveNotificationsEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.notificationsEnabled,
+      false,
     ).value;
   }
 

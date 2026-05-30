@@ -64,6 +64,7 @@ type StoredChatReplyComposer =
 export type DesktopSettingsConfig = {
   general?: {
     developerMode?: boolean;
+    notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
@@ -417,6 +418,9 @@ export function desktopSettingsPatchToEdits(
   // write new values.
   if (patch.general?.developerMode !== undefined) {
     set(["general", "developer_mode"], patch.general.developerMode);
+  }
+  if (patch.general?.notificationsEnabled !== undefined) {
+    set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
   }
 
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
@@ -903,6 +907,7 @@ function normalizeDesktopConfig(
   return pruneEmptyConfig({
     general: {
       developerMode: readBoolean(general?.developer_mode),
+      notificationsEnabled: readBoolean(general?.notifications_enabled),
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
@@ -1103,12 +1108,14 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const pruned: DesktopSettingsConfig = {};
 
   const developerMode = config.general?.developerMode;
+  const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const codexProfileModel = config.general?.codexProfileModel;
   const messagingAcknowledgment = config.general?.messagingAcknowledgment;
   if (
     developerMode !== undefined ||
+    notificationsEnabled !== undefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
     messagingAcknowledgment !== undefined
@@ -1116,6 +1123,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.general = {};
     if (developerMode !== undefined) {
       pruned.general.developerMode = developerMode;
+    }
+    if (notificationsEnabled !== undefined) {
+      pruned.general.notificationsEnabled = notificationsEnabled;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;

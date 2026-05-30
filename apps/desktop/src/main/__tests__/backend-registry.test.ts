@@ -43,6 +43,24 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
 
+const desktopNotificationServiceMock = vi.hoisted(() => {
+  const notifyAttention = vi.fn();
+  const notifyTerminal = vi.fn();
+  const clearAttentionKey = vi.fn();
+  const service = { notifyAttention, notifyTerminal, clearAttentionKey };
+  return {
+    notifyAttention,
+    notifyTerminal,
+    clearAttentionKey,
+    getDesktopNotificationService: vi.fn(() => service),
+  };
+});
+
+vi.mock("../notifications/desktop-notification-service", () => ({
+  getDesktopNotificationService:
+    desktopNotificationServiceMock.getDesktopNotificationService,
+}));
+
 // These tests pre-date the agent-core Grok experimental flag and exercise
 // the direct xAI HTTP provider's behavior (model warm-up, availability
 // reporting, etc.). The flag now defaults to off; enable it for this file
@@ -11570,6 +11588,184 @@ command = "pnpm dev"
 
       expect(result.map((thread) => thread.id)).toEqual(["thread-codex"]);
       expect(codexClient.listThreadsCallCount).toBe(1);
+
+      await registry.close();
+    });
+  });
+
+  describe("notification wiring", () => {
+    function makeRegistry(): DesktopBackendRegistry {
+      return new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({}),
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+    }
+
+    function resetNotificationMocks(): void {
+      desktopNotificationServiceMock.notifyAttention.mockClear();
+      desktopNotificationServiceMock.notifyTerminal.mockClear();
+      desktopNotificationServiceMock.clearAttentionKey.mockClear();
+    }
+
+    it("calls notifyAttention on turn/requestApproval with a backend:thread:request key", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "req-1",
+          },
+        } as AppServerNotification,
+      });
+
+      expect(desktopNotificationServiceMock.notifyAttention).toHaveBeenCalledTimes(1);
+      const call = desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        key: "codex:thread-1:req-1",
+        title: "PwrAgent approval needed",
+      });
+      expect(typeof call.body).toBe("string");
+      expect(typeof call.enabled).toBe("boolean");
+
+      await registry.close();
+    });
+
+    it("calls notifyAttention on item/tool/requestUserInput with the question title", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: "thread-q",
+            requestId: "req-q",
+          },
+        } as AppServerNotification,
+      });
+
+      const call = desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        key: "codex:thread-q:req-q",
+        title: "PwrAgent question waiting",
+      });
+
+      await registry.close();
+    });
+
+    it("calls notifyTerminal on turn/completed and includes the cached thread title", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      // Seed the title cache via thread/name/updated, then complete the turn.
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-2",
+            threadName: "My Investigation",
+          },
+        } as AppServerNotification,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done" }],
+            },
+          },
+        },
+      });
+
+      expect(desktopNotificationServiceMock.notifyTerminal).toHaveBeenCalledTimes(1);
+      const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        title: "PwrAgent turn completed",
+      });
+      expect(call.body).toContain("My Investigation");
+      expect(call.body).toContain("completed");
+
+      await registry.close();
+    });
+
+    it("falls back to a generic terminal body when no thread title has been observed", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "thread-no-title",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "failed",
+              error: { message: "boom" },
+            },
+          },
+        },
+      });
+
+      const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
+      expect(call.title).toBe("PwrAgent turn failed");
+      expect(call.body).not.toContain("undefined");
+      expect(call.body).toContain("failed");
+
+      await registry.close();
+    });
+
+    it("clears the attention key on serverRequest/resolved (covers legacy applyPatchApproval cleanup)", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "applyPatchApproval",
+          params: {
+            threadId: "thread-legacy",
+            requestId: "approval-7",
+          },
+        } as AppServerNotification,
+      });
+      expect(desktopNotificationServiceMock.notifyAttention).toHaveBeenCalledTimes(1);
+      expect(
+        desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0]?.key,
+      ).toBe("codex:thread-legacy:approval-7");
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "serverRequest/resolved",
+          params: {
+            threadId: "thread-legacy",
+            requestId: "approval-7",
+          },
+        } as AppServerNotification,
+      });
+
+      expect(desktopNotificationServiceMock.clearAttentionKey).toHaveBeenCalledWith(
+        "codex:thread-legacy:approval-7",
+      );
 
       await registry.close();
     });

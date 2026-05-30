@@ -54,6 +54,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      notificationsEnabled: {
+        value: false,
+        source: "default",
+      },
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
@@ -366,6 +370,18 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           developerMode: true,
+        },
+      });
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Desktop notifications" }),
+    ).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Desktop notifications" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          notificationsEnabled: true,
         },
       });
     });

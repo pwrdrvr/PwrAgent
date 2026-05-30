@@ -224,6 +224,7 @@ export type DesktopAppearanceSnapshot = {
 
 export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
+  notificationsEnabled: DesktopSettingsValue<boolean>;
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
   messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
@@ -554,6 +555,7 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     developerMode?: boolean;
+    notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;

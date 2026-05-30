@@ -104,6 +104,7 @@ export function GeneralSettings(props: {
   onDeveloperModeChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
+  onNotificationsEnabledChange: (value: boolean) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
@@ -112,6 +113,7 @@ export function GeneralSettings(props: {
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const developerMode = props.snapshot.general.developerMode;
+  const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
@@ -214,6 +216,31 @@ export function GeneralSettings(props: {
           </div>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        eyebrow="General"
+        title="Notifications"
+        chip={sourceBadge(notificationsEnabled)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Desktop notifications"
+            sub="Native alerts for approval/questions and turn completion while PwrAgent is unfocused or minimized."
+            source={sourceBadge(notificationsEnabled)}
+            help="If you don't see notifications, allow them for PwrAgent in your OS notification settings."
+            control={
+              <SettingsSwitch
+                checked={notificationsEnabled.value}
+                disabled={props.saving}
+                label="Desktop notifications"
+                onChange={(next) => {
+                  void props.onNotificationsEnabledChange(next);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"
