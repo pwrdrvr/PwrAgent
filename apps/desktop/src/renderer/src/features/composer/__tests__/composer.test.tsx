@@ -1631,6 +1631,146 @@ describe("Composer", () => {
     expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
   });
 
+  it("clears an image-only pending steer after Codex acknowledges the image", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "steer.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Steerable thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("steer.png")).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
+      "1 image"
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "ready for another instruction",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [
+          {
+            type: "image",
+            url: expect.stringMatching(/^data:image\/png;base64,/),
+          },
+        ],
+      });
+    });
+    expect(screen.getByText("Steering now")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "userMessage",
+              content: [
+                {
+                  type: "image",
+                  url: "data:image/png;base64,AQID",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      screen.queryByLabelText("Pending steer message")
+    ).not.toBeInTheDocument();
+  });
+
   it("restores a pending steer after navigating away and back", async () => {
     let agentEventHandler:
       | ((event: {
