@@ -1247,7 +1247,7 @@ describe("DesktopBackendRegistry", () => {
     });
   });
 
-  it("adds Codex app-server method commands to listSkills", async () => {
+  it("adds Codex compact app-server command to listSkills", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: {
@@ -1275,13 +1275,6 @@ describe("DesktopBackendRegistry", () => {
           cwd: "/repo",
           skills: [],
           commands: [
-            {
-              name: "review",
-              description: "Run a Codex code review.",
-              backend: "codex",
-              scope: "backend",
-              source: "provider",
-            },
             {
               name: "compact",
               description: "Compact this thread's context.",

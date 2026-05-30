@@ -942,16 +942,6 @@ function backendMethodCommands(
   const assumeCodexAppServerSurface = methods.length === 0;
   const commands: AppServerAvailableCommandSummary[] = [];
 
-  if (supported.has("review/start") || assumeCodexAppServerSurface) {
-    commands.push({
-      name: "review",
-      description: "Run a Codex code review.",
-      backend,
-      scope: "backend",
-      source: "provider",
-    });
-  }
-
   if (supported.has("thread/compact/start") || assumeCodexAppServerSurface) {
     commands.push({
       name: "compact",
