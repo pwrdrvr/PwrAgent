@@ -37,6 +37,18 @@ The desktop style guide defines:
 - Keep radius at `8px` or below.
 - Favor one accent color and neutral surfaces.
 
+## Codex Data Boundary
+
+Desktop code must not inspect Codex-owned storage directly. Do not open, parse,
+query, or infer behavior from Codex session JSONL files, rollout files, or
+Codex sqlite databases, even when the Codex App Server protocol returns a path
+to one of those files. Use protocol fields from the Codex App Server instead.
+PwrAgent-owned JSONL, sqlite, config, and replay fixture files remain OK when
+the desktop app or test harness owns that data. CI runs
+`pnpm lint:codex-storage` to catch common violations; do not bypass or rename
+around that check. Fix the data flow by using protocol fields or changing the
+protocol.
+
 ## Running the App for Development
 
 To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):

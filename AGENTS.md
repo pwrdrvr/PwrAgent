@@ -18,6 +18,13 @@
   documented in [.github/workflows/README.md](.github/workflows/README.md).
   Check that list before adding or using a CI-triggering PR label.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches by default. Only search it when the task is specifically about captured E2E protocol snippets.
+- Never read Codex-owned storage files directly from PwrAgent code. Treat
+  Codex session JSONL files, rollout files, and Codex sqlite databases as
+  private implementation details; use the Codex App Server protocol instead.
+  PwrAgent-owned files under `~/.pwragent/` and repo-local test fixtures are
+  fine when the feature explicitly owns them. CI enforces common cases with
+  `pnpm lint:codex-storage`; do not bypass that check by renaming variables or
+  shelling out.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
