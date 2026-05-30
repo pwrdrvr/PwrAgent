@@ -981,6 +981,44 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function parseActiveTurnKey(
+  key: string,
+): { backend: AppServerBackendKind; threadId: string } | undefined {
+  if (key.startsWith("acp:")) {
+    const registrySeparator = key.indexOf(":", "acp:".length);
+    if (registrySeparator <= "acp:".length) return undefined;
+    const backend = key.slice(0, registrySeparator);
+    if (!isAcpBackendId(backend)) return undefined;
+    const threadId = parseThreadIdFromThreadTurnKeyBody(
+      key.slice(registrySeparator + 1),
+    );
+    return threadId ? { backend, threadId } : undefined;
+  }
+
+  const backendSeparator = key.indexOf(":");
+  if (backendSeparator <= 0) return undefined;
+  const backend = key.slice(0, backendSeparator);
+  if (backend !== "codex" && backend !== "grok") return undefined;
+  const threadId = parseThreadIdFromThreadTurnKeyBody(
+    key.slice(backendSeparator + 1),
+  );
+  return threadId ? { backend, threadId } : undefined;
+}
+
+function parseThreadIdFromThreadTurnKeyBody(body: string): string | undefined {
+  const pendingSeparator = body.indexOf(":pending:");
+  if (pendingSeparator > 0) {
+    const beforePending = body.slice(0, pendingSeparator);
+    const afterPending = body.slice(pendingSeparator + ":pending:".length);
+    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
+      return beforePending;
+    }
+  }
+  const turnSeparator = body.lastIndexOf(":");
+  if (turnSeparator <= 0) return undefined;
+  return body.slice(0, turnSeparator);
+}
+
 function buildHeadlessAutomationTurnKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -994,6 +1032,23 @@ function buildTurnStartReservationKey(
   threadId: string,
 ): string {
   return `${backend}\u0000${threadId}`;
+}
+
+function parseReservedAcpStartThreadKey(
+  key: string,
+): { backend: AppServerBackendKind; threadId: string } | undefined {
+  const [backend, threadId] = key.split("\u0000");
+  if (!backend || !threadId || !isAcpBackendId(backend)) {
+    return undefined;
+  }
+  return { backend, threadId };
+}
+
+function formatQuitThreadKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}:${threadId}`;
 }
 
 function prependAutomationRuntimeContext(params: {
@@ -4026,6 +4081,42 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): boolean {
     return this.threadTurnQueue.canStartImmediately(params);
+  }
+
+  getInProgressThreadSnapshotForQuit(): {
+    count: number;
+    threadIds: string[];
+  } {
+    const threadKeys = new Set<string>();
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (parsed) {
+        threadKeys.add(formatQuitThreadKey(parsed.backend, parsed.threadId));
+      }
+    }
+    for (const key of this.activeCodexTurnModes.keys()) {
+      const threadId = parseThreadIdFromThreadTurnKeyBody(key);
+      if (threadId) {
+        threadKeys.add(formatQuitThreadKey("codex", threadId));
+      }
+    }
+    for (const threadId of this.reservedCodexStartThreadIds) {
+      threadKeys.add(formatQuitThreadKey("codex", threadId));
+    }
+    for (const key of this.reservedAcpStartThreadKeys) {
+      const parsed = parseReservedAcpStartThreadKey(key);
+      if (parsed) {
+        threadKeys.add(formatQuitThreadKey(parsed.backend, parsed.threadId));
+      }
+    }
+    for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
+      threadKeys.add(formatQuitThreadKey(entry.backend, entry.threadId));
+    }
+    const threadIds = [...threadKeys].sort();
+    return {
+      count: threadIds.length,
+      threadIds,
+    };
   }
 
   async startTurn(params: {

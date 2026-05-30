@@ -7068,6 +7068,57 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reports in-progress quit threads across Codex active, queued, and ACP active turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "hello" }],
+    });
+    await registry.submitTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "queued" }],
+    });
+    await (
+      registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+      }
+    ).emit({
+      backend: "acp:grok",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-thread-1",
+          turnId: "pending:acp-thread-1:123456",
+          turn: {
+            id: "pending:acp-thread-1:123456",
+            status: "in_progress",
+            startedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 2,
+      threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
+    });
+
+    await registry.close();
+  });
+
   it("applies generated Codex thread titles after starting turns", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

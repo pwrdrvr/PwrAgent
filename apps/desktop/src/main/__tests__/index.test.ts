@@ -42,6 +42,9 @@ const registerWindowPointerIpcHandlersMock = vi.fn();
 const disposeWindowPointerIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const requestOpenSettingsMock = vi.fn();
+const requestQuitMock = vi.fn(async () => true);
+const allowImmediateQuitMock = vi.fn();
+const isQuitAllowedMock = vi.fn(() => true);
 const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
@@ -149,6 +152,14 @@ vi.mock("../window", () => ({
 
 vi.mock("../window-open-settings", () => ({
   requestOpenSettings: requestOpenSettingsMock,
+}));
+
+vi.mock("../quit-manager", () => ({
+  appQuitManager: {
+    allowImmediateQuit: allowImmediateQuitMock,
+    isQuitAllowed: isQuitAllowedMock,
+  },
+  requestQuit: requestQuitMock,
 }));
 
 vi.mock("../ipc/app-server", () => ({
@@ -388,6 +399,11 @@ describe("bootstrapApp", () => {
     disposeWindowPointerIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     requestOpenSettingsMock.mockReset();
+    requestQuitMock.mockReset();
+    requestQuitMock.mockResolvedValue(true);
+    allowImmediateQuitMock.mockReset();
+    isQuitAllowedMock.mockReset();
+    isQuitAllowedMock.mockReturnValue(true);
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();

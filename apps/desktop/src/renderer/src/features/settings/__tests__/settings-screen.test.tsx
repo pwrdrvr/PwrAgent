@@ -50,6 +50,10 @@ function createSnapshot(
       encrypted: false,
     },
     general: {
+      confirmQuitWithInProgressThreads: {
+        value: true,
+        source: "default",
+      },
       developerMode: {
         value: false,
         source: "default",
@@ -365,6 +369,24 @@ describe("SettingsScreen", () => {
       "aria-checked",
       "false",
     );
+    expect(
+      screen.getByRole("switch", {
+        name: "Confirm quit when threads are in progress",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Confirm quit when threads are in progress",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          confirmQuitWithInProgressThreads: false,
+        },
+      });
+    });
+
     fireEvent.click(screen.getByRole("switch", { name: "Developer Mode" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

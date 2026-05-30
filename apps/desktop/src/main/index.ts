@@ -95,6 +95,7 @@ import { subscribersForChannel } from "./window-channels";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
+import { appQuitManager, requestQuit } from "./quit-manager";
 import {
   getAuxiliaryWindowMenuTitle,
   reapplyAuxiliaryWindowMenuBars,
@@ -224,6 +225,7 @@ function installProcessShutdownHandlers(): void {
   const handleSignal = (signal: NodeJS.Signals): void => {
     mainLog.info("main process shutdown signal received", { signal });
     disposeMainProcessResourcesSync();
+    appQuitManager.allowImmediateQuit();
     app.quit();
   };
   process.once("SIGTERM", handleSignal);
@@ -335,6 +337,9 @@ function installApplicationMenu(): void {
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
+      },
+      quit: () => {
+        void requestQuit({ source: "menu" });
       },
       replayOnboarding: () => {
         requestReplayOnboarding();
@@ -470,13 +475,20 @@ export function bootstrapApp(): void {
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
-    registerAppUpdateIpcHandlers();
+    registerAppUpdateIpcHandlers({
+      requestQuit: async (performQuit) =>
+        await requestQuit({ performQuit, source: "update-install" }),
+    });
     registerComposerDraftIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();
-    registerBootInfoIpcHandlers();
+    registerBootInfoIpcHandlers({
+      requestQuit: async () => {
+        await requestQuit({ source: "ipc" });
+      },
+    });
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
         if (patch.general?.developerMode !== undefined) {
@@ -557,11 +569,16 @@ export function bootstrapApp(): void {
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
-      app.quit();
+      void requestQuit({ source: "window-all-closed" });
     }
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
+    if (!appQuitManager.isQuitAllowed()) {
+      event?.preventDefault();
+      void requestQuit({ source: "before-quit" });
+      return;
+    }
     disposeMainProcessResourcesSync();
   });
 }

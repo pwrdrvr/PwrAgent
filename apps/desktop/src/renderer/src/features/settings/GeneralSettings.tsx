@@ -102,6 +102,7 @@ export function GeneralSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDeveloperModeChange: (value: boolean) => Promise<void>;
+  onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -112,6 +113,8 @@ export function GeneralSettings(props: {
   >();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
+  const confirmQuitWithInProgressThreads =
+    props.snapshot.general.confirmQuitWithInProgressThreads;
   const developerMode = props.snapshot.general.developerMode;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
@@ -216,6 +219,30 @@ export function GeneralSettings(props: {
           </div>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        eyebrow="General"
+        title="Quit confirmation"
+        chip={sourceBadge(confirmQuitWithInProgressThreads)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Confirm quit when threads are in progress"
+            sub="Warn before quitting while agent turns are running. The prompt auto-quits after a short countdown so shutdown can continue."
+            source={sourceBadge(confirmQuitWithInProgressThreads)}
+            control={
+              <SettingsSwitch
+                checked={confirmQuitWithInProgressThreads.value}
+                disabled={props.saving}
+                label="Confirm quit when threads are in progress"
+                onChange={(next) => {
+                  void props.onConfirmQuitWithInProgressThreadsChange(next);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"

@@ -278,6 +278,13 @@ function SettingsSectionBody(props: {
             general: { developerMode },
           });
         }}
+        onConfirmQuitWithInProgressThreadsChange={async (
+          confirmQuitWithInProgressThreads: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            general: { confirmQuitWithInProgressThreads },
+          });
+        }}
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
             updates: { channel },

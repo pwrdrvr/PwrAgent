@@ -223,6 +223,7 @@ export type DesktopAppearanceSnapshot = {
 };
 
 export type DesktopGeneralSettingsSnapshot = {
+  confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   developerMode: DesktopSettingsValue<boolean>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
   appearance: DesktopAppearanceSnapshot;
@@ -554,6 +555,7 @@ export type DesktopSettingsSnapshot = {
 
 export type DesktopSettingsConfigPatch = {
   general?: {
+    confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     notificationsEnabled?: boolean;
     appearance?: {

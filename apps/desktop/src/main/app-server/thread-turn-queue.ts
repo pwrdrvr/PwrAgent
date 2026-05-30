@@ -144,6 +144,10 @@ export class ThreadTurnQueue {
     return [...this.queueFor(this.keyFor(params))];
   }
 
+  getAllQueuedEntries(): ThreadTurnQueueEntry[] {
+    return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
+  }
+
   cancelEntry(entryId: string, reason?: string): ThreadTurnQueueEntry | undefined {
     for (const [key, queue] of this.queuedEntries.entries()) {
       const index = queue.findIndex((entry) => entry.id === entryId);

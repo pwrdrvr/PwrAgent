@@ -40,6 +40,7 @@ function buildTemplate(
       openProfilesSettings: options?.openProfilesSettings ?? vi.fn(),
       openSettings: options?.openSettings ?? vi.fn(),
       openWebsite: vi.fn(),
+      quit: vi.fn(),
       replayOnboarding: vi.fn(),
       showAboutPanel: vi.fn(),
       showChangelogWindow: vi.fn(),
@@ -215,6 +216,41 @@ describe("buildApplicationMenuTemplate", () => {
       // — we don't need the args here, just that our action gets called.
       (settings?.click as () => void | undefined)?.();
       expect(openSettings).toHaveBeenCalledOnce();
+    });
+
+    it("routes macOS Quit through the shared quit action", () => {
+      const quit = vi.fn();
+      const template = buildApplicationMenuTemplate({
+        appName: "PwrAgent",
+        developerMode: false,
+        isMac: true,
+        profiles: [],
+        windows: [],
+        actions: {
+          checkForUpdates: vi.fn(),
+          focusWindow: vi.fn(),
+          openDocumentation: vi.fn(),
+          openIssueReporter: vi.fn(),
+          openProfile: vi.fn(),
+          openProfilesSettings: vi.fn(),
+          openSettings: vi.fn(),
+          openWebsite: vi.fn(),
+          quit,
+          replayOnboarding: vi.fn(),
+          showAboutPanel: vi.fn(),
+          showChangelogWindow: vi.fn(),
+          showLicenseWindow: vi.fn(),
+          showLogsWindow: vi.fn(),
+          showThirdPartyNoticesWindow: vi.fn(),
+        },
+      });
+      const quitItem = submenuItems(template, "PwrAgent").find(
+        (item) => item.label === "Quit PwrAgent",
+      );
+
+      expect(quitItem?.accelerator).toBe("Command+Q");
+      (quitItem?.click as () => void | undefined)?.();
+      expect(quit).toHaveBeenCalledOnce();
     });
 
     it("surfaces Settings in Help → About cluster on non-Mac platforms", () => {
