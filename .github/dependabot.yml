@@ -32,6 +32,27 @@ updates:
       - dependency-name: "electron"
         update-types:
           - "version-update:semver-major"
+      # Vite 8 showed that desktop build-tool majors need coordinated migration
+      # across Vite, plugin-react, and electron-vite. Keep routine minor/patch
+      # Dependabot PRs flowing, but do not open normal version-update PRs for
+      # these majors until we deliberately plan and validate the migration.
+      - dependency-name: "vite"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "@vitejs/plugin-react"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "electron-vite"
+        update-types:
+          - "version-update:semver-major"
+      # Desktop packaging/runtime-adjacent majors also need release-pipeline
+      # validation instead of routine Dependabot review.
+      - dependency-name: "electron-builder"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "@electron/*"
+        update-types:
+          - "version-update:semver-major"
       # node-fetch is kept at v2 for grammY's current Node runtime shim. The
       # latest grammY release still depends on node-fetch v2 and its CommonJS
       # entrypoint; v3 is ESM-only and should be handled as a planned Telegram
@@ -47,7 +68,6 @@ updates:
           - "electron-vite"
         dependency-type: "development"
         update-types:
-          - "major"
           - "minor"
           - "patch"
       desktop-runtime-minor-patch:
