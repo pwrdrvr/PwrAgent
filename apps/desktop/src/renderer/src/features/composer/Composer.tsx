@@ -2574,6 +2574,32 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     updateSending(true);
     props.onPendingStatusChange?.("Compacting");
+    const submittedScopeKey = composerScopeKey;
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    const emptySnapshot: ComposerDraftSnapshot = {
+      draft: "",
+      editorDocument: undefined,
+      imageAttachments: [],
+      skillTokens: [],
+    };
+    clearComposerDraftSnapshot(submittedScopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey: submittedScopeKey,
+      snapshot: emptySnapshot,
+    };
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: "",
+      expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+      staleDraft: submittedSnapshot.draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(
+        submittedSnapshot.skillTokens,
+      ),
+    };
+    flushSync(() => {
+      clearComposerDraft();
+      setImageAttachments([]);
+      setReviewConfig(undefined);
+    });
 
     try {
       const response = await props.desktopApi.compactThread({
@@ -2583,13 +2609,20 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       recordComposerDraftHistory(
-        composerScopeKey,
-        latestDraftSnapshotRef.current.snapshot,
+        submittedScopeKey,
+        submittedSnapshot,
         "sent",
       );
-      clearComposerDraftSnapshot(composerScopeKey);
-      clearComposerDraft();
     } catch (error) {
+      latestDraftSnapshotRef.current = {
+        scopeKey: submittedScopeKey,
+        snapshot: submittedSnapshot,
+      };
+      saveComposerDraftSnapshot(submittedScopeKey, submittedSnapshot);
+      setDraft(submittedSnapshot.draft);
+      setEditorDocument(submittedSnapshot.editorDocument);
+      setImageAttachments(submittedSnapshot.imageAttachments);
+      setSkillTokens(submittedSnapshot.skillTokens);
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       setInterrupting(false);

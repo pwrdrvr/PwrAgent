@@ -70,6 +70,20 @@ async function flushReactUpdates(): Promise<void> {
   });
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 afterEach(async () => {
   await flushReactUpdates();
   vi.mocked(normalizeImageFile).mockClear();
@@ -3628,11 +3642,15 @@ describe("Composer", () => {
   });
 
   it("runs exact compact slash command on Enter even after review was selected", async () => {
-    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
-      backend: request.backend,
-      threadId: request.threadId,
-      turnId: "compact-turn-1",
-    }));
+    const compactThreadResponse = createDeferred<{
+      backend: CompactThreadRequest["backend"];
+      threadId: CompactThreadRequest["threadId"];
+      turnId: string;
+    }>();
+    const compactThread = vi.fn((request: CompactThreadRequest) => {
+      void request;
+      return compactThreadResponse.promise;
+    });
     const startReview = vi.fn();
 
     render(
@@ -3679,7 +3697,7 @@ describe("Composer", () => {
       ),
     ).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.change(textarea, { target: { value: "/co" } });
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(within(commands).queryByRole("button", { name: /\/review/i })).not.toBeInTheDocument();
     expect(within(commands).getByRole("button", { name: /\/compact/i })).toHaveAttribute(
@@ -3695,7 +3713,17 @@ describe("Composer", () => {
         threadId: "thread-1",
       });
     });
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+    });
     expect(startReview).not.toHaveBeenCalled();
+
+    compactThreadResponse.resolve({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "compact-turn-1",
+    });
   });
 
   it("inserts provider-native skill commands from slash autocomplete", async () => {
