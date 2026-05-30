@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
@@ -315,22 +315,13 @@ function renderMessageSegment(params: {
     return (
       <div key={`images:${params.index}`} className="transcript-message__image-grid">
         {imageSegment.parts.map((imagePart, imageIndex) => (
-          <button
-            key={`image:${imageSegment.startIndex + imageIndex}`}
-            type="button"
-            className="transcript-message__image-button"
-            aria-label={`Expand transcript image ${imageSegment.startIndex + imageIndex + 1}`}
-            onClick={() => {
-              params.onOpenImage?.(imagePart);
-            }}
-          >
-            <TranscriptImage
-              className="transcript-message__image-preview"
-              src={imagePart.url}
-              alt={imagePart.alt ?? "Transcript image"}
-              loading="lazy"
-            />
-          </button>
+          <TranscriptImageTile
+            key={`image:${imageSegment.startIndex + imageIndex}:${imagePart.url}`}
+            desktopApi={params.desktopApi}
+            imagePart={imagePart}
+            imageNumber={imageSegment.startIndex + imageIndex + 1}
+            onOpenImage={params.onOpenImage}
+          />
         ))}
       </div>
     );
@@ -346,6 +337,95 @@ function renderMessageSegment(params: {
       text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
     />
   );
+}
+
+function TranscriptImageTile(props: {
+  desktopApi?: Pick<DesktopApi, "copyText">;
+  imagePart: AppServerThreadImagePart;
+  imageNumber: number;
+  onOpenImage?: (image: AppServerThreadImagePart) => void;
+}): ReactNode {
+  const [failed, setFailed] = useState(false);
+  const sourceLabel = useMemo(
+    () => formatTranscriptImageSourceLabel(props.imagePart.url),
+    [props.imagePart.url]
+  );
+
+  if (failed) {
+    return (
+      <div className="transcript-message__image-fallback">
+        <div className="transcript-message__image-fallback-main">
+          <span className="transcript-message__image-fallback-title">Image failed to load</span>
+          <code
+            className="transcript-message__image-fallback-path"
+            title={sourceLabel}
+          >
+            {sourceLabel}
+          </code>
+        </div>
+        <TranscriptCopyButton
+          className="transcript-copy-button--image-path"
+          copiedLabel="Copied image path"
+          desktopApi={props.desktopApi}
+          label="Copy image path"
+          text={sourceLabel}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="transcript-message__image-button"
+      aria-label={`Expand transcript image ${props.imageNumber}`}
+      onClick={() => {
+        props.onOpenImage?.(props.imagePart);
+      }}
+    >
+      <TranscriptImage
+        className="transcript-message__image-preview"
+        src={props.imagePart.url}
+        alt={props.imagePart.alt ?? "Transcript image"}
+        loading="lazy"
+        onError={() => setFailed(true)}
+      />
+    </button>
+  );
+}
+
+function formatTranscriptImageSourceLabel(url: string): string {
+  const transcriptImageSourceUrl = decodeTranscriptImageProtocolUrl(url);
+  if (transcriptImageSourceUrl) {
+    return formatTranscriptImageSourceLabel(transcriptImageSourceUrl);
+  }
+
+  if (!url.startsWith("file://")) {
+    return url;
+  }
+
+  try {
+    return decodeURIComponent(new URL(url).pathname);
+  } catch {
+    const stripped = url.replace(/^file:\/\//, "");
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
+  }
+}
+
+function decodeTranscriptImageProtocolUrl(url: string): string | undefined {
+  if (!url.startsWith("pwragent-image://file/")) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
+  } catch {
+    return undefined;
+  }
 }
 
 function renderMessageHeader(params: {

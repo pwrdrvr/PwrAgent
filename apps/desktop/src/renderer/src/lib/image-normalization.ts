@@ -66,6 +66,7 @@ type NormalizeImageFileOptions = {
   maxLongEdge?: number;
   maxShortEdge?: number;
   qualityProfile?: ImageUploadQualityProfile;
+  sourceMimeType?: string;
   dependencies?: Partial<ImageNormalizationDependencies>;
 };
 
@@ -176,8 +177,13 @@ export async function normalizeImageFile(
     IMAGE_UPLOAD_QUALITY_PROFILES[
       options.qualityProfile ?? DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE
     ];
+  const originalMimeType = inferImageMimeType(file, options.sourceMimeType);
+  const blob =
+    !file.type && originalMimeType
+      ? new Blob([file], { type: originalMimeType })
+      : file;
   return await normalizeBlob({
-    blob: file,
+    blob,
     fallback: options.fallback,
     fileName: file.name || "pasted-image",
     jpegQuality: options.jpegQuality ?? profile.jpegQuality,
@@ -186,7 +192,7 @@ export async function normalizeImageFile(
       options.maxPatchCount ??
       (options.qualityProfile ? undefined : DEFAULT_PASTED_IMAGE_MAX_PATCHES),
     maxShortEdge: options.maxShortEdge ?? profile.maxShortEdge,
-    originalMimeType: inferImageMimeType(file),
+    originalMimeType,
     originalSize: file.size,
     dependencies: {
       ...defaultImageNormalizationDependencies,
@@ -558,8 +564,9 @@ const defaultImageNormalizationDependencies: ImageNormalizationDependencies = {
     }),
 };
 
-function inferImageMimeType(file: File): string {
-  const sourceType = normalizeSourceMimeType(file.type);
+function inferImageMimeType(file: File, sourceMimeType?: string): string {
+  const sourceType =
+    normalizeSourceMimeType(sourceMimeType ?? "") || normalizeSourceMimeType(file.type);
   if (sourceType) {
     return sourceType;
   }

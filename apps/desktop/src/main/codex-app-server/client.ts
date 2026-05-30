@@ -999,6 +999,11 @@ function dedupeJoinedText(parts: string[]): string | undefined {
   return unique.join("\n\n");
 }
 
+function isCodexImageBoundaryText(value: string): boolean {
+  const trimmed = value.trim();
+  return /^<image\b[^>]*>$/i.test(trimmed) || /^<\/image>$/i.test(trimmed);
+}
+
 function normalizeThreadSummary(value: string | undefined): string | undefined {
   const trimmed = value?.replace(/\s+/g, " ").trim();
   if (!trimmed) {
@@ -1157,7 +1162,7 @@ function buildProjectKeyLinkedDirectories(
 function normalizeConversationRole(
   value: string | undefined
 ): "user" | "assistant" | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
   if (normalized === "user" || normalized === "usermessage") {
     return "user";
   }
@@ -1236,7 +1241,6 @@ function isCodexInternalReviewPrompt(
     normalizedType === "usermessage" &&
     normalizedText.startsWith("review ") &&
     normalizedText.includes("code changes") &&
-    normalizedText.includes("base branch") &&
     normalizedText.includes("prioritized") &&
     normalizedText.includes("findings")
   );
@@ -1371,6 +1375,59 @@ function normalizeRenderableImageUrl(value: string | undefined): string | undefi
   return undefined;
 }
 
+function buildImagePartFromUrl(value: string | undefined): AppServerThreadImagePart | undefined {
+  const url = normalizeRenderableImageUrl(value);
+  return url ? { type: "image", url } : undefined;
+}
+
+function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
+  if (typeof value === "string") {
+    const part = buildImagePartFromUrl(value);
+    return part ? [part] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractImagePartsFromValue(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const part = buildImagePartFromUrl(
+    pickString(record, [
+      "image_url",
+      "imageUrl",
+      "url",
+      "src",
+      "uri",
+      "path",
+      "localPath",
+      "local_path"
+    ])
+  );
+  if (!part) {
+    return [];
+  }
+
+  const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+  if (alt) {
+    part.alt = alt;
+  }
+  return [part];
+}
+
+function extractDirectImageParts(record: Record<string, unknown>): AppServerThreadImagePart[] {
+  return [
+    ...extractImagePartsFromValue(record.local_images),
+    ...extractImagePartsFromValue(record.localImages),
+    ...extractImagePartsFromValue(record.images),
+    ...extractImagePartsFromValue(record.image_urls),
+    ...extractImagePartsFromValue(record.imageUrls)
+  ];
+}
+
 function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractStructuredMessageParts(entry));
@@ -1391,10 +1448,13 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     normalizedType === "output_text"
   ) {
     const text = pickString(record, ["text", "value", "content"]);
+    if (text && isCodexImageBoundaryText(text)) {
+      return [];
+    }
     return text ? [{ type: "text", text }] : [];
   }
 
-  const imageUrl = normalizeRenderableImageUrl(
+  const imagePart = buildImagePartFromUrl(
     pickString(record, [
       "image_url",
       "imageUrl",
@@ -1407,23 +1467,21 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     ])
   );
   if (
-    imageUrl &&
+    imagePart &&
     (normalizedType === "image" ||
       normalizedType === "input_image" ||
+      normalizedType === "localimage" ||
+      normalizedType === "local_image" ||
       normalizedType === "output_image" ||
       normalizedType === "image_url" ||
       "image_url" in record ||
       "imageUrl" in record)
   ) {
-    const part: AppServerThreadImagePart = {
-      type: "image",
-      url: imageUrl
-    };
     const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
     if (alt) {
-      part.alt = alt;
+      imagePart.alt = alt;
     }
-    return [part];
+    return [imagePart];
   }
 
   for (const nestedKey of ["content", "parts", "input", "output", "data"]) {
@@ -1442,22 +1500,140 @@ function buildMessageContent(record: Record<string, unknown>): {
 } {
   const structuredParts = [
     ...extractStructuredMessageParts(record.content),
-    ...extractStructuredMessageParts(record.parts)
+    ...extractStructuredMessageParts(record.parts),
+    ...extractDirectImageParts(record)
   ];
 
   if (structuredParts.length > 0) {
-    const text = dedupeJoinedText(
-      structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
-    ) ?? "";
+    const text =
+      dedupeJoinedText(
+        structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      ) ?? collectLegacyMessageText(record);
+    const parts =
+      structuredParts.some((part) => part.type === "text") || !text
+        ? structuredParts
+        : [{ type: "text" as const, text }, ...structuredParts];
 
     return {
-      parts: structuredParts,
+      parts,
       text
     };
   }
 
   const text = collectLegacyMessageText(record);
   return { text };
+}
+
+function hasThreadMessageImages(
+  message: Pick<AppServerThreadMessageEntry, "parts">
+): boolean {
+  return threadMessageImageUrls(message).length > 0;
+}
+
+function threadMessageImageUrls(
+  message: Pick<AppServerThreadMessageEntry, "parts">
+): string[] {
+  return (
+    message.parts
+      ?.filter((part): part is Extract<AppServerThreadMessagePart, { type: "image" }> =>
+        part.type === "image"
+      )
+      .map((part) => part.url) ?? []
+  );
+}
+
+function imageUrlsMatch(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((url, index) => url === right[index]);
+}
+
+function imageUrlsAreRawEventMirror(left: string[], right: string[]): boolean {
+  if (left.length === 0 || left.length !== right.length) {
+    return false;
+  }
+
+  const leftDataUrls = left.every((url) => url.startsWith("data:image/"));
+  const rightDataUrls = right.every((url) => url.startsWith("data:image/"));
+  const leftFileUrls = left.every((url) => url.startsWith("file://"));
+  const rightFileUrls = right.every((url) => url.startsWith("file://"));
+
+  return (leftDataUrls && rightFileUrls) || (leftFileUrls && rightDataUrls);
+}
+
+function messageTimestampsAreWithin(
+  left: AppServerThreadReplay["messages"][number],
+  right: AppServerThreadReplay["messages"][number],
+  windowMs: number
+): boolean {
+  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+    return false;
+  }
+
+  return Math.abs(left.createdAt - right.createdAt) <= windowMs;
+}
+
+function messagesAreNearDuplicateImagePrompts(
+  left: AppServerThreadReplay["messages"][number],
+  right: AppServerThreadReplay["messages"][number]
+): boolean {
+  if (left.role !== right.role || left.text !== right.text) {
+    return false;
+  }
+
+  const leftImageUrls = threadMessageImageUrls(left);
+  const rightImageUrls = threadMessageImageUrls(right);
+  const leftHasImages = leftImageUrls.length > 0;
+  const rightHasImages = rightImageUrls.length > 0;
+
+  if (!leftHasImages && !rightHasImages) {
+    if (left.role !== "assistant") {
+      return false;
+    }
+
+    if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+      return true;
+    }
+
+    return messageTimestampsAreWithin(left, right, 1_000);
+  }
+
+  if (leftHasImages && rightHasImages) {
+    if (imageUrlsMatch(leftImageUrls, rightImageUrls)) {
+      return (
+        typeof left.createdAt !== "number" ||
+        typeof right.createdAt !== "number" ||
+        messageTimestampsAreWithin(left, right, 1_000)
+      );
+    }
+
+    return (
+      imageUrlsAreRawEventMirror(leftImageUrls, rightImageUrls) &&
+      messageTimestampsAreWithin(left, right, 100)
+    );
+  }
+
+  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+    return true;
+  }
+
+  return messageTimestampsAreWithin(left, right, 1_000);
+}
+
+function appendConversationMessage(
+  output: AppServerThreadReplay["messages"],
+  message: AppServerThreadReplay["messages"][number]
+): void {
+  const existingIndex = output.findIndex((candidate) =>
+    messagesAreNearDuplicateImagePrompts(candidate, message)
+  );
+  if (existingIndex === -1) {
+    output.push(message);
+    return;
+  }
+
+  const existing = output[existingIndex];
+  if (existing && !hasThreadMessageImages(existing) && hasThreadMessageImages(message)) {
+    output[existingIndex] = message;
+  }
 }
 
 function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
@@ -1489,7 +1665,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       (content.text || content.parts?.length) &&
       !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
     ) {
-      output.push({
+      appendConversationMessage(output, {
         id:
           pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
           `message-${output.length + 1}`,
@@ -2194,6 +2370,132 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+function readTokenUsageBreakdown(
+  record: Record<string, unknown>
+): TokenUsageBreakdown | undefined {
+  const explicitTotal = pickNumber(record, ["totalTokens", "total_tokens"]);
+  const inputTokens = pickNumber(record, ["inputTokens", "input_tokens"]);
+  const cachedInputTokens = pickNumber(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+  ]);
+  const outputTokens = pickNumber(record, ["outputTokens", "output_tokens"]);
+  const reasoningOutputTokens = pickNumber(record, [
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  ]);
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function normalizeTokenUsagePayload(
+  record: Record<string, unknown>
+): TokenUsageBreakdown | undefined {
+  const root =
+    asRecord(record.tokenUsage) ??
+    asRecord(record.token_usage) ??
+    asRecord(record.info) ??
+    record;
+  const currentUsage =
+    asRecord(root.last) ??
+    asRecord(root.last_token_usage) ??
+    asRecord(root.total) ??
+    asRecord(root.total_token_usage) ??
+    root;
+
+  return readTokenUsageBreakdown(currentUsage);
+}
+
+function formatTokenCount(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function summarizeTokenUsageActivity(
+  record: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
+): AppServerThreadActivityEntry | undefined {
+  const normalizedType = normalizeItemType(pickString(record, ["type"]));
+  if (normalizedType !== "tokencount" && normalizedType !== "tokenusage") {
+    return undefined;
+  }
+
+  const tokens = normalizeTokenUsagePayload(record);
+  if (!tokens) {
+    return undefined;
+  }
+
+  const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const idSuffix = typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
+  const summaryParts = [
+    `${formatTokenCount(uncachedInputTokens)} uncached in`,
+    `${formatTokenCount(cachedInputTokens)} cached`,
+    reasoningOutputTokens > 0
+      ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
+      : `${formatTokenCount(outputTokens)} out`,
+  ];
+
+  return {
+    type: "activity",
+    id: `live-token-usage-${turn?.id ?? idSuffix}`,
+    createdAt,
+    summary: `Usage: ${summaryParts.join(" · ")}`,
+    status: "completed",
+    details: [
+      {
+        id: `token-usage-${idSuffix}-input`,
+        kind: "read",
+        label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
+          uncachedInputTokens
+        )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-output`,
+        kind: "read",
+        label: `Output: ${formatTokenCount(outputTokens)} tokens${
+          reasoningOutputTokens > 0
+            ? `, including ${formatTokenCount(reasoningOutputTokens)} reasoning`
+            : ""
+        }`,
+        status: "completed",
+      },
+    ],
+    ...(turn ? { turn } : {}),
+  };
+}
+
 function readActivityElapsedMs(item: Record<string, unknown>): number | undefined {
   const data = asRecord(item.data);
   const direct =
@@ -2800,6 +3102,62 @@ function truncateActivityText(text: string, maxLength: number): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
+function extractTokenUsageEntries(value: unknown): AppServerThreadActivityEntry[] {
+  const output: AppServerThreadActivityEntry[] = [];
+
+  const visit = (node: unknown, inheritedCreatedAt?: number): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry, inheritedCreatedAt));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const recordCreatedAt = normalizeEpochTimestamp(
+      pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+    );
+    const createdAt = recordCreatedAt ?? inheritedCreatedAt;
+    const tokenUsageActivity = summarizeTokenUsageActivity(record, createdAt);
+    if (tokenUsageActivity) {
+      output.push(tokenUsageActivity);
+    }
+
+    for (const key of ["events", "payload", "item", "data", "thread", "response", "result"]) {
+      visit(record[key], createdAt);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function sortEntriesByCreatedAt(entries: AppServerThreadEntry[]): AppServerThreadEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const leftCreatedAt = left.entry.createdAt;
+      const rightCreatedAt = right.entry.createdAt;
+      if (
+        typeof leftCreatedAt === "number" &&
+        typeof rightCreatedAt === "number" &&
+        leftCreatedAt !== rightCreatedAt
+      ) {
+        return leftCreatedAt - rightCreatedAt;
+      }
+      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+        return -1;
+      }
+      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+        return 1;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.entry);
+}
+
 function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
   const record = asRecord(value);
   const thread = asRecord(record?.thread);
@@ -2810,12 +3168,15 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
     : [];
 
   if (turns.length === 0) {
-    return extractConversationMessages(value).map(
-      (message): AppServerThreadMessageEntry => ({
-        type: "message",
-        ...message
-      })
-    );
+    return sortEntriesByCreatedAt([
+      ...extractConversationMessages(value).map(
+        (message): AppServerThreadMessageEntry => ({
+          type: "message",
+          ...message
+        }),
+      ),
+      ...extractTokenUsageEntries(value),
+    ]);
   }
 
   const entries: AppServerThreadEntry[] = [];
@@ -2904,6 +3265,13 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
               }
             : reviewEntry
         );
+        continue;
+      }
+
+      const tokenUsageActivity = summarizeTokenUsageActivity(item, createdAt, turnMetadata);
+      if (tokenUsageActivity) {
+        flushActivityItems();
+        entries.push(tokenUsageActivity);
         continue;
       }
 

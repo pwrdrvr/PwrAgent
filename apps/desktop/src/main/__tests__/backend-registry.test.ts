@@ -8734,6 +8734,45 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("materializes data URL images before starting Codex turns", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-turn-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-image",
+        input: [{ type: "image", url: "data:image/png;base64,AQID" }],
+      });
+
+      const input = codexClient.lastStartTurnParams?.input;
+      expect(input).toHaveLength(1);
+      expect(input?.[0]).toMatchObject({ type: "localImage" });
+      const imagePath = input?.[0]?.type === "localImage" ? input[0].path : "";
+      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    } finally {
+      await registry.close();
+      await rm(tempHome, { recursive: true, force: true });
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+    }
+  });
+
   it("routes review start to the selected backend client", async () => {
     const grokClient = new MockBackendClient({
       initializeResult: { methods: ["review/start"] },

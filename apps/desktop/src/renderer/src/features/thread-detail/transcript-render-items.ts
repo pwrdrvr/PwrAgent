@@ -267,7 +267,11 @@ function isWorkPhaseEntry(
   | AppServerThreadActivityEntry
   | AppServerThreadPlanEntry {
   if (entry.type === "activity") {
-    return !isTerminalTurnFailureActivity(entry) && !isFileDiffActivity(entry);
+    return (
+      !isTerminalTurnFailureActivity(entry) &&
+      !isFileDiffActivity(entry) &&
+      !isTokenUsageActivity(entry)
+    );
   }
 
   if (entry.type === "plan") {
@@ -288,7 +292,8 @@ function isConcreteWorkEntry(
     entry.type === "plan" ||
     (entry.type === "activity" &&
       !isTerminalTurnFailureActivity(entry) &&
-      !isFileDiffActivity(entry))
+      !isFileDiffActivity(entry) &&
+      !isTokenUsageActivity(entry))
   );
 }
 
@@ -304,6 +309,10 @@ function isTerminalTurnFailureActivity(
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
   return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
+}
+
+function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {
+  return entry.id.startsWith("live-token-usage-") || entry.summary.startsWith("Usage:");
 }
 
 function readCompletedTurn(

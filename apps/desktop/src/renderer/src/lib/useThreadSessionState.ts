@@ -12,6 +12,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadMessagePart,
   AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
@@ -34,6 +35,7 @@ import {
   buildLiveActivityEntry,
   buildLiveToolDetails,
   buildMcpProgressDetail,
+  buildTokenUsageActivityEntry,
   formatChangedFileSummary,
   getNotificationItem,
   mergeActivityDetails,
@@ -119,6 +121,7 @@ type ThreadSessionEntry = {
   nextLiveEntrySequence: number;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
@@ -176,9 +179,17 @@ function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
   }
 
   return (
+    isTokenUsageActivityEntry(entry) ||
     entry.type === "message" &&
     entry.role === "assistant" &&
     entry.phase === "final"
+  );
+}
+
+function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
+  return (
+    entry.type === "activity" &&
+    (entry.id.startsWith("live-token-usage-") || entry.summary.startsWith("Usage:"))
   );
 }
 
@@ -201,8 +212,36 @@ function mergeTranscriptEntries(
         ? optimisticEntry.createdAt
         : undefined;
     const optimisticSequence = readRendererSequence(optimisticEntry);
+    if (isTokenUsageActivityEntry(optimisticEntry) && optimisticTurnId) {
+      const sameTurnIndex = merged.findLastIndex(
+        (entry) => entry.turn?.id === optimisticTurnId
+      );
+      if (sameTurnIndex !== -1) {
+        merged.splice(sameTurnIndex + 1, 0, optimisticEntry);
+        continue;
+      }
+
+      const usageTimedIndex =
+        typeof optimisticCreatedAt === "number"
+          ? merged.findIndex((entry) => {
+              const entryCreatedAt =
+                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+              return (
+                typeof entryCreatedAt === "number" &&
+                entryCreatedAt > optimisticCreatedAt
+              );
+            })
+          : -1;
+      if (usageTimedIndex !== -1) {
+        merged.splice(usageTimedIndex, 0, optimisticEntry);
+        continue;
+      }
+    }
+
     const timedIndex =
-      optimisticTurnId && typeof optimisticCreatedAt === "number"
+      optimisticTurnId &&
+      typeof optimisticCreatedAt === "number" &&
+      !isTokenUsageActivityEntry(optimisticEntry)
         ? merged.findIndex((entry) => {
             const entryCreatedAt =
               typeof entry.createdAt === "number" ? entry.createdAt : undefined;
@@ -229,6 +268,22 @@ function mergeTranscriptEntries(
 
     if (timedIndex !== -1) {
       merged.splice(timedIndex, 0, optimisticEntry);
+      continue;
+    }
+
+    const globalTimedIndex =
+      !optimisticTurnId && typeof optimisticCreatedAt === "number"
+        ? merged.findIndex((entry) => {
+            const entryCreatedAt =
+              typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+            return (
+              typeof entryCreatedAt === "number" &&
+              entryCreatedAt > optimisticCreatedAt
+            );
+          })
+        : -1;
+    if (globalTimedIndex !== -1) {
+      merged.splice(globalTimedIndex, 0, optimisticEntry);
       continue;
     }
 
@@ -259,6 +314,226 @@ function mergeTranscriptEntries(
   }
 
   return merged;
+}
+
+function mergeTranscriptMessages(
+  responseMessages: AppServerThreadMessage[],
+  optimisticMessages: AppServerThreadMessage[]
+): AppServerThreadMessage[] {
+  const merged = [...responseMessages];
+
+  for (const optimisticMessage of optimisticMessages) {
+    const existingIndex = merged.findIndex((message) => message.id === optimisticMessage.id);
+    if (existingIndex !== -1) {
+      merged[existingIndex] = optimisticMessage;
+      continue;
+    }
+
+    const optimisticCreatedAt =
+      typeof optimisticMessage.createdAt === "number"
+        ? optimisticMessage.createdAt
+        : undefined;
+    const timedIndex =
+      typeof optimisticCreatedAt === "number"
+        ? merged.findIndex((message) => {
+            const messageCreatedAt =
+              typeof message.createdAt === "number" ? message.createdAt : undefined;
+            return (
+              typeof messageCreatedAt === "number" &&
+              messageCreatedAt > optimisticCreatedAt
+            );
+          })
+        : -1;
+    if (timedIndex !== -1) {
+      merged.splice(timedIndex, 0, optimisticMessage);
+      continue;
+    }
+
+    merged.push(optimisticMessage);
+  }
+
+  return merged;
+}
+
+function isCodexImageBoundaryText(value: string): boolean {
+  const trimmed = value.trim();
+  return /^<image\b[^>]*>$/i.test(trimmed) || /^<\/image>$/i.test(trimmed);
+}
+
+function stripCodexImageBoundaryText(value: string): string {
+  const lines = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (!lines.some((line) => isCodexImageBoundaryText(line))) {
+    return value;
+  }
+
+  return lines
+    .filter((line) => !isCodexImageBoundaryText(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripCodexImageBoundaryParts(
+  parts: AppServerThreadMessagePart[] | undefined
+): AppServerThreadMessagePart[] | undefined {
+  if (!parts?.length) {
+    return parts;
+  }
+
+  let changed = false;
+  const strippedParts = parts.flatMap((part): AppServerThreadMessagePart[] => {
+    if (part.type !== "text") {
+      return [part];
+    }
+
+    const text = stripCodexImageBoundaryText(part.text);
+    changed = changed || text !== part.text;
+    return text ? [{ ...part, text }] : [];
+  });
+
+  if (!changed) {
+    return parts;
+  }
+
+  return strippedParts.length > 0 ? strippedParts : undefined;
+}
+
+function normalizeMessageImageBoundaryText<
+  T extends AppServerThreadMessage | AppServerThreadMessageEntry,
+>(message: T): T {
+  const text = stripCodexImageBoundaryText(message.text);
+  const parts = stripCodexImageBoundaryParts(message.parts);
+  if (text === message.text && parts === message.parts) {
+    return message;
+  }
+
+  const nextMessage = {
+    ...message,
+    text,
+  };
+  if (parts) {
+    return {
+      ...nextMessage,
+      parts,
+    };
+  }
+
+  delete (nextMessage as { parts?: AppServerThreadMessagePart[] }).parts;
+  return nextMessage;
+}
+
+function normalizeResponseImageBoundaryText(
+  response: AppServerReadThreadResponse
+): AppServerReadThreadResponse {
+  let changed = false;
+  const entries = response.replay.entries.map((entry) => {
+    if (entry.type !== "message") {
+      return entry;
+    }
+
+    const normalizedEntry = normalizeMessageImageBoundaryText(entry);
+    changed = changed || normalizedEntry !== entry;
+    return normalizedEntry;
+  });
+  const messages = response.replay.messages.map((message) => {
+    const normalizedMessage = normalizeMessageImageBoundaryText(message);
+    changed = changed || normalizedMessage !== message;
+    return normalizedMessage;
+  });
+
+  if (!changed) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+      messages,
+    },
+  };
+}
+
+function hasImageParts(
+  message: Pick<AppServerThreadMessageEntry | AppServerThreadMessage, "parts">
+): boolean {
+  return Boolean(message.parts?.some((part) => part.type === "image"));
+}
+
+function imageMessageSources(
+  sources: AppServerThreadEntry[]
+): AppServerThreadMessageEntry[] {
+  return sources.filter(
+    (entry): entry is AppServerThreadMessageEntry =>
+      entry.type === "message" && entry.role === "user" && hasImageParts(entry)
+  );
+}
+
+function mergeImagePartsFromSources<
+  T extends AppServerThreadMessage | AppServerThreadMessageEntry,
+>(
+  message: T,
+  sources: AppServerThreadMessageEntry[]
+): T {
+  if (message.role !== "user" || hasImageParts(message)) {
+    return message;
+  }
+
+  const source = sources.find((candidate) =>
+    messageTextMatchesOptimisticEntry(message, candidate)
+  );
+  if (!source?.parts) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: source.parts,
+  };
+}
+
+function mergeImagePartsIntoResponse(
+  response: AppServerReadThreadResponse | undefined,
+  sources: AppServerThreadEntry[]
+): AppServerReadThreadResponse | undefined {
+  if (!response || sources.length === 0) {
+    return response;
+  }
+
+  const imageSources = imageMessageSources(sources);
+  if (imageSources.length === 0) {
+    return response;
+  }
+
+  let changed = false;
+  const entries = response.replay.entries.map((entry) => {
+    if (entry.type !== "message") {
+      return entry;
+    }
+
+    const nextEntry = mergeImagePartsFromSources(entry, imageSources);
+    changed = changed || nextEntry !== entry;
+    return nextEntry;
+  });
+  const messages = response.replay.messages.map((message) => {
+    const nextMessage = mergeImagePartsFromSources(message, imageSources);
+    changed = changed || nextMessage !== message;
+    return nextMessage;
+  });
+
+  if (!changed) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+      messages,
+    },
+  };
 }
 
 function buildEmptyResponse(params: {
@@ -299,7 +574,9 @@ function pruneOptimisticEntries(
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
       return !response.replay.messages.some((message) =>
-        messageMatchesOptimisticEntry(message, entry)
+        messageMatchesOptimisticEntry(message, entry, {
+          allowImageUrlMismatch: true,
+        })
       );
     }
 
@@ -380,9 +657,14 @@ function activityEntriesMatch(
     return false;
   }
 
+  const tokenUsageMatch =
+    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
   return optimisticEntry.details.every((detail) =>
     candidate.details.some((candidateDetail) => {
       if (candidateDetail.id === detail.id) {
+        return true;
+      }
+      if (tokenUsageMatch && candidateDetail.label === detail.label) {
         return true;
       }
       if (detail.command?.displayCommand) {
@@ -417,7 +699,8 @@ function transcriptEntriesMatch(
         parts: candidate.parts,
         createdAt: candidate.createdAt,
       },
-      existingEntry
+      existingEntry,
+      { allowImageUrlMismatch: true }
     );
   }
 
@@ -473,6 +756,7 @@ function carryForwardTranscriptEntryOrder(
     return {
       ...entry,
       createdAt: source.createdAt,
+      ...(source.turn && !entry.turn ? { turn: source.turn } : {}),
     };
   });
 
@@ -510,17 +794,20 @@ function carryForwardTranscriptEntryOrder(
     entries = mergeTranscriptEntries(entries, [source]);
   }
 
-  if (!changed) {
-    return response;
-  }
+  const responseWithOrderedEntries = changed
+    ? {
+        ...response,
+        replay: {
+          ...response.replay,
+          entries,
+        },
+      }
+    : response;
 
-  return {
-    ...response,
-    replay: {
-      ...response.replay,
-      entries,
-    },
-  };
+  return (
+    mergeImagePartsIntoResponse(responseWithOrderedEntries, sources) ??
+    responseWithOrderedEntries
+  );
 }
 
 function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undefined {
@@ -1456,9 +1743,10 @@ function appendLiveCommandOutputDelta(
 
 function messageMatchesOptimisticEntry(
   message: AppServerThreadMessage,
-  entry: AppServerThreadMessageEntry
+  entry: AppServerThreadMessageEntry,
+  options: { allowImageUrlMismatch?: boolean } = {}
 ): boolean {
-  if (message.role !== entry.role || message.text !== entry.text) {
+  if (!messageTextMatchesOptimisticEntry(message, entry)) {
     return false;
   }
 
@@ -1468,10 +1756,53 @@ function messageMatchesOptimisticEntry(
   }
 
   const messageImages = (message.parts ?? []).filter((part) => part.type === "image");
+  if (
+    options.allowImageUrlMismatch &&
+    messageImages.length === entryImages.length
+  ) {
+    return true;
+  }
+
   return (
     messageImages.length === entryImages.length &&
     entryImages.every((image, index) => messageImages[index]?.url === image.url)
   );
+}
+
+function messageTextMatchesOptimisticEntry(
+  message: AppServerThreadMessage,
+  entry: AppServerThreadMessageEntry
+): boolean {
+  if (
+    message.role !== entry.role ||
+    stripCodexImageBoundaryText(message.text) !==
+      stripCodexImageBoundaryText(entry.text)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function mergeCompletedUserMessageWithOptimisticEntry(
+  message: AppServerThreadMessageEntry,
+  optimisticEntries: AppServerThreadEntry[]
+): AppServerThreadMessageEntry {
+  const optimisticEntry = optimisticEntries.find(
+    (entry): entry is AppServerThreadMessageEntry =>
+      entry.type === "message" &&
+      message.role === "user" &&
+      messageTextMatchesOptimisticEntry(message, entry)
+  );
+  if (!optimisticEntry?.parts?.some((part) => part.type === "image")) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: optimisticEntry.parts,
+    createdAt: optimisticEntry.createdAt ?? message.createdAt,
+  };
 }
 
 function appendMessageEntries(
@@ -1503,8 +1834,8 @@ function appendMessageEntries(
     fetchedAt: Date.now(),
     replay: {
       ...baseResponse.replay,
-      entries: mergeItems(baseResponse.replay.entries, entries),
-      messages: mergeItems(baseResponse.replay.messages, nextMessages),
+      entries: mergeTranscriptEntries(baseResponse.replay.entries, entries),
+      messages: mergeTranscriptMessages(baseResponse.replay.messages, nextMessages),
       lastUserMessage,
       lastAssistantMessage,
     },
@@ -2064,10 +2395,10 @@ export function useThreadSessionState(params: {
       }));
 
       try {
-        const response = await readThread({
+        const response = normalizeResponseImageBoundaryText(await readThread({
           backend: targetThread.source,
           threadId: targetThread.id,
-        });
+        }));
 
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
@@ -2190,7 +2521,12 @@ export function useThreadSessionState(params: {
 
       updateSession(threadKey, (current) => {
         const persistedMessageExists = current.response?.replay.messages.some((message) =>
-          messageMatchesOptimisticEntry(message, optimisticEntry)
+          messageMatchesOptimisticEntry(message, optimisticEntry, {
+            allowImageUrlMismatch: true,
+          })
+        );
+        const persistedTextMessageExists = current.response?.replay.messages.some(
+          (message) => messageTextMatchesOptimisticEntry(message, optimisticEntry)
         );
         const optimisticMessageExists = optimisticMessageEntries(
           current.optimisticEntries
@@ -2203,12 +2539,20 @@ export function useThreadSessionState(params: {
               parts: entry.parts,
               createdAt: entry.createdAt,
             },
-            optimisticEntry
+            optimisticEntry,
+            { allowImageUrlMismatch: true }
           )
         );
 
-        if (persistedMessageExists || optimisticMessageExists) {
-          return current;
+        if (persistedMessageExists || optimisticMessageExists || persistedTextMessageExists) {
+          const response = mergeImagePartsIntoResponse(current.response, [optimisticEntry]);
+          return response && response !== current.response
+            ? {
+                ...current,
+                lastTouchedAt: Date.now(),
+                response,
+              }
+            : current;
         }
 
         return {
@@ -2619,13 +2963,17 @@ export function useThreadSessionState(params: {
             event.notification.params
           );
           if (userMessageEntry) {
+            const completedUserMessageEntry = mergeCompletedUserMessageWithOptimisticEntry(
+              userMessageEntry,
+              current.optimisticEntries
+            );
             const nextResponse = appendMessageEntries(
               current.response,
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
               },
-              [userMessageEntry]
+              [completedUserMessageEntry]
             );
 
             return {
@@ -2636,7 +2984,7 @@ export function useThreadSessionState(params: {
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) =>
                   entry.type !== "message" ||
-                  !messageMatchesOptimisticEntry(userMessageEntry, entry)
+                  !messageTextMatchesOptimisticEntry(completedUserMessageEntry, entry)
               ),
               response: nextResponse,
             };
@@ -2884,6 +3232,10 @@ export function useThreadSessionState(params: {
                 ? { ...entry, turn: completedTurn }
                 : entry
             );
+          const completedUsageActivity =
+            current.pendingUsageActivityEntry && completedTurn
+              ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
+              : current.pendingUsageActivityEntry;
 
           return {
             ...current,
@@ -2916,7 +3268,10 @@ export function useThreadSessionState(params: {
               shouldAppendFinalMessage && completedText
                 ? current.nextLiveEntrySequence + 1
                 : current.nextLiveEntrySequence,
-            optimisticEntries: remainingOptimisticEntries,
+            optimisticEntries:
+              completedTurnMatchesActive && completedUsageActivity
+                ? mergeItems(remainingOptimisticEntries, [completedUsageActivity])
+                : remainingOptimisticEntries,
             pendingAssistantMessage: completedTurnMatchesActive
               ? undefined
               : current.pendingAssistantMessage,
@@ -2926,6 +3281,9 @@ export function useThreadSessionState(params: {
             pendingRequest: completedTurnMatchesActive
               ? undefined
               : current.pendingRequest,
+            pendingUsageActivityEntry: completedTurnMatchesActive
+              ? undefined
+              : current.pendingUsageActivityEntry,
             pendingUserInput: completedTurnMatchesActive
               ? undefined
               : current.pendingUserInput,
@@ -2964,6 +3322,7 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
+            pendingUsageActivityEntry: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -2991,6 +3350,7 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
+            pendingUsageActivityEntry: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -3029,6 +3389,7 @@ export function useThreadSessionState(params: {
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
+            pendingUsageActivityEntry: undefined,
             pendingStatusText: undefined,
             response: undefined,
           };
@@ -3038,14 +3399,52 @@ export function useThreadSessionState(params: {
           const contextWindow = normalizeThreadContextWindowState(
             event.notification.params.tokenUsage
           );
-          if (!contextWindow) {
+          const turn = buildTurnMetadata({
+            fallbackId:
+              typeof event.notification.params.turnId === "string"
+                ? event.notification.params.turnId
+                : current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
+          });
+          const usageEntry = buildTokenUsageActivityEntry({
+            id: `live-token-usage-${turn?.id ?? notificationThreadId}`,
+            model:
+              thread?.source === event.backend && thread.id === notificationThreadId
+                ? thread.model
+                : undefined,
+            tokenUsage: event.notification.params.tokenUsage,
+            turn,
+          });
+          if (!contextWindow && !usageEntry) {
             return current;
           }
 
+          const holdUsageUntilTurnCompletes = Boolean(
+            usageEntry &&
+              current.activeTurnId &&
+              turn?.id === current.activeTurnId &&
+              turn.status !== "completed"
+          );
+
           return {
             ...current,
-            contextWindow,
+            ...(contextWindow ? { contextWindow } : {}),
+            expectOwnUpdate:
+              usageEntry && !holdUsageUntilTurnCompletes
+                ? true
+                : current.expectOwnUpdate,
+            interacted:
+              usageEntry && !holdUsageUntilTurnCompletes
+                ? true
+                : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
+            optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
+              ? mergeItems(current.optimisticEntries, [usageEntry])
+              : current.optimisticEntries,
+            pendingUsageActivityEntry: holdUsageUntilTurnCompletes
+              ? usageEntry
+              : current.pendingUsageActivityEntry,
           };
         }
 
@@ -3385,7 +3784,7 @@ export function useThreadSessionState(params: {
 
   const messages = useMemo(
     () => {
-      const mergedMessages = mergeItems(
+      const mergedMessages = mergeTranscriptMessages(
         selectedSession?.response?.replay.messages ?? [],
         visibleOptimisticEntries
           .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")

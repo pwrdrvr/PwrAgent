@@ -540,6 +540,35 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("renders token usage as top-level activity without disrupting commentary collapse", () => {
+    const turn = completedTurn("turn-1", 20_000);
+    const usageActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-token-usage-turn-1",
+      summary: "Usage: 1.2k uncached in / 0 cached / 12 out",
+      details: [],
+      turn,
+    };
+    const update = commentary("c1", "Checking the result.", turn);
+    const answer = final("f1", "Final answer.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [usageActivity, update, answer],
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: usageActivity },
+      {
+        type: "workPhaseGroup",
+        id: "commentary:turn-1:c1:complete",
+        collapsible: true,
+        entries: [update],
+        label: "1 previous message",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
   it("only collapses consecutive commentary in the fallback path", () => {
     const first = commentary("c1", "First scan.");
     const answer = final("f1", "Interim answer.");

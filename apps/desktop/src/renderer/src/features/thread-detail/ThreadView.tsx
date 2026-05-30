@@ -915,6 +915,8 @@ export function ThreadView(props: ThreadViewProps) {
     useState<AppServerThreadActivityEntry>();
   const [pendingProtocolActivityEntry, setPendingProtocolActivityEntry] =
     useState<AppServerThreadActivityEntry>();
+  const [pendingUsageActivityEntry, setPendingUsageActivityEntry] =
+    useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
   // Snapshots of the two rail-owned live entries at turn/completed
@@ -938,6 +940,9 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingProtocolActivityEntryRef = useRef<
     AppServerThreadActivityEntry | undefined
   >(undefined);
+  const pendingUsageActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
+    undefined,
+  );
   const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
@@ -972,6 +977,7 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     setPendingActivityEntry(undefined);
     setPendingProtocolActivityEntry(undefined);
+    setPendingUsageActivityEntry(undefined);
     setPendingPlanEntry(undefined);
     setLastCompletedActivityEntry(undefined);
     setLastCompletedPlanEntry(undefined);
@@ -994,8 +1000,14 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     pendingActivityEntryRef.current = pendingActivityEntry;
     pendingProtocolActivityEntryRef.current = pendingProtocolActivityEntry;
+    pendingUsageActivityEntryRef.current = pendingUsageActivityEntry;
     pendingPlanEntryRef.current = pendingPlanEntry;
-  }, [pendingActivityEntry, pendingProtocolActivityEntry, pendingPlanEntry]);
+  }, [
+    pendingActivityEntry,
+    pendingProtocolActivityEntry,
+    pendingUsageActivityEntry,
+    pendingPlanEntry,
+  ]);
 
   // When a new turn begins, clear the pinned snapshots from the prior
   // turn so the LiveWorkRail reflects the in-flight turn's work, not
@@ -1504,6 +1516,7 @@ export function ThreadView(props: ThreadViewProps) {
       ) {
         setPendingActivityEntry(undefined);
         setPendingProtocolActivityEntry(undefined);
+        setPendingUsageActivityEntry(undefined);
         return;
       }
 
@@ -1552,6 +1565,14 @@ export function ThreadView(props: ThreadViewProps) {
             deferLiveTranscriptEntry(completedProtocolActivity);
           }
           setPendingProtocolActivityEntry(undefined);
+
+          const completedUsageActivity = completeEntryTurn(
+            pendingUsageActivityEntryRef.current,
+          );
+          if (completedUsageActivity) {
+            deferLiveTranscriptEntry(completedUsageActivity);
+          }
+          setPendingUsageActivityEntry(undefined);
 
           const completedPlan = completeEntryTurn(pendingPlanEntryRef.current);
           if (completedPlan) {
@@ -2130,6 +2151,7 @@ export function ThreadView(props: ThreadViewProps) {
               reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}
               pendingProtocolActivityEntry={pendingProtocolActivityEntry}
+              pendingUsageActivityEntry={pendingUsageActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={props.onLoadOlder}
               onOpenImage={setExpandedImage}

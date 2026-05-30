@@ -2620,6 +2620,356 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("deduplicates Codex raw event user messages when a response item carries the image", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-raw-image-events", {
+      events: [
+        {
+          type: "response_item",
+          timestamp: "2026-05-30T23:37:32.719Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "What's in this image?",
+              },
+              {
+                type: "input_text",
+                text: "<image name=[Image #1]>",
+              },
+              {
+                type: "input_image",
+                image_url: "data:image/png;base64,AQID",
+              },
+              {
+                type: "input_text",
+                text: "</image>",
+              },
+            ],
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-05-30T23:37:32.720Z",
+          payload: {
+            type: "user_message",
+            message: "What's in this image?",
+            images: [],
+            local_images: ["/tmp/materialized.png"],
+            text_elements: [],
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-05-30T23:37:37.556Z",
+          payload: {
+            type: "agent_message",
+            message: "The image shows the PwrAgent desktop app.",
+            phase: "final_answer",
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-30T23:37:37.556Z",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [
+              {
+                type: "output_text",
+                text: "The image shows the PwrAgent desktop app.",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-raw-image-events",
+    });
+
+    expect(replay.entries.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
+      "message:message-1",
+      "message:message-2",
+    ]);
+    expect(replay.messages.map((message) => `${message.role}:${message.text}`)).toEqual([
+      "user:What's in this image?",
+      "assistant:The image shows the PwrAgent desktop app.",
+    ]);
+    expect(replay.entries).toMatchObject([
+      {
+        type: "message",
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: "data:image/png;base64,AQID" },
+        ],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        text: "The image shows the PwrAgent desktop app.",
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("keeps distinct same-text image prompts with different image sources", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-distinct-image-prompts", {
+      events: [
+        {
+          type: "response_item",
+          timestamp: "2026-05-30T23:37:32.719Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "What's in this image?" },
+              { type: "input_image", image_url: "data:image/png;base64,AQID" },
+            ],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-30T23:37:32.720Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "What's in this image?" },
+              { type: "input_image", image_url: "data:image/png;base64,BAUG" },
+            ],
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-distinct-image-prompts",
+    });
+
+    expect(replay.messages).toMatchObject([
+      {
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: "data:image/png;base64,AQID" },
+        ],
+      },
+      {
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: "data:image/png;base64,BAUG" },
+        ],
+      },
+    ]);
+    expect(replay.entries).toHaveLength(2);
+
+    await client.close();
+  });
+
+  it("restores token usage activity from Codex rollout token_count events", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-token-count-events", {
+      events: [
+        {
+          type: "event_msg",
+          timestamp: "2026-05-31T16:51:41.062Z",
+          payload: {
+            type: "agent_message",
+            message: "Done.",
+            phase: "final_answer",
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-05-31T16:51:41.079Z",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: 21_743,
+                cached_input_tokens: 4_480,
+                output_tokens: 148,
+                reasoning_output_tokens: 0,
+                total_tokens: 21_891,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-token-count-events",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "message",
+        role: "assistant",
+        text: "Done.",
+      },
+      {
+        type: "activity",
+        id: "live-token-usage-1780246301079",
+        summary: "Usage: 17,263 uncached in · 4,480 cached · 148 out",
+        status: "completed",
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("preserves local image fields from durable user message records", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-local-image-records", {
+      thread: {
+        turns: [
+          {
+            id: "turn-local-image",
+            startedAt: 1_763_500_300,
+            items: [
+              {
+                type: "user_message",
+                id: "user-local-image",
+                message: "what's in this?",
+                local_images: ["/tmp/materialized.png"],
+              },
+              {
+                type: "agent_message",
+                id: "assistant-final",
+                phase: "final_answer",
+                message: "It is a screenshot of PwrAgent.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-local-image-records",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "message",
+        role: "user",
+        text: "what's in this?",
+        parts: [
+          { type: "text", text: "what's in this?" },
+          { type: "image", url: "file:///tmp/materialized.png" },
+        ],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        text: "It is a screenshot of PwrAgent.",
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("preserves durable localImage content parts after restart", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-local-image-content", {
+      thread: {
+        turns: [
+          {
+            id: "turn-local-image-content",
+            startedAt: 1_764_000_300,
+            itemsView: "full",
+            items: [
+              {
+                type: "userMessage",
+                id: "user-local-image-content",
+                content: [
+                  {
+                    type: "input_text",
+                    text: "what's in this?",
+                  },
+                  {
+                    type: "localImage",
+                    path: "/Users/test/.pwragent/profiles/dev/state/image-inputs/materialized.png",
+                  },
+                ],
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-local-image-content",
+                phase: "final_answer",
+                text: "It is a screenshot of PwrAgent.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-local-image-content",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "message",
+        role: "user",
+        text: "what's in this?",
+        parts: [
+          { type: "text", text: "what's in this?" },
+          {
+            type: "image",
+            url: "file:///Users/test/.pwragent/profiles/dev/state/image-inputs/materialized.png",
+          },
+        ],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        text: "It is a screenshot of PwrAgent.",
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("extracts structured plan items from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-plan-item", {

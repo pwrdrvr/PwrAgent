@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -147,14 +147,19 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
 
     await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
     const request = await app.getLastStartTurn();
-    const imageItem = (request as { input: Array<{ type: string; url?: string }> }).input.find(
-      (item) => item.type === "image",
+    const imageItem = (request as { input: Array<{ type: string; path?: string }> }).input.find(
+      (item) => item.type === "localImage",
     );
-    const imageUrl = imageItem?.url;
-    if (!imageUrl) {
-      throw new Error("Expected turn/start payload to include an image data URL");
+    const imagePath = imageItem?.path;
+    if (!imagePath) {
+      throw new Error("Expected turn/start payload to include a local image file");
     }
-    expect(imageUrl).toMatch(/^data:image\/(jpeg|png);base64,/);
+    expect(imagePath).toMatch(/\.(?:jpe?g|png)$/i);
+
+    const extension = path.extname(imagePath).toLowerCase();
+    const mimeType = extension === ".png" ? "image/png" : "image/jpeg";
+    const imageBuffer = await readFile(imagePath);
+    const imageUrl = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
 
     const dimensions = await app.window.evaluate(async (dataUrl) => {
       const image = new Image();

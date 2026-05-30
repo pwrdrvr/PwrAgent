@@ -38,10 +38,48 @@ function readNumber(record: Record<string, unknown> | undefined, key: string): n
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readFiniteNumber(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = readNumber(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function findFirstNestedValue(
+  value: unknown,
+  keys: string[],
+): unknown {
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+
+  for (const child of Object.values(record)) {
+    const nested = findFirstNestedValue(child, keys);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+
+  return undefined;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -169,6 +207,212 @@ function buildLiveCommandDetail(
     ...(typeof exitCode === "number" ? { exitCode } : {}),
     ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
   };
+}
+
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type PricingCatalogEntry = {
+  cachedInputUsdPerMillion: number;
+  inputUsdPerMillion: number;
+  model: string;
+  outputUsdPerMillion: number;
+};
+
+const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    model: "gpt-5.5",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
+  },
+  {
+    model: "gpt-5.4",
+    inputUsdPerMillion: 2.5,
+    cachedInputUsdPerMillion: 0.25,
+    outputUsdPerMillion: 15,
+  },
+  {
+    model: "gpt-5.4-mini",
+    inputUsdPerMillion: 0.75,
+    cachedInputUsdPerMillion: 0.075,
+    outputUsdPerMillion: 4.5,
+  },
+];
+
+export function buildTokenUsageActivityEntry(params: {
+  id: string;
+  model?: string;
+  tokenUsage: unknown;
+  turn?: AppServerThreadTurnMetadata;
+}): AppServerThreadActivityEntry | undefined {
+  const tokens = normalizeTokenUsage(params.tokenUsage);
+  if (!tokens) {
+    return undefined;
+  }
+
+  const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const cost = estimateUsageCost({
+    cachedInputTokens,
+    model: params.model,
+    outputTokens,
+    uncachedInputTokens,
+  });
+  const summaryParts = [
+    `${formatTokenCount(uncachedInputTokens)} uncached in`,
+    `${formatTokenCount(cachedInputTokens)} cached`,
+    reasoningOutputTokens > 0
+      ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
+      : `${formatTokenCount(outputTokens)} out`,
+    cost ? `${formatUsd(cost.totalUsd)} list price` : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  const details: AppServerThreadActivityDetail[] = [
+    {
+      id: `${params.id}-input`,
+      kind: "read",
+      label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
+        uncachedInputTokens,
+      )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
+      status: "completed",
+    },
+    {
+      id: `${params.id}-output`,
+      kind: "read",
+      label: `Output: ${formatTokenCount(outputTokens)} tokens${
+        reasoningOutputTokens > 0
+          ? `, including ${formatTokenCount(reasoningOutputTokens)} reasoning`
+          : ""
+      }`,
+      status: "completed",
+    },
+  ];
+  if (cost) {
+    details.push({
+      id: `${params.id}-cost`,
+      kind: "read",
+      label: `Cost: ${formatUsd(cost.totalUsd)} list price for ${cost.model}`,
+      status: "completed",
+    });
+  } else if (params.model) {
+    details.push({
+      id: `${params.id}-cost-unavailable`,
+      kind: "read",
+      label: `Cost unavailable: no local pricing entry for ${params.model}`,
+      status: "completed",
+    });
+  }
+
+  return {
+    type: "activity",
+    id: params.id,
+    createdAt: Date.now(),
+    summary: `Usage: ${summaryParts.join(" · ")}`,
+    status: "completed",
+    details,
+    ...(params.turn ? { turn: params.turn } : {}),
+  };
+}
+
+function normalizeTokenUsage(tokenUsage: unknown): TokenUsageBreakdown | undefined {
+  const root =
+    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
+    readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const currentUsageRecord =
+    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
+    readRecord(root.last) ??
+    readRecord(root.last_token_usage) ??
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
+    readRecord(root.total) ??
+    readRecord(root.total_token_usage) ??
+    root;
+
+  return readTokenBreakdown(currentUsageRecord);
+}
+
+function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
+  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+  const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
+  const cachedInputTokens = readFiniteNumber(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+  ]);
+  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]);
+  const reasoningOutputTokens = readFiniteNumber(record, [
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  ]);
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function estimateUsageCost(params: {
+  cachedInputTokens: number;
+  model?: string;
+  outputTokens: number;
+  uncachedInputTokens: number;
+}): { model: string; totalUsd: number } | undefined {
+  const model = params.model?.trim();
+  if (!model) {
+    return undefined;
+  }
+  const entry = PRICING_CATALOG.find((candidate) => candidate.model === model);
+  if (!entry) {
+    return undefined;
+  }
+  const totalUsd =
+    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
+    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
+    (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
+  return { model, totalUsd };
+}
+
+function formatTokenCount(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function formatUsd(value: number): string {
+  if (value > 0 && value < 0.01) {
+    return "<$0.01";
+  }
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: value < 1 ? 4 : 2,
+    minimumFractionDigits: value < 1 ? 2 : 2,
+    style: "currency",
+  }).format(value);
 }
 
 function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
