@@ -56,6 +56,10 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:sql
 
+      - name: Codex storage boundary
+        timeout-minutes: 10
+        run: pnpm lint:codex-storage
+
       - name: Renderer color literals
         timeout-minutes: 10
         run: pnpm lint:colors

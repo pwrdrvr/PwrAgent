@@ -83,6 +83,7 @@ class MockTransport implements JsonRpcTransport {
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
   };
+  static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
   static threadResumeError:
     | { code?: number; message: string }
@@ -144,6 +145,21 @@ class MockTransport implements JsonRpcTransport {
       };
       const searchTerm =
         params.params?.searchTerm ?? params.params?.query ?? params.params?.filter;
+      const threadListOverride = searchTerm
+        ? MockTransport.threadListResultBySearchTerm.get(searchTerm)
+        : undefined;
+      if (threadListOverride) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived ? [] : threadListOverride,
+            },
+          }),
+        );
+        return;
+      }
 
       if (searchTerm === "missing-worktree") {
         this.messageHandler(
@@ -957,6 +973,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {}
     };
+    MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
   });
@@ -1079,6 +1096,96 @@ describe("CodexAppServerClient", () => {
       ],
       source: "codex",
     });
+
+    await client.close();
+  });
+
+  it("filters app-originated Codex sessions from protocol metadata", async () => {
+    MockTransport.threadListResultBySearchTerm.set("originator-filter", [
+      {
+        id: "thread-pwrsnap",
+        name: "PwrSnap sizzle reel",
+        originator: "pwrsnap",
+        updatedAt: 1_777_500_000,
+        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-30-004-chat-2026-05-30",
+        path: "/Users/huntharo/.codex/sessions/never-read-pwrsnap.jsonl",
+      },
+      {
+        id: "thread-pwragent",
+        name: "PwrAgent workspace chat",
+        originator: "pwragent-desktop",
+        updatedAt: 1_777_400_000,
+        cwd: "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+        path: "/Users/huntharo/.codex/sessions/never-read-pwragent.jsonl",
+      },
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => ({
+      linkedDirectories: projectKey
+        ? [
+            {
+              id: projectKey,
+              label: path.basename(projectKey),
+              path: projectKey,
+              kind: "local" as const,
+            },
+          ]
+        : [],
+    }));
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+
+    const threads = await client.listThreads({ filter: "originator-filter" });
+
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-pwragent"]);
+    expect(threadDirectoryEnricher).toHaveBeenCalledTimes(1);
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith(
+      "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+    );
+
+    await client.close();
+  });
+
+  it("uses protocol originator when Codex exposes it directly", async () => {
+    MockTransport.threadListResultBySearchTerm.set("protocol-originator-filter", [
+      {
+        id: "thread-external-app",
+        name: "External app chat",
+        originator: "another-app",
+        updatedAt: 1_777_500_000,
+        cwd: "/Users/huntharo/Documents/OtherApp/Chats/one",
+      },
+      {
+        id: "thread-codex-desktop",
+        name: "Codex Desktop thread",
+        originator: "Codex Desktop",
+        updatedAt: 1_777_400_000,
+        cwd: "/Users/huntharo/github/PwrAgent",
+      },
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async (projectKey) =>
+        projectKey
+          ? [
+              {
+                id: projectKey,
+                label: path.basename(projectKey),
+                path: projectKey,
+                kind: "local",
+              },
+            ]
+          : [],
+    });
+
+    const threads = await client.listThreads({ filter: "protocol-originator-filter" });
+
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-codex-desktop"]);
 
     await client.close();
   });

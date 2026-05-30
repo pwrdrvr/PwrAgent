@@ -152,6 +152,7 @@ type RawCodexThreadSummary = Omit<
   AppServerThreadSummary,
   "source" | "linkedDirectories"
 > & {
+  originator?: string;
   projectKey?: string;
   gitOriginUrl?: string;
 };
@@ -923,6 +924,30 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   }
 
   return trimmed;
+}
+
+function normalizeSessionOriginator(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function isAllowedCodexSessionOriginator(value: string | undefined): boolean {
+  const normalized = normalizeSessionOriginator(value);
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("codex") ||
+    normalized === "pwragent-desktop" ||
+    normalized === "pwragnt-desktop"
+  );
+}
+
+function filterVisibleCodexThreads(
+  threads: RawCodexThreadSummary[]
+): RawCodexThreadSummary[] {
+  return threads.filter((thread) => isAllowedCodexSessionOriginator(thread.originator));
 }
 
 function isPlaceholderThreadTitle(value: string | undefined): boolean {
@@ -3215,6 +3240,9 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     const projectKey =
       pickString(record, ["projectKey", "project_key", "cwd"]) ??
       pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
+    const originator =
+      pickString(record, ["originator"]) ??
+      pickString(sessionRecord ?? {}, ["originator"]);
     const titleInfo = getThreadTitleInfo(record);
     const rawDerivedTitle =
       pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
@@ -3251,6 +3279,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           summary === normalizeThreadSummary(rawDerivedTitle))
           ? undefined
           : summary,
+      originator,
       projectKey,
       model:
         pickString(record, ["model"]) ??
@@ -4299,18 +4328,20 @@ export class CodexAppServerClient {
         filter: params?.filter,
         requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(archivedThreads, {
+      return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
         enrichDirectories: params?.enrichDirectories ?? true,
       });
     }
 
-    const activeThreads = await requestThreadListPages({
-      archived: false,
-      client: this.connection,
-      diagnostics,
-      filter: params?.filter,
-      requestTimeoutMs: requestParams.timeoutMs,
-    });
+    const activeThreads = filterVisibleCodexThreads(
+      await requestThreadListPages({
+        archived: false,
+        client: this.connection,
+        diagnostics,
+        filter: params?.filter,
+        requestTimeoutMs: requestParams.timeoutMs,
+      }),
+    );
     const threads = mergeArchivedThreadMetadata({
       activeThreads,
       archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
@@ -4373,6 +4404,7 @@ export class CodexAppServerClient {
       filter,
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     })
+      .then(filterVisibleCodexThreads)
       .then((threads) => {
         this.archivedThreadMetadataByFilter.set(cacheKey, threads);
         this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
@@ -4392,11 +4424,16 @@ export class CodexAppServerClient {
   ): Promise<AppServerThreadSummary[]> {
     if (!options.enrichDirectories) {
       return threads.map((thread) => {
-        const projectKey = thread.projectKey?.trim() || undefined;
+        const {
+          gitOriginUrl: _gitOriginUrl,
+          originator: _originator,
+          ...publicThread
+        } = thread;
+        const projectKey = publicThread.projectKey?.trim() || undefined;
         return {
-          ...thread,
+          ...publicThread,
           projectKey,
-          gitBranch: thread.gitBranch,
+          gitBranch: publicThread.gitBranch,
           linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
           source: "codex" as const,
         };
@@ -4430,10 +4467,14 @@ export class CodexAppServerClient {
       }> => {
         const projectKey = await resolveThreadProjectKey(thread);
         const enrichment = await this.threadDirectoryEnricher(projectKey);
+        const {
+          originator: _originator,
+          ...publicThread
+        } = thread;
         return {
           index,
           thread: {
-            ...thread,
+            ...publicThread,
             projectKey,
             gitBranch: thread.gitBranch,
             linkedDirectories: enrichment.linkedDirectories,
