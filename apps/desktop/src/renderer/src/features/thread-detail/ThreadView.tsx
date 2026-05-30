@@ -1994,7 +1994,7 @@ export function ThreadView(props: ThreadViewProps) {
               draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
               directories={props.directories}
-              disabled={!launchpadBackend?.available}
+              disabled={launchpadBackend ? !launchpadBackend.available : false}
               unavailableReason={launchpadBackend?.unavailableReason}
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
