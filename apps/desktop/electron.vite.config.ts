@@ -47,6 +47,7 @@ export default defineConfig(({ command }) => {
         sourcemap: false,
         rollupOptions: {
           external: [
+            "electron",
             "abort-controller",
             "bufferutil",
             "node-fetch",
@@ -62,6 +63,7 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
+          external: ["electron"],
           output: {
             format: "cjs"
           }
@@ -75,11 +77,6 @@ export default defineConfig(({ command }) => {
     },
     renderer: {
       plugins: [react()],
-      optimizeDeps: {
-        esbuildOptions: {
-          minify: true,
-        },
-      },
       resolve: {
         alias: {
           "@renderer": resolve(__dirname, "src/renderer/src")
