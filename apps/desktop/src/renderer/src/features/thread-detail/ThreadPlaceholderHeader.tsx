@@ -5,7 +5,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 type ThreadPlaceholderHeaderProps = {
   desktopApi?: DesktopApi;
   title: string;
-  onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
+  onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
 };
 
 export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {

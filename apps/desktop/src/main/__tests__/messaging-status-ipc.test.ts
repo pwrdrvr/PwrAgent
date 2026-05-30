@@ -20,6 +20,7 @@ const pairingStoreMock = vi.hoisted(() => ({
   markStatus: vi.fn(),
 }));
 const activityLogMock = vi.hoisted(() => ({
+  getPlatformActivitySummary: vi.fn(() => ({ summaries: [] as unknown[] })),
   record: vi.fn(),
 }));
 const messagingConfigMocks = vi.hoisted(() => ({
@@ -123,6 +124,8 @@ describe("messaging status ipc", () => {
       configPath: "/tmp/pwragent-config.toml",
     });
     pairingStoreMock.markStatus.mockReset();
+    activityLogMock.getPlatformActivitySummary.mockClear();
+    activityLogMock.getPlatformActivitySummary.mockReturnValue({ summaries: [] });
     activityLogMock.record.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     leaseCoordinatorMock.applyLatestConfig.mockClear();
@@ -364,6 +367,32 @@ describe("messaging status ipc", () => {
 
     expect(leaseCoordinatorMock.shutdown).toHaveBeenCalledWith(runtimeMock);
     expect(runtimeMock.stop).toHaveBeenCalled();
+  });
+
+  it("returns persisted per-provider request and response activity summaries", async () => {
+    const summary = {
+      summaries: [
+        {
+          platform: "telegram",
+          lastRequestAt: 1_000,
+          lastResponseAt: 2_000,
+        },
+      ],
+    };
+    activityLogMock.getPlatformActivitySummary.mockReturnValue(summary);
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL)?.(),
+    ).resolves.toEqual(summary);
+    expect(activityLogMock.getPlatformActivitySummary).toHaveBeenCalled();
   });
 
   it("swallows shutdown errors so a failing teardown can't block the spawn", async () => {

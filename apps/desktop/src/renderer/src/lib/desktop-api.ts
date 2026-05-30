@@ -65,6 +65,7 @@ import type {
   ApproveMessagingPairingResponse,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
+  GetMessagingActivitySummaryResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -553,6 +554,8 @@ export type DesktopApi = {
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;
+  getMessagingActivitySummary?: () =>
+    Promise<GetMessagingActivitySummaryResponse>;
   generateMessagingPairingToken?: (
     request: GenerateMessagingPairingTokenRequest,
   ) => Promise<GenerateMessagingPairingTokenResponse>;

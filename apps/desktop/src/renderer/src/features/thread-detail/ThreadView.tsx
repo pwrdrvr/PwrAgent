@@ -816,8 +816,8 @@ export type ThreadViewProps = {
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
-  /** Forwarded to ThreadHeader → MessagingStatusBar — opens the Activity screen. */
-  onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
+  /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
+  onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   onRevealSelectedThreadInList?: () => void;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;

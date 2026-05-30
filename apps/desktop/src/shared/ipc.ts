@@ -77,6 +77,8 @@ export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
 export const MESSAGING_SET_ENABLED_CHANNEL = "messaging:set-enabled";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
+export const MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL =
+  "messaging:get-activity-summary";
 export const MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL =
   "messaging:generate-pairing-token";
 export const MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL =

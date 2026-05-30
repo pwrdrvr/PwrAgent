@@ -2487,7 +2487,7 @@ describe("SettingsScreen", () => {
     expect(current?.textContent).toBe("Messaging");
   });
 
-  it("fires onOpenMessagingActivity when a title-bar platform chip is clicked", async () => {
+  it("fires onOpenMessagingActivity from the title-bar messaging popover", async () => {
     // Activity is its own top-level mainView, NOT a settings section,
     // so a chip click in the Settings title-bar strip delegates to
     // App.tsx via this callback. The App-level handler closes the
@@ -2514,9 +2514,12 @@ describe("SettingsScreen", () => {
 
     const chip = await screen.findByRole("button", { name: /Telegram/i });
     fireEvent.click(chip);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Messaging Activity" }),
+    );
 
     await waitFor(() => {
-      expect(onOpenMessagingActivity).toHaveBeenCalled();
+      expect(onOpenMessagingActivity).toHaveBeenCalledWith(undefined);
     });
     // The breadcrumb stays on whatever section was active — chip
     // clicks no longer mutate the section selection.

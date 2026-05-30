@@ -76,6 +76,7 @@ import type {
   ApproveMessagingPairingResponse,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
+  GetMessagingActivitySummaryResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -254,6 +255,7 @@ import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
+  MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
@@ -869,6 +871,9 @@ const desktopApi = Object.freeze({
     request?: ListMessagingActivityRequest,
   ): Promise<ListMessagingActivityResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_ACTIVITY_CHANNEL, request),
+  getMessagingActivitySummary:
+    async (): Promise<GetMessagingActivitySummaryResponse> =>
+      await ipcRenderer.invoke(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL),
   generateMessagingPairingToken: async (
     request: GenerateMessagingPairingTokenRequest,
   ): Promise<GenerateMessagingPairingTokenResponse> =>

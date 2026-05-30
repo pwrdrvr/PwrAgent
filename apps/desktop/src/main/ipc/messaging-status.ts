@@ -7,6 +7,7 @@ import type {
   DesktopSettingsSnapshot,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
+  GetMessagingActivitySummaryResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -35,6 +36,7 @@ import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
+  MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
@@ -327,6 +329,14 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
+    async (): Promise<GetMessagingActivitySummaryResponse> => {
+      return getDesktopMessagingActivityLog().getPlatformActivitySummary();
+    },
+  );
+
   ipcMain.removeHandler(MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL);
   ipcMain.handle(
     MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -510,6 +520,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   unsubscribePairingChanged = undefined;
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);

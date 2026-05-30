@@ -15,8 +15,8 @@ type ThreadHeaderProps = {
   projectLabel?: string;
   thread: NavigationThreadSummary;
   backends?: BackendSummary[];
-  /** Forwarded to MessagingStatusBar — fires when a platform chip is clicked. */
-  onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
+  /** Forwarded to MessagingStatusBar - opens Messaging Activity. */
+  onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   onRevealSelectedThreadInList?: () => void;
 };
 
