@@ -8704,6 +8704,22 @@ textarea,
   white-space: pre-wrap;
 }
 
+.composer-tiptap-input__editor::spelling-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--status-error);
+  text-decoration-thickness: 1.1px;
+  text-underline-offset: 0.12em;
+}
+
+.composer-tiptap-input__editor::grammar-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--status-warning);
+  text-decoration-thickness: 1.1px;
+  text-underline-offset: 0.12em;
+}
+
 .composer-tiptap-input__editor p {
   margin: 0;
 }
