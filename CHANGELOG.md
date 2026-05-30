@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0-beta.19 - 2026-05-30
+
+- Added opt-in native attention notifications for background approval requests, user-input questions, and terminal turn completion/failure/cancellation, contributed by Serhii Novachenko (@serejja) in #578.
+- Fixed onboarding wizard and Codex config warning overlay clickability while preserving draggable titlebar behavior, contributed by Serhii Kushch (@serhiikushch) in #588.
+- Added the Grok CLI ACP backend with local discovery, custom path override, Default/Full Access control via `/always-approve`, Grok session-summary title updates, and canonical Grok transcript/backend labels.
+- Hid the legacy direct-xAI AgentCore Grok backend behind an experimental flag and clarified that the Settings → Models Grok API key only applies to that experimental backend.
+- Removed the misleading editable Codex profile strategy control from Settings → General while keeping onboarding replay inference for existing profile pairings.
+- Improved desktop runtime dependency handling by separating Electron-adjacent Dependabot groups and adding a fallback that verifies and restores a runnable Electron binary after install.
+- Updated Electron and development tooling dependencies, then restored the pinned runtime path required by CI and packaging.
+
 ## v1.0.0-beta.18 - 2026-05-26
 
 - Added Agent-attached automation scheduling with interval, weekday, and weekly schedules, run history, startup reconciliation, manual runs, messaging delivery, and global Automations management.
