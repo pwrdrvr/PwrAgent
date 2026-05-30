@@ -3020,6 +3020,7 @@ textarea,
   background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
   box-shadow: var(--shadow-popover);
   animation: app-update-banner-enter 160ms ease-out;
+  -webkit-app-region: no-drag;
 }
 
 .codex-config-warning-banner__content {
@@ -10791,14 +10792,18 @@ textarea,
   display: flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: no-drag;
 }
 .onboarding-wizard-overlay__scrim {
   position: absolute;
   inset: 0;
+  z-index: 0;
   background: var(--scrim-strong);
+  pointer-events: none;
 }
 .onboarding-wizard {
   position: relative;
+  z-index: 1;
   width: min(1120px, calc(100vw - 64px));
   max-height: calc(100vh - 64px);
   background: var(--bg-panel);
@@ -10884,6 +10889,14 @@ textarea,
   padding: 14px 18px 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel);
+  -webkit-app-region: drag;
+}
+.onboarding-wizard__titlebar button,
+.onboarding-wizard__titlebar input,
+.onboarding-wizard__titlebar a,
+.onboarding-wizard__titlebar select,
+.onboarding-wizard__titlebar [role="button"] {
+  -webkit-app-region: no-drag;
 }
 .onboarding-wizard__eyebrow {
   font: 600 10px/1 var(--font-sans, sans-serif);
