@@ -3761,19 +3761,7 @@ export function Composer(props: ComposerProps) {
     );
   };
 
-  const runExactSlashCommand = (): boolean => {
-    if (autocompleteKind !== "slash" || !slashTrigger) {
-      return false;
-    }
-
-    const currentSlashText = `/${slashTrigger.query}`.toLowerCase();
-    const command = filteredSlashCommands.find((candidate) =>
-      slashCommandMatchesText(candidate, currentSlashText)
-    );
-    if (!command) {
-      return false;
-    }
-
+  const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
     if (command.id === "review-current") {
       enterReviewComposer();
       return true;
@@ -3785,6 +3773,25 @@ export function Composer(props: ComposerProps) {
     }
 
     return false;
+  };
+
+  const getActiveSlashCommand = (): SlashCommandSuggestion | undefined => {
+    if (autocompleteKind !== "slash") {
+      return undefined;
+    }
+
+    const currentSlashText = slashTrigger
+      ? `/${slashTrigger.query}`.toLowerCase()
+      : undefined;
+    return (
+      (currentSlashText
+        ? filteredSlashCommands.find((candidate) =>
+            slashCommandMatchesText(candidate, currentSlashText)
+          )
+        : undefined) ??
+      filteredSlashCommands[activeSlashIndex] ??
+      filteredSlashCommands[0]
+    );
   };
 
   const restoreDeletedSkillToken = (
@@ -3892,7 +3899,14 @@ export function Composer(props: ComposerProps) {
         return;
       }
       event.preventDefault();
-      if (event.key === "Enter" && runExactSlashCommand()) {
+      const slashCommand =
+        event.key === "Enter" && autocompleteKind === "slash"
+          ? getActiveSlashCommand()
+          : undefined;
+      if (
+        slashCommand &&
+        runSlashCommand(slashCommand)
+      ) {
         return;
       }
       commitActiveAutocomplete();
