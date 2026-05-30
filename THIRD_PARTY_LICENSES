@@ -49,7 +49,7 @@ ISC
 - ini@1.3.8 | https://github.com/isaacs/ini
 - once@1.4.0 | https://github.com/isaacs/once
 - semver@7.7.4 | https://github.com/npm/node-semver
-- semver@7.8.0 | https://github.com/npm/node-semver
+- semver@7.8.1 | https://github.com/npm/node-semver
 - wrappy@1.0.2 | https://github.com/npm/wrappy
 
 MIT
@@ -103,7 +103,7 @@ MIT
 - aggregate-error@3.1.0 | sindresorhus/aggregate-error
 - bail@2.0.2 | wooorm/bail
 - base64-js@1.5.1 | https://github.com/beatgammit/base64-js
-- better-sqlite3@12.9.0 | https://github.com/WiseLibs/better-sqlite3
+- better-sqlite3@12.10.0 | https://github.com/WiseLibs/better-sqlite3
 - bindings@1.5.0 | https://github.com/TooTallNate/node-bindings
 - bl@4.1.0 | https://github.com/rvagg/bl
 - buffer@5.7.1 | https://github.com/feross/buffer
@@ -123,7 +123,7 @@ MIT
 - dequal@2.0.3 | lukeed/dequal
 - devlop@1.1.0 | wooorm/devlop
 - electron@41.7.0 | https://github.com/electron/electron
-- electron-log@5.4.3 | megahertz/electron-log
+- electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.3 | https://github.com/electron-userland/electron-builder
 - end-of-stream@1.4.5 | https://github.com/mafintosh/end-of-stream
 - escape-string-regexp@5.0.0 | sindresorhus/escape-string-regexp
@@ -202,7 +202,7 @@ MIT
 - mkdirp-classic@0.5.3 | https://github.com/mafintosh/mkdirp-classic
 - ms@2.1.3 | vercel/ms
 - napi-build-utils@2.0.0 | https://github.com/inspiredware/napi-build-utils
-- node-abi@3.90.0 | https://github.com/electron/node-abi
+- node-abi@3.92.0 | https://github.com/electron/node-abi
 - node-fetch@2.7.0 | https://github.com/bitinn/node-fetch
 - orderedmap@2.1.1 | https://github.com/marijnh/orderedmap
 - parse-entities@4.0.2 | wooorm/parse-entities
@@ -835,13 +835,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-better-sqlite3@12.9.0 (MIT)
----------------------------
+better-sqlite3@12.10.0 (MIT)
+----------------------------
 
 Applies to:
-- better-sqlite3@12.9.0 (MIT)
+- better-sqlite3@12.10.0 (MIT)
 
-Representative file: better-sqlite3@12.9.0/LICENSE
+Representative file: better-sqlite3@12.10.0/LICENSE
 
 The MIT License (MIT)
 
@@ -987,7 +987,7 @@ Applies to:
 - ini@1.3.8 (ISC)
 - once@1.4.0 (ISC)
 - semver@7.7.4 (ISC)
-- semver@7.8.0 (ISC)
+- semver@7.8.1 (ISC)
 - wrappy@1.0.2 (ISC)
 
 Representative file: chownr@1.1.4/LICENSE
@@ -1519,13 +1519,13 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-electron-log@5.4.3 (MIT)
+electron-log@5.4.4 (MIT)
 ------------------------
 
 Applies to:
-- electron-log@5.4.3 (MIT)
+- electron-log@5.4.4 (MIT)
 
-Representative file: electron-log@5.4.3/LICENSE
+Representative file: electron-log@5.4.4/LICENSE
 
 The MIT License (MIT)
 
@@ -2417,13 +2417,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-node-abi@3.90.0 (MIT)
+node-abi@3.92.0 (MIT)
 ---------------------
 
 Applies to:
-- node-abi@3.90.0 (MIT)
+- node-abi@3.92.0 (MIT)
 
-Representative file: node-abi@3.90.0/LICENSE
+Representative file: node-abi@3.92.0/LICENSE
 
 MIT License
 
