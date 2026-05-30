@@ -78,12 +78,12 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.2.0",
+    "@vitejs/plugin-react": "^6.0.2",
     "axe-core": "^4.11.4",
     "electron": "^41.2.1",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
     "tsx": "^4.20.6",
-    "vite": "^7.3.2"
+    "vite": "^8.0.13"
   }
 }
