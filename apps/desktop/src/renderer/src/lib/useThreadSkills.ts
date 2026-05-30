@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerAvailableCommandSummary,
   AppServerListSkillsResponse,
@@ -65,6 +65,50 @@ export function useThreadSkills(params: {
     return undefined;
   }, [launchpad, thread]);
   const state = skillTarget ? stateByThreadKey[skillTarget.key] : undefined;
+
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !skillTarget?.threadId) {
+      return;
+    }
+
+    const { backend, key, threadId } = skillTarget;
+    return desktopApi.onAgentEvent((event) => {
+      if (
+        event.backend !== backend ||
+        event.notification.method !== "thread/availableCommands/updated" ||
+        event.notification.params.threadId !== threadId
+      ) {
+        return;
+      }
+
+      const commands = Array.isArray(
+        (event.notification.params as { commands?: unknown }).commands,
+      )
+        ? ((event.notification.params as {
+            commands: AppServerAvailableCommandSummary[];
+          }).commands)
+        : [];
+      requestVersionsRef.current[key] =
+        (requestVersionsRef.current[key] ?? 0) + 1;
+      setStateByThreadKey((current) => ({
+        ...current,
+        [key]: {
+          error: undefined,
+          loading: false,
+          response: {
+            backend,
+            fetchedAt: Date.now(),
+            data: [
+              {
+                commands,
+                skills: [],
+              },
+            ],
+          },
+        },
+      }));
+    });
+  }, [desktopApi, skillTarget]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
     if (!skillTarget) {

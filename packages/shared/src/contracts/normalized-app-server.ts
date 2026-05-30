@@ -998,6 +998,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/availableCommands/updated";
+      params: {
+        threadId: string;
+        commands: AppServerAvailableCommandSummary[];
+      };
+    }
+  | {
       method: "thread/codexEnvironment/updated";
       params: {
         threadId: string;

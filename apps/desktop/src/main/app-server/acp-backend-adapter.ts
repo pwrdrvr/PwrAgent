@@ -1122,6 +1122,20 @@ export class AcpBackendAdapter {
             },
           });
         }
+        if (updateKind === "available_commands_update") {
+          await this.emit({
+            backend: agent.backendId,
+            notification: {
+              method: "thread/availableCommands/updated",
+              params: {
+                threadId: sessionId,
+                commands:
+                  this.getSession(agent.backendId, sessionId)?.availableCommands ??
+                  [],
+              },
+            },
+          });
+        }
         const kimiYoloExecutionMode =
           agent.registryId === "kimi"
             ? readKimiYoloExecutionModeFromText(readAcpUpdateText(update) ?? "")
