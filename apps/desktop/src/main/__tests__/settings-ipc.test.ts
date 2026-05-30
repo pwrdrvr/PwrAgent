@@ -835,6 +835,42 @@ describe("settings ipc", () => {
     }
   });
 
+  it("passes configured ACP CLI overrides to explicit local discovery refreshes", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    vi.stubEnv("PWRAGENT_ACP_AGENTS_GROK_CLI_PATH", "/opt/pwragent/bin/grok");
+    vi.stubEnv("PWRAGENT_ACP_AGENTS_QWEN_CLI_PATH", "/opt/pwragent/bin/qwen");
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      registerSettingsIpcHandlers(service);
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+
+      expect(localAcpDiscoveryMock.discoverLocalAcpAgents).toHaveBeenCalledWith({
+        overrides: {
+          grok: "/opt/pwragent/bin/grok",
+          qwen: "/opt/pwragent/bin/qwen",
+        },
+      });
+    } finally {
+      disposeAppState();
+    }
+  });
+
   // The wizard PR (#491) calls this IPC the moment the operator picks
   // a Codex profile model. The handler must (1) persist the wizard
   // signal idempotently, (2) fire the same thread-list prefetch the
