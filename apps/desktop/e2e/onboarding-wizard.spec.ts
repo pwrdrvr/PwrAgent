@@ -26,6 +26,39 @@ const wizardLaunchOptions = {
 };
 
 test.describe("Onboarding wizard", () => {
+  test("Get started and Back buttons are clickable", async () => {
+    const app = await launchElectronApp(wizardLaunchOptions);
+    try {
+      await expect(
+        app.window.getByRole("heading", {
+          name: /A few short choices/i,
+        }),
+      ).toBeVisible();
+
+      const getStarted = app.window.getByRole("button", { name: /Get started/i });
+      await expect(getStarted).toBeVisible();
+      await getStarted.click();
+
+      await expect(
+        app.window.getByRole("heading", {
+          name: /Pick your appearance and thread density/i,
+        }),
+      ).toBeVisible();
+
+      const back = app.window.getByRole("button", { name: /^← Back/i });
+      await expect(back).toBeVisible();
+      await back.click();
+
+      await expect(
+        app.window.getByRole("heading", {
+          name: /A few short choices/i,
+        }),
+      ).toBeVisible();
+    } finally {
+      await app.close();
+    }
+  });
+
   test("fires on a fresh PWRAGENT_HOME and walks Welcome → Done in Shared mode", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {

@@ -97,6 +97,7 @@ export type OnboardingWizardProps = {
   initialDensity: DesktopAppearanceDensity;
   initialTheme: DesktopAppearanceTheme;
   initialCodexProfileModel: DesktopCodexProfileModel;
+  initialCodexProfileNames?: readonly string[];
   /** Live theme + density controller. The wizard calls setTheme / setDensity
    *  as the operator picks so the app flips in real time. */
   appearanceController: AppearanceController;
@@ -170,6 +171,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // as the Isolated default. This lets the operator confirm "yes,
   // create `foo`" without retyping the name in the Profiles step.
   const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() => {
+    const initialNames = props.initialCodexProfileNames
+      ?.map((name) => name.trim())
+      .filter(isValidProfileName);
+    if (initialNames?.length) {
+      return [...initialNames];
+    }
     const requested =
       props.bootInfo?.decisionKind === "missing-named-profile"
         ? props.bootInfo.requestedProfileName?.trim()
@@ -348,6 +355,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           if (codexProfileModel === "shared") {
             return sharedNeedsLogin ? "shared-codex-login" : "messaging-safety";
           }
+          if (props.isReplay) {
+            return "messaging-safety";
+          }
           return "name-codex-profiles";
         case "name-codex-profiles":
           return "messaging-safety";
@@ -370,7 +380,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           return null;
       }
     },
-    [codexProfileModel, orderedProviders.length, providerSetupIndex, sharedNeedsLogin],
+    [
+      codexProfileModel,
+      orderedProviders.length,
+      props.isReplay,
+      providerSetupIndex,
+      sharedNeedsLogin,
+    ],
   );
   // Did this wizard session start at the bootstrap-confirm step?
   // Only true when the boot decision named a missing profile —
@@ -403,6 +419,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           if (codexProfileModel === "shared") {
             return sharedNeedsLogin ? "shared-codex-login" : "codex-profile";
           }
+          if (props.isReplay) {
+            return "codex-profile";
+          }
           return "name-codex-profiles";
         case "messaging-providers":
           return "messaging-safety";
@@ -420,6 +439,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       codexProfileModel,
       entryWasBootstrapConfirm,
       orderedProviders.length,
+      props.isReplay,
       providerSetupIndex,
       sharedNeedsLogin,
     ],
@@ -637,27 +657,37 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         };
         await props.onComplete(patch);
 
-        // Isolated + Multiple paths: provision paired PwrAgent + Codex
-        // profiles with the same names on both sides. The user's
-        // existing `default` PwrAgent profile and `default` Codex
-        // profile both stay untouched. Codex login per pair is deferred
-        // to Settings → Profiles — we don't fire N SSO browser windows
-        // mid-wizard. See `provisionPairedProfiles` for the IPC sequence
-        // and best-effort error handling.
-        //
-        // After the provisioning loop, auto-switch the operator INTO the
-        // newly-created profile (the first one for Multiple). The wizard
-        // was running on the operator's *original* session profile
-        // (typically `default`), but the whole point of Isolated/Multiple
-        // is "I want to work in a different profile" — landing the
-        // operator there at Finish closes that loop. The created
-        // profiles have `onboarding.completed = true` already seeded
-        // (see `provisionPairedProfiles`), so the wizard does NOT
-        // re-fire when the new window opens. Best-effort: a missing
-        // `openPwrAgentProfile` IPC just leaves the operator in the
-        // original session — they can switch later from the Profiles
-        // menu.
-        if (codexProfileModel !== "shared") {
+        if (isReplay) {
+          // Replay Onboarding reflects the current profile setup but
+          // must not create, pair, or switch profiles on Finish.
+          // Buffered secrets still graduate to the active profile if
+          // the replay collected any.
+          const activeProfile = props.bootInfo?.activeProfileName;
+          if (activeProfile) {
+            await writeBufferedSecretsIfAny(activeProfile, bufferedSecrets);
+          }
+        } else if (codexProfileModel !== "shared") {
+          // Isolated + Multiple paths: provision paired PwrAgent +
+          // Codex profiles with the same names on both sides. The
+          // user's existing `default` PwrAgent profile and `default`
+          // Codex profile both stay untouched. Codex login per pair is
+          // deferred to Settings → Profiles — we don't fire N SSO
+          // browser windows mid-wizard. See `provisionPairedProfiles`
+          // for the IPC sequence and best-effort error handling.
+          //
+          // After the provisioning loop, auto-switch the operator INTO
+          // the newly-created profile (the first one for Multiple).
+          // The wizard was running on the operator's *original*
+          // session profile (typically `default`), but the whole point
+          // of Isolated/Multiple is "I want to work in a different
+          // profile" — landing the operator there at Finish closes
+          // that loop. The created profiles have
+          // `onboarding.completed = true` already seeded (see
+          // `provisionPairedProfiles`), so the wizard does NOT re-fire
+          // when the new window opens. Best-effort: a missing
+          // `openPwrAgentProfile` IPC just leaves the operator in the
+          // original session — they can switch later from the Profiles
+          // menu.
           const created = await provisionPairedProfiles(
             props.desktopApi,
             codexProfileNames,
@@ -967,7 +997,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               // post-launch Settings trip. Shared mode collapses to a
               // single profile so we skip the notice.
               multiProfileTarget={
-                codexProfileModel !== "shared" && codexProfileNames.length >= 1
+                codexProfileModel !== "shared" &&
+                !isReplay &&
+                codexProfileNames.length >= 1
                   ? {
                       firstProfileName: codexProfileNames[0]!,
                       otherProfileNames: codexProfileNames.slice(1),

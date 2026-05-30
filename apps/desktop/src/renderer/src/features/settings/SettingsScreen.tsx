@@ -290,11 +290,6 @@ function SettingsSectionBody(props: {
             },
           });
         }}
-        onCodexProfileModelChange={async (codexProfileModel) => {
-          await props.settings.writeConfig({
-            general: { codexProfileModel },
-          });
-        }}
         onNotificationsEnabledChange={async (notificationsEnabled) => {
           await props.settings.writeConfig({
             general: { notificationsEnabled },

@@ -178,6 +178,22 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps onboarding and warning overlays clickable without losing window drag affordances", () => {
+    const overlayRule = extractRuleBody(css, ".onboarding-wizard-overlay");
+    const titlebarRule = extractRuleBody(css, ".onboarding-wizard__titlebar");
+    const warningBannerRule = extractRuleBody(css, ".codex-config-warning-banner");
+
+    expect(overlayRule).toContain("-webkit-app-region: no-drag;");
+    expect(css).toMatch(
+      /\.onboarding-wizard-overlay__scrim\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?\}/
+    );
+    expect(titlebarRule).toContain("-webkit-app-region: drag;");
+    expect(css).toMatch(
+      /\.onboarding-wizard__titlebar button,\s*\.onboarding-wizard__titlebar input,\s*\.onboarding-wizard__titlebar a,\s*\.onboarding-wizard__titlebar select,\s*\.onboarding-wizard__titlebar \[role="button"\]\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/
+    );
+    expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/
