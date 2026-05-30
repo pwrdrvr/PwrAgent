@@ -1,4 +1,12 @@
-import { app, BrowserWindow, clipboard, Menu, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  Menu,
+  shell,
+  type ContextMenuParams,
+  type MenuItemConstructorOptions,
+} from "electron";
 import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
@@ -88,18 +96,12 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
   });
 
   window.webContents.on("context-menu", (_event, params) => {
-    if (!params.linkURL) {
+    const template = buildNativeContextMenuTemplate(window, params);
+    if (template.length === 0) {
       return;
     }
 
-    const menu = Menu.buildFromTemplate([
-      {
-        label: "Copy Link",
-        click: () => {
-          clipboard.writeText(params.linkURL);
-        },
-      },
-    ]);
+    const menu = Menu.buildFromTemplate(template);
 
     menu.popup({
       window,
@@ -107,6 +109,96 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
       y: params.y,
     });
   });
+}
+
+function buildNativeContextMenuTemplate(
+  window: BrowserWindow,
+  params: ContextMenuParams,
+): MenuItemConstructorOptions[] {
+  const template: MenuItemConstructorOptions[] = [];
+  const dictionarySuggestions = params.dictionarySuggestions ?? [];
+
+  for (const suggestion of dictionarySuggestions) {
+    template.push({
+      label: suggestion,
+      click: () => {
+        window.webContents.replaceMisspelling(suggestion);
+      },
+    });
+  }
+
+  if (params.misspelledWord) {
+    if (dictionarySuggestions.length > 0) {
+      template.push({ type: "separator" });
+    }
+    template.push({
+      label: `Add "${params.misspelledWord}" to Dictionary`,
+      click: () => {
+        window.webContents.session.addWordToSpellCheckerDictionary(
+          params.misspelledWord,
+        );
+      },
+    });
+  }
+
+  if (params.linkURL) {
+    appendSeparator(template);
+    template.push({
+      label: "Copy Link",
+      click: () => {
+        clipboard.writeText(params.linkURL);
+      },
+    });
+  }
+
+  if (params.isEditable) {
+    appendSeparator(template);
+    appendEditableMenuItems(template, params);
+  } else if (params.selectionText) {
+    appendSeparator(template);
+    template.push({ role: "copy" });
+  }
+
+  return template;
+}
+
+function appendEditableMenuItems(
+  template: MenuItemConstructorOptions[],
+  params: ContextMenuParams,
+): void {
+  template.push(
+    editableRole("undo", params, "canUndo"),
+    editableRole("redo", params, "canRedo"),
+    { type: "separator" },
+    editableRole("cut", params, "canCut"),
+    editableRole("copy", params, "canCopy"),
+    editableRole("paste", params, "canPaste"),
+    editableRole("delete", params, "canDelete"),
+    { type: "separator" },
+    editableRole("selectAll", params, "canSelectAll"),
+  );
+}
+
+function editableRole(
+  role: NonNullable<MenuItemConstructorOptions["role"]>,
+  params: ContextMenuParams,
+  flag: keyof ContextMenuParams["editFlags"],
+): MenuItemConstructorOptions {
+  return {
+    role,
+    enabled: params.editFlags?.[flag] ?? true,
+  };
+}
+
+function appendSeparator(template: MenuItemConstructorOptions[]): void {
+  if (template.length === 0) {
+    return;
+  }
+
+  const last = template[template.length - 1];
+  if (last?.type !== "separator") {
+    template.push({ type: "separator" });
+  }
 }
 
 /**

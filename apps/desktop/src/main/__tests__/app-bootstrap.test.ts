@@ -28,6 +28,8 @@ const mainMonitorStartMock = vi.fn();
 const mainMonitorStopMock = vi.fn();
 const shellOpenExternalMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
+const addWordToSpellCheckerDictionaryMock = vi.fn();
+const replaceMisspellingMock = vi.fn();
 const menuPopupMock = vi.fn();
 const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => ({
   popup: menuPopupMock,
@@ -128,6 +130,10 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
           locationHref: "http://127.0.0.1:5173"
         })
       ),
+      replaceMisspelling: replaceMisspellingMock,
+      session: {
+        addWordToSpellCheckerDictionary: addWordToSpellCheckerDictionaryMock,
+      },
       debugger: {
         attach: vi.fn(),
         detach: vi.fn(),
@@ -196,6 +202,8 @@ describe("createMainWindow", () => {
     mainMonitorStopMock.mockReset();
     shellOpenExternalMock.mockReset();
     clipboardWriteTextMock.mockReset();
+    addWordToSpellCheckerDictionaryMock.mockReset();
+    replaceMisspellingMock.mockReset();
     menuPopupMock.mockReset();
     buildFromTemplateMock.mockClear();
     RendererHeapMonitorMock.mockClear();
@@ -345,6 +353,76 @@ describe("createMainWindow", () => {
 
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
       "file:///Users/huntharo/project/AGENTS.md:12"
+    );
+  });
+
+  it("shows native spelling suggestions when editable text is right-clicked", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    emitWebContentsEvent(
+      "context-menu",
+      {},
+      {
+        dictionarySuggestions: ["superseded", "supersede"],
+        editFlags: {
+          canCopy: true,
+          canCut: true,
+          canDelete: true,
+          canEditRichly: true,
+          canPaste: true,
+          canRedo: false,
+          canSelectAll: true,
+          canUndo: true,
+        },
+        isEditable: true,
+        misspelledWord: "superseeded",
+        x: 40,
+        y: 64,
+      }
+    );
+
+    const template = buildFromTemplateMock.mock.calls[0]?.[0];
+    expect(template).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "superseded",
+          click: expect.any(Function),
+        }),
+        expect.objectContaining({
+          label: "supersede",
+          click: expect.any(Function),
+        }),
+        expect.objectContaining({
+          label: 'Add "superseeded" to Dictionary',
+          click: expect.any(Function),
+        }),
+        expect.objectContaining({ role: "paste" }),
+      ])
+    );
+    expect(menuPopupMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        x: 40,
+        y: 64,
+      })
+    );
+
+    const suggestionItem = template?.find(
+      (item) => item.label === "superseded"
+    );
+    const suggestionClick = suggestionItem?.click as (() => void) | undefined;
+    suggestionClick?.();
+
+    expect(replaceMisspellingMock).toHaveBeenCalledWith("superseded");
+
+    const dictionaryItem = template?.find(
+      (item) => item.label === 'Add "superseeded" to Dictionary'
+    );
+    const dictionaryClick = dictionaryItem?.click as (() => void) | undefined;
+    dictionaryClick?.();
+
+    expect(addWordToSpellCheckerDictionaryMock).toHaveBeenCalledWith(
+      "superseeded"
     );
   });
 
