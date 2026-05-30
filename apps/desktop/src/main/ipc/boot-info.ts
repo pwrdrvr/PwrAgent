@@ -87,7 +87,9 @@ export function buildBootInfo(): DesktopBootInfo {
   }
 }
 
-export function registerBootInfoIpcHandlers(): void {
+export function registerBootInfoIpcHandlers(options?: {
+  requestQuit?: () => Promise<void> | void;
+}): void {
   ipcMain.removeHandler(APP_GET_BOOT_INFO_CHANNEL);
   ipcMain.handle(
     APP_GET_BOOT_INFO_CHANNEL,
@@ -105,6 +107,10 @@ export function registerBootInfoIpcHandlers(): void {
   // by which point the dev server's lifecycle no longer matters.
   ipcMain.removeHandler(APP_QUIT_CHANNEL);
   ipcMain.handle(APP_QUIT_CHANNEL, async (): Promise<void> => {
+    if (options?.requestQuit) {
+      await options.requestQuit();
+      return;
+    }
     app.quit();
   });
 

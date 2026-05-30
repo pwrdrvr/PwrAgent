@@ -31,6 +31,7 @@ describe("DesktopSettingsService", () => {
         'chat_reply_composer = "tiptap-chips"',
         "",
         "[general]",
+        "confirm_quit_with_in_progress_threads = false",
         "developer_mode = true",
         "notifications_enabled = true",
         "",
@@ -93,6 +94,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.general.developerMode).toEqual({
       value: true,
+      source: "config",
+    });
+    expect(snapshot.general.confirmQuitWithInProgressThreads).toEqual({
+      value: false,
       source: "config",
     });
     expect(snapshot.general.notificationsEnabled).toEqual({
@@ -292,6 +297,40 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+  });
+
+  it("defaults quit confirmation to enabled and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.general.confirmQuitWithInProgressThreads).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(true);
+
+    await service.writeConfigPatch({
+      general: {
+        confirmQuitWithInProgressThreads: false,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
+    expect(saved).toContain("confirm_quit_with_in_progress_threads = false");
+    expect(
+      (await service.readSettings()).general.confirmQuitWithInProgressThreads,
+    ).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
   });
 
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {

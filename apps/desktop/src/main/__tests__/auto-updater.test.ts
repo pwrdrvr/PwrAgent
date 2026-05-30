@@ -157,6 +157,39 @@ describe("auto updater", () => {
       manualResult,
     );
   });
+
+  it("routes downloaded update installs through requestQuit", async () => {
+    const updater = await importAutoUpdater();
+    const requestQuit = vi.fn(async (performQuit: () => void) => {
+      performQuit();
+      return true;
+    });
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    const install = ipcHandlers.get("app:install-update");
+
+    await expect(install?.()).resolves.toEqual({ status: "restarting" });
+    expect(requestQuit).toHaveBeenCalledTimes(1);
+    expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not install a downloaded update when quit confirmation is cancelled", async () => {
+    const updater = await importAutoUpdater();
+    const requestQuit = vi.fn(async () => false);
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    const install = ipcHandlers.get("app:install-update");
+
+    await expect(install?.()).resolves.toEqual({
+      status: "error",
+      message: "Update restart cancelled.",
+    });
+    expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+  });
 });
 
 describe("compareSemver", () => {

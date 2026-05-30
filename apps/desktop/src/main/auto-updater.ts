@@ -398,7 +398,9 @@ export function initAutoUpdater(): void {
   void checkForAppUpdatesNow("startup");
 }
 
-export function registerAppUpdateIpcHandlers(): void {
+export function registerAppUpdateIpcHandlers(options?: {
+  requestQuit?: (performQuit: () => void) => Promise<boolean>;
+}): void {
   ipcMain.removeHandler(APP_UPDATE_CHECK_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_STATUS_READ_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_INSTALL_CHANNEL);
@@ -424,7 +426,20 @@ export function registerAppUpdateIpcHandlers(): void {
       }
       try {
         log.info("installing downloaded update", { version });
-        autoUpdater.quitAndInstall();
+        const performQuit = (): void => {
+          autoUpdater.quitAndInstall();
+        };
+        if (options?.requestQuit) {
+          const quitAccepted = await options.requestQuit(performQuit);
+          if (!quitAccepted) {
+            return {
+              status: "error",
+              message: "Update restart cancelled.",
+            };
+          }
+        } else {
+          performQuit();
+        }
         return { status: "restarting" };
       } catch (err) {
         return {

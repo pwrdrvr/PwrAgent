@@ -10,6 +10,7 @@ export type ApplicationMenuActions = {
   openProfilesSettings: () => void;
   openSettings: () => void;
   openWebsite: () => void | Promise<void>;
+  quit: () => void | Promise<void>;
   replayOnboarding: () => void;
   showAboutPanel: () => void;
   showChangelogWindow: () => void;
@@ -77,7 +78,13 @@ function buildMacAppMenu(
       { role: "hideOthers" },
       { role: "unhide" },
       { type: "separator" },
-      { role: "quit" },
+      {
+        label: `Quit ${options.appName}`,
+        accelerator: "Command+Q",
+        click: () => {
+          void options.actions.quit();
+        },
+      },
     ],
   };
 }
@@ -89,7 +96,16 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
       { role: "close" },
       ...(options.isMac
         ? []
-        : [{ type: "separator" as const }, { role: "quit" as const }]),
+        : [
+            { type: "separator" as const },
+            {
+              label: "Quit",
+              accelerator: "CmdOrCtrl+Q",
+              click: () => {
+                void options.actions.quit();
+              },
+            },
+          ]),
     ],
   };
 }

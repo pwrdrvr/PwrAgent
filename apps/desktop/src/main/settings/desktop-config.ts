@@ -63,6 +63,7 @@ type StoredChatReplyComposer =
 
 export type DesktopSettingsConfig = {
   general?: {
+    confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     notificationsEnabled?: boolean;
     appearance?: {
@@ -418,6 +419,12 @@ export function desktopSettingsPatchToEdits(
   // write new values.
   if (patch.general?.developerMode !== undefined) {
     set(["general", "developer_mode"], patch.general.developerMode);
+  }
+  if (patch.general?.confirmQuitWithInProgressThreads !== undefined) {
+    set(
+      ["general", "confirm_quit_with_in_progress_threads"],
+      patch.general.confirmQuitWithInProgressThreads,
+    );
   }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
@@ -906,6 +913,9 @@ function normalizeDesktopConfig(
 
   return pruneEmptyConfig({
     general: {
+      confirmQuitWithInProgressThreads: readBoolean(
+        general?.confirm_quit_with_in_progress_threads,
+      ),
       developerMode: readBoolean(general?.developer_mode),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
       appearance: {
@@ -1108,6 +1118,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const pruned: DesktopSettingsConfig = {};
 
   const developerMode = config.general?.developerMode;
+  const confirmQuitWithInProgressThreads =
+    config.general?.confirmQuitWithInProgressThreads;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
@@ -1115,6 +1127,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const messagingAcknowledgment = config.general?.messagingAcknowledgment;
   if (
     developerMode !== undefined ||
+    confirmQuitWithInProgressThreads !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
@@ -1123,6 +1136,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.general = {};
     if (developerMode !== undefined) {
       pruned.general.developerMode = developerMode;
+    }
+    if (confirmQuitWithInProgressThreads !== undefined) {
+      pruned.general.confirmQuitWithInProgressThreads =
+        confirmQuitWithInProgressThreads;
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;

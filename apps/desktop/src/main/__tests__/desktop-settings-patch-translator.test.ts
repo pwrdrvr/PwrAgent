@@ -18,6 +18,22 @@ describe("desktopSettingsPatchToEdits — general", () => {
       },
     ]);
   });
+
+  it("writes quit confirmation preference", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        confirmQuitWithInProgressThreads: false,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "confirm_quit_with_in_progress_threads"],
+        value: false,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — experimental", () => {

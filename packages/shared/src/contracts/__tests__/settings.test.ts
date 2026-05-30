@@ -19,6 +19,10 @@ describe("desktop settings contracts", () => {
         encrypted: true,
       },
       general: {
+        confirmQuitWithInProgressThreads: {
+          value: true,
+          source: "default",
+        },
         developerMode: {
           value: false,
           source: "default",

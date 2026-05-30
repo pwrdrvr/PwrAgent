@@ -332,6 +332,10 @@ export class DesktopSettingsService {
       },
       secretStorage,
       general: {
+        confirmQuitWithInProgressThreads: this.resolveConfigBoolean(
+          config.general?.confirmQuitWithInProgressThreads,
+          true,
+        ),
         developerMode: this.resolveConfigBoolean(
           config.general?.developerMode,
           this.defaultDeveloperMode(),
@@ -700,6 +704,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.developerMode,
       this.defaultDeveloperMode(),
+    ).value;
+  }
+
+  resolveConfirmQuitWithInProgressThreads(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.confirmQuitWithInProgressThreads,
+      true,
     ).value;
   }
 
