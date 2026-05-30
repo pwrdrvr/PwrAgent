@@ -2822,6 +2822,75 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("auto-approves ACP permission requests for full-access sessions", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "qwen",
+          name: "Qwen Code",
+          distributionKind: "local",
+          distributionSource: "qwen --experimental-acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-qwen-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: acpBackendId,
+          sessionId: "qwen-session-1",
+          title: "Qwen thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 2000,
+          executionMode: "full-access",
+          acpRuntime: {
+            configValues: { mode: "auto" },
+            currentModeId: "auto",
+            updatedAt: 2000,
+          },
+          status: "active",
+        },
+      ]),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await (
+      registry as unknown as {
+        handleServerRequest(
+          backend: AcpBackendId,
+          request: AppServerPendingRequestNotification,
+        ): Promise<unknown>;
+      }
+    ).handleServerRequest(acpBackendId, {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "qwen-session-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        acpMethod: "session/request_permission",
+        command: "pnpm build",
+      },
+    });
+
+    expect(response).toEqual({ decision: "approve" });
+    expect(events).toEqual([]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("materializes Kimi worktree launchpads with local environment setup", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-kimi-launchpad-"));
     const worktreePath = path.join(root, ".worktrees", "thread-1", "app");

@@ -510,6 +510,9 @@ export class AcpAgentClient {
       params.source === "configOption"
         ? {
             configValues: { [params.optionId]: params.value },
+            ...(this.isRuntimeModeConfigOption(params.optionId)
+              ? { currentModeId: params.value }
+              : {}),
             updatedAt: now,
           }
         : params.source === "mode"
@@ -522,8 +525,8 @@ export class AcpAgentClient {
               updatedAt: now,
             };
     const runtimeState = mergeAcpRuntimeState(
-      requestedRuntimeState,
       responseRuntimeState ?? { updatedAt: now },
+      requestedRuntimeState,
     );
     this.updateSessionRuntimeState(params.sessionId, runtimeState);
     this.notifyRuntimeCapabilities({
@@ -532,6 +535,14 @@ export class AcpAgentClient {
       runtimeState,
     });
     return runtimeState;
+  }
+
+  private isRuntimeModeConfigOption(optionId: string): boolean {
+    return (
+      this.runtimeCapabilities?.configOptions?.some(
+        (option) => option.id === optionId && option.category === "mode",
+      ) ?? false
+    );
   }
 
   private async setRuntimeOptionOnTransport(params: {

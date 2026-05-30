@@ -1014,6 +1014,15 @@ function buildPendingRequestKey(params: {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
 }
 
+function isAcpPermissionRequest(
+  request: AppServerPendingRequestNotification,
+): boolean {
+  return (
+    request.method === "item/commandExecution/requestApproval" &&
+    request.params.acpMethod === "session/request_permission"
+  );
+}
+
 function executionModeQueueKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -3933,9 +3942,10 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
-    const acpRuntimeCapabilities = isAcpBackendId(backend)
-      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+    const acpAgent = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)
       : undefined;
+    const acpRuntimeCapabilities = acpAgent?.runtimeCapabilities;
     const acpRuntimeStartedAt = Date.now();
     const acpRuntimeWithDefaults = isAcpBackendId(backend)
       ? mergeAcpRuntimeState(
@@ -3956,6 +3966,7 @@ export class DesktopBackendRegistry {
       : acpRuntimeWithDefaults;
     const effectiveExecutionMode =
       isAcpBackendId(backend) &&
+      acpAgent?.registryId === "qwen" &&
       executionMode === "default" &&
       acpRuntimeStateRequiresFullAccess({
         runtime: acpRuntimeWithModel,
@@ -8431,6 +8442,19 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
+      const session = this.acpBackend.getSession(backend, request.params.threadId);
+      if (session?.executionMode === "full-access") {
+        backendRegistryLog.info("auto-approving ACP permission request", {
+          backend,
+          requestId: request.params.requestId,
+          threadId: request.params.threadId,
+          turnId: request.params.turnId,
+        });
+        return { decision: "approve" };
+      }
+    }
+
     const dynamicToolCall = readAutomationInspectionDynamicToolCall({
       method: request.method,
       params: request.params,

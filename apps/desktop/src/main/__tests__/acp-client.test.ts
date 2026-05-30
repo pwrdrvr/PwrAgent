@@ -644,6 +644,84 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("keeps requested ACP config-option mode when response reports stale current mode", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "qwen-session",
+        configOptions: [
+          {
+            id: "mode",
+            label: "Mode",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              { value: "default", label: "Default" },
+              { value: "auto", label: "Auto" },
+            ],
+          },
+        ],
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "auto", label: "Auto" },
+          ],
+        },
+      },
+      "session/set_config_option": {
+        configOptions: [
+          {
+            id: "mode",
+            label: "Mode",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              { value: "default", label: "Default" },
+              { value: "auto", label: "Auto" },
+            ],
+          },
+        ],
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "auto", label: "Auto" },
+          ],
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:qwen",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "full-access",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "configOption",
+        optionId: "mode",
+        value: "auto",
+      }),
+    ).resolves.toMatchObject({
+      configValues: { mode: "auto" },
+      currentModeId: "auto",
+    });
+    expect(store.getSession("acp:qwen", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        configValues: { mode: "auto" },
+        currentModeId: "auto",
+      },
+    });
+  });
+
   it("rejects a second active prompt for the same ACP session", async () => {
     const pendingPrompt = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
