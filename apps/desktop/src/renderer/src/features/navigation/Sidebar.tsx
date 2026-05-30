@@ -259,6 +259,14 @@ export function Sidebar(props: SidebarProps) {
         backend.capabilities.archiveThread === true
     );
 
+  const canForkThread = (thread: NavigationThreadSummary): boolean =>
+    props.backends.some(
+      (backend) =>
+        backend.kind === thread.source &&
+        backend.available &&
+        backend.capabilities.forkThread === true
+    );
+
   useEffect(() => {
     if (!contextMenu) {
       return;
@@ -585,6 +593,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenu &&
       contextMenu.thread.source === "codex" &&
       !contextMenuIsSubthread &&
+      canForkThread(contextMenu.thread) &&
       props.onForkThread,
   );
   const contextMenuCanUnlinkSubthread = Boolean(

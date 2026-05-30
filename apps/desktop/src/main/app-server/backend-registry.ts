@@ -980,6 +980,11 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       supported.has("thread/start") ||
       supported.has("thread/new") ||
       assumeCodexAppServerSurface,
+    // Empty Codex method lists are emitted by older supported app-server
+    // surfaces that predate method discovery. PwrAgent's supported Codex
+    // floor includes thread/fork, so keep the legacy "assume app-server
+    // surface" behavior for empty lists while respecting explicit method
+    // lists from feature-gated builds.
     forkThread: supported.has("thread/fork") || assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
     archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,

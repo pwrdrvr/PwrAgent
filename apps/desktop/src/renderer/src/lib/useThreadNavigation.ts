@@ -2976,11 +2976,15 @@ export function useThreadNavigation(
           ? [response.linkedDirectory]
           : parent.linkedDirectories;
         const optimisticFork: NavigationThreadSummary = {
-          ...parent,
           id: response.threadId,
           title: parent.title,
           titleSource: parent.titleSource,
+          summary: parent.summary,
           source: response.backend,
+          projectKey:
+            response.linkedDirectory?.worktreePath ??
+            response.linkedDirectory?.path ??
+            parent.projectKey,
           createdAt: now,
           updatedAt: now,
           inbox: {
@@ -2988,11 +2992,14 @@ export function useThreadNavigation(
             reason: "new-thread",
           },
           executionMode: response.executionMode,
+          model: parent.model,
+          reasoningEffort: parent.reasoningEffort,
+          serviceTier: parent.serviceTier,
+          fastMode: parent.fastMode,
+          gitBranch: parent.gitBranch,
+          observedGitBranch: parent.observedGitBranch,
           linkedDirectories,
           parentThreadId: parent.id,
-          pinnedRank: undefined,
-          subthreadOrder: undefined,
-          subthreadsCollapsed: undefined,
         };
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         setOptimisticThread(optimisticFork);

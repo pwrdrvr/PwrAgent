@@ -268,9 +268,18 @@ describe("Sidebar", () => {
 
   it("forks a Codex thread from the thread context menu", () => {
     const onForkThread = vi.fn(async () => undefined);
+    const forkBackends: BackendSummary[] = [
+      {
+        ...backends[0]!,
+        capabilities: {
+          ...backends[0]!.capabilities,
+          forkThread: true,
+        },
+      },
+    ];
     render(
       <Sidebar
-        backends={backends}
+        backends={forkBackends}
         browseMode="inbox"
         directories={directories}
         inboxThreads={[sharedThread]}
@@ -289,6 +298,31 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
 
     expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
+  });
+
+  it("hides fork actions when the backend does not advertise fork support", () => {
+    const onForkThread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+
+    expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
   });
 
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {

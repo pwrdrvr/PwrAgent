@@ -2457,6 +2457,23 @@ describe("useThreadNavigation", () => {
       model: "gpt-5.5",
       serviceTier: "fast",
       fastMode: true,
+      messagingBindings: [
+        {
+          bindingId: "binding-parent",
+          platform: "telegram" as const,
+          conversationTitle: "Parent DM",
+        },
+      ],
+      prs: [
+        {
+          number: 123,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "passing" as const,
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+        },
+      ],
+      reactions: ["👀"],
       linkedDirectories: [
         {
           id: "/repo/app",
@@ -2539,6 +2556,9 @@ describe("useThreadNavigation", () => {
         },
       ],
     });
+    expect(result.current.selectedThread?.messagingBindings).toBeUndefined();
+    expect(result.current.selectedThread?.prs).toBeUndefined();
+    expect(result.current.selectedThread?.reactions).toBeUndefined();
   });
 
   it("refreshes the selected thread when only the observed branch changes", async () => {
