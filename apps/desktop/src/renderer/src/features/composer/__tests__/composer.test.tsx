@@ -1327,6 +1327,234 @@ describe("Composer", () => {
     );
   });
 
+  it("keeps a queued review local when the previous queued turn lands in the server queue", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "server-queue-entry-1",
+      queueStatus: "queued" as const,
+      queueEntryId: "server-queue-entry-1",
+    }));
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+          listener: infer Listener,
+        ) => unknown
+          ? Listener
+          : never) => {
+          agentEventHandler = callback as typeof agentEventHandler;
+          return () => undefined;
+        },
+        startReview,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Server queue race",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "make a branch and PR" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "/review main" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "make a branch and PR"
+    );
+    expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
+      "Review changes against main"
+    );
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "make a branch and PR" }],
+        })
+      );
+    });
+    await flushReactUpdates();
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Review changes against main"
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "server-queue-entry-1",
+            status: "started",
+            turnId: "turn-2",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "server-queue-entry-1",
+            status: "terminal",
+            turnId: "turn-2",
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("resets server queued turn state when switching composer scopes", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => {
+      if (request.threadId === "thread-1") {
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "server-queue-entry-1",
+          queueStatus: "queued" as const,
+          queueEntryId: "server-queue-entry-1",
+        };
+      }
+
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-thread-2",
+      };
+    });
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+    };
+    const threadA = {
+      id: "thread-1",
+      title: "Server queued thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadB = {
+      ...threadA,
+      id: "thread-2",
+      title: "Other thread",
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "make a branch and PR" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadA}
+      />
+    );
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          input: [{ type: "text", text: "make a branch and PR" }],
+        })
+      );
+    });
+    await flushReactUpdates();
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadB}
+      />
+    );
+
+    const nextTextarea = screen.getByLabelText("Reply");
+    fireEvent.change(nextTextarea, { target: { value: "work on thread two" } });
+    await clickButton("Send");
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-2",
+          input: [{ type: "text", text: "work on thread two" }],
+        })
+      );
+    });
+  });
+
   it("does not remove the next queued message when the in-flight queued chip is edited", async () => {
     let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
     const startTurn = vi.fn(
