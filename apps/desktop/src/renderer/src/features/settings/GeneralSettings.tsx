@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type {
-  DesktopCodexProfileModel,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
 } from "@pwragent/shared";
@@ -44,16 +43,6 @@ const DENSITY_OPTIONS: Array<{
     value: "mission-control",
   },
   { label: "Compact", meta: "Chips hidden", value: "compact" },
-];
-
-const CODEX_PROFILE_MODEL_OPTIONS: Array<{
-  label: string;
-  meta: string;
-  value: DesktopCodexProfileModel;
-}> = [
-  { label: "Shared", meta: "Reuse Codex login", value: "shared" },
-  { label: "Isolated", meta: "Fresh profile", value: "isolated" },
-  { label: "Multiple", meta: "Power user", value: "multiple" },
 ];
 
 const PASTED_IMAGE_PATCH_OPTIONS: Array<{
@@ -115,7 +104,6 @@ export function GeneralSettings(props: {
   onDeveloperModeChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
-  onCodexProfileModelChange: (value: DesktopCodexProfileModel) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
@@ -125,7 +113,6 @@ export function GeneralSettings(props: {
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const developerMode = props.snapshot.general.developerMode;
   const updateChannel = props.snapshot.updates.channel;
-  const codexProfileModel = props.snapshot.general.codexProfileModel;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -340,50 +327,6 @@ export function GeneralSettings(props: {
                     }}
                   >
                     {option.label}
-                  </button>
-                ))}
-              </div>
-            }
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="General"
-        title="Codex profile"
-        chip={sourceBadge(codexProfileModel)}
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Codex profile model"
-            sub="How PwrAgent relates to your Codex install for this profile. Mode changes may require re-authentication."
-            source={sourceBadge(codexProfileModel)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Codex profile model"
-              >
-                {CODEX_PROFILE_MODEL_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={codexProfileModel.value === option.value}
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      codexProfileModel.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onCodexProfileModelChange(option.value);
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
                   </button>
                 ))}
               </div>

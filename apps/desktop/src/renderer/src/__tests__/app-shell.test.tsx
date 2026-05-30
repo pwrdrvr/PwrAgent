@@ -10,12 +10,17 @@ import {
 } from "@testing-library/react";
 import type {
   AgentEvent,
+  DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { App } from "../App";
+import {
+  App,
+  inferReplayCodexProfileModel,
+  inferReplayCodexProfileSetup,
+} from "../App";
 
 beforeAll(() => {
   const emptyRect = {
@@ -87,6 +92,65 @@ function createDeferred<T>(): {
   });
   return { promise, resolve, reject };
 }
+
+function profileSummary(
+  name: string,
+  codexProfileName: string,
+  active = false,
+): DesktopPwrAgentProfileSummary {
+  return {
+    name,
+    active,
+    canDelete: name !== "default",
+    codexProfile: {
+      name: codexProfileName,
+      displayName: codexProfileName || "System default",
+      codexHome: codexProfileName
+        ? `/home/example/.codex/profiles/${codexProfileName}`
+        : "/home/example/.codex",
+      exists: true,
+      hasAuthFile: true,
+      hasConfigFile: true,
+      selected: true,
+      source: codexProfileName ? "directory" : "default",
+    },
+    default: name === "default",
+    profileDir: `/home/example/.pwragent/profiles/${name}`,
+  };
+}
+
+describe("inferReplayCodexProfileModel", () => {
+  it("opens Replay Onboarding in Multiple when multiple profiles have named Codex pairings", () => {
+    const profiles = [
+      profileSummary("personal", "personal", true),
+      profileSummary("work", "work"),
+    ];
+
+    expect(inferReplayCodexProfileModel("shared", profiles)).toBe("multiple");
+    expect(inferReplayCodexProfileSetup("shared", profiles)).toEqual({
+      model: "multiple",
+      profileNames: ["personal", "work"],
+    });
+  });
+
+  it("opens Replay Onboarding in Isolated when the active profile has a named Codex pairing", () => {
+    const profiles = [profileSummary("pwragent", "pwragent", true)];
+
+    expect(inferReplayCodexProfileModel("shared", profiles)).toBe("isolated");
+    expect(inferReplayCodexProfileSetup("shared", profiles)).toEqual({
+      model: "isolated",
+      profileNames: ["pwragent"],
+    });
+  });
+
+  it("falls back to the persisted wizard choice when profile pairings are shared", () => {
+    expect(
+      inferReplayCodexProfileModel("multiple", [
+        profileSummary("default", "", true),
+      ]),
+    ).toBe("multiple");
+  });
+});
 
 describe("App", () => {
   afterEach(async () => {
