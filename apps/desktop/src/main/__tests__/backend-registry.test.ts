@@ -2672,6 +2672,156 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("materializes Qwen launchpads with implicit Auto runtime as full-access", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "qwen-session-1",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption: vi.fn(
+        async (params: {
+          source: "configOption" | "mode" | "model";
+          optionId: string;
+          value: string;
+        }): Promise<BackendAcpSessionRuntimeState> => ({
+          ...(params.source === "configOption"
+            ? { configValues: { [params.optionId]: params.value } }
+            : {}),
+          ...(params.source === "mode" ? { currentModeId: params.value } : {}),
+          ...(params.source === "model" ? { currentModelId: params.value } : {}),
+          updatedAt: 2000,
+        }),
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/project",
+          workMode: "local" as const,
+        })),
+      } as never,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "qwen",
+          name: "Qwen Code",
+          distributionKind: "local",
+          distributionSource: "qwen --experimental-acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-qwen-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "mode",
+                label: "Mode",
+                type: "select",
+                category: "mode",
+                currentValue: "auto",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+      launchpad: {
+        directoryKey: "directory:/repo/project",
+        directoryKind: "directory",
+        directoryLabel: "project",
+        directoryPath: "/repo/project",
+        backend: acpBackendId,
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    });
+
+    expect(response).toMatchObject({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      executionMode: "full-access",
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+        acpRuntime: expect.objectContaining({
+          configValues: expect.objectContaining({ mode: "auto" }),
+        }),
+      }),
+    );
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "qwen-session-1",
+      source: "configOption",
+      optionId: "mode",
+      value: "auto",
+    });
+    expect(sessions[0]).toMatchObject({
+      executionMode: "full-access",
+      acpRuntime: expect.objectContaining({
+        configValues: expect.objectContaining({ mode: "auto" }),
+      }),
+    });
+
+    await registry.close();
+  });
+
   it("materializes Kimi worktree launchpads with local environment setup", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-kimi-launchpad-"));
     const worktreePath = path.join(root, ".worktrees", "thread-1", "app");

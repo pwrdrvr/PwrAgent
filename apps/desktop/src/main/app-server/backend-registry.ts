@@ -30,6 +30,7 @@ import {
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
+  type BackendAcpRuntimeCapabilities,
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
@@ -858,6 +859,60 @@ const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
   "autoEdit",
   "yolo",
 ]);
+
+function acpRuntimeStateRequiresFullAccess(params: {
+  runtime?: BackendAcpSessionRuntimeState;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+}): boolean {
+  const { runtime, runtimeCapabilities } = params;
+  if (!runtime) {
+    return false;
+  }
+  if (acpRuntimeValueLooksPrivileged(runtime.currentModeId)) {
+    return true;
+  }
+
+  const configValues = runtime.configValues ?? {};
+  const modeOptionIds = new Set(
+    runtimeCapabilities?.configOptions
+      ?.filter((option) => option.category === "mode")
+      .map((option) => option.id) ?? [],
+  );
+  for (const key of ["mode", "approval-mode", "approval_mode"]) {
+    modeOptionIds.add(key);
+  }
+
+  for (const optionId of modeOptionIds) {
+    if (acpRuntimeValueLooksPrivileged(configValues[optionId])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function acpRuntimeModeDefaultsFromCapabilities(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+  now: number,
+): BackendAcpSessionRuntimeState | undefined {
+  const configValues = Object.fromEntries(
+    (runtimeCapabilities?.configOptions ?? [])
+      .filter((option) => option.category === "mode")
+      .flatMap((option) =>
+        typeof option.currentValue === "string"
+          ? [[option.id, option.currentValue] as const]
+          : [],
+      ),
+  );
+  const state: BackendAcpSessionRuntimeState = {
+    updatedAt: now,
+    ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
+    ...(runtimeCapabilities?.modes?.currentModeId
+      ? { currentModeId: runtimeCapabilities.modes.currentModeId }
+      : {}),
+  };
+  return Object.keys(state).length > 1 ? state : undefined;
+}
 
 function sanitizeAcpRuntimeForExecutionMode(params: {
   backend: AppServerBackendKind;
@@ -3849,7 +3904,6 @@ export class DesktopBackendRegistry {
       branchName,
       ...request
     } = params;
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
     let cwd =
       backend === "codex" && !request.cwd?.trim()
@@ -3879,18 +3933,40 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
+    const acpRuntimeCapabilities = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+      : undefined;
+    const acpRuntimeStartedAt = Date.now();
+    const acpRuntimeWithDefaults = isAcpBackendId(backend)
+      ? mergeAcpRuntimeState(
+          acpRuntimeModeDefaultsFromCapabilities(
+            acpRuntimeCapabilities,
+            acpRuntimeStartedAt,
+          ),
+          request.acpRuntime,
+        )
+      : request.acpRuntime;
     const acpRuntimeWithModel = isAcpBackendId(backend)
       ? withAcpModelRuntimeSelection({
-          runtime: request.acpRuntime,
-          runtimeCapabilities:
-            this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+          runtime: acpRuntimeWithDefaults,
+          runtimeCapabilities: acpRuntimeCapabilities,
           model: modelSettings.model,
-          now: Date.now(),
+          now: acpRuntimeStartedAt,
         })
-      : request.acpRuntime;
+      : acpRuntimeWithDefaults;
+    const effectiveExecutionMode =
+      isAcpBackendId(backend) &&
+      executionMode === "default" &&
+      acpRuntimeStateRequiresFullAccess({
+        runtime: acpRuntimeWithModel,
+        runtimeCapabilities: acpRuntimeCapabilities,
+      })
+        ? "full-access"
+        : executionMode;
+    const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveExecutionMode];
     const acpRuntime = sanitizeAcpRuntimeForExecutionMode({
       backend,
-      executionMode,
+      executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
     const dynamicTools =
@@ -3907,10 +3983,10 @@ export class DesktopBackendRegistry {
       ? await this.startAcpSession({
           backend,
           cwd,
-          executionMode,
+          executionMode: effectiveExecutionMode,
           acpRuntime,
         })
-      : await this.getClient(backend, executionMode).startThread({
+      : await this.getClient(backend, effectiveExecutionMode).startThread({
           ...request,
           ...modelSettings,
           cwd,
@@ -3931,7 +4007,7 @@ export class DesktopBackendRegistry {
         projectKey: cwd,
         createdAt: startedAt,
         updatedAt: startedAt,
-        executionMode,
+        executionMode: effectiveExecutionMode,
         ...modelSettings,
         acpRuntime,
         codexEnvironmentRuntime: request.codexEnvironmentRuntime,
@@ -3954,7 +4030,7 @@ export class DesktopBackendRegistry {
       await this.overlayStore.setThreadExecutionMode({
         backend,
         threadId: result.threadId,
-        executionMode,
+        executionMode: effectiveExecutionMode,
       });
       await this.updateThreadGitBranchMetadata({
         backend,
@@ -3985,7 +4061,7 @@ export class DesktopBackendRegistry {
     return {
       backend,
       threadId: result.threadId,
-      executionMode,
+      executionMode: effectiveExecutionMode,
       codexEnvironmentRuntime: request.codexEnvironmentRuntime,
     };
   }

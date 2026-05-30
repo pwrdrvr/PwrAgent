@@ -447,7 +447,13 @@ export function mergeAcpRuntimeState(
 }
 
 export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  return value === "yolo" || value === "autoEdit" || value === "auto_edit";
+  return (
+    value === "yolo" ||
+    value === "auto" ||
+    value === "autoEdit" ||
+    value === "auto_edit" ||
+    value === "auto-edit"
+  );
 }
 
 export function formatAcpRuntimeLabel(value: string): string {

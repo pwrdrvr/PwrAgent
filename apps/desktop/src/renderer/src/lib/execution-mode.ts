@@ -10,7 +10,7 @@ export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
 }
 
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
-  return ["auto_edit", "autoedit", "yolo"].includes(
+  return ["auto", "auto_edit", "autoedit", "yolo"].includes(
     value.trim().replace(/[-\s]+/g, "_").toLowerCase(),
   );
 }
