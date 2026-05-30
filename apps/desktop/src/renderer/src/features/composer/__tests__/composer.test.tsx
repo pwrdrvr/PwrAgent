@@ -3627,6 +3627,77 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("runs exact compact slash command on Enter even after review was selected", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-1",
+    }));
+    const startReview = vi.fn();
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact this thread's context.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+    expect(
+      within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+        "button",
+        { name: /\/review/i },
+      ),
+    ).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(within(commands).queryByRole("button", { name: /\/review/i })).not.toBeInTheDocument();
+    expect(within(commands).getByRole("button", { name: /\/compact/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+    });
+    expect(startReview).not.toHaveBeenCalled();
+  });
+
   it("inserts provider-native skill commands from slash autocomplete", async () => {
     render(
       <Composer

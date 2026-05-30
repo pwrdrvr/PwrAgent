@@ -304,6 +304,19 @@ function providerCommandToSlashSuggestion(
   };
 }
 
+function slashCommandMatchesText(
+  command: SlashCommandSuggestion,
+  text: string,
+): boolean {
+  const normalizedText = text.toLowerCase();
+  return (
+    command.label.toLowerCase() === normalizedText ||
+    (command.aliases ?? []).some(
+      (alias) => `/${alias}`.toLowerCase() === normalizedText,
+    )
+  );
+}
+
 const REVIEW_TARGET_OPTIONS: Array<{
   description: string;
   label: string;
@@ -3733,9 +3746,45 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    const currentSlashText = slashTrigger
+      ? `/${slashTrigger.query}`.toLowerCase()
+      : undefined;
+    const exactSlashCommand = currentSlashText
+      ? filteredSlashCommands.find((command) =>
+          slashCommandMatchesText(command, currentSlashText)
+        )
+      : undefined;
     applySlashCommand(
-      filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
+      exactSlashCommand ??
+        filteredSlashCommands[activeSlashIndex] ??
+        filteredSlashCommands[0]!
     );
+  };
+
+  const runExactSlashCommand = (): boolean => {
+    if (autocompleteKind !== "slash" || !slashTrigger) {
+      return false;
+    }
+
+    const currentSlashText = `/${slashTrigger.query}`.toLowerCase();
+    const command = filteredSlashCommands.find((candidate) =>
+      slashCommandMatchesText(candidate, currentSlashText)
+    );
+    if (!command) {
+      return false;
+    }
+
+    if (command.id === "review-current") {
+      enterReviewComposer();
+      return true;
+    }
+
+    if (command.label.toLowerCase() === "/compact") {
+      void submitCompactThread();
+      return true;
+    }
+
+    return false;
   };
 
   const restoreDeletedSkillToken = (
@@ -3843,6 +3892,9 @@ export function Composer(props: ComposerProps) {
         return;
       }
       event.preventDefault();
+      if (event.key === "Enter" && runExactSlashCommand()) {
+        return;
+      }
       commitActiveAutocomplete();
     }
   };
