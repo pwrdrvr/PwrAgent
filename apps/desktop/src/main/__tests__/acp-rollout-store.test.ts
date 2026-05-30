@@ -48,6 +48,36 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
+  it("hides Qwen thought chunks when restoring rollout replay", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:qwen" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "I should report this to the user." },
+      },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Yes, it builds." },
+      },
+    });
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Yes, it builds." }),
+    ]);
+  });
+
   it("coalesces unchanged tool updates before writing rollout records", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:kimi" as AcpBackendId;

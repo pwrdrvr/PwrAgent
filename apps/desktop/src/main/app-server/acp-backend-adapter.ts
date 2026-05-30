@@ -51,6 +51,7 @@ import {
 import {
   AcpSessionReplayNormalizer,
   readAcpContentText,
+  shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
@@ -1170,7 +1171,8 @@ export class AcpBackendAdapter {
         }
         if (
           updateKind === "agent_message_chunk" ||
-          updateKind === "agent_thought_chunk"
+          (updateKind === "agent_thought_chunk" &&
+            shouldSurfaceAcpThoughtsAsMessages(agent.backendId))
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {

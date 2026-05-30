@@ -12,6 +12,7 @@ import {
   AcpSessionReplayNormalizer,
   readAcpContentText,
   readAcpTopicTitle,
+  shouldSurfaceAcpThoughtsAsMessages,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
@@ -144,11 +145,15 @@ export class AcpAgentClient {
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  private readonly surfaceThoughtsAsMessages: boolean;
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
     this.approvalRequesterName = approvalRequesterNameForOptions(options);
+    this.surfaceThoughtsAsMessages = shouldSurfaceAcpThoughtsAsMessages(
+      options.backendId,
+    );
   }
 
   async initialize(): Promise<void> {
@@ -705,7 +710,9 @@ export class AcpAgentClient {
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
     let normalizer = this.normalizers.get(sessionId);
     if (!normalizer) {
-      normalizer = new AcpSessionReplayNormalizer();
+      normalizer = new AcpSessionReplayNormalizer({
+        surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
+      });
       this.normalizers.set(sessionId, normalizer);
     }
     return normalizer;
@@ -726,7 +733,9 @@ export class AcpAgentClient {
     if (!this.options.rolloutStore) {
       return;
     }
-    const normalizer = new AcpSessionReplayNormalizer();
+    const normalizer = new AcpSessionReplayNormalizer({
+      surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
+    });
     for (const record of this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,

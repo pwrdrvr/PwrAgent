@@ -346,6 +346,99 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("does not emit Qwen thought chunks as live assistant response text", async () => {
+    const backendId = "acp:qwen" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "qwen",
+      name: "Qwen Code",
+      launchDescriptor: {
+        backendId,
+        registryId: "qwen",
+        distributionKind: "local",
+        command: "qwen",
+        args: ["--experimental-acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "full-access",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Does it build?",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "I should run the build first." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "Yes, it builds." },
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        backend: backendId,
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "assistant:turn-1:0",
+            delta: "Yes, it builds.",
+          },
+        },
+      });
+    });
+    expect(
+      events.filter(
+        (event) =>
+          event.notification.method === "item/agentMessage/delta" &&
+          event.notification.params.delta === "I should run the build first.",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("uses separate live assistant item ids for ACP text separated by tools", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
