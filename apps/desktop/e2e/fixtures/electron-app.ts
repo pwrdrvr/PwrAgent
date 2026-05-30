@@ -120,6 +120,7 @@ export async function launchElectronApp(params: {
       path.join(seedHomeRoot, ".pwragent/profiles/default/config.toml"),
       {
         general: {
+          confirmQuitWithInProgressThreads: false,
           appearance: {
             theme: params.appearance?.theme ?? "dark",
             density: params.appearance?.density ?? "mission-control",
