@@ -25,6 +25,7 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadReplay,
   type AppServerThreadSummary,
+  type AppServerThreadTitleSource,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
@@ -3730,6 +3731,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId,
     threadId: string,
     name: string,
+    options?: { titleSource?: AppServerThreadTitleSource },
   ): Promise<{ threadId: string }> {
     const nextName = name.trim();
     if (!nextName) {
@@ -3743,7 +3745,7 @@ export class DesktopBackendRegistry {
     this.acpBackend.upsertSession({
       ...session,
       title: nextName,
-      titleSource: "explicit",
+      titleSource: options?.titleSource ?? "explicit",
       updatedAt: Math.max(session.updatedAt, updatedAt),
     });
     await this.emit({
@@ -4079,11 +4081,17 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        return await this.startAcpTurn({
+        const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
           input: params.input,
         });
+        this.scheduleThreadTitleGeneration({
+          backend: params.backend,
+          threadId: result.threadId,
+          input: params.input,
+        });
+        return result;
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
@@ -8210,6 +8218,13 @@ export class DesktopBackendRegistry {
           params,
           result?.reason ?? "title_generation_unavailable"
         );
+        if (isAcpBackendId(params.backend)) {
+          await this.applyPromptDerivedAcpThreadTitle({
+            backend: params.backend,
+            threadId: params.threadId,
+            prompt: params.prompt,
+          });
+        }
         return;
       }
       this.logThreadTitleGeneration("generated", params, undefined, {
@@ -8240,13 +8255,11 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      if (params.backend === "codex") {
-        await this.withCodexThreadClient(params.threadId, async (client) =>
-          await this.renameWithClient(client, params.threadId, result.title)
-        );
-      } else {
-        await this.renameWithClient(this.grokClient, params.threadId, result.title);
-      }
+      await this.applyGeneratedThreadTitle({
+        backend: params.backend,
+        threadId: params.threadId,
+        title: result.title,
+      });
       this.logThreadTitleGeneration("applied", params, undefined, {
         generatedTitle: truncateLogValue(result.title),
       });
@@ -8261,6 +8274,49 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
+    }
+  }
+
+  private async applyPromptDerivedAcpThreadTitle(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    prompt: string;
+  }): Promise<void> {
+    const title = shortenDerivedThreadTitle(params.prompt);
+    if (!title) {
+      return;
+    }
+    const latestThread = await this.findThreadForTitleGeneration({
+      backend: params.backend,
+      callerReason: "title-generation",
+      threadId: params.threadId,
+    });
+    if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      return;
+    }
+    await this.renameAcpSession(params.backend, params.threadId, title, {
+      titleSource: "fallback",
+    });
+    this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
+      generatedTitle: truncateLogValue(title),
+    });
+  }
+
+  private async applyGeneratedThreadTitle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    title: string;
+  }): Promise<void> {
+    if (isAcpBackendId(params.backend)) {
+      await this.renameAcpSession(params.backend, params.threadId, params.title, {
+        titleSource: "derived",
+      });
+    } else if (params.backend === "codex") {
+      await this.withCodexThreadClient(params.threadId, async (client) =>
+        await this.renameWithClient(client, params.threadId, params.title)
+      );
+    } else {
+      await this.renameWithClient(this.grokClient, params.threadId, params.title);
     }
   }
 

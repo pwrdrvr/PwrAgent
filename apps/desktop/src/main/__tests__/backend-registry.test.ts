@@ -7363,6 +7363,84 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("applies prompt-derived titles to ACP sessions when no title generator is available", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "qwen-session-1",
+        title: "ACP session",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "acp:qwen_title_generator_unavailable",
+      })),
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => sessions[0]!),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "qwen-session-1",
+        turnId: "turn-1",
+      })),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          ...createKimiAgentRecord(acpBackendId),
+          registryId: "qwen",
+          name: "Qwen Code",
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      input: [{ type: "text", text: "Does this project build?" }],
+    });
+    await waitForCondition(() => sessions[0]?.title === "Does this project build?");
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      userPrompt: "Does this project build?",
+    });
+    expect(sessions[0]).toMatchObject({
+      title: "Does this project build?",
+      titleSource: "fallback",
+    });
+
+    await registry.close();
+  });
+
   it("skips generated titles when the thread already has an explicit name", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({
