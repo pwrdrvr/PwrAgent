@@ -76,4 +76,57 @@ describe("useThreadSkills", () => {
       ]);
     });
   });
+
+  it("loads provider commands for an ACP thread session", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "acp:kimi" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          skills: [],
+          commands: [
+            {
+              name: "skill:frontend-design",
+              description: "Load frontend-design",
+              aliases: ["fd"],
+              backend: "acp:kimi" as const,
+              scope: "session" as const,
+              source: "provider" as const,
+            },
+          ],
+        },
+      ],
+    }));
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi: { listSkills },
+        thread: {
+          id: "session-1",
+          title: "Kimi session",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      })
+    );
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+
+    expect(listSkills).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "session-1",
+    });
+
+    await waitFor(() => {
+      expect(result.current.skills).toEqual([]);
+      expect(result.current.providerCommands.map((command) => command.name)).toEqual([
+        "skill:frontend-design",
+      ]);
+    });
+  });
 });

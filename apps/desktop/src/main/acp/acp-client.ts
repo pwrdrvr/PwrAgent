@@ -1,5 +1,6 @@
 import type {
   AcpBackendId,
+  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
@@ -584,6 +585,7 @@ export class AcpAgentClient {
     const sessionId = this.appSessionIdFor(protocolSessionId);
     const receivedAt = this.now();
     const activeTurn = this.activeTurns.get(sessionId);
+    const updateKind = readUpdateKind(update);
     const runtimeState = acpSessionRuntimeStateFromUpdate(update, receivedAt);
     if (runtimeState) {
       this.updateSessionRuntimeState(sessionId, runtimeState);
@@ -592,12 +594,14 @@ export class AcpAgentClient {
       ).catch(() => undefined);
       return;
     }
+    if (updateKind === "available_commands_update") {
+      this.updateSessionAvailableCommands(sessionId, update, receivedAt);
+    }
     const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     if (isConversationHistoryUpdate(update)) {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
     this.appendHistoryUpdate(sessionId, receivedAt, update);
-    const updateKind = readUpdateKind(update);
     const isAssistantTextUpdate =
       updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
     const text = readUpdateText(update);
@@ -740,6 +744,25 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       hasConversationHistory: true,
+      updatedAt: Math.max(metadata.updatedAt, receivedAt),
+    });
+  }
+
+  private updateSessionAvailableCommands(
+    sessionId: string,
+    update: Record<string, unknown>,
+    receivedAt: number,
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    this.options.store.upsertSession({
+      ...metadata,
+      availableCommands: normalizeAvailableCommandsUpdate(
+        update,
+        this.options.backendId,
+      ),
       updatedAt: Math.max(metadata.updatedAt, receivedAt),
     });
   }
@@ -1033,6 +1056,60 @@ function readUpdateText(update: Record<string, unknown>): string | undefined {
     return update.output_text;
   }
   return readAcpContentText(update.content);
+}
+
+function normalizeAvailableCommandsUpdate(
+  update: Record<string, unknown>,
+  backend: AcpBackendId,
+): AppServerAvailableCommandSummary[] {
+  const rawCommands = Array.isArray(update.availableCommands)
+    ? update.availableCommands
+    : Array.isArray(update.available_commands)
+      ? update.available_commands
+      : [];
+  const commands = new Map<string, AppServerAvailableCommandSummary>();
+
+  for (const rawCommand of rawCommands) {
+    const command = asRecord(rawCommand);
+    const name = readNonEmptyString(command, "name");
+    if (!name) {
+      continue;
+    }
+    const description = readNonEmptyString(command, "description");
+    const aliases = readStringArray(command?.aliases);
+    commands.set(name, {
+      name,
+      backend,
+      scope: "session",
+      source: "provider",
+      ...(description ? { description } : {}),
+      ...(aliases.length > 0 ? { aliases } : {}),
+    });
+  }
+
+  return [...commands.values()];
+}
+
+function readNonEmptyString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function errorMessage(error: unknown): string {

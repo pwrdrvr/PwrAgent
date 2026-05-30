@@ -7,6 +7,7 @@ import {
   type CSSProperties,
 } from "react";
 import type {
+  AppServerAvailableCommandSummary,
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
@@ -808,6 +809,7 @@ export type ThreadViewProps = {
   worktreeArchiveError?: string;
   skillError?: string;
   skillLoading?: boolean;
+  providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
@@ -2015,6 +2017,7 @@ export function ThreadView(props: ThreadViewProps) {
               pickingDirectory={props.pickingDirectory}
               skillError={props.skillError}
               skillLoading={props.skillLoading}
+              providerCommands={props.providerCommands ?? []}
               skills={props.skills}
             />
           )}
@@ -2210,6 +2213,7 @@ export function ThreadView(props: ThreadViewProps) {
             threadModelSettingsError={props.setThreadModelSettingsError}
             skillError={props.skillError}
             skillLoading={props.skillLoading}
+            providerCommands={props.providerCommands ?? []}
             skills={props.skills}
             thread={selectedThread!}
             updatingExecutionMode={props.updatingExecutionMode}

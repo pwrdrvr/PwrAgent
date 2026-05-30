@@ -2747,10 +2747,22 @@ export class DesktopBackendRegistry {
     backend?: AppServerBackendKind;
     cwd?: string;
     cwds?: string[];
+    threadId?: string;
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
-      return { data: [] };
+      if (!params.threadId) {
+        return { data: [] };
+      }
+      const session = this.acpBackend.getSession(backend, params.threadId);
+      return {
+        data: [
+          {
+            commands: session?.availableCommands ?? [],
+            skills: [],
+          },
+        ],
+      };
     }
 
     const data = await this.getClient(backend).listSkills({

@@ -10,6 +10,7 @@ import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
+  AppServerAvailableCommandSummary,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
@@ -96,6 +97,7 @@ type RawThreadSummary = {
 };
 
 type SkillCatalogEntry = {
+  commands?: AppServerAvailableCommandSummary[];
   cwd?: string;
   skills: AppServerSkillSummary[];
 };
@@ -713,14 +715,62 @@ function extractSkillsList(value: unknown): SkillCatalogEntry[] {
         },
       ];
     });
+    const rawCommands = Array.isArray(record.commands)
+      ? record.commands
+      : Array.isArray(record.availableCommands)
+        ? record.availableCommands
+        : [];
+    const commands = rawCommands.flatMap((command): AppServerAvailableCommandSummary[] => {
+      if (!command || typeof command !== "object" || Array.isArray(command)) {
+        return [];
+      }
+
+      const item = command as Record<string, unknown>;
+      const name =
+        typeof item.name === "string" && item.name.trim()
+          ? item.name.trim()
+          : typeof item.command === "string" && item.command.trim()
+            ? item.command.trim()
+            : "";
+      if (!name) {
+        return [];
+      }
+
+      return [
+        {
+          name,
+          description:
+            typeof item.description === "string" ? item.description : undefined,
+          aliases: readStringArray(item.aliases),
+          scope: "backend",
+          source: "provider",
+        },
+      ];
+    });
 
     return [
       {
+        ...(commands.length > 0 ? { commands } : {}),
         cwd: typeof record.cwd === "string" ? record.cwd : undefined,
         skills,
       },
     ];
   });
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return strings.length > 0 ? strings : undefined;
 }
 
 function extractModelOptions(value: unknown): BackendModelOption[] {

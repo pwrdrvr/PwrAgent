@@ -370,6 +370,7 @@ class DesktopAppServerService {
       backend,
       cwd: request.cwd,
       cwds: request.cwds,
+      threadId: request.threadId,
     });
 
     logDebug("listSkills", {
@@ -377,6 +378,10 @@ class DesktopAppServerService {
       cwd: request.cwd ?? null,
       cwds: request.cwds ?? [],
       entries: response.data.length,
+      commands: response.data.reduce(
+        (count, entry) => count + (entry.commands?.length ?? 0),
+        0,
+      ),
       skills: response.data.reduce((count, entry) => count + entry.skills.length, 0),
     });
 

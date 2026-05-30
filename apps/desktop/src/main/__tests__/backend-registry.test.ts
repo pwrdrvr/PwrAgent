@@ -1195,6 +1195,49 @@ function createKimiAcpRegistry(options?: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("returns ACP provider commands from session metadata", async () => {
+    const session: AcpSessionMetadata = {
+      backendId: "acp:kimi",
+      sessionId: "kimi-session-1",
+      title: "Kimi session",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      availableCommands: [
+        {
+          name: "skill:frontend-design",
+          description: "Load frontend-design",
+          aliases: ["fd"],
+          backend: "acp:kimi",
+          scope: "session",
+          source: "provider",
+        },
+      ],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord("acp:kimi")]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:kimi",
+        threadId: "kimi-session-1",
+      }),
+    ).resolves.toEqual({
+      data: [
+        {
+          skills: [],
+          commands: session.availableCommands,
+        },
+      ],
+    });
+  });
+
   it("reports backend availability and capabilities", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

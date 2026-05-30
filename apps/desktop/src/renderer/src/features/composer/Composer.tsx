@@ -13,6 +13,7 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  AppServerAvailableCommandSummary,
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -149,6 +150,7 @@ type ComposerProps = {
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
+  providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   updatingExecutionMode?: ThreadExecutionMode;
@@ -234,6 +236,7 @@ type SlashCommandSuggestion = {
   id: string;
   insertText: string;
   label: string;
+  aliases?: string[];
 };
 
 type AutocompleteKind = "skills" | "slash";
@@ -275,6 +278,21 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     description: "Review current staged, unstaged, and untracked changes",
   },
 ];
+
+function providerCommandToSlashSuggestion(
+  command: AppServerAvailableCommandSummary,
+): SlashCommandSuggestion {
+  const commandName = command.name.startsWith("/")
+    ? command.name.slice(1)
+    : command.name;
+  return {
+    id: `provider:${command.backend ?? "unknown"}:${commandName}`,
+    label: `/${commandName}`,
+    insertText: `/${commandName}`,
+    description: command.description ?? "Provider command",
+    aliases: command.aliases,
+  };
+}
 
 const REVIEW_TARGET_OPTIONS: Array<{
   description: string;
@@ -1911,18 +1929,26 @@ export function Composer(props: ComposerProps) {
       })
       .map((match) => match.skill);
   }, [props.skills, trigger]);
+  const slashCommandSuggestions = useMemo(() => {
+    const commands = props.providerCommands?.map(providerCommandToSlashSuggestion) ?? [];
+    return supportsReview ? [...SLASH_COMMANDS, ...commands] : commands;
+  }, [props.providerCommands, supportsReview]);
   const filteredSlashCommands = useMemo(() => {
-    if (!slashTrigger || !supportsReview) {
+    if (!slashTrigger) {
       return [];
     }
 
     const typed = draft.slice(slashTrigger.start, slashTrigger.end).trim().toLowerCase();
-    return SLASH_COMMANDS.filter(
-      (command) =>
+    const query = typed.slice(1);
+    return slashCommandSuggestions.filter((command) => {
+      const aliases = command.aliases ?? [];
+      return (
         command.label.toLowerCase().startsWith(typed) ||
-        command.description.toLowerCase().includes(typed.slice(1))
-    );
-  }, [draft, slashTrigger, supportsReview]);
+        aliases.some((alias) => `/${alias}`.toLowerCase().startsWith(typed)) ||
+        command.description.toLowerCase().includes(query)
+      );
+    });
+  }, [draft, slashCommandSuggestions, slashTrigger]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
@@ -2119,12 +2145,12 @@ export function Composer(props: ComposerProps) {
   }, [activeAutocompleteIndex, autocompleteKind]);
 
   useEffect(() => {
-    if (!trigger) {
+    if (!trigger && !slashTrigger) {
       return;
     }
 
     void props.onEnsureSkillsLoaded?.();
-  }, [props.onEnsureSkillsLoaded, trigger]);
+  }, [props.onEnsureSkillsLoaded, slashTrigger, trigger]);
 
   useEffect(() => {
     if (!isLaunchpad) {

@@ -851,6 +851,13 @@ class MockTransport implements JsonRpcTransport {
                     enabled: true,
                   },
                 ],
+                commands: [
+                  {
+                    name: "resume",
+                    description: "Resume the active task.",
+                    aliases: ["continue"],
+                  },
+                ],
                 errors: [],
               },
             ],
@@ -3795,6 +3802,15 @@ describe("CodexAppServerClient", () => {
 
     expect(skills).toEqual([
       {
+        commands: [
+          {
+            name: "resume",
+            description: "Resume the active task.",
+            aliases: ["continue"],
+            scope: "backend",
+            source: "provider",
+          },
+        ],
         cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
         skills: [
           {

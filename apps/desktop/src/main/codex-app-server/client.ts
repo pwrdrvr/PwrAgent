@@ -4,6 +4,7 @@ import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
+  AppServerAvailableCommandSummary,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadCommandDetail,
@@ -161,6 +162,7 @@ type RawCodexThreadListPage = {
 };
 
 type SkillCatalogEntry = {
+  commands?: AppServerAvailableCommandSummary[];
   cwd?: string;
   skills: AppServerSkillSummary[];
 };
@@ -2929,6 +2931,28 @@ function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined 
   };
 }
 
+function extractAvailableCommandSummary(
+  value: unknown,
+): AppServerAvailableCommandSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const name = pickString(record, ["name", "id", "command"]);
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    name,
+    description: pickString(record, ["description", "summary"]),
+    aliases: pickStringArray(record.aliases),
+    scope: "backend",
+    source: "provider",
+  };
+}
+
 function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
   const record = asRecord(value);
   const data = Array.isArray(record?.data)
@@ -2952,14 +2976,39 @@ function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
       const normalized = extractSkillSummary(skill);
       return normalized ? [normalized] : [];
     });
+    const rawCommands = Array.isArray(entryRecord.commands)
+      ? entryRecord.commands
+      : Array.isArray(entryRecord.availableCommands)
+        ? entryRecord.availableCommands
+        : [];
+    const commands = rawCommands.flatMap((command) => {
+      const normalized = extractAvailableCommandSummary(command);
+      return normalized ? [normalized] : [];
+    });
 
     return [
       {
+        ...(commands.length > 0 ? { commands } : {}),
         cwd: pickString(entryRecord, ["cwd"]),
         skills
       }
     ];
   });
+}
+
+function pickStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return strings.length > 0 ? strings : undefined;
 }
 
 function extractModelOptions(value: unknown): BackendModelOption[] {

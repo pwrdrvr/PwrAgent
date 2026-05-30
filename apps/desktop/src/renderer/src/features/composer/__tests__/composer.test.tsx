@@ -3495,6 +3495,54 @@ describe("Composer", () => {
     expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
   });
 
+  it("inserts provider-native skill commands from slash autocomplete", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "acp:kimi",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "skill:frontend-design",
+            description: "Load frontend-design",
+            aliases: ["fd"],
+            backend: "acp:kimi",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/ski" } });
+
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    fireEvent.click(
+      within(commands).getByRole("button", { name: /\/skill:frontend-design/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reply")).toHaveValue("/skill:frontend-design ");
+    });
+  });
+
   it("opens review composer from the focused slash command option", async () => {
     render(
       <Composer

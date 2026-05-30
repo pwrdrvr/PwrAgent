@@ -1,5 +1,6 @@
 import type {
   AcpBackendId,
+  AppServerAvailableCommandSummary,
   AppServerThreadTitleSource,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
@@ -21,6 +22,7 @@ export type AcpSessionMetadata = {
   updatedAt: number;
   executionMode: ThreadExecutionMode;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  availableCommands?: AppServerAvailableCommandSummary[];
   status: "active" | "idle" | "failed" | "unknown";
   hasConversationHistory?: boolean;
   requiresAgentSessionRebind?: boolean;

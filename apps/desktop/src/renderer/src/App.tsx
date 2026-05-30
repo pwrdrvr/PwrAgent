@@ -386,6 +386,7 @@ function DesktopAppShell(props: {
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,
     skillError: skills.error,
     skillLoading: skills.loading,
+    providerCommands: skills.providerCommands,
     skills: skills.skills,
     transcriptEntries: session.entries,
     transcriptError: session.error,
