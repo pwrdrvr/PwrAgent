@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  GetMessagingActivitySummaryResponse,
   MessagingActivityEntry,
   MessagingActivityKind,
   MessagingChannelKind,
@@ -112,6 +113,41 @@ export class MessagingActivityLog {
           .all(limit) as RawActivityRow[]);
     return rows.map(rowToEntry);
   }
+
+  getPlatformActivitySummary(): GetMessagingActivitySummaryResponse {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT
+           platform,
+           MAX(
+             CASE
+               WHEN kind IN ('inbound-routed', 'inbound-rejected', 'inbound-ignored')
+               THEN created_at
+             END
+           ) AS last_request_at,
+           MAX(
+             CASE
+               WHEN kind = 'outbound'
+               THEN created_at
+             END
+           ) AS last_response_at
+         FROM messaging_activity_log
+         GROUP BY platform
+         HAVING last_request_at IS NOT NULL OR last_response_at IS NOT NULL`,
+      )
+      .all() as RawActivitySummaryRow[];
+    return {
+      summaries: rows.map((row) => ({
+        platform: row.platform as MessagingChannelKind,
+        ...(row.last_request_at !== null
+          ? { lastRequestAt: row.last_request_at }
+          : {}),
+        ...(row.last_response_at !== null
+          ? { lastResponseAt: row.last_response_at }
+          : {}),
+      })),
+    };
+  }
 }
 
 type RawActivityRow = {
@@ -127,6 +163,12 @@ type RawActivityRow = {
   summary: string;
   created_at: number;
   payload: string;
+};
+
+type RawActivitySummaryRow = {
+  platform: string;
+  last_request_at: number | null;
+  last_response_at: number | null;
 };
 
 function rowToEntry(row: RawActivityRow): MessagingActivityEntry {

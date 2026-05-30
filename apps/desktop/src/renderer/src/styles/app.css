@@ -583,7 +583,7 @@ textarea,
 .messaging-status-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  position: relative;
   flex: 0 0 auto;
   min-width: max-content;
   padding: 4px 8px;
@@ -599,8 +599,8 @@ textarea,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   background: var(--bg-panel-elevated);
   color: var(--text-muted);
@@ -627,36 +627,182 @@ textarea,
   border: 1.5px solid var(--bg-panel);
 }
 
-.messaging-status-chip__tooltip {
+.messaging-status-controller {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 3px 8px 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.messaging-status-controller:hover,
+.messaging-status-controller:focus-visible,
+.messaging-status-controller[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+  outline: none;
+}
+
+.messaging-status-controller.is-off {
+  color: var(--text-muted);
+}
+
+.messaging-status-controller.has-warning {
+  border-color: var(--status-warning);
+}
+
+.messaging-status-controller__label {
+  font: 700 10px/1 var(--font-sans, sans-serif);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.messaging-status-controller__platforms {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.messaging-status-popover {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 50;
-  display: none;
-  width: max-content;
-  max-width: min(280px, calc(100vw - 32px));
-  padding: 8px 10px;
+  z-index: 60;
+  width: min(420px, calc(100vw - 32px));
+  padding: 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-  box-shadow: 0 8px 24px var(--shadow-tint-soft);
+  box-shadow: var(--shadow-popover);
   color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.35;
-  pointer-events: none;
   text-align: left;
-  white-space: normal;
 }
 
-.messaging-status-chip__tooltip > span {
-  display: block;
+.messaging-status-popover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.messaging-status-chip:hover .messaging-status-chip__tooltip,
-.messaging-status-chip:focus-visible .messaging-status-chip__tooltip,
-.messaging-status-chip:focus-within .messaging-status-chip__tooltip {
-  display: block;
+.messaging-status-popover__title {
+  color: var(--text-primary);
+  font: 700 13px/1.2 var(--font-sans, sans-serif);
+}
+
+.messaging-status-popover__summary {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font: 500 11px/1.3 var(--font-sans, sans-serif);
+}
+
+.messaging-status-popover__switch {
+  flex: 0 0 auto;
+}
+
+.messaging-status-popover__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.messaging-status-popover__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.messaging-status-popover__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.messaging-status-popover__row-title {
+  color: var(--text-primary);
+  font: 650 12px/1.25 var(--font-sans, sans-serif);
+}
+
+.messaging-status-popover__row-sub {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font: 500 11px/1.35 var(--font-sans, sans-serif);
+}
+
+.messaging-status-popover__details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font: 500 11px/1.35 var(--font-sans, sans-serif);
+  overflow-wrap: anywhere;
+}
+
+.messaging-status-popover__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.messaging-status-popover__state {
+  color: var(--text-muted);
+  font: 700 10px/1 var(--font-sans, sans-serif);
+  text-transform: uppercase;
+}
+
+.messaging-status-popover__state--enabled {
+  color: var(--status-ok);
+}
+
+.messaging-status-popover__state--degraded {
+  color: var(--status-warning);
+}
+
+.messaging-status-popover__state--errored {
+  color: var(--status-error);
+}
+
+.messaging-status-popover__platform-switch {
+  height: 24px;
+  padding-right: 8px;
+  font-size: 10px;
+}
+
+.messaging-status-popover__activity {
+  width: 100%;
+  padding: 10px 12px 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: 700 12px/1.2 var(--font-sans, sans-serif);
+  text-align: center;
+}
+
+.messaging-status-popover__activity:hover,
+.messaging-status-popover__activity:focus-visible {
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.messaging-status-popover__error {
+  margin: 8px 8px 0;
+  color: var(--status-error);
+  font: 600 11px/1.35 var(--font-sans, sans-serif);
 }
 
 /* Binding chip menu — small popover anchored to the chip wrap. The
@@ -707,17 +853,6 @@ textarea,
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.4;
-}
-
-.messaging-status-chip--clickable {
-  cursor: pointer;
-  border: none;
-  padding: 0;
-  background: transparent;
-}
-
-.messaging-status-chip--clickable:hover {
-  color: var(--text-primary);
 }
 
 /* ============================================================

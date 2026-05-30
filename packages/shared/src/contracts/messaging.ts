@@ -221,6 +221,18 @@ export type ListMessagingActivityResponse = {
   entries: MessagingActivityEntry[];
 };
 
+export type MessagingPlatformActivitySummary = {
+  platform: MessagingChannelKind;
+  /** Most recent inbound request observed for this provider. */
+  lastRequestAt?: number;
+  /** Most recent outbound response sent through this provider. */
+  lastResponseAt?: number;
+};
+
+export type GetMessagingActivitySummaryResponse = {
+  summaries: MessagingPlatformActivitySummary[];
+};
+
 export type UnbindMessagingThreadRequest = {
   bindingId: string;
 };

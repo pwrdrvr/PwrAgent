@@ -134,6 +134,53 @@ describe("MessagingActivityLog", () => {
     ]);
   });
 
+  it("summarizes latest request and response timestamps by platform", () => {
+    log.record({
+      platform: "telegram",
+      kind: "inbound-routed",
+      summary: "telegram request",
+      createdAt: 1_000,
+    });
+    log.record({
+      platform: "telegram",
+      kind: "outbound",
+      summary: "telegram response",
+      createdAt: 2_000,
+    });
+    log.record({
+      platform: "telegram",
+      kind: "inbound-rejected",
+      summary: "newer telegram request",
+      createdAt: 3_000,
+    });
+    log.record({
+      platform: "discord",
+      kind: "outbound",
+      summary: "discord response",
+      createdAt: 4_000,
+    });
+    log.record({
+      platform: "discord",
+      kind: "diagnostic",
+      summary: "not request or response",
+      createdAt: 5_000,
+    });
+
+    expect(log.getPlatformActivitySummary()).toEqual({
+      summaries: expect.arrayContaining([
+        expect.objectContaining({
+          platform: "telegram",
+          lastRequestAt: 3_000,
+          lastResponseAt: 2_000,
+        }),
+        expect.objectContaining({
+          platform: "discord",
+          lastResponseAt: 4_000,
+        }),
+      ]),
+    });
+  });
+
   it("clamps the limit to the [1, 500] range", () => {
     for (let i = 0; i < 10; i += 1) {
       log.record({

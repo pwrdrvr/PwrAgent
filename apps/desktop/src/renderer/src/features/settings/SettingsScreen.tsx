@@ -95,10 +95,10 @@ export function SettingsScreen(props: {
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
   onClose?: () => void;
-  /** Fired when a platform chip in the title-bar strip is clicked.
+  /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
    *  Messaging Activity overlay (its own top-level mainView). */
-  onOpenMessagingActivity?: () => void;
+  onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
 }) {
   const [section, setSection] = useState<SettingsSection>(
     props.initialSection ?? "general",
@@ -116,8 +116,8 @@ export function SettingsScreen(props: {
   // handler swaps mainView for us; no internal state change here.
   const onOpenMessagingActivity = props.onOpenMessagingActivity;
   const onOpenActivity = useCallback(
-    (_platform?: MessagingChannelKind) => {
-      onOpenMessagingActivity?.();
+    (platform?: MessagingChannelKind) => {
+      onOpenMessagingActivity?.(platform);
     },
     [onOpenMessagingActivity],
   );
