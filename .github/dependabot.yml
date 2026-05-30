@@ -32,6 +32,13 @@ updates:
       - dependency-name: "electron"
         update-types:
           - "version-update:semver-major"
+      # node-fetch is kept at v2 for grammY's current Node runtime shim. The
+      # latest grammY release still depends on node-fetch v2 and its CommonJS
+      # entrypoint; v3 is ESM-only and should be handled as a planned Telegram
+      # runtime change rather than an automated dependency bump.
+      - dependency-name: "node-fetch"
+        update-types:
+          - "version-update:semver-major"
     groups:
       vite-toolchain:
         patterns:
