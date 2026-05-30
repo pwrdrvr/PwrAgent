@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -1604,9 +1605,19 @@ function PairingTokenField(props: {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
   const [message, setMessage] = useState<string | undefined>(undefined);
   const [messageEntryId, setMessageEntryId] = useState<string | undefined>(undefined);
+  const messageEntryIdRef = useRef<string | undefined>(undefined);
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+
+  const setGeneratedMessage = useCallback(
+    (nextMessage: string | undefined, nextEntryId: string | undefined) => {
+      messageEntryIdRef.current = nextEntryId;
+      setMessage(nextMessage);
+      setMessageEntryId(nextEntryId);
+    },
+    [],
+  );
 
   const refresh = async () => {
     if (!props.desktopApi?.listMessagingPairingRequests) return;
@@ -1620,18 +1631,16 @@ function PairingTokenField(props: {
     void refresh();
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
       if (event.entry.platform !== props.platform) return;
-      if (event.entry.id === messageEntryId && event.entry.status !== "pending") {
-        setMessage(undefined);
-        setMessageEntryId(undefined);
+      if (event.entry.id === messageEntryIdRef.current && event.entry.status !== "pending") {
+        setGeneratedMessage(undefined, undefined);
       }
       void refresh();
     });
-  }, [messageEntryId, props.desktopApi, props.platform]);
+  }, [props.desktopApi, props.platform, setGeneratedMessage]);
 
   const selectScope = (nextScope: MessagingPairingScope) => {
     setScope(nextScope);
-    setMessage(undefined);
-    setMessageEntryId(undefined);
+    setGeneratedMessage(undefined, undefined);
   };
 
   const generate = async () => {
@@ -1643,8 +1652,7 @@ function PairingTokenField(props: {
         platform: props.platform,
         scope,
       });
-      setMessage(result.message);
-      setMessageEntryId(result.entry.id);
+      setGeneratedMessage(result.message, result.entry.id);
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1665,8 +1673,7 @@ function PairingTokenField(props: {
           entryId: entry.id,
         });
         if (result?.entry.id === messageEntryId) {
-          setMessage(undefined);
-          setMessageEntryId(undefined);
+          setGeneratedMessage(undefined, undefined);
         }
         if (result?.added) {
           await props.onSettingsChanged?.();
@@ -1674,8 +1681,7 @@ function PairingTokenField(props: {
       } else {
         const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
         if (result?.entry.id === messageEntryId) {
-          setMessage(undefined);
-          setMessageEntryId(undefined);
+          setGeneratedMessage(undefined, undefined);
         }
       }
       await refresh();
