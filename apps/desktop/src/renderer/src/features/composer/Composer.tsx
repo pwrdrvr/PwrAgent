@@ -746,15 +746,53 @@ function collectTextFragments(value: unknown): string[] {
   return [...directText, ...nestedText];
 }
 
-function notificationIncludesDraftText(params: unknown, draft: QueuedTurnDraft): boolean {
+function collectImageUrls(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectImageUrls(entry));
+  }
+
+  const record = value as Record<string, unknown>;
+  const directImages = Object.entries(record).flatMap(([key, entry]) =>
+    typeof entry === "string" &&
+    (key === "url" ||
+      key === "image_url" ||
+      key === "imageUrl" ||
+      key === "image" ||
+      key === "src" ||
+      entry.startsWith("data:image/"))
+      ? [entry]
+      : []
+  );
+  const nestedImages = Object.values(record).flatMap((entry) =>
+    typeof entry === "string" ? [] : collectImageUrls(entry)
+  );
+  return [...directImages, ...nestedImages];
+}
+
+function notificationIncludesDraftContent(
+  params: unknown,
+  draft: QueuedTurnDraft,
+): boolean {
   const preview = draft.text.trim();
-  if (!preview) {
+  if (preview) {
+    return collectTextFragments(params).some((fragment) =>
+      fragment.includes(preview)
+    );
+  }
+
+  const attachmentUrls = draft.imageAttachments.map(
+    (attachment) => attachment.url,
+  );
+  if (attachmentUrls.length === 0) {
     return false;
   }
 
-  return collectTextFragments(params).some((fragment) =>
-    fragment.includes(preview)
-  );
+  const notificationImageUrls = new Set(collectImageUrls(params));
+  return attachmentUrls.every((url) => notificationImageUrls.has(url));
 }
 
 function isSteerInjectionOpportunity(method: string): boolean {
@@ -2174,7 +2212,7 @@ export function Composer(props: ComposerProps) {
       if (
         pendingSteer?.status === "steering" &&
         event.notification.method === "item/completed" &&
-        notificationIncludesDraftText(event.notification.params, pendingSteer)
+        notificationIncludesDraftContent(event.notification.params, pendingSteer)
       ) {
         setPendingSteer(undefined);
         setSteering(false);
