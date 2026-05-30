@@ -71,6 +71,9 @@ export class OverlayStore {
             extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
             worktreeSnapshots: current?.worktreeSnapshots ?? [],
             pinnedRank: current?.pinnedRank,
+            parentThreadId: current?.parentThreadId,
+            subthreadOrder: current?.subthreadOrder,
+            subthreadsCollapsed: current?.subthreadsCollapsed,
             permissionTransitionLog: current?.permissionTransitionLog,
             messagingBindingTransitionLog:
               current?.messagingBindingTransitionLog,
@@ -510,6 +513,98 @@ export class OverlayStore {
         };
       });
       return pinnedRanks;
+    });
+  }
+
+  async setThreadParent(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    parentThreadId?: string | null;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      if (params.parentThreadId === params.threadId) {
+        throw new Error("A thread cannot be its own parent.");
+      }
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const parentThreadId = params.parentThreadId?.trim();
+      const nextState: ThreadOverlayState = {
+        ...current,
+        parentThreadId: parentThreadId || undefined,
+        pinnedRank: parentThreadId ? undefined : current.pinnedRank,
+      };
+      data.threads[threadKey] = nextState;
+      if (parentThreadId) {
+        const parentKey = buildThreadIdentityKey(params.backend, parentThreadId);
+        const parent = data.threads[parentKey] ?? {
+          backend: params.backend,
+          threadId: parentThreadId,
+          executionMode: "default" as const,
+          extraLinkedDirectories: [],
+        };
+        data.threads[parentKey] = {
+          ...parent,
+          subthreadOrder: [
+            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
+            params.threadId,
+          ],
+        };
+      }
+      return nextState;
+    });
+  }
+
+  async updateSubthreadOrder(params: {
+    backend: ThreadOverlayState["backend"];
+    parentThreadId: string;
+    threadIds: string[];
+  }): Promise<string[]> {
+    return await this.withData(async (data) => {
+      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parent = data.threads[parentKey] ?? {
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const seen = new Set<string>();
+      const threadIds = params.threadIds.filter((threadId) => {
+        if (seen.has(threadId)) return false;
+        seen.add(threadId);
+        return threadId !== params.parentThreadId;
+      });
+      data.threads[parentKey] = {
+        ...parent,
+        subthreadOrder: threadIds,
+      };
+      return threadIds;
+    });
+  }
+
+  async setSubthreadsCollapsed(params: {
+    backend: ThreadOverlayState["backend"];
+    parentThreadId: string;
+    collapsed: boolean;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parent = data.threads[parentKey] ?? {
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...parent,
+        subthreadsCollapsed: params.collapsed,
+      };
+      data.threads[parentKey] = nextState;
+      return nextState;
     });
   }
 

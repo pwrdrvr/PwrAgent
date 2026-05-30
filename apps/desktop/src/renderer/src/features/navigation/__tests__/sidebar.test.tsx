@@ -202,6 +202,70 @@ describe("Sidebar", () => {
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
+  it("groups sub-threads under their parent and persists collapse clicks", () => {
+    const childThread = {
+      ...sharedThread,
+      id: "thread-review",
+      title: "Adversarial review",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />,
+    );
+
+    expect(container.querySelector(".subthread-list")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cross-project cleanup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adversarial review" })).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Collapse sub-threads for Cross-project cleanup",
+      }),
+    );
+    expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
+  });
+
+  it("opens a sub-thread launchpad from the thread context menu", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New Sub-thread" }));
+
+    expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
+  });
+
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
     render(
       <Sidebar

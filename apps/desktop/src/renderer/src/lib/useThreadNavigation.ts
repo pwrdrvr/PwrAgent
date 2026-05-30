@@ -64,6 +64,58 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
   return selectionKey.slice("launchpad:".length);
 }
 
+function buildSubthreadLaunchpadKey(
+  parent: Pick<NavigationThreadSummary, "id" | "source">,
+  mode: "same-worktree" | "new-worktree",
+): string {
+  return `subthread:${encodeURIComponent(parent.source)}:${encodeURIComponent(parent.id)}:${mode}`;
+}
+
+function getParentThreadIdFromSubthreadLaunchpadKey(directoryKey: string): string | undefined {
+  const parts = directoryKey.split(":");
+  if (parts.length !== 4 || parts[0] !== "subthread") {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(parts[2]!);
+  } catch {
+    return undefined;
+  }
+}
+
+function selectThreadWorkspace(
+  thread: NavigationThreadSummary,
+  mode: "same-worktree" | "new-worktree",
+): {
+  directoryKind: NavigationDirectorySummary["kind"];
+  directoryLabel: string;
+  directoryPath?: string;
+  workMode: NavigationLaunchpadDraft["workMode"];
+} {
+  const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
+  const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
+  const preferred = worktree ?? local;
+
+  if (mode === "new-worktree") {
+    const repository = preferred?.path ?? thread.projectKey;
+    return {
+      directoryKind: repository ? "directory" : "workspace",
+      directoryLabel: preferred?.label ?? thread.title,
+      directoryPath: repository,
+      workMode: "worktree",
+    };
+  }
+
+  const sameWorkspacePath =
+    worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey;
+  return {
+    directoryKind: sameWorkspacePath ? "directory" : "workspace",
+    directoryLabel: preferred?.label ?? thread.title,
+    directoryPath: sameWorkspacePath,
+    workMode: "local",
+  };
+}
+
 function compareNavigationDirectoriesByLabel(
   left: NavigationDirectorySummary,
   right: NavigationDirectorySummary
@@ -389,6 +441,10 @@ function threadSummariesEqual(
     JSON.stringify(left.workspaceHandoff ?? {}) ===
       JSON.stringify(right.workspaceHandoff ?? {}) &&
     left.pinnedRank === right.pinnedRank &&
+    left.parentThreadId === right.parentThreadId &&
+    JSON.stringify(left.subthreadOrder ?? []) ===
+      JSON.stringify(right.subthreadOrder ?? []) &&
+    left.subthreadsCollapsed === right.subthreadsCollapsed &&
     retainedBranchDriftPairsEqual(
       left.retainedBranchDriftPairs,
       right.retainedBranchDriftPairs
@@ -610,6 +666,91 @@ function updateThreadPinsInSnapshot(
     }
     changed = true;
     return { ...thread, pinnedRank };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function updateThreadParentInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    parentThreadId?: string;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (thread.parentThreadId === params.parentThreadId) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      parentThreadId: params.parentThreadId,
+      pinnedRank: params.parentThreadId ? undefined : thread.pinnedRank,
+    };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function updateSubthreadOrderInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+    threadIds: string[];
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+      return thread;
+    }
+    if (JSON.stringify(thread.subthreadOrder ?? []) === JSON.stringify(params.threadIds)) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, subthreadOrder: params.threadIds };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function updateSubthreadsCollapsedInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+    collapsed: boolean;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+      return thread;
+    }
+    if (thread.subthreadsCollapsed === params.collapsed) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, subthreadsCollapsed: params.collapsed };
   });
 
   return changed ? { ...snapshot, threads } : snapshot;
@@ -1333,6 +1474,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   workMode: NavigationLaunchpadDraft["workMode"];
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
+  parentThreadId?: string;
 }): NavigationThreadSummary {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
@@ -1350,6 +1492,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    parentThreadId: params.parentThreadId,
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
@@ -1445,6 +1588,10 @@ export function useThreadNavigation(
     backend?: AppServerBackendKind,
     executionMode?: ThreadExecutionMode
   ) => Promise<void>;
+  createSubthread: (
+    parent: NavigationThreadSummary,
+    mode?: "same-worktree" | "new-worktree",
+  ) => Promise<void>;
   createThreadError?: string;
   creatingThread?: {
     backend: AppServerBackendKind;
@@ -1465,7 +1612,8 @@ export function useThreadNavigation(
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    parentThreadId?: string,
   ) => Promise<void>;
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -1549,6 +1697,18 @@ export function useThreadNavigation(
   reorderThreadPins: (
     backend: AppServerBackendKind,
     threadIds: string[],
+  ) => Promise<void>;
+  setThreadParent: (
+    thread: NavigationThreadSummary,
+    parentThreadId?: string,
+  ) => Promise<void>;
+  updateSubthreadOrder: (
+    parent: NavigationThreadSummary,
+    threadIds: string[],
+  ) => Promise<void>;
+  setSubthreadsCollapsed: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
   ) => Promise<void>;
   /** Directory pin: optimistic patch → IPC → reconcile. Plan Unit J. */
   setDirectoryPin: (
@@ -2218,6 +2378,71 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "thread/parent/set") {
+        const { threadId, parentThreadId } = event.notification.params as {
+          threadId: string;
+          parentThreadId: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadParentInSnapshot(current.response, {
+            backend: event.backend,
+            threadId,
+            parentThreadId,
+          }),
+        }));
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/parent/cleared") {
+        const { threadId } = event.notification.params as {
+          threadId: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadParentInSnapshot(current.response, {
+            backend: event.backend,
+            threadId,
+            parentThreadId: undefined,
+          }),
+        }));
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/subthreadOrder/updated") {
+        const { parentThreadId, threadIds } = event.notification.params as {
+          parentThreadId: string;
+          threadIds: string[];
+        };
+        setState((current) => ({
+          ...current,
+          response: updateSubthreadOrderInSnapshot(current.response, {
+            backend: event.backend,
+            parentThreadId,
+            threadIds,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "thread/subthreadsCollapsed/updated") {
+        const { parentThreadId, collapsed } = event.notification.params as {
+          parentThreadId: string;
+          collapsed: boolean;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+            backend: event.backend,
+            parentThreadId,
+            collapsed,
+          }),
+        }));
+        return;
+      }
+
       // Directory pin bus events (plan 2026-05-09-002, Unit I).
       // Patcher short-circuits when the rank already matches so the
       // IPC response → patch → bus event → patch chain collapses
@@ -2645,6 +2870,66 @@ export function useThreadNavigation(
     [desktopApi, directories, refresh]
   );
 
+  const createSubthread = useCallback(
+    async (
+      parent: NavigationThreadSummary,
+      mode: "same-worktree" | "new-worktree" = "same-worktree",
+    ): Promise<void> => {
+      if (!desktopApi?.ensureDirectoryLaunchpad) {
+        setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        return;
+      }
+
+      const directory = selectThreadWorkspace(parent, mode);
+      const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
+      setCreatingThread({
+        backend: parent.source,
+        executionMode: parent.executionMode ?? "default",
+      });
+      setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
+      setArchiveThreadError(undefined);
+      setSetThreadModelSettingsError(undefined);
+
+      try {
+        const response = await desktopApi.ensureDirectoryLaunchpad({
+          directoryKey,
+          directoryKind: directory.directoryKind,
+          directoryLabel: directory.directoryLabel,
+          directoryPath: directory.directoryPath,
+          preferredBackend: parent.source,
+        });
+        let launchpad = response.launchpad;
+        let defaults: NavigationLaunchpadDefaults = response.defaults;
+        const patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"] = {
+          backend: parent.source,
+          executionMode: parent.executionMode ?? response.launchpad.executionMode,
+          workMode: directory.workMode,
+          directoryLabel: directory.directoryLabel,
+          directoryPath: directory.directoryPath,
+        };
+        if (desktopApi.updateDirectoryLaunchpad) {
+          const updated = await desktopApi.updateDirectoryLaunchpad({
+            directoryKey,
+            patch,
+          });
+          launchpad = updated.launchpad;
+          defaults = updated.defaults;
+        }
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdate(current.response, launchpad, defaults),
+        }));
+        setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
+      } catch (error) {
+        setCreateThreadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setCreatingThread(undefined);
+      }
+    },
+    [desktopApi],
+  );
+
   const openDirectoryLaunchpad = useCallback(
     async (
       directory: NavigationDirectorySummary,
@@ -2953,7 +3238,8 @@ export function useThreadNavigation(
       directoryKey: string,
       input?: AppServerTurnInputItem[],
       collaborationMode?: AppServerCollaborationModeRequest,
-      reviewTarget?: AppServerReviewTarget
+      reviewTarget?: AppServerReviewTarget,
+      parentThreadId?: string,
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -2970,12 +3256,17 @@ export function useThreadNavigation(
       setLaunchpadError(undefined);
 
       try {
+        const materializeParentThreadId =
+          parentThreadId ?? getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
         const response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
           launchpad,
           input,
           collaborationMode,
           reviewTarget,
+          ...(materializeParentThreadId
+            ? { parentThreadId: materializeParentThreadId }
+            : {}),
         });
         const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
           directory,
@@ -2986,6 +3277,7 @@ export function useThreadNavigation(
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           optimisticUserMessage: buildOptimisticUserMessage(input),
+          parentThreadId: materializeParentThreadId,
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         setLocalLaunchpads((current) => {
@@ -3232,6 +3524,9 @@ export function useThreadNavigation(
   const setThreadPinRequest = desktopApi?.setThreadPin;
   const setThreadAgentRequest = desktopApi?.setThreadAgent;
   const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
+  const setThreadParentRequest = desktopApi?.setThreadParent;
+  const updateSubthreadOrderRequest = desktopApi?.updateSubthreadOrder;
+  const setSubthreadsCollapsedRequest = desktopApi?.setSubthreadsCollapsed;
   const setDirectoryPinRequest = desktopApi?.setDirectoryPin;
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
   const setThreadReaction = useCallback(
@@ -3363,6 +3658,123 @@ export function useThreadNavigation(
       }
     },
     [refresh, reorderThreadPinsRequest],
+  );
+
+  const setThreadParent = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      parentThreadId?: string,
+    ): Promise<void> => {
+      if (!setThreadParentRequest) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        response: updateThreadParentInSnapshot(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          parentThreadId,
+        }),
+      }));
+
+      try {
+        const result = await setThreadParentRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          parentThreadId,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateThreadParentInSnapshot(current.response, {
+            backend: result.backend,
+            threadId: result.threadId,
+            parentThreadId: result.parentThreadId,
+          }),
+        }));
+      } catch {
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setThreadParentRequest],
+  );
+
+  const updateSubthreadOrder = useCallback(
+    async (
+      parent: NavigationThreadSummary,
+      threadIds: string[],
+    ): Promise<void> => {
+      if (!updateSubthreadOrderRequest) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        response: updateSubthreadOrderInSnapshot(current.response, {
+          backend: parent.source,
+          parentThreadId: parent.id,
+          threadIds,
+        }),
+      }));
+
+      try {
+        const result = await updateSubthreadOrderRequest({
+          backend: parent.source,
+          parentThreadId: parent.id,
+          threadIds,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateSubthreadOrderInSnapshot(current.response, {
+            backend: result.backend,
+            parentThreadId: result.parentThreadId,
+            threadIds: result.threadIds,
+          }),
+        }));
+      } catch {
+        await refresh(buildThreadIdentityKey(parent.source, parent.id));
+      }
+    },
+    [refresh, updateSubthreadOrderRequest],
+  );
+
+  const setSubthreadsCollapsed = useCallback(
+    async (
+      parent: NavigationThreadSummary,
+      collapsed: boolean,
+    ): Promise<void> => {
+      if (!setSubthreadsCollapsedRequest) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        response: updateSubthreadsCollapsedInSnapshot(current.response, {
+          backend: parent.source,
+          parentThreadId: parent.id,
+          collapsed,
+        }),
+      }));
+
+      try {
+        const result = await setSubthreadsCollapsedRequest({
+          backend: parent.source,
+          parentThreadId: parent.id,
+          collapsed,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+            backend: result.backend,
+            parentThreadId: result.parentThreadId,
+            collapsed: result.collapsed,
+          }),
+        }));
+      } catch {
+        await refresh(buildThreadIdentityKey(parent.source, parent.id));
+      }
+    },
+    [refresh, setSubthreadsCollapsedRequest],
   );
 
   const setThreadAgent = useCallback(
@@ -3684,6 +4096,7 @@ export function useThreadNavigation(
   return {
     browseMode,
     createThread,
+    createSubthread,
     createThreadError,
     creatingThread,
     directories,
@@ -3728,6 +4141,9 @@ export function useThreadNavigation(
     setThreadPin,
     setThreadAgent,
     reorderThreadPins,
+    setThreadParent,
+    updateSubthreadOrder,
+    setSubthreadsCollapsed,
     setDirectoryPin,
     reorderDirectoryPins,
     snapshot: state.response,

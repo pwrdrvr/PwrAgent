@@ -1960,6 +1960,69 @@ textarea,
   min-width: 0;
 }
 
+.thread-group {
+  min-width: 0;
+}
+
+.subthread-list {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  margin: 1px 0 4px 18px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.subthread-list--compact {
+  margin-left: 14px;
+}
+
+.thread-row-shell--nested .thread-row {
+  padding-left: 12px;
+}
+
+.thread-row-shell.has-subthreads .thread-row {
+  padding-left: 30px;
+}
+
+.thread-row__subthread-toggle {
+  position: absolute;
+  top: 13px;
+  left: 8px;
+  z-index: 4;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-row__subthread-toggle::before {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.thread-row__subthread-toggle.is-open::before {
+  transform: rotate(90deg);
+}
+
+.thread-row__subthread-toggle:hover,
+.thread-row__subthread-toggle:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
 .thread-row-shell.is-draggable {
   cursor: grab;
 }

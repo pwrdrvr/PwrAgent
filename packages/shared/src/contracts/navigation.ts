@@ -49,6 +49,15 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   agent?: ThreadAgentMetadata;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
+  /**
+   * UI-only sub-thread relationship. The child remains an independent
+   * agent thread; this only controls sidebar grouping.
+   */
+  parentThreadId?: ThreadIdentifier;
+  /** User-curated child order, stored on the parent thread overlay. */
+  subthreadOrder?: ThreadIdentifier[];
+  /** Persisted disclosure state for the parent's child section. */
+  subthreadsCollapsed?: boolean;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   /**
    * Pending permission mode change waiting for the active turn to end.
@@ -432,6 +441,42 @@ export type ReorderThreadPinsResponse = {
   pinnedRanks: Record<ThreadIdentifier, string>;
 };
 
+export type SetThreadParentRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  parentThreadId?: ThreadIdentifier | null;
+};
+
+export type SetThreadParentResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  parentThreadId?: ThreadIdentifier;
+};
+
+export type UpdateSubthreadOrderRequest = {
+  backend?: AppServerBackendKind;
+  parentThreadId: ThreadIdentifier;
+  threadIds: ThreadIdentifier[];
+};
+
+export type UpdateSubthreadOrderResponse = {
+  backend: AppServerBackendKind;
+  parentThreadId: ThreadIdentifier;
+  threadIds: ThreadIdentifier[];
+};
+
+export type SetSubthreadsCollapsedRequest = {
+  backend?: AppServerBackendKind;
+  parentThreadId: ThreadIdentifier;
+  collapsed: boolean;
+};
+
+export type SetSubthreadsCollapsedResponse = {
+  backend: AppServerBackendKind;
+  parentThreadId: ThreadIdentifier;
+  collapsed: boolean;
+};
+
 /**
  * Directory pinning (mirror of thread pinning, sans the `backend`
  * dimension). Directory keys are globally unique — a directory
@@ -563,6 +608,15 @@ export type ThreadOverlayState = {
   reactions?: string[];
   /** User-curated position in the pinned section. Undefined means unpinned. */
   pinnedRank?: string;
+  /**
+   * UI-only parent relationship. This does not grant the child agent
+   * access to the parent transcript or state.
+   */
+  parentThreadId?: ThreadIdentifier;
+  /** Child thread ids in user-curated order, stored on the parent. */
+  subthreadOrder?: ThreadIdentifier[];
+  /** Persisted disclosure state for the parent's child section. */
+  subthreadsCollapsed?: boolean;
   /**
    * GitHub pull requests detected for this thread, persisted across
    * restarts so chips appear instantly on relaunch and so we can

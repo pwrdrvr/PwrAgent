@@ -515,6 +515,10 @@ function DesktopAppShell(props: {
           setMainView("thread");
           await navigation.createThread();
         }}
+        onCreateSubthread={async (thread, mode) => {
+          setMainView("thread");
+          await navigation.createSubthread(thread, mode);
+        }}
         onOpenAutomations={() => {
           setMainView("automations");
         }}
@@ -536,6 +540,9 @@ function DesktopAppShell(props: {
         onSetThreadReaction={navigation.setThreadReaction}
         onSetThreadPin={navigation.setThreadPin}
         onReorderThreadPins={navigation.reorderThreadPins}
+        onSetThreadParent={navigation.setThreadParent}
+        onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
+        onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
         onSetDirectoryPin={navigation.setDirectoryPin}
         onReorderDirectoryPins={navigation.reorderDirectoryPins}
         onPrefetchPullRequests={pullRequests.prefetch}

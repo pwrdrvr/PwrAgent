@@ -66,8 +66,12 @@ import type {
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetSubthreadsCollapsedRequest,
+  SetSubthreadsCollapsedResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetThreadParentRequest,
+  SetThreadParentResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadReactionRequest,
@@ -176,6 +180,8 @@ import type {
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
@@ -277,12 +283,15 @@ import {
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
+  NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   PRELOAD_LOG_CHANNEL,
@@ -717,6 +726,18 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  setThreadParent: async (
+    request: SetThreadParentRequest,
+  ): Promise<SetThreadParentResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PARENT_CHANNEL, request),
+  updateSubthreadOrder: async (
+    request: UpdateSubthreadOrderRequest,
+  ): Promise<UpdateSubthreadOrderResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL, request),
+  setSubthreadsCollapsed: async (
+    request: SetSubthreadsCollapsedRequest,
+  ): Promise<SetSubthreadsCollapsedResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL, request),
   setDirectoryPin: async (
     request: SetDirectoryPinRequest,
   ): Promise<SetDirectoryPinResponse> =>

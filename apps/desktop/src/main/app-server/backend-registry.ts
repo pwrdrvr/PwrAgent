@@ -6818,6 +6818,23 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
+    if (request.parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend: startThreadResponse.backend,
+        threadId: startThreadResponse.threadId,
+        parentThreadId: request.parentThreadId,
+      });
+      await this.emit({
+        backend: startThreadResponse.backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: startThreadResponse.threadId,
+            parentThreadId: request.parentThreadId,
+          },
+        },
+      });
+    }
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
@@ -7417,7 +7434,11 @@ export class DesktopBackendRegistry {
       method === "thread/executionMode/queued" ||
       method === "thread/executionMode/updated" ||
       method === "thread/name/updated" ||
+      method === "thread/parent/cleared" ||
+      method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/subthreadOrder/updated" ||
+      method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
       method === "turn/completed" ||
       method === "turn/failed"

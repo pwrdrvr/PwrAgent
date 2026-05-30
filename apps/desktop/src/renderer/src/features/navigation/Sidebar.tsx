@@ -71,6 +71,10 @@ type SidebarProps = {
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
+  onCreateSubthread?: (
+    thread: NavigationThreadSummary,
+    mode: "same-worktree" | "new-worktree",
+  ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -93,6 +97,18 @@ type SidebarProps = {
   onReorderThreadPins?: (
     backend: AppServerBackendKind,
     threadIds: string[],
+  ) => Promise<void>;
+  onSetThreadParent?: (
+    thread: NavigationThreadSummary,
+    parentThreadId?: string,
+  ) => Promise<void>;
+  onUpdateSubthreadOrder?: (
+    parent: NavigationThreadSummary,
+    threadIds: string[],
+  ) => Promise<void>;
+  onSetSubthreadsCollapsed?: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
   ) => Promise<void>;
   /**
    * Directory pinning (plan 2026-05-09-002). Mirror of thread-pin
@@ -394,6 +410,19 @@ export function Sidebar(props: SidebarProps) {
     void onArchiveThread(thread);
   };
 
+  const createSubthreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: "same-worktree" | "new-worktree",
+  ): void => {
+    setContextMenu(undefined);
+    void props.onCreateSubthread?.(thread, mode);
+  };
+
+  const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void props.onSetThreadParent?.(thread, undefined);
+  };
+
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     void props.onSetThreadPin?.(thread, !thread.pinnedRank);
@@ -536,7 +565,16 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
-  const contextMenuCanPin = Boolean(contextMenu && props.onSetThreadPin);
+  const contextMenuIsSubthread = Boolean(contextMenu?.thread.parentThreadId);
+  const contextMenuCanCreateSubthread = Boolean(
+    contextMenu && !contextMenuIsSubthread && props.onCreateSubthread,
+  );
+  const contextMenuCanUnlinkSubthread = Boolean(
+    contextMenuIsSubthread && props.onSetThreadParent,
+  );
+  const contextMenuCanPin = Boolean(
+    contextMenu && !contextMenuIsSubthread && props.onSetThreadPin,
+  );
   /**
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
@@ -564,6 +602,8 @@ export function Sidebar(props: SidebarProps) {
     contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
   const contextMenuHasTopActions =
     contextMenuCanPin ||
+    contextMenuCanCreateSubthread ||
+    contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
     contextMenuCanArchive;
@@ -763,6 +803,8 @@ export function Sidebar(props: SidebarProps) {
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onReorderThreadPins={props.onReorderThreadPins}
+              onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
+              onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
               onSetDirectoryPin={props.onSetDirectoryPin}
               onReorderDirectoryPins={props.onReorderDirectoryPins}
               onOpenDirectoryContextMenu={
@@ -784,6 +826,8 @@ export function Sidebar(props: SidebarProps) {
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onReorderThreadPins={props.onReorderThreadPins}
+                onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
+                onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}
                 onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -814,6 +858,55 @@ export function Sidebar(props: SidebarProps) {
                   onClick={() => togglePinFromContextMenu(contextMenu.thread)}
                 >
                   {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                </button>
+              ) : null}
+              {contextMenuCanCreateSubthread ? (
+                <>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      createSubthreadFromContextMenu(
+                        contextMenu.thread,
+                        "same-worktree",
+                      )
+                    }
+                  >
+                    New Sub-thread
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      createSubthreadFromContextMenu(
+                        contextMenu.thread,
+                        "same-worktree",
+                      )
+                    }
+                  >
+                    Fork into Same Worktree
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      createSubthreadFromContextMenu(
+                        contextMenu.thread,
+                        "new-worktree",
+                      )
+                    }
+                  >
+                    Fork into New Worktree
+                  </button>
+                </>
+              ) : null}
+              {contextMenuCanUnlinkSubthread ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => unlinkSubthreadFromContextMenu(contextMenu.thread)}
+                >
+                  Unlink from Parent
                 </button>
               ) : null}
               {contextMenuShowMoveItems ? (

@@ -55,10 +55,14 @@ import type {
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetSubthreadsCollapsedRequest,
+  SetSubthreadsCollapsedResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadParentRequest,
+  SetThreadParentResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   GetGhStatusRequest,
@@ -182,6 +186,8 @@ import type {
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
@@ -454,6 +460,15 @@ export type DesktopApi = {
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
+  setThreadParent?: (
+    request: SetThreadParentRequest
+  ) => Promise<SetThreadParentResponse>;
+  updateSubthreadOrder?: (
+    request: UpdateSubthreadOrderRequest
+  ) => Promise<UpdateSubthreadOrderResponse>;
+  setSubthreadsCollapsed?: (
+    request: SetSubthreadsCollapsedRequest
+  ) => Promise<SetSubthreadsCollapsedResponse>;
   /**
    * Directory pin IPC (plan 2026-05-09-002, Unit H). Mirror of
    * setThreadPin / reorderThreadPins minus the per-backend

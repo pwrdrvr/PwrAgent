@@ -316,6 +316,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   input?: AppServerTurnInputItem[];
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;
+  parentThreadId?: ThreadIdentifier;
 };
 
 export type MaterializeDirectoryLaunchpadResponse = {
