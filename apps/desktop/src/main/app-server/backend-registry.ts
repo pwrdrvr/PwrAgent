@@ -1010,7 +1010,7 @@ function parseThreadIdFromThreadTurnKeyBody(body: string): string | undefined {
   if (pendingSeparator > 0) {
     const beforePending = body.slice(0, pendingSeparator);
     const afterPending = body.slice(pendingSeparator + ":pending:".length);
-    if (beforePending === afterPending) {
+    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
       return beforePending;
     }
   }

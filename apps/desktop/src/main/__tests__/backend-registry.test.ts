@@ -7101,9 +7101,9 @@ command = "pnpm dev"
         method: "turn/started",
         params: {
           threadId: "acp-thread-1",
-          turnId: "acp-turn-1",
+          turnId: "pending:acp-thread-1:123456",
           turn: {
-            id: "acp-turn-1",
+            id: "pending:acp-thread-1:123456",
             status: "in_progress",
             startedAt: Date.now(),
           },

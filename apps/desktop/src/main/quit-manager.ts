@@ -48,6 +48,7 @@ export function createQuitManager(
   dependencies: QuitManagerDependencies,
 ): QuitManager {
   let quitAllowed = false;
+  let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
@@ -81,6 +82,9 @@ export function createQuitManager(
     }
 
     if (promptPromise) {
+      if (options.performQuit) {
+        pendingPerformQuit = options.performQuit;
+      }
       return await promptPromise;
     }
 
@@ -90,6 +94,7 @@ export function createQuitManager(
       threadIds: snapshot.threadIds,
     });
 
+    pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
     promptPromise = (async () => {
       const resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
         countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
@@ -103,10 +108,12 @@ export function createQuitManager(
         threadIds: snapshot.threadIds,
       });
       if (resolution === "manual-cancel") {
+        pendingPerformQuit = undefined;
         return false;
       }
       quitAllowed = true;
-      (options.performQuit ?? dependencies.performQuit)();
+      (pendingPerformQuit ?? dependencies.performQuit)();
+      pendingPerformQuit = undefined;
       return true;
     })().finally(() => {
       promptPromise = undefined;
