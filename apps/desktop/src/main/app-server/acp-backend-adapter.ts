@@ -35,7 +35,10 @@ import {
 } from "../acp/acp-client";
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
-import { resolveGrokCliPathOverride } from "../settings/desktop-config";
+import {
+  resolveGrokCliPathOverride,
+  resolveQwenCliPathOverride,
+} from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -298,6 +301,9 @@ function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
   }
   if (agent.registryId === "kimi") {
     return "Kimi";
+  }
+  if (agent.registryId === "qwen") {
+    return "Qwen";
   }
   return agent.name;
 }
@@ -668,8 +674,15 @@ export class AcpBackendAdapter {
       options.discoverLocalAcpAgents ??
       (async () => {
         const grokOverride = resolveGrokCliPathOverride();
+        const qwenOverride = resolveQwenCliPathOverride();
         return await discoverLocalAcpAgents({
-          overrides: grokOverride ? { grok: grokOverride } : undefined,
+          overrides:
+            grokOverride || qwenOverride
+              ? {
+                  ...(grokOverride ? { grok: grokOverride } : {}),
+                  ...(qwenOverride ? { qwen: qwenOverride } : {}),
+                }
+              : undefined,
         });
       });
     this.createAcpTransport = options.createAcpTransport;

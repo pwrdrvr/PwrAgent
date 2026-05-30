@@ -529,6 +529,7 @@ describe("App", () => {
       },
       acpAgents: {
         grok: { cliPath: { value: "", source: "default" } },
+        qwen: { cliPath: { value: "", source: "default" } },
       },
       applications: {
         editors: [],

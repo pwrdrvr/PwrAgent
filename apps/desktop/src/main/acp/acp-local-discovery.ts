@@ -28,6 +28,7 @@ export type LocalAcpDiscoveryOptions = {
    */
   overrides?: {
     grok?: string;
+    qwen?: string;
   };
 };
 
@@ -38,6 +39,7 @@ export async function discoverLocalAcpAgents(
     discoverLocalGemini(options),
     discoverLocalKimi(options),
     discoverLocalGrok(options),
+    discoverLocalQwen(options),
   ]);
   return discovered.filter((agent): agent is AcpInstalledAgentRecord =>
     Boolean(agent)
@@ -215,6 +217,65 @@ async function discoverLocalGrok(
   return undefined;
 }
 
+async function discoverLocalQwen(
+  options?: LocalAcpDiscoveryOptions,
+): Promise<AcpInstalledAgentRecord | undefined> {
+  const probe = options?.probe ?? defaultProbe;
+  const candidates = qwenCandidatePaths(options?.overrides?.qwen);
+  for (const command of candidates) {
+    const [versionResult, helpResult] = await Promise.all([
+      probeCommand(probe, command, ["--version"]),
+      probeCommand(probe, command, ["--help"]),
+    ]);
+    if (!versionResult || !helpResult) {
+      continue;
+    }
+    if (!/(^|\s)--acp(\s|,|$)/.test(resultText(helpResult))) {
+      continue;
+    }
+    const now = options?.now?.() ?? Date.now();
+    const backendId = "acp:qwen" as AcpBackendId;
+    const version = parseCliVersion(resultText(versionResult));
+    return {
+      backendId,
+      registryId: "qwen",
+      name: "Qwen Code",
+      version,
+      distributionKind: "local",
+      distributionSource: `${command} --acp`,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-qwen-code-cli",
+      installedAt: now,
+      updatedAt: now,
+      capabilities: acpAgentCapabilitiesForRegistryId("qwen"),
+      launchDescriptor: normalizeAcpLaunchDescriptor({
+        backendId,
+        registryId: "qwen",
+        distributionKind: "local",
+        command,
+        args: ["--acp"],
+        env: {},
+      }),
+      registryAgent: {
+        id: "qwen",
+        backendId,
+        name: "Qwen Code",
+        version,
+        authors: ["Qwen Team"],
+        license: "Apache-2.0",
+        repositoryUrl: "https://github.com/QwenLM/qwen-code",
+        distributions: [],
+        distributionKinds: ["local"],
+        auth: { required: false, methods: ["agent-managed"] },
+        raw: { source: "local-cli" },
+      },
+    };
+  }
+  return undefined;
+}
+
 /**
  * Build the ordered list of Grok CLI candidate paths to probe.
  *
@@ -245,6 +306,18 @@ function grokCandidatePaths(override?: string): string[] {
   candidates.push(path.join(homedir(), ".grok", "bin", "grok"));
   candidates.push("/opt/homebrew/bin/grok");
   candidates.push("/usr/local/bin/grok");
+  return Array.from(new Set(candidates));
+}
+
+function qwenCandidatePaths(override?: string): string[] {
+  const candidates: string[] = [];
+  if (override && override.trim().length > 0) {
+    candidates.push(override.trim());
+  }
+  candidates.push("qwen");
+  candidates.push(path.join(homedir(), ".qwen", "bin", "qwen"));
+  candidates.push("/opt/homebrew/bin/qwen");
+  candidates.push("/usr/local/bin/qwen");
   return Array.from(new Set(candidates));
 }
 

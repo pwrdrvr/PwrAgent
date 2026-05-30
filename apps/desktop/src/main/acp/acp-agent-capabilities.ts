@@ -16,6 +16,9 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   grok: {
     liveWorkspaceHandoff: false,
   },
+  qwen: {
+    liveWorkspaceHandoff: false,
+  },
 };
 
 export function acpAgentCapabilitiesForRegistryId(

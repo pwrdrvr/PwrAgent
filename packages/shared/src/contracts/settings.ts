@@ -544,6 +544,14 @@ export type DesktopSettingsSnapshot = {
        */
       cliPath: DesktopSettingsValue<string>;
     };
+    qwen: {
+      /**
+       * Optional override for the Qwen Code executable path. When empty,
+       * discovery probes the standard locations ($PATH, ~/.qwen/bin/qwen,
+       * /opt/homebrew/bin/qwen, /usr/local/bin/qwen).
+       */
+      cliPath: DesktopSettingsValue<string>;
+    };
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -662,6 +670,9 @@ export type DesktopSettingsConfigPatch = {
   };
   acpAgents?: {
     grok?: {
+      cliPath?: string;
+    };
+    qwen?: {
       cliPath?: string;
     };
   };
