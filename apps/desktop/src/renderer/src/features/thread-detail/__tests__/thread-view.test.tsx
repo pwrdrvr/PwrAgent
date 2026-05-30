@@ -381,6 +381,125 @@ describe("ThreadView", () => {
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
+  it("keeps launchpad drafts editable until a known backend reports unavailable", async () => {
+    const selectedDirectory = {
+      key: "workspace:new-thread",
+      kind: "workspace",
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      executionMode: "default",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeEnabled();
+  });
+
+  it("surfaces ACP unavailable reasons in launchpad drafts", async () => {
+    const selectedDirectory = {
+      key: "workspace:new-thread",
+      kind: "workspace",
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "acp:gemini",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      executionMode: "default",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "acp:gemini",
+            label: "Gemini",
+            available: false,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: true,
+              multiDirectoryThreads: false,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default",
+                available: false,
+                isDefault: true,
+                unavailableReason: "ACP agent authentication required",
+              },
+            ],
+            unavailableReason: "ACP agent authentication required",
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      await screen.findByText("ACP agent authentication required")
+    ).toHaveClass("composer__meta--error");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toHaveAttribute(
+      "contenteditable",
+      "false",
+    );
+  });
+
   it("shows missing recorded working directory details and copies the thread id", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {

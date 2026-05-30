@@ -509,7 +509,10 @@ function DesktopAppShell(props: {
         automationsActive={mainView === "automations"}
         settingsActive={mainView === "settings"}
         onBrowseModeChange={navigation.setBrowseMode}
-        onCreateThread={navigation.createThread}
+        onCreateThread={async () => {
+          setMainView("thread");
+          await navigation.createThread();
+        }}
         onOpenAutomations={() => {
           setMainView("automations");
         }}

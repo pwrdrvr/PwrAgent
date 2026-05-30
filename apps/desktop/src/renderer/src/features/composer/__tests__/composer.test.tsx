@@ -330,6 +330,34 @@ describe("Composer", () => {
     });
   });
 
+  it("renders unavailable reason when provided", async () => {
+    const unavailableReason = "Codex profile not logged in. Please check your settings.";
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={true}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        unavailableReason={unavailableReason}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByText(unavailableReason)).toBeInTheDocument();
+    expect(screen.getByText(unavailableReason)).toHaveClass("composer__meta--error");
+  });
+
   it("opens the current workspace in discovered applications", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 

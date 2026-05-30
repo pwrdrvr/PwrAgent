@@ -78,6 +78,44 @@ function sortNavigationDirectories(
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
 
+function upsertLaunchpadDirectory(
+  directories: NavigationSnapshot["directories"],
+  launchpad: NavigationLaunchpadDraft,
+): NavigationSnapshot["directories"] {
+  let foundDirectory = false;
+  const nextDirectories = directories.map((directory) => {
+    if (directory.key !== launchpad.directoryKey) {
+      return directory;
+    }
+
+    foundDirectory = true;
+    return {
+      ...directory,
+      kind: launchpad.directoryKind,
+      label: launchpad.directoryLabel,
+      path: launchpad.directoryPath ?? directory.path,
+      launchpad,
+    };
+  });
+
+  return sortNavigationDirectories(
+    foundDirectory
+      ? nextDirectories
+      : [
+          ...nextDirectories,
+          {
+            key: launchpad.directoryKey,
+            kind: launchpad.directoryKind,
+            label: launchpad.directoryLabel,
+            path: launchpad.directoryPath,
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad,
+          },
+        ],
+  );
+}
+
 function directoryKeysForThread(
   directories: NavigationSnapshot["directories"],
   threadKey?: string,
@@ -405,17 +443,20 @@ function reconcileNavigationSnapshot(
   const previousByDirectoryKey = new Map(
     previous.directories.map((directory) => [directory.key, directory])
   );
+  const reconciledDirectories = next.directories.map((directory) => {
+    const previousDirectory = previousByDirectoryKey.get(directory.key);
+    return {
+      ...directory,
+      ...(previousDirectory?.gitStatus &&
+      !Object.prototype.hasOwnProperty.call(directory, "gitStatus")
+        ? { gitStatus: previousDirectory.gitStatus }
+        : {}),
+    };
+  });
+
   return {
     ...next,
-    directories: next.directories.map((directory) => {
-      if (Object.prototype.hasOwnProperty.call(directory, "gitStatus")) {
-        return directory;
-      }
-      const previousDirectory = previousByDirectoryKey.get(directory.key);
-      return previousDirectory?.gitStatus
-        ? { ...directory, gitStatus: previousDirectory.gitStatus }
-        : directory;
-    }),
+    directories: sortNavigationDirectories(reconciledDirectories),
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id)
@@ -1063,43 +1104,20 @@ function applyLaunchpadUpdate(
   defaults: NavigationSnapshot["launchpadDefaults"]
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
-    return snapshot;
-  }
-
-  let foundDirectory = false;
-  const directories = snapshot.directories.map((directory) => {
-    if (directory.key !== launchpad.directoryKey) {
-      return directory;
-    }
-
-    foundDirectory = true;
     return {
-      ...directory,
-      kind: launchpad.directoryKind,
-      label: launchpad.directoryLabel,
-      path: launchpad.directoryPath ?? directory.path,
-      launchpad,
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: upsertLaunchpadDirectory([], launchpad),
+      launchpadDefaults: defaults,
     };
-  });
+  }
 
   return {
     ...snapshot,
-    directories: sortNavigationDirectories(
-      foundDirectory
-        ? directories
-        : [
-            ...directories,
-            {
-              key: launchpad.directoryKey,
-              kind: launchpad.directoryKind,
-              label: launchpad.directoryLabel,
-              path: launchpad.directoryPath,
-              threadKeys: [],
-              needsAttentionCount: 0,
-              launchpad,
-            },
-          ],
-    ),
+    directories: upsertLaunchpadDirectory(snapshot.directories, launchpad),
     launchpadDefaults: defaults,
   };
 }
@@ -1109,10 +1127,14 @@ function applyLaunchpadUpdateIfMissing(
   launchpad: NavigationLaunchpadDraft,
   defaults: NavigationSnapshot["launchpadDefaults"],
 ): NavigationSnapshot | undefined {
-  if (
-    !snapshot ||
-    snapshot.directories.some((directory) => directory.key === launchpad.directoryKey)
-  ) {
+  if (!snapshot) {
+    return applyLaunchpadUpdate(snapshot, launchpad, defaults);
+  }
+
+  if (snapshot.directories.some(
+    (directory) =>
+      directory.key === launchpad.directoryKey && Boolean(directory.launchpad)
+  )) {
     return snapshot;
   }
 
@@ -1560,6 +1582,9 @@ export function useThreadNavigation(
     backend: AppServerBackendKind;
     executionMode: ThreadExecutionMode;
   }>();
+  const [localLaunchpads, setLocalLaunchpads] = useState<
+    Record<string, NavigationLaunchpadDraft>
+  >({});
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
@@ -2310,8 +2335,15 @@ export function useThreadNavigation(
 
   const directories = useMemo(
     () => {
+      const launchpads = Object.values(localLaunchpads);
+      const currentDirectories = launchpads.reduce(
+        (nextDirectories, launchpad) =>
+          upsertLaunchpadDirectory(nextDirectories, launchpad),
+        state.response?.directories ?? [],
+      );
+
       if (!optimisticThread) {
-        return state.response?.directories ?? [];
+        return currentDirectories;
       }
 
       const optimisticThreadKey = buildThreadIdentityKey(
@@ -2323,11 +2355,16 @@ export function useThreadNavigation(
       );
 
       return projectOptimisticThreadIntoDirectories(
-        state.response?.directories ?? [],
+        currentDirectories,
         hasHydratedThread ? undefined : optimisticThread
       );
     },
-    [optimisticThread, state.response?.directories, state.response?.threads]
+    [
+      localLaunchpads,
+      optimisticThread,
+      state.response?.directories,
+      state.response?.threads,
+    ]
   );
 
   const inboxThreads = threads;
@@ -2570,18 +2607,42 @@ export function useThreadNavigation(
           launchpad = updated.launchpad;
           defaults = updated.defaults;
         }
+        setLocalLaunchpads((current) => ({
+          ...current,
+          [directoryKey]: launchpad,
+        }));
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(current.response, launchpad, defaults),
         }));
-        setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
+        const selectionKey = buildLaunchpadSelectionKey(directoryKey);
+        pendingPickedLaunchpadRef.current.set(directoryKey, launchpad);
+        setSelectedItemKey(selectionKey);
+        await refresh(selectionKey, undefined, true);
+        const pendingLaunchpad =
+          pendingPickedLaunchpadRef.current.get(directoryKey) ?? launchpad;
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdateIfMissing(
+            current.response,
+            pendingLaunchpad,
+            defaults,
+          ),
+        }));
+        setSelectedItemKey(selectionKey);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
+        const workspaceDirectory = directories.find(
+          (directory) => directory.kind === "workspace"
+        );
+        pendingPickedLaunchpadRef.current.delete(
+          workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+        );
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, directories]
+    [desktopApi, directories, refresh]
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -2609,6 +2670,10 @@ export function useThreadNavigation(
           currentBranch: directory.gitStatus?.currentBranch,
           preferredBackend,
         });
+        setLocalLaunchpads((current) => ({
+          ...current,
+          [directory.key]: response.launchpad,
+        }));
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
@@ -2663,6 +2728,10 @@ export function useThreadNavigation(
         }
         pendingPickedDirectoryKey = result.directoryKey;
         pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
+        setLocalLaunchpads((current) => ({
+          ...current,
+          [result.directoryKey]: result.launchpad,
+        }));
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
@@ -2747,6 +2816,21 @@ export function useThreadNavigation(
           ),
         };
       });
+      setLocalLaunchpads((current) => {
+        const currentLaunchpad = current[directoryKey];
+        if (!currentLaunchpad) {
+          return current;
+        }
+        return {
+          ...current,
+          [directoryKey]: {
+            ...currentLaunchpad,
+            ...patch,
+            directoryKey,
+            updatedAt: Date.now(),
+          },
+        };
+      });
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
@@ -2766,6 +2850,14 @@ export function useThreadNavigation(
         if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
           return;
         }
+        setLocalLaunchpads((current) =>
+          current[directoryKey]
+            ? {
+                ...current,
+                [directoryKey]: response.launchpad,
+              }
+            : current
+        );
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
@@ -2813,6 +2905,14 @@ export function useThreadNavigation(
 
       try {
         const response = await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        setLocalLaunchpads((current) => {
+          if (!current[directoryKey]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
         setState((current) => ({
           ...current,
           response: applyLaunchpadReset(
@@ -2888,6 +2988,14 @@ export function useThreadNavigation(
           optimisticUserMessage: buildOptimisticUserMessage(input),
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        setLocalLaunchpads((current) => {
+          if (!current[directoryKey]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
         setOptimisticThread(optimisticMaterializedThread);
         setSelectedItemKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);

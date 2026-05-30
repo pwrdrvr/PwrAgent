@@ -2233,6 +2233,155 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("opens masthead new-thread drafts while the initial navigation snapshot is loading", async () => {
+    const initialSnapshot = createDeferred<NavigationSnapshot>();
+    const emptySnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad,
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(initialSnapshot.promise)
+      .mockResolvedValue(emptySnapshot);
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    let create!: Promise<void>;
+    act(() => {
+      create = result.current.createThread();
+    });
+
+    await waitFor(() => {
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      initialSnapshot.resolve(emptySnapshot);
+      await create;
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      preferredBackend: undefined,
+    });
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+        "workspace:new-thread"
+      );
+      expect(result.current.selectedDirectory?.kind).toBe("workspace");
+    });
+  });
+
+  it("removes server-backed launchpads when a refreshed snapshot omits them", async () => {
+    const directoryKey = "directory:/Users/test/PwrAgent";
+    const snapshotWithLaunchpad: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/test/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/test/PwrAgent",
+            backend: "codex",
+            executionMode: "default",
+            prompt: "Build the feature",
+            workMode: "worktree",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const snapshotWithoutLaunchpad: NavigationSnapshot = {
+      ...snapshotWithLaunchpad,
+      fetchedAt: snapshotWithLaunchpad.fetchedAt + 1,
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/test/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(snapshotWithLaunchpad)
+      .mockResolvedValueOnce(snapshotWithoutLaunchpad);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(
+        "Build the feature"
+      );
+    });
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad).toBeUndefined();
+      expect(result.current.selectedLaunchpad).toBeUndefined();
+    });
+  });
+
   it("does not fabricate a git workspace relationship for directory-less Workspace threads", async () => {
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,

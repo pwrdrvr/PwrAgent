@@ -173,16 +173,6 @@ export function Sidebar(props: SidebarProps) {
   const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameValidationError, setRenameValidationError] = useState<string>();
-  const hasCreateThreadOptions = useMemo(
-    () =>
-      props.backends.some(
-        (backend) =>
-          backend.available &&
-          backend.capabilities.createThread &&
-          backend.executionModes.some((mode) => mode.available)
-      ),
-    [props.backends]
-  );
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
@@ -642,7 +632,7 @@ export function Sidebar(props: SidebarProps) {
           <button
             aria-label="New thread"
             className="sidebar__icon-button"
-            disabled={!hasCreateThreadOptions || Boolean(props.creatingThread)}
+            disabled={Boolean(props.creatingThread)}
             type="button"
             onClick={() => {
               void props.onCreateThread();

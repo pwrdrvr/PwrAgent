@@ -1009,6 +1009,13 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
+  const selectedThreadBackend = useMemo(
+    () =>
+      selectedThread
+        ? props.backends.find((backend) => backend.kind === selectedThread.source)
+        : undefined,
+    [props.backends, selectedThread],
+  );
   const selectedLaunchpad = props.selectedLaunchpad;
 
   useEffect(() => {
@@ -1987,7 +1994,8 @@ export function ThreadView(props: ThreadViewProps) {
               draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
               directories={props.directories}
-              disabled={!launchpadBackend?.available}
+              disabled={launchpadBackend ? !launchpadBackend.available : false}
+              unavailableReason={launchpadBackend?.unavailableReason}
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
               pastedImageMaxPatches={props.pastedImageMaxPatches}
@@ -2167,6 +2175,7 @@ export function ThreadView(props: ThreadViewProps) {
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}
             disabled={props.composerDisabled}
+            unavailableReason={selectedThreadBackend?.unavailableReason}
             contextWindow={props.contextWindow}
             fullAccessRiskWarningDismissed={
               props.fullAccessRiskWarningDismissed
