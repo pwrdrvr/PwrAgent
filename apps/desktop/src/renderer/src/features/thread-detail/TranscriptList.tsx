@@ -832,7 +832,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   }}
                 />
               ) : item.entry.type === "activity" ? (
-                <TranscriptActivity entry={item.entry} />
+                <TranscriptActivity desktopApi={props.desktopApi} entry={item.entry} />
               ) : item.entry.type === "plan" ? (
                 <TranscriptPlan
                   applications={props.applications}
