@@ -480,7 +480,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     },
     outboundAttachments: {
       maxUploadBytes: 50 * 1024 * 1024,
-      supportsFileUpload: false,
+      supportsFileUpload: true,
       supportsImageUpload: true,
       supportsRemoteImageUrl: true,
     },

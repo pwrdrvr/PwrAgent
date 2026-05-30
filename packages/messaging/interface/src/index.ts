@@ -1280,13 +1280,10 @@ export type MessagingAttachmentCapabilities = {
 /**
  * Outbound attachment capabilities — what we can deliver to the user.
  *
- * Reserved for forthcoming Plan/Review surface delivery: the agent's plan
- * artifact (and code-review artifact) is intended to ride out as a
- * Markdown file attachment with a truncated inline preview, mirroring the
- * pattern proven in openclaw-app-server (`buildCodexPlanMarkdownPreview` +
- * `formatCodexPlanAttachmentSummary` + `formatCodexPlanAttachmentFallback`).
- * Producers will read `supportsFileUpload` and `maxUploadBytes` to decide
- * between attachment-with-preview and inline-only fallback.
+ * Read by generic artifact producers such as Plan/Review surface delivery:
+ * the agent artifact can ride out as a Markdown file attachment with a
+ * truncated inline preview when the provider supports upload, or as an
+ * inline-only fallback for text-only providers and oversized artifacts.
  *
  * Tracked in: docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md
  */
@@ -1315,8 +1312,8 @@ export type MessagingCapabilityProfile = {
   /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
   /**
-   * Outbound attachment limits — reserved for Plan/Review surface delivery.
-   * See `MessagingOutboundAttachmentCapabilities` for the planned consumer.
+   * Outbound attachment limits — read by Plan/Review artifact producers and
+   * any future generic surfaces that can choose between file upload and text.
    */
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };
