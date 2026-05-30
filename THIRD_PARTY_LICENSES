@@ -94,7 +94,7 @@ MIT
 - @types/hast@3.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/mdast@4.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/ms@2.1.0 | https://github.com/DefinitelyTyped/DefinitelyTyped
-- @types/react@19.2.14 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/react@19.2.15 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/react-dom@19.2.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/unist@2.0.11 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/unist@3.0.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -221,8 +221,8 @@ MIT
 - prosemirror-transform@1.12.0 | https://github.com/prosemirror/prosemirror-transform
 - prosemirror-view@1.41.8 | https://code.haverbeke.berlin/prosemirror/prosemirror-view
 - pump@3.0.4 | https://github.com/mafintosh/pump
-- react@19.2.5 | https://github.com/facebook/react
-- react-dom@19.2.5 | https://github.com/facebook/react
+- react@19.2.6 | https://github.com/facebook/react
+- react-dom@19.2.6 | https://github.com/facebook/react
 - react-markdown@10.1.0 | remarkjs/react-markdown
 - readable-stream@3.6.2 | https://github.com/nodejs/readable-stream
 - remark-breaks@4.0.0 | remarkjs/remark-breaks
@@ -399,7 +399,7 @@ Applies to:
 - @types/hast@3.0.4 (MIT)
 - @types/mdast@4.0.4 (MIT)
 - @types/ms@2.1.0 (MIT)
-- @types/react@19.2.14 (MIT)
+- @types/react@19.2.15 (MIT)
 - @types/react-dom@19.2.3 (MIT)
 - @types/unist@2.0.11 (MIT)
 - @types/unist@3.0.3 (MIT)
@@ -2685,16 +2685,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-react@19.2.5 (MIT)
+react@19.2.6 (MIT)
 ------------------
 
 Applies to:
-- react@19.2.5 (MIT)
-- react-dom@19.2.5 (MIT)
+- react@19.2.6 (MIT)
+- react-dom@19.2.6 (MIT)
 - scheduler@0.27.0 (MIT)
 - use-sync-external-store@1.6.0 (MIT)
 
-Representative file: react@19.2.5/LICENSE
+Representative file: react@19.2.6/LICENSE
 
 MIT License
 
