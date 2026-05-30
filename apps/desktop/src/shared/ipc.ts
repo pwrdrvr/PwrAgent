@@ -12,6 +12,7 @@ export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
+export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";

@@ -519,6 +519,10 @@ function DesktopAppShell(props: {
           setMainView("thread");
           await navigation.createSubthread(thread, mode);
         }}
+        onForkThread={async (thread, mode) => {
+          setMainView("thread");
+          await navigation.forkThread(thread, mode);
+        }}
         onOpenAutomations={() => {
           setMainView("automations");
         }}

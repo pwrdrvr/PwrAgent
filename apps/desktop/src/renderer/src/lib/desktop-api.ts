@@ -25,6 +25,8 @@ import type {
   AppServerListThreadsResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
+  ForkThreadRequest,
+  ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetAutomationRunArtifactRequest,
@@ -334,6 +336,7 @@ export type DesktopApi = {
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
+  forkThread?: (request: ForkThreadRequest) => Promise<ForkThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
   compactThread?: (
     request: CompactThreadRequest

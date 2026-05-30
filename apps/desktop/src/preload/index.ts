@@ -13,6 +13,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  ForkThreadRequest,
+  ForkThreadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListAutomationCardsRequest,
@@ -196,6 +198,7 @@ import type {
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
@@ -613,6 +616,10 @@ const desktopApi = Object.freeze({
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>
     await ipcRenderer.invoke(AGENT_START_THREAD_CHANNEL, request),
+  forkThread: async (
+    request: ForkThreadRequest,
+  ): Promise<ForkThreadResponse> =>
+    await ipcRenderer.invoke(AGENT_FORK_THREAD_CHANNEL, request),
   startReview: async (
     request: StartReviewRequest
   ): Promise<StartReviewResponse> =>

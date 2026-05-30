@@ -2447,6 +2447,100 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("forks a parent thread through the desktop bridge and selects the optimistic fork", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Implement grouped threads",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      model: "gpt-5.5",
+      serviceTier: "fast",
+      fastMode: true,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/app/.worktrees/parent/app",
+          kind: "worktree" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const forkThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      sourceThreadId: "thread-parent",
+      threadId: "thread-fork",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+      linkedDirectory: {
+        id: "/repo/app",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/thread-fork/app",
+        kind: "worktree" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      forkThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.forkThread(parentThread, "new-worktree");
+    });
+
+    expect(forkThread).toHaveBeenCalledWith({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "worktree",
+      model: "gpt-5.5",
+      reasoningEffort: undefined,
+      serviceTier: "fast",
+      fastMode: true,
+    });
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-fork",
+      parentThreadId: "thread-parent",
+      linkedDirectories: [
+        {
+          kind: "worktree",
+          worktreePath: "/repo/app/.worktrees/thread-fork/app",
+        },
+      ],
+    });
+  });
+
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationCallCount = 0;

@@ -1592,6 +1592,10 @@ export function useThreadNavigation(
     parent: NavigationThreadSummary,
     mode?: "same-worktree" | "new-worktree",
   ) => Promise<void>;
+  forkThread: (
+    parent: NavigationThreadSummary,
+    mode: "same-worktree" | "new-worktree",
+  ) => Promise<void>;
   createThreadError?: string;
   creatingThread?: {
     backend: AppServerBackendKind;
@@ -1720,6 +1724,7 @@ export function useThreadNavigation(
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
+  const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
@@ -2930,6 +2935,79 @@ export function useThreadNavigation(
     [desktopApi],
   );
 
+  const forkThread = useCallback(
+    async (
+      parent: NavigationThreadSummary,
+      mode: "same-worktree" | "new-worktree",
+    ): Promise<void> => {
+      if (!forkThreadRequest) {
+        setCreateThreadError("Desktop bridge is missing forkThread().");
+        return;
+      }
+
+      const directory = selectThreadWorkspace(parent, mode);
+      const executionMode = parent.executionMode ?? "default";
+      setCreatingThread({
+        backend: parent.source,
+        executionMode,
+      });
+      setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
+      setArchiveThreadError(undefined);
+      setSetThreadModelSettingsError(undefined);
+
+      try {
+        const response = await forkThreadRequest({
+          backend: parent.source,
+          sourceThreadId: parent.id,
+          parentThreadId: parent.id,
+          executionMode,
+          directoryKind: directory.directoryKind,
+          directoryLabel: directory.directoryLabel,
+          directoryPath: directory.directoryPath,
+          workMode: directory.workMode,
+          model: parent.model,
+          reasoningEffort: parent.reasoningEffort,
+          serviceTier: parent.serviceTier,
+          fastMode: parent.fastMode,
+        });
+        const now = Date.now();
+        const linkedDirectories = response.linkedDirectory
+          ? [response.linkedDirectory]
+          : parent.linkedDirectories;
+        const optimisticFork: NavigationThreadSummary = {
+          ...parent,
+          id: response.threadId,
+          title: parent.title,
+          titleSource: parent.titleSource,
+          source: response.backend,
+          createdAt: now,
+          updatedAt: now,
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+          executionMode: response.executionMode,
+          linkedDirectories,
+          parentThreadId: parent.id,
+          pinnedRank: undefined,
+          subthreadOrder: undefined,
+          subthreadsCollapsed: undefined,
+        };
+        const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        setOptimisticThread(optimisticFork);
+        setSelectedItemKey(nextThreadKey);
+        setPendingSeenThreadKey(nextThreadKey);
+        await refresh(nextThreadKey, optimisticFork, true);
+      } catch (error) {
+        setCreateThreadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setCreatingThread(undefined);
+      }
+    },
+    [forkThreadRequest, refresh],
+  );
+
   const openDirectoryLaunchpad = useCallback(
     async (
       directory: NavigationDirectorySummary,
@@ -4097,6 +4175,7 @@ export function useThreadNavigation(
     browseMode,
     createThread,
     createSubthread,
+    forkThread,
     createThreadError,
     creatingThread,
     directories,

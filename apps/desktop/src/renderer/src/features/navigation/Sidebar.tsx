@@ -75,6 +75,10 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     mode: "same-worktree" | "new-worktree",
   ) => Promise<void>;
+  onForkThread?: (
+    thread: NavigationThreadSummary,
+    mode: "same-worktree" | "new-worktree",
+  ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -418,6 +422,14 @@ export function Sidebar(props: SidebarProps) {
     void props.onCreateSubthread?.(thread, mode);
   };
 
+  const forkThreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: "same-worktree" | "new-worktree",
+  ): void => {
+    setContextMenu(undefined);
+    void props.onForkThread?.(thread, mode);
+  };
+
   const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     void props.onSetThreadParent?.(thread, undefined);
@@ -569,6 +581,12 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanCreateSubthread = Boolean(
     contextMenu && !contextMenuIsSubthread && props.onCreateSubthread,
   );
+  const contextMenuCanFork = Boolean(
+    contextMenu &&
+      contextMenu.thread.source === "codex" &&
+      !contextMenuIsSubthread &&
+      props.onForkThread,
+  );
   const contextMenuCanUnlinkSubthread = Boolean(
     contextMenuIsSubthread && props.onSetThreadParent,
   );
@@ -603,6 +621,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuHasTopActions =
     contextMenuCanPin ||
     contextMenuCanCreateSubthread ||
+    contextMenuCanFork ||
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
@@ -860,44 +879,50 @@ export function Sidebar(props: SidebarProps) {
                   {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
                 </button>
               ) : null}
-              {contextMenuCanCreateSubthread ? (
+              {contextMenuCanCreateSubthread || contextMenuCanFork ? (
                 <>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      createSubthreadFromContextMenu(
-                        contextMenu.thread,
-                        "same-worktree",
-                      )
-                    }
-                  >
-                    New Sub-thread
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      createSubthreadFromContextMenu(
-                        contextMenu.thread,
-                        "same-worktree",
-                      )
-                    }
-                  >
-                    Fork into Same Worktree
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      createSubthreadFromContextMenu(
-                        contextMenu.thread,
-                        "new-worktree",
-                      )
-                    }
-                  >
-                    Fork into New Worktree
-                  </button>
+                  {contextMenuCanCreateSubthread ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        createSubthreadFromContextMenu(
+                          contextMenu.thread,
+                          "same-worktree",
+                        )
+                      }
+                    >
+                      New Sub-thread
+                    </button>
+                  ) : null}
+                  {contextMenuCanFork ? (
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          forkThreadFromContextMenu(
+                            contextMenu.thread,
+                            "same-worktree",
+                          )
+                        }
+                      >
+                        Fork into Same Worktree
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          forkThreadFromContextMenu(
+                            contextMenu.thread,
+                            "new-worktree",
+                          )
+                        }
+                      >
+                        Fork into New Worktree
+                      </button>
+                    </>
+                  ) : null}
                 </>
               ) : null}
               {contextMenuCanUnlinkSubthread ? (

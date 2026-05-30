@@ -132,6 +132,7 @@ export type BackendAcpSummary = {
 export type BackendCapabilities = {
   listThreads: boolean;
   createThread: boolean;
+  forkThread?: boolean;
   resumeThread: boolean;
   archiveThread?: boolean;
   restoreThread?: boolean;

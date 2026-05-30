@@ -266,6 +266,31 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
+  it("forks a Codex thread from the thread context menu", () => {
+    const onForkThread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+
+    expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
+  });
+
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
     render(
       <Sidebar

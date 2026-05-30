@@ -44,6 +44,33 @@ export type StartThreadResponse = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
+export type ForkThreadRequest = {
+  backend: AppServerBackendKind;
+  sourceThreadId: ThreadIdentifier;
+  parentThreadId?: ThreadIdentifier;
+  executionMode?: ThreadExecutionMode;
+  directoryKind?: DirectorySummaryKind;
+  directoryLabel?: string;
+  directoryPath?: string;
+  workMode?: LaunchpadWorkMode;
+  branchName?: string;
+  model?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+};
+
+export type ForkThreadResponse = {
+  backend: AppServerBackendKind;
+  sourceThreadId: ThreadIdentifier;
+  threadId: ThreadIdentifier;
+  executionMode: ThreadExecutionMode;
+  linkedDirectory?: LinkedDirectorySummary;
+  workMode: LaunchpadWorkMode;
+};
+
 export type StartTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

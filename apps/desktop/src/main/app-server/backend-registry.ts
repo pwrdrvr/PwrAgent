@@ -44,6 +44,8 @@ import {
   type BackendSummary,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type ForkThreadRequest,
+  type ForkThreadResponse,
   isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
@@ -318,6 +320,15 @@ type BackendClient = {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     dynamicTools?: CodexDynamicToolSpec[];
+  }): Promise<{ threadId: string }>;
+  forkThread?(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -969,6 +980,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       supported.has("thread/start") ||
       supported.has("thread/new") ||
       assumeCodexAppServerSurface,
+    forkThread: supported.has("thread/fork") || assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
     archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
     restoreThread: supported.has("thread/unarchive") || assumeCodexAppServerSurface,
@@ -4465,6 +4477,126 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
       codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+    };
+  }
+
+  async forkThread(request: ForkThreadRequest): Promise<ForkThreadResponse> {
+    this.assertNotBootstrap("forkThread");
+    const backend = request.backend ?? "codex";
+    if (backend !== "codex") {
+      throw new Error("Thread forking is currently supported only by the Codex backend.");
+    }
+
+    const executionMode = request.executionMode ?? "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modelSettings = await this.resolveModelSettings(backend, request);
+    const directoryKind =
+      request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
+    const directoryLabel =
+      request.directoryLabel?.trim() ||
+      (request.directoryPath ? path.basename(request.directoryPath) : undefined) ||
+      "Forked thread";
+    const preparedWorkspace = await this.gitDirectoryService.prepareLaunchpadWorkspace({
+      backend,
+      branchName: request.branchName,
+      directoryKind,
+      directoryLabel,
+      directoryPath: request.directoryPath,
+      workMode: request.workMode ?? "local",
+    });
+    const cwd = preparedWorkspace.cwd;
+    const linkedDirectories =
+      preparedWorkspace.workMode === "worktree"
+        ? buildWorktreeLinkedDirectory({
+            label: directoryLabel,
+            repositoryPath: preparedWorkspace.repositoryPath ?? request.directoryPath,
+            worktreePath: cwd,
+          })
+        : buildLocalLinkedDirectory(cwd);
+    const client = this.getClient(backend, executionMode);
+    if (!client.forkThread) {
+      throw new Error("Selected backend does not support thread/fork.");
+    }
+
+    const result = await client.forkThread({
+      threadId: request.sourceThreadId,
+      cwd,
+      ...modelSettings,
+      approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+      sandbox: request.sandbox ?? modeSettings.sandbox,
+    });
+    const forkedAt = Date.now();
+    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+    this.pendingStartedThreads.set(`${backend}:${result.threadId}`, {
+      id: result.threadId,
+      source: backend,
+      title: "Forked thread",
+      titleSource: "fallback",
+      projectKey: cwd,
+      createdAt: forkedAt,
+      updatedAt: forkedAt,
+      executionMode,
+      ...modelSettings,
+      linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
+      gitBranch,
+    });
+
+    if (preparedWorkspace.workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend,
+        threadId: result.threadId,
+        worktreePath: cwd,
+      });
+    }
+
+    await this.overlayStore.setThreadExecutionMode({
+      backend,
+      threadId: result.threadId,
+      executionMode,
+    });
+    if (
+      modelSettings.model !== undefined ||
+      modelSettings.reasoningEffort !== undefined ||
+      modelSettings.serviceTier !== undefined ||
+      modelSettings.fastMode !== undefined
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend,
+        threadId: result.threadId,
+        ...modelSettings,
+      });
+    }
+    if (request.parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend,
+        threadId: result.threadId,
+        parentThreadId: request.parentThreadId,
+      });
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: result.threadId,
+            parentThreadId: request.parentThreadId,
+          },
+        },
+      });
+    }
+    await this.updateThreadGitBranchMetadata({
+      backend,
+      threadId: result.threadId,
+      branch: gitBranch,
+    });
+    this.invalidateThreadListCache(backend);
+
+    return {
+      backend,
+      sourceThreadId: request.sourceThreadId,
+      threadId: result.threadId,
+      executionMode,
+      linkedDirectory: linkedDirectories[0],
+      workMode: preparedWorkspace.workMode,
     };
   }
 

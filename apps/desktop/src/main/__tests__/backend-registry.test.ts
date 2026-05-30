@@ -235,6 +235,29 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadParent: async ({
+      backend,
+      threadId,
+      parentThreadId,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      parentThreadId?: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        parentThreadId,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadAgent: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -560,6 +583,15 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   };
+  lastForkThreadParams?: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+  };
   lastStartTurnParams?: {
     backend?: "codex" | "grok";
     threadId: string;
@@ -818,6 +850,19 @@ class MockBackendClient {
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return { threadId: "thread-1" };
+  }
+
+  async forkThread(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+  }): Promise<{ threadId: string }> {
+    this.lastForkThreadParams = params;
+    return { threadId: "thread-fork" };
   }
 
   async startTurn(params: {
@@ -7435,6 +7480,134 @@ script = "printf setup-output"
       label: "app",
       path: "/repo/app",
       worktreePath: "/repo/app/.worktrees/thread-1/app",
+    });
+
+    await registry.close();
+  });
+
+  it("forks a Codex thread into the same worktree and records the visual parent", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app/.worktrees/parent/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    const response = await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app/.worktrees/parent/app",
+      workMode: "local",
+      model: "gpt-5.5",
+      serviceTier: "fast",
+      fastMode: true,
+    });
+
+    expect(codexClient.lastForkThreadParams).toMatchObject({
+      threadId: "thread-parent",
+      cwd: "/repo/app/.worktrees/parent/app",
+      model: "gpt-5.5",
+      serviceTier: "fast",
+      fastMode: true,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    expect(response).toMatchObject({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      threadId: "thread-fork",
+      workMode: "local",
+      linkedDirectory: {
+        kind: "local",
+        path: "/repo/app/.worktrees/parent/app",
+      },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-fork",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      model: "gpt-5.5",
+      serviceTier: "fast",
+      fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("forks a Codex thread into a new managed worktree", async () => {
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/repo/app/.worktrees/thread-fork/app",
+      repositoryPath: "/repo/app",
+      workMode: "worktree" as const,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    const response = await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "worktree",
+    });
+
+    expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      branchName: undefined,
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "worktree",
+    });
+    expect(codexClient.lastForkThreadParams?.cwd).toBe(
+      "/repo/app/.worktrees/thread-fork/app",
+    );
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+      worktreePath: "/repo/app/.worktrees/thread-fork/app",
+      threadId: "thread-fork",
+    });
+    expect(response.linkedDirectory).toEqual({
+      id: "/repo/app",
+      kind: "worktree",
+      label: "app",
+      path: "/repo/app",
+      worktreePath: "/repo/app/.worktrees/thread-fork/app",
     });
 
     await registry.close();
