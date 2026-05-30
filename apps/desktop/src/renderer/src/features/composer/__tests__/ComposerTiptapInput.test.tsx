@@ -49,6 +49,27 @@ function setComposerSelection(textbox: HTMLElement, index: number): void {
 }
 
 describe("ComposerTiptapInput", () => {
+  it("keeps Alt+Enter inside the editor instead of routing it to the composer", async () => {
+    const onKeyDown = vi.fn();
+    render(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        onKeyDown={onKeyDown}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="- Some item\n- Second item"
+      />
+    );
+
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    fireEvent.keyDown(textbox, { key: "Enter", altKey: true });
+
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
   it("does not render initial URLs or path-like markdown filenames as links", async () => {
     const { container } = renderTiptapInput({
       value:

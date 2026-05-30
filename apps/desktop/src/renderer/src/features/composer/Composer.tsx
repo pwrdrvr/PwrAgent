@@ -4083,7 +4083,7 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         void submitTurn(event.metaKey ? "steer" : "default");
       }
