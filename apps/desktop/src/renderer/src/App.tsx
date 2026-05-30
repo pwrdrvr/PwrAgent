@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useState,
@@ -12,11 +14,7 @@ import type {
   DesktopPwrAgentProfileSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
-import { OnboardingWizard } from "./features/onboarding/OnboardingWizard";
-import {
-  SettingsScreen,
-  type SettingsSection,
-} from "./features/settings/SettingsScreen";
+import type { SettingsSection } from "./features/settings/SettingsScreen";
 import {
   useDesktopSettings,
   type DesktopSettingsState,
@@ -50,6 +48,14 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "about",
 ]);
 
+const LazySettingsScreen = lazy(async () => ({
+  default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
+}));
+
+const LazyOnboardingWizard = lazy(async () => ({
+  default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
+}));
+
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
@@ -76,11 +82,13 @@ export function App() {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen
-            appearanceController={appearanceController}
-            desktopApi={desktopApi}
-            settings={settings}
-          />
+          <Suspense fallback={null}>
+            <LazySettingsScreen
+              appearanceController={appearanceController}
+              desktopApi={desktopApi}
+              settings={settings}
+            />
+          </Suspense>
         </main>
       </div>
     );
@@ -90,11 +98,13 @@ export function App() {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen
-            appearanceController={appearanceController}
-            desktopApi={desktopApi}
-            settings={settings}
-          />
+          <Suspense fallback={null}>
+            <LazySettingsScreen
+              appearanceController={appearanceController}
+              desktopApi={desktopApi}
+              settings={settings}
+            />
+          </Suspense>
         </main>
       </div>
     );
@@ -556,15 +566,17 @@ function DesktopAppShell(props: {
 
       {mainView === "settings" ? (
         <div className="app-shell__settings-layer">
-          <SettingsScreen
-            appearanceController={props.appearanceController}
-            desktopApi={desktopApi}
-            initialSection={settingsInitialSection}
-            profiles={profiles}
-            settings={settings}
-            onClose={() => setMainView("thread")}
-            onOpenMessagingActivity={openMessagingActivityWindow}
-          />
+          <Suspense fallback={null}>
+            <LazySettingsScreen
+              appearanceController={props.appearanceController}
+              desktopApi={desktopApi}
+              initialSection={settingsInitialSection}
+              profiles={profiles}
+              settings={settings}
+              onClose={() => setMainView("thread")}
+              onOpenMessagingActivity={openMessagingActivityWindow}
+            />
+          </Suspense>
         </div>
       ) : null}
 
@@ -585,85 +597,87 @@ function DesktopAppShell(props: {
       ) : null}
 
       {onboardingOpen !== null && settings.snapshot ? (
-        <OnboardingWizard
-          isReplay={onboardingOpen === "replay"}
-          bootInfo={bootInfo}
-          initialDensity={settings.snapshot.general.appearance.density.value}
-          initialTheme={settings.snapshot.general.appearance.theme.value}
-          initialCodexProfileModel={
-            onboardingOpen === "replay" && replayCodexProfileSetup
-              ? replayCodexProfileSetup.model
-              : settings.snapshot.general.codexProfileModel.value
-          }
-          initialCodexProfileNames={
-            onboardingOpen === "replay"
-              ? replayCodexProfileSetup?.profileNames
-              : undefined
-          }
-          appearanceController={props.appearanceController}
-          settings={settings}
-          desktopApi={desktopApi}
-          onComplete={async (patch) => {
-            await settings.writeConfig(patch);
-            // The wizard already flips theme + density live via
-            // appearanceController as the operator clicks — the
-            // explicit setters below are a belt-and-suspenders to keep
-            // the controller's React state aligned with whatever the
-            // final patch holds, even if persistAndComplete adjusts.
-            if (patch.general?.appearance?.density) {
-              props.appearanceController.setDensity(
-                patch.general.appearance.density,
-              );
+        <Suspense fallback={null}>
+          <LazyOnboardingWizard
+            isReplay={onboardingOpen === "replay"}
+            bootInfo={bootInfo}
+            initialDensity={settings.snapshot.general.appearance.density.value}
+            initialTheme={settings.snapshot.general.appearance.theme.value}
+            initialCodexProfileModel={
+              onboardingOpen === "replay" && replayCodexProfileSetup
+                ? replayCodexProfileSetup.model
+                : settings.snapshot.general.codexProfileModel.value
             }
-            if (patch.general?.appearance?.theme) {
-              props.appearanceController.setTheme(
-                patch.general.appearance.theme,
-              );
+            initialCodexProfileNames={
+              onboardingOpen === "replay"
+                ? replayCodexProfileSetup?.profileNames
+                : undefined
             }
-            // Mark onboarding complete AND kick off the deferred Codex
-            // `listThreads` prefetch in one IPC call (#500). On replay,
-            // skip the call entirely — replays don't touch onboarding.
-            //
-            // In bootstrap mode (#524), skip this too. The bootstrap
-            // window is about to quit; firing
-            // `completeOnboardingCodexBootstrap` here would (a) write
-            // `[onboarding] completed = true` to `.bootstrap/config.toml`
-            // (which we're about to delete) and (b) trigger a Codex
-            // `listThreads` against the system default Codex install,
-            // contaminating the soon-to-quit window with the operator's
-            // real Codex Desktop threads. The new profile's window
-            // handles its own completion + prefetch on launch.
-            if (!onboardingOpen) return;
-            if (
-              onboardingOpen !== "replay" &&
-              bootInfo?.mode !== "bootstrap" &&
-              desktopApi?.completeOnboardingCodexBootstrap
-            ) {
-              await desktopApi.completeOnboardingCodexBootstrap({
-                connect: true,
-              });
-              await settings.refresh();
-            }
-            setOnboardingOpen(null);
-          }}
-          onDismiss={(persistCompleted) => {
-            if (persistCompleted) {
-              // Skip path: persist `completed = true` so the wizard
-              // doesn't auto-fire again, but pass `connect: false` so
-              // we don't auto-load Codex threads under an unverified
-              // identity. The renderer's next explicit refresh (or app
-              // restart) will surface them.
-              void desktopApi?.completeOnboardingCodexBootstrap?.({
-                connect: false,
-              }).then(() => settings.refresh());
-            }
-            setOnboardingOpen(null);
-          }}
-          onOpenMessagingSettings={() => {
-            setSettingsInitialSection("messaging");
-            setMainView("settings");
-          }}
-        />
+            appearanceController={props.appearanceController}
+            settings={settings}
+            desktopApi={desktopApi}
+            onComplete={async (patch) => {
+              await settings.writeConfig(patch);
+              // The wizard already flips theme + density live via
+              // appearanceController as the operator clicks — the
+              // explicit setters below are a belt-and-suspenders to keep
+              // the controller's React state aligned with whatever the
+              // final patch holds, even if persistAndComplete adjusts.
+              if (patch.general?.appearance?.density) {
+                props.appearanceController.setDensity(
+                  patch.general.appearance.density,
+                );
+              }
+              if (patch.general?.appearance?.theme) {
+                props.appearanceController.setTheme(
+                  patch.general.appearance.theme,
+                );
+              }
+              // Mark onboarding complete AND kick off the deferred Codex
+              // `listThreads` prefetch in one IPC call (#500). On replay,
+              // skip the call entirely — replays don't touch onboarding.
+              //
+              // In bootstrap mode (#524), skip this too. The bootstrap
+              // window is about to quit; firing
+              // `completeOnboardingCodexBootstrap` here would (a) write
+              // `[onboarding] completed = true` to `.bootstrap/config.toml`
+              // (which we're about to delete) and (b) trigger a Codex
+              // `listThreads` against the system default Codex install,
+              // contaminating the soon-to-quit window with the operator's
+              // real Codex Desktop threads. The new profile's window
+              // handles its own completion + prefetch on launch.
+              if (!onboardingOpen) return;
+              if (
+                onboardingOpen !== "replay" &&
+                bootInfo?.mode !== "bootstrap" &&
+                desktopApi?.completeOnboardingCodexBootstrap
+              ) {
+                await desktopApi.completeOnboardingCodexBootstrap({
+                  connect: true,
+                });
+                await settings.refresh();
+              }
+              setOnboardingOpen(null);
+            }}
+            onDismiss={(persistCompleted) => {
+              if (persistCompleted) {
+                // Skip path: persist `completed = true` so the wizard
+                // doesn't auto-fire again, but pass `connect: false` so
+                // we don't auto-load Codex threads under an unverified
+                // identity. The renderer's next explicit refresh (or app
+                // restart) will surface them.
+                void desktopApi?.completeOnboardingCodexBootstrap?.({
+                  connect: false,
+                }).then(() => settings.refresh());
+              }
+              setOnboardingOpen(null);
+            }}
+            onOpenMessagingSettings={() => {
+              setSettingsInitialSection("messaging");
+              setMainView("settings");
+            }}
+          />
+        </Suspense>
       ) : null}
 
       <CodexConfigWarningBanner desktopApi={desktopApi} />
