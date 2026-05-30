@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
+  CompactThreadRequest,
   ComposerDraftRecoveryCandidate,
   NavigationThreadSummary,
   NavigationLaunchpadDraft,
@@ -67,6 +68,20 @@ async function flushReactUpdates(): Promise<void> {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 afterEach(async () => {
@@ -980,7 +995,6 @@ describe("Composer", () => {
 
     render(
       <Composer
-        backends={[backendSummary("codex")]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn,
@@ -1031,7 +1045,6 @@ describe("Composer", () => {
 
     render(
       <Composer
-        backends={[backendSummary("codex")]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn,
@@ -3493,6 +3506,272 @@ describe("Composer", () => {
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(commands).toBeInTheDocument();
     expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+  });
+
+  it("keeps slash review autocomplete visible while editing the prefix", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    for (const value of ["/", "/r", "/re", "/r"]) {
+      fireEvent.change(textarea, { target: { value } });
+
+      const commands = screen.getByRole("listbox", { name: "Commands" });
+      expect(commands).toBeInTheDocument();
+      expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    }
+  });
+
+  it("keeps duplicate local and provider slash commands labeled by source", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "review",
+            description: "Run a Codex code review.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(within(commands).getAllByRole("button", { name: /\/review/i })).toHaveLength(2);
+    expect(within(commands).getByText("PwrAgent")).toBeInTheDocument();
+    expect(within(commands).getByText("OpenAI")).toBeInTheDocument();
+  });
+
+  it("routes Codex compact slash commands to thread compaction", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-1",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact this thread's context.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("runs exact compact slash command on Enter even after review was selected", async () => {
+    const compactThreadResponse = createDeferred<{
+      backend: CompactThreadRequest["backend"];
+      threadId: CompactThreadRequest["threadId"];
+      turnId: string;
+    }>();
+    const compactThread = vi.fn((request: CompactThreadRequest) => {
+      void request;
+      return compactThreadResponse.promise;
+    });
+    const startReview = vi.fn();
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact this thread's context.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+    expect(
+      within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+        "button",
+        { name: /\/review/i },
+      ),
+    ).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.change(textarea, { target: { value: "/co" } });
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(within(commands).queryByRole("button", { name: /\/review/i })).not.toBeInTheDocument();
+    expect(within(commands).getByRole("button", { name: /\/compact/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+    });
+    expect(startReview).not.toHaveBeenCalled();
+
+    compactThreadResponse.resolve({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "compact-turn-1",
+    });
+  });
+
+  it("inserts provider-native skill commands from slash autocomplete", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "acp:kimi",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "skill:frontend-design",
+            description: "Load frontend-design",
+            aliases: ["fd"],
+            backend: "acp:kimi",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/ski" } });
+
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    fireEvent.click(
+      within(commands).getByRole("button", { name: /\/skill:frontend-design/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reply")).toHaveValue("/skill:frontend-design ");
+    });
   });
 
   it("opens review composer from the focused slash command option", async () => {

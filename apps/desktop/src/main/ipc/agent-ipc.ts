@@ -6,6 +6,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CompactThreadRequest,
+  CompactThreadResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
@@ -48,6 +50,7 @@ import {
   AGENT_EVENT_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
@@ -380,6 +383,38 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
+  ipcMain.handle(
+    AGENT_COMPACT_THREAD_CHANNEL,
+    async (
+      _event,
+      request: CompactThreadRequest
+    ): Promise<CompactThreadResponse> => {
+      logDebug("compactThread", {
+        backend: request.backend,
+        threadId: request.threadId,
+      });
+
+      try {
+        const response = await registry.compactThread(request);
+        logDebug("compactThreadResult", {
+          backend: response.backend,
+          threadId: response.threadId,
+          turnId: response.turnId,
+          itemId: response.itemId,
+        });
+        return response;
+      } catch (error) {
+        appServerLog.error("compactThread failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_INTERRUPT_TURN_CHANNEL,
@@ -597,6 +632,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
+  ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);

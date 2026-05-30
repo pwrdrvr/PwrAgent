@@ -51,6 +51,8 @@ import type {
   AppServerReadThreadResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CompactThreadRequest,
+  CompactThreadResponse,
   CodexEnvironmentSetupProgressEvent,
   CreateAutomationRequest,
   GetNavigationSnapshotRequest,
@@ -191,6 +193,7 @@ import {
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
@@ -605,6 +608,10 @@ const desktopApi = Object.freeze({
     request: StartReviewRequest
   ): Promise<StartReviewResponse> =>
     await ipcRenderer.invoke(AGENT_START_REVIEW_CHANNEL, request),
+  compactThread: async (
+    request: CompactThreadRequest
+  ): Promise<CompactThreadResponse> =>
+    await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
   startTurn: async (
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>

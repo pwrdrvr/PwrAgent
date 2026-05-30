@@ -18,6 +18,8 @@ import type {
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CompactThreadRequest,
+  CompactThreadResponse,
   CreateAutomationRequest,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
@@ -327,6 +329,9 @@ export type DesktopApi = {
   ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
+  compactThread?: (
+    request: CompactThreadRequest
+  ) => Promise<CompactThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (
     request: InterruptTurnRequest

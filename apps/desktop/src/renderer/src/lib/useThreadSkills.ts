@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerAvailableCommandSummary,
   AppServerListSkillsResponse,
   AppServerSkillSummary,
   NavigationLaunchpadDraft,
@@ -26,6 +27,7 @@ export function useThreadSkills(params: {
   ensureLoaded: () => Promise<void>;
   error?: string;
   loading: boolean;
+  providerCommands: AppServerAvailableCommandSummary[];
   response?: AppServerListSkillsResponse;
   skills: AppServerSkillSummary[];
 } {
@@ -33,7 +35,7 @@ export function useThreadSkills(params: {
   const requestVersionsRef = useRef<Record<string, number>>({});
   const [stateByThreadKey, setStateByThreadKey] = useState<Record<string, SkillState>>({});
   const skillTarget = useMemo(() => {
-    if (thread && thread.source === "codex") {
+    if (thread) {
       const cwds = [
         ...new Set(
           thread.linkedDirectories
@@ -46,6 +48,7 @@ export function useThreadSkills(params: {
         backend: thread.source,
         cwds,
         key: buildThreadIdentityKey(thread.source, thread.id),
+        threadId: thread.id,
       };
     }
 
@@ -55,12 +58,57 @@ export function useThreadSkills(params: {
         backend: launchpad.backend,
         cwds,
         key: `launchpad:${launchpad.backend}:${launchpad.directoryKey}`,
+        threadId: undefined,
       };
     }
 
     return undefined;
   }, [launchpad, thread]);
   const state = skillTarget ? stateByThreadKey[skillTarget.key] : undefined;
+
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !skillTarget?.threadId) {
+      return;
+    }
+
+    const { backend, key, threadId } = skillTarget;
+    return desktopApi.onAgentEvent((event) => {
+      if (
+        event.backend !== backend ||
+        event.notification.method !== "thread/availableCommands/updated" ||
+        event.notification.params.threadId !== threadId
+      ) {
+        return;
+      }
+
+      const commands = Array.isArray(
+        (event.notification.params as { commands?: unknown }).commands,
+      )
+        ? ((event.notification.params as {
+            commands: AppServerAvailableCommandSummary[];
+          }).commands)
+        : [];
+      requestVersionsRef.current[key] =
+        (requestVersionsRef.current[key] ?? 0) + 1;
+      setStateByThreadKey((current) => ({
+        ...current,
+        [key]: {
+          error: undefined,
+          loading: false,
+          response: {
+            backend,
+            fetchedAt: Date.now(),
+            data: [
+              {
+                commands,
+                skills: [],
+              },
+            ],
+          },
+        },
+      }));
+    });
+  }, [desktopApi, skillTarget]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
     if (!skillTarget) {
@@ -99,8 +147,9 @@ export function useThreadSkills(params: {
     try {
       const response = await desktopApi.listSkills({
         backend: skillTarget.backend,
-        cwd: cwds.length === 1 ? cwds[0] : undefined,
-        cwds: cwds.length > 0 ? cwds : undefined,
+        ...(cwds.length === 1 ? { cwd: cwds[0] } : {}),
+        ...(cwds.length > 0 ? { cwds } : {}),
+        ...(skillTarget.threadId ? { threadId: skillTarget.threadId } : {}),
       });
 
       if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
@@ -146,10 +195,28 @@ export function useThreadSkills(params: {
     );
   }, [state?.response?.data]);
 
+  const providerCommands = useMemo(() => {
+    const deduped = new Map<string, AppServerAvailableCommandSummary>();
+
+    for (const entry of state?.response?.data ?? []) {
+      for (const command of entry.commands ?? []) {
+        deduped.set(
+          `${command.backend ?? skillTarget?.backend ?? "unknown"}:${command.name}`,
+          command,
+        );
+      }
+    }
+
+    return [...deduped.values()].sort((left, right) =>
+      left.name.localeCompare(right.name)
+    );
+  }, [skillTarget?.backend, state?.response?.data]);
+
   return {
     ensureLoaded,
     error: state?.error,
     loading: state?.loading ?? false,
+    providerCommands,
     response: state?.response,
     skills,
   };

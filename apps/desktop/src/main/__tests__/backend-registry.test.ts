@@ -9,6 +9,7 @@ import type {
   AcpBackendId,
   AgentEvent,
   AppServerNotification,
+  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
@@ -655,7 +656,11 @@ class MockBackendClient {
       initializeError?: Error;
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
-      skills?: Array<{ cwd?: string; skills: AppServerSkillSummary[] }>;
+      skills?: Array<{
+        commands?: AppServerAvailableCommandSummary[];
+        cwd?: string;
+        skills: AppServerSkillSummary[];
+      }>;
       models?: Array<{
         id: string;
         label?: string;
@@ -736,7 +741,11 @@ class MockBackendClient {
     return { threadId: params.threadId };
   }
 
-  async listSkills(): Promise<Array<{ cwd?: string; skills: AppServerSkillSummary[] }>> {
+  async listSkills(): Promise<Array<{
+    commands?: AppServerAvailableCommandSummary[];
+    cwd?: string;
+    skills: AppServerSkillSummary[];
+  }>> {
     return this.options.skills ?? [];
   }
 
@@ -1195,6 +1204,90 @@ function createKimiAcpRegistry(options?: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("returns ACP provider commands from session metadata", async () => {
+    const session: AcpSessionMetadata = {
+      backendId: "acp:kimi",
+      sessionId: "kimi-session-1",
+      title: "Kimi session",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      availableCommands: [
+        {
+          name: "skill:frontend-design",
+          description: "Load frontend-design",
+          aliases: ["fd"],
+          backend: "acp:kimi",
+          scope: "session",
+          source: "provider",
+        },
+      ],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord("acp:kimi")]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:kimi",
+        threadId: "kimi-session-1",
+      }),
+    ).resolves.toEqual({
+      data: [
+        {
+          skills: [],
+          commands: session.availableCommands,
+        },
+      ],
+    });
+  });
+
+  it("adds Codex compact app-server command to listSkills", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: {
+          methods: ["skills/list", "review/start", "thread/compact/start"],
+        },
+        skills: [
+          {
+            cwd: "/repo",
+            skills: [],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "codex",
+        cwd: "/repo",
+      }),
+    ).resolves.toEqual({
+      data: [
+        {
+          cwd: "/repo",
+          skills: [],
+          commands: [
+            {
+              name: "compact",
+              description: "Compact this thread's context.",
+              backend: "codex",
+              scope: "backend",
+              source: "provider",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("reports backend availability and capabilities", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

@@ -32,6 +32,15 @@ export type AppServerSkillSummary = {
   scope?: string;
 };
 
+export type AppServerAvailableCommandSummary = {
+  name: string;
+  description?: string;
+  aliases?: string[];
+  backend?: AppServerBackendKind;
+  scope?: "backend" | "session";
+  source?: "provider";
+};
+
 export type AppServerTurnInputItem =
   | AppServerTextInputItem
   | AppServerImageInputItem
@@ -577,12 +586,14 @@ export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
   cwd?: string;
   cwds?: string[];
+  threadId?: ThreadIdentifier;
 };
 
 export type AppServerListSkillsResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
   data: Array<{
+    commands?: AppServerAvailableCommandSummary[];
     cwd?: string;
     skills: AppServerSkillSummary[];
   }>;
@@ -984,6 +995,13 @@ export type AppServerNotification =
       params: {
         threadId: string;
         acpRuntime?: AppServerAcpSessionRuntimeState;
+      };
+    }
+  | {
+      method: "thread/availableCommands/updated";
+      params: {
+        threadId: string;
+        commands: AppServerAvailableCommandSummary[];
       };
     }
   | {

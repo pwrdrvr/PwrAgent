@@ -716,6 +716,57 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("stores available command updates as session metadata", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      title: "Kimi ACP",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "available_commands_update",
+      availableCommands: [
+        {
+          name: "skill:frontend-design",
+          description: "Load frontend-design",
+          aliases: ["fd", "frontend"],
+        },
+        {
+          name: "help",
+        },
+      ],
+    });
+
+    expect(store.getSession("acp:kimi", "session-1")?.availableCommands).toEqual([
+      {
+        name: "skill:frontend-design",
+        description: "Load frontend-design",
+        aliases: ["fd", "frontend"],
+        backend: "acp:kimi",
+        scope: "session",
+        source: "provider",
+      },
+      {
+        name: "help",
+        backend: "acp:kimi",
+        scope: "session",
+        source: "provider",
+      },
+    ]);
+    expect(readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands).toEqual(
+      store.getSession("acp:kimi", "session-1")?.availableCommands,
+    );
+  });
+
   it("loads ACP transcript replay from provider session/load without storing it in the DB", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

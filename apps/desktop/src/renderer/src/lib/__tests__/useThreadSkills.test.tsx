@@ -76,4 +76,131 @@ describe("useThreadSkills", () => {
       ]);
     });
   });
+
+  it("loads provider commands for an ACP thread session", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "acp:kimi" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          skills: [],
+          commands: [
+            {
+              name: "skill:frontend-design",
+              description: "Load frontend-design",
+              aliases: ["fd"],
+              backend: "acp:kimi" as const,
+              scope: "session" as const,
+              source: "provider" as const,
+            },
+          ],
+        },
+      ],
+    }));
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi: { listSkills },
+        thread: {
+          id: "session-1",
+          title: "Kimi session",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      })
+    );
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+
+    expect(listSkills).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "session-1",
+    });
+
+    await waitFor(() => {
+      expect(result.current.skills).toEqual([]);
+      expect(result.current.providerCommands.map((command) => command.name)).toEqual([
+        "skill:frontend-design",
+      ]);
+    });
+  });
+
+  it("updates cached ACP provider commands when session metadata changes", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "acp:kimi" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          skills: [],
+          commands: [],
+        },
+      ],
+    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      listSkills,
+      onAgentEvent: (handler) => {
+        agentEventHandler = handler;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi,
+        thread: {
+          id: "session-1",
+          title: "Kimi session",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      })
+    );
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+
+    expect(result.current.providerCommands).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:kimi",
+        notification: {
+          method: "thread/availableCommands/updated",
+          params: {
+            threadId: "session-1",
+            commands: [
+              {
+                name: "skill:frontend-design",
+                description: "Load frontend-design",
+                backend: "acp:kimi",
+                scope: "session",
+                source: "provider",
+              },
+            ],
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.providerCommands.map((command) => command.name)).toEqual([
+        "skill:frontend-design",
+      ]);
+    });
+    expect(listSkills).toHaveBeenCalledTimes(1);
+  });
 });

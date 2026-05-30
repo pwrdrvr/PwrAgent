@@ -1768,6 +1768,13 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
+        if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
+          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          if (event.defaultPrevented) {
+            event.stopPropagation();
+          }
+          return;
+        }
         if (
           event.key.toLowerCase() === "z" &&
           (event.metaKey || event.ctrlKey) &&

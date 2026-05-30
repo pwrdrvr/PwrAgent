@@ -26,6 +26,7 @@ import {
   type AppServerThreadReplay,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
+  type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
@@ -927,6 +928,54 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     approvalRequests: true,
     multiDirectoryThreads: backend === "codex",
   };
+}
+
+function backendMethodCommands(
+  backend: AppServerBackendKind,
+  methods: string[],
+): AppServerAvailableCommandSummary[] {
+  if (backend !== "codex") {
+    return [];
+  }
+
+  const supported = new Set(methods);
+  const assumeCodexAppServerSurface = methods.length === 0;
+  const commands: AppServerAvailableCommandSummary[] = [];
+
+  if (supported.has("thread/compact/start") || assumeCodexAppServerSurface) {
+    commands.push({
+      name: "compact",
+      description: "Compact this thread's context.",
+      backend,
+      scope: "backend",
+      source: "provider",
+    });
+  }
+
+  return commands;
+}
+
+function mergeCommandSummaries(
+  current: AppServerAvailableCommandSummary[] | undefined,
+  incoming: AppServerAvailableCommandSummary[],
+): AppServerAvailableCommandSummary[] {
+  const merged: AppServerAvailableCommandSummary[] = [];
+  const seen = new Set<string>();
+
+  for (const command of [...(current ?? []), ...incoming]) {
+    const commandName = command.name.startsWith("/")
+      ? command.name.slice(1)
+      : command.name;
+    const key = `${command.backend ?? ""}:${commandName}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    merged.push(command);
+  }
+
+  return merged;
 }
 
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
@@ -2747,18 +2796,59 @@ export class DesktopBackendRegistry {
     backend?: AppServerBackendKind;
     cwd?: string;
     cwds?: string[];
+    threadId?: string;
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
-      return { data: [] };
+      if (!params.threadId) {
+        return { data: [] };
+      }
+      const session = this.acpBackend.getSession(backend, params.threadId);
+      return {
+        data: [
+          {
+            commands: session?.availableCommands ?? [],
+            skills: [],
+          },
+        ],
+      };
     }
 
-    const data = await this.getClient(backend).listSkills({
+    const client = this.getClient(backend);
+    const data = await client.listSkills({
       cwd: params.cwd,
       cwds: params.cwds,
     });
+    const commands = backendMethodCommands(
+      backend,
+      (await client.getInitializeResult()).methods ?? [],
+    );
 
-    return { data };
+    if (commands.length === 0) {
+      return { data };
+    }
+
+    if (data.length === 0) {
+      return {
+        data: [
+          {
+            commands,
+            skills: [],
+          },
+        ],
+      };
+    }
+
+    return {
+      data: data.map((entry, index) =>
+        index === 0
+          ? {
+              ...entry,
+              commands: mergeCommandSummaries(entry.commands, commands),
+            }
+          : entry,
+      ),
+    };
   }
 
   private async listAllInstalledAcpThreads(
