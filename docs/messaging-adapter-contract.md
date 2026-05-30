@@ -233,9 +233,9 @@ dimensions:
 - **inboundAttachments** — what we accept from the user (size caps, count
   caps, download support).
 - **outboundAttachments** — what we can deliver to the user (file upload size,
-  image upload, remote URL support). Reserved for the forthcoming Plan/Review
-  surface delivery (see the plan-review attachment delivery plan in
-  `docs/plans/`).
+  image upload, remote URL support). Plan/Review artifact producers read this
+  to choose between inline-only text and inline preview plus Markdown
+  attachment.
 
 Existing examples in the tree:
 

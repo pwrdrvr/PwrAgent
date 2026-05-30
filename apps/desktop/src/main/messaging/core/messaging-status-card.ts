@@ -137,7 +137,7 @@ export function buildBindingStatusIntent(params: {
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
-      "Plan mode: unavailable",
+      planDeliveryLine(params.capabilityProfile),
       acpRuntimeLabel
         ? `Runtime mode: ${acpRuntimeLabel}`
         : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
@@ -169,6 +169,14 @@ export function buildBindingStatusIntent(params: {
       toolUpdateMode,
     }),
   };
+}
+
+function planDeliveryLine(
+  capabilityProfile: MessagingCapabilityProfile | undefined,
+): string {
+  return capabilityProfile?.outboundAttachments?.supportsFileUpload
+    ? "Plan delivery: Markdown attachment + inline preview"
+    : "Plan delivery: inline preview";
 }
 
 function mentionRequiredLine(
