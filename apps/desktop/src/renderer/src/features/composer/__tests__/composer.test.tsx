@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
+  CompactThreadRequest,
   ComposerDraftRecoveryCandidate,
   NavigationThreadSummary,
   NavigationLaunchpadDraft,
@@ -980,7 +981,6 @@ describe("Composer", () => {
 
     render(
       <Composer
-        backends={[backendSummary("codex")]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn,
@@ -1031,7 +1031,6 @@ describe("Composer", () => {
 
     render(
       <Composer
-        backends={[backendSummary("codex")]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn,
@@ -3493,6 +3492,139 @@ describe("Composer", () => {
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(commands).toBeInTheDocument();
     expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+  });
+
+  it("keeps slash review autocomplete visible while editing the prefix", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    for (const value of ["/", "/r", "/re", "/r"]) {
+      fireEvent.change(textarea, { target: { value } });
+
+      const commands = screen.getByRole("listbox", { name: "Commands" });
+      expect(commands).toBeInTheDocument();
+      expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    }
+  });
+
+  it("keeps duplicate local and provider slash commands labeled by source", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "review",
+            description: "Run a Codex code review.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(within(commands).getAllByRole("button", { name: /\/review/i })).toHaveLength(2);
+    expect(within(commands).getByText("PwrAgent")).toBeInTheDocument();
+    expect(within(commands).getByText("OpenAI")).toBeInTheDocument();
+  });
+
+  it("routes Codex compact slash commands to thread compaction", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-1",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact this thread's context.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("inserts provider-native skill commands from slash autocomplete", async () => {

@@ -9,6 +9,7 @@ import type {
   AcpBackendId,
   AgentEvent,
   AppServerNotification,
+  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
@@ -655,7 +656,11 @@ class MockBackendClient {
       initializeError?: Error;
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
-      skills?: Array<{ cwd?: string; skills: AppServerSkillSummary[] }>;
+      skills?: Array<{
+        commands?: AppServerAvailableCommandSummary[];
+        cwd?: string;
+        skills: AppServerSkillSummary[];
+      }>;
       models?: Array<{
         id: string;
         label?: string;
@@ -736,7 +741,11 @@ class MockBackendClient {
     return { threadId: params.threadId };
   }
 
-  async listSkills(): Promise<Array<{ cwd?: string; skills: AppServerSkillSummary[] }>> {
+  async listSkills(): Promise<Array<{
+    commands?: AppServerAvailableCommandSummary[];
+    cwd?: string;
+    skills: AppServerSkillSummary[];
+  }>> {
     return this.options.skills ?? [];
   }
 
@@ -1233,6 +1242,54 @@ describe("DesktopBackendRegistry", () => {
         {
           skills: [],
           commands: session.availableCommands,
+        },
+      ],
+    });
+  });
+
+  it("adds Codex app-server method commands to listSkills", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: {
+          methods: ["skills/list", "review/start", "thread/compact/start"],
+        },
+        skills: [
+          {
+            cwd: "/repo",
+            skills: [],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "codex",
+        cwd: "/repo",
+      }),
+    ).resolves.toEqual({
+      data: [
+        {
+          cwd: "/repo",
+          skills: [],
+          commands: [
+            {
+              name: "review",
+              description: "Run a Codex code review.",
+              backend: "codex",
+              scope: "backend",
+              source: "provider",
+            },
+            {
+              name: "compact",
+              description: "Compact this thread's context.",
+              backend: "codex",
+              scope: "backend",
+              source: "provider",
+            },
+          ],
         },
       ],
     });

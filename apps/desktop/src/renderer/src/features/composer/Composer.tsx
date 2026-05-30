@@ -232,11 +232,13 @@ type ModelOption = NonNullable<
 >[number];
 
 type SlashCommandSuggestion = {
+  aliases?: string[];
   description: string;
   id: string;
   insertText: string;
   label: string;
-  aliases?: string[];
+  source: "provider" | "pwragent";
+  sourceLabel: string;
 };
 
 type AutocompleteKind = "skills" | "slash";
@@ -276,21 +278,29 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     label: "/review",
     insertText: "/review",
     description: "Review current staged, unstaged, and untracked changes",
+    source: "pwragent",
+    sourceLabel: "PwrAgent",
   },
 ];
 
 function providerCommandToSlashSuggestion(
   command: AppServerAvailableCommandSummary,
+  backends: BackendSummary[] = [],
 ): SlashCommandSuggestion {
   const commandName = command.name.startsWith("/")
     ? command.name.slice(1)
     : command.name;
+  const sourceLabel = command.backend
+    ? formatBackendLabel(command.backend, backends)
+    : "Provider";
   return {
     id: `provider:${command.backend ?? "unknown"}:${commandName}`,
     label: `/${commandName}`,
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    source: "provider",
+    sourceLabel,
   };
 }
 
@@ -1386,6 +1396,17 @@ export function Composer(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
+  const supportsCompactCommand = Boolean(
+    props.providerCommands?.some((command) => {
+      const commandName = command.name.startsWith("/")
+        ? command.name.slice(1)
+        : command.name;
+      return (
+        commandName === "compact" &&
+        (!props.thread || !command.backend || command.backend === props.thread.source)
+      );
+    })
+  );
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -1930,16 +1951,19 @@ export function Composer(props: ComposerProps) {
       .map((match) => match.skill);
   }, [props.skills, trigger]);
   const slashCommandSuggestions = useMemo(() => {
-    const commands = props.providerCommands?.map(providerCommandToSlashSuggestion) ?? [];
+    const commands =
+      props.providerCommands?.map((command) =>
+        providerCommandToSlashSuggestion(command, props.backends)
+      ) ?? [];
     return supportsReview ? [...SLASH_COMMANDS, ...commands] : commands;
-  }, [props.providerCommands, supportsReview]);
+  }, [props.backends, props.providerCommands, supportsReview]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
       return [];
     }
 
-    const typed = draft.slice(slashTrigger.start, slashTrigger.end).trim().toLowerCase();
-    const query = typed.slice(1);
+    const typed = `/${slashTrigger.query}`.toLowerCase();
+    const query = slashTrigger.query.toLowerCase();
     return slashCommandSuggestions.filter((command) => {
       const aliases = command.aliases ?? [];
       return (
@@ -1948,7 +1972,7 @@ export function Composer(props: ComposerProps) {
         command.description.toLowerCase().includes(query)
       );
     });
-  }, [draft, slashCommandSuggestions, slashTrigger]);
+  }, [slashCommandSuggestions, slashTrigger?.query]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
@@ -1958,10 +1982,7 @@ export function Composer(props: ComposerProps) {
     availableAutocompleteKind === "skills" && trigger
       ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
       : availableAutocompleteKind === "slash" && slashTrigger
-        ? `slash:${slashTrigger.start}:${slashTrigger.end}:${draft.slice(
-            slashTrigger.start,
-            slashTrigger.end,
-          )}`
+        ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
         : undefined;
   const displayedAutocompleteKind =
     autocompleteKey && autocompleteKey === dismissedAutocompleteKey
@@ -1995,6 +2016,7 @@ export function Composer(props: ComposerProps) {
     [props.directory, props.thread]
   );
   const isBareReviewCommand = draft.trim() === "/review";
+  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && isBareReviewCommand
   );
@@ -2150,7 +2172,15 @@ export function Composer(props: ComposerProps) {
     }
 
     void props.onEnsureSkillsLoaded?.();
-  }, [props.onEnsureSkillsLoaded, slashTrigger, trigger]);
+  }, [
+    props.onEnsureSkillsLoaded,
+    slashTrigger?.end,
+    slashTrigger?.query,
+    slashTrigger?.start,
+    trigger?.end,
+    trigger?.query,
+    trigger?.start,
+  ]);
 
   useEffect(() => {
     if (!isLaunchpad) {
@@ -2503,6 +2533,55 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      setSendError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const submitCompactThread = async (): Promise<void> => {
+    if (props.disabled) {
+      return;
+    }
+    if (!supportsCompactCommand) {
+      setSendError("Selected backend does not support compaction.");
+      return;
+    }
+    if (imageAttachments.length > 0) {
+      setSendError("/compact does not accept image attachments.");
+      return;
+    }
+    if (shouldQueueThreadSubmit()) {
+      setSendError("Cannot compact while a turn is in progress.");
+      return;
+    }
+    if (!props.thread || !props.desktopApi?.compactThread) {
+      setSendError("Compaction is not available for this thread.");
+      return;
+    }
+
+    setSendError(undefined);
+    updateSending(true);
+    props.onPendingStatusChange?.("Compacting");
+
+    try {
+      const response = await props.desktopApi.compactThread({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+      });
+      updateActiveTurnId(response.turnId);
+      props.onActiveTurnIdChange?.(response.turnId);
+      recordComposerDraftHistory(
+        composerScopeKey,
+        latestDraftSnapshotRef.current.snapshot,
+        "sent",
+      );
+      clearComposerDraftSnapshot(composerScopeKey);
+      clearComposerDraft();
+    } catch (error) {
+      props.onPendingStatusChange?.(undefined);
+      updateSending(false);
+      setInterrupting(false);
+      updateActiveTurnId(undefined);
+      props.onActiveTurnIdChange?.(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2902,6 +2981,11 @@ export function Composer(props: ComposerProps) {
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
+    if (isCompactCommand) {
+      await submitCompactThread();
+      return;
+    }
+
     if (shouldQueueThreadSubmit()) {
       if (activeTurnIdRef.current && mode === "steer") {
         steerCurrentDraft();
@@ -4567,10 +4651,13 @@ export function Composer(props: ComposerProps) {
                   <span className="composer__autocomplete-token" aria-hidden="true">/</span>
                   <HighlightedAutocompleteLabel
                     label={command.label}
-                    query={slashTrigger
-                      ? draft.slice(slashTrigger.start, slashTrigger.end).trim()
-                      : "/"}
+                    query={slashTrigger ? `/${slashTrigger.query}` : "/"}
                   />
+                  <span
+                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                  >
+                    {command.sourceLabel}
+                  </span>
                 </span>
                 <span className="composer__autocomplete-meta">
                   {command.description}

@@ -10229,6 +10229,7 @@ textarea,
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
+  min-width: 0;
 }
 
 .composer__autocomplete-match {
@@ -10247,6 +10248,34 @@ textarea,
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1;
+}
+
+.composer__autocomplete-source {
+  display: inline-flex;
+  max-width: 104px;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.composer__autocomplete-source--pwragent {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.composer__autocomplete-source--provider {
+  background: var(--bg-panel);
 }
 
 .composer__autocomplete-meta {
