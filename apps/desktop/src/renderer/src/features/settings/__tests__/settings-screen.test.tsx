@@ -1602,9 +1602,9 @@ describe("SettingsScreen", () => {
       generatedAt: 1,
       expiresAt: 2,
     };
-    let pairingChanged:
-      | ((event: { at: number; entry: MessagingPairingEntry }) => void)
-      | undefined;
+    const pairingChangedCallbacks: Array<
+      (event: { at: number; entry: MessagingPairingEntry }) => void
+    > = [];
     const desktopApi = {
       generateMessagingPairingToken: vi.fn(async () => ({
         entry,
@@ -1614,7 +1614,7 @@ describe("SettingsScreen", () => {
       })),
       listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
       onMessagingPairingChanged: vi.fn((callback) => {
-        pairingChanged = callback;
+        pairingChangedCallbacks.push(callback);
         return () => undefined;
       }),
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
@@ -1628,20 +1628,24 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    const initialPairingChangedCallbacks = [...pairingChangedCallbacks];
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    expect(pairingChangedCallbacks).toHaveLength(initialPairingChangedCallbacks.length);
 
     act(() => {
-      pairingChanged?.({
-        at: 3,
-        entry: {
-          ...entry,
-          status: "observed",
-          observedAt: 3,
-          observedActor: { id: "8460800771", displayName: "Harold Hunt" },
-          observedChat: { id: "8460800771", kind: "dm", title: "Harold Hunt" },
-        },
-      });
+      for (const callback of initialPairingChangedCallbacks) {
+        callback({
+          at: 3,
+          entry: {
+            ...entry,
+            status: "observed",
+            observedAt: 3,
+            observedActor: { id: "8460800771", displayName: "Harold Hunt" },
+            observedChat: { id: "8460800771", kind: "dm", title: "Harold Hunt" },
+          },
+        });
+      }
     });
 
     // Bumped from the default 1000ms because CI runners under load take
