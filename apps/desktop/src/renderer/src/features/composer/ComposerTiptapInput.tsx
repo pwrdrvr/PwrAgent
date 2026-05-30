@@ -1154,8 +1154,11 @@ export const ComposerTiptapInput = forwardRef<
     });
     applyingControlledHistoryRef.current = false;
     requestAnimationFrame(() => {
-      currentEditor.commands.focus();
       try {
+        if (currentEditor.isDestroyed) {
+          return;
+        }
+        currentEditor.commands.focus();
         currentEditor.commands.setTextSelection(
           getPositionAtDraftIndex(currentEditor, entry.selectionIndex, readMode),
         );
