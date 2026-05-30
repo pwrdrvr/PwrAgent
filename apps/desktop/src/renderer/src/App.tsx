@@ -6,7 +6,11 @@ import {
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import type { DesktopBootInfo } from "@pwragent/shared";
+import type {
+  DesktopBootInfo,
+  DesktopCodexProfileModel,
+  DesktopPwrAgentProfileSummary,
+} from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { OnboardingWizard } from "./features/onboarding/OnboardingWizard";
 import {
@@ -190,6 +194,12 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
+  const replayCodexProfileSetup = settings.snapshot
+    ? inferReplayCodexProfileSetup(
+        settings.snapshot.general.codexProfileModel?.value ?? "shared",
+        profiles.profiles,
+      )
+    : undefined;
   useQueuedTurnRelease({
     backends: backendSummaries.backends,
     composerDraftStore,
@@ -276,9 +286,11 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onReplayOnboardingRequested(() => {
-      setOnboardingOpen("replay");
+      void profiles.refresh().finally(() => {
+        setOnboardingOpen("replay");
+      });
     });
-  }, [desktopApi]);
+  }, [desktopApi, profiles.refresh]);
   useEffect(() => {
     // Auto-launch on the first snapshot where `completed === false`.
     // `autoOpenSeen` blocks re-opens after the user dismissed without
@@ -579,7 +591,14 @@ function DesktopAppShell(props: {
           initialDensity={settings.snapshot.general.appearance.density.value}
           initialTheme={settings.snapshot.general.appearance.theme.value}
           initialCodexProfileModel={
-            settings.snapshot.general.codexProfileModel.value
+            onboardingOpen === "replay" && replayCodexProfileSetup
+              ? replayCodexProfileSetup.model
+              : settings.snapshot.general.codexProfileModel.value
+          }
+          initialCodexProfileNames={
+            onboardingOpen === "replay"
+              ? replayCodexProfileSetup?.profileNames
+              : undefined
           }
           appearanceController={props.appearanceController}
           settings={settings}
@@ -659,4 +678,39 @@ function isSettingsSection(
   return (
     section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
   );
+}
+
+export type ReplayCodexProfileSetup = {
+  model: DesktopCodexProfileModel;
+  profileNames?: readonly string[];
+};
+
+export function inferReplayCodexProfileSetup(
+  persisted: DesktopCodexProfileModel,
+  profiles: readonly DesktopPwrAgentProfileSummary[],
+): ReplayCodexProfileSetup {
+  const namedPairings = profiles.filter((profile) => profile.codexProfile.name);
+  if (namedPairings.length >= 2) {
+    return {
+      model: "multiple",
+      profileNames: namedPairings.map((profile) => profile.name),
+    };
+  }
+
+  const activeProfile = profiles.find((profile) => profile.active);
+  const isolatedProfile = activeProfile?.codexProfile.name
+    ? activeProfile
+    : namedPairings[0];
+  if (isolatedProfile) {
+    return { model: "isolated", profileNames: [isolatedProfile.name] };
+  }
+
+  return { model: persisted };
+}
+
+export function inferReplayCodexProfileModel(
+  persisted: DesktopCodexProfileModel,
+  profiles: readonly DesktopPwrAgentProfileSummary[],
+): DesktopCodexProfileModel {
+  return inferReplayCodexProfileSetup(persisted, profiles).model;
 }

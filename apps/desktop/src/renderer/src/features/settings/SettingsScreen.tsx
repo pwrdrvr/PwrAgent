@@ -290,11 +290,6 @@ function SettingsSectionBody(props: {
             },
           });
         }}
-        onCodexProfileModelChange={async (codexProfileModel) => {
-          await props.settings.writeConfig({
-            general: { codexProfileModel },
-          });
-        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },
