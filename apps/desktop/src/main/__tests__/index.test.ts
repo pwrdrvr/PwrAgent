@@ -817,6 +817,45 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not recreate a window from profile focus after quit begins", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
+      [string, { onFocus: () => void }]
+    >;
+    const onFocus = watcherCalls[0]?.[1].onFocus;
+    expect(onFocus).toBeTypeOf("function");
+    if (!onFocus) {
+      return;
+    }
+
+    appEventHandlers.get("before-quit")?.();
+    onFocus();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ipc handlers registered until Electron reaches will-quit", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.();
+
+    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeSettingsIpcHandlersMock).not.toHaveBeenCalled();
+
+    appEventHandlers.get("will-quit")?.();
+
+    expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("routes closing the last window through the shared quit flow", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
@@ -893,7 +932,7 @@ describe("bootstrapApp", () => {
 
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
-    appEventHandlers.get("before-quit")?.();
+    appEventHandlers.get("will-quit")?.();
     expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
