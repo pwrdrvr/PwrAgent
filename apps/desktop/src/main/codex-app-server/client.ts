@@ -43,7 +43,6 @@ import type {
   InitializeParams as CodexInitializeParams,
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
-  ServiceTier as CodexServiceTier,
 } from "@pwragent/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
@@ -267,7 +266,10 @@ function isHandledServerRequestMethod(method: string): boolean {
 function isKnownCodexNotificationMethod(
   method: string
 ): boolean {
-  return GENERATED_CODEX_NOTIFICATION_METHODS.has(method);
+  return (
+    GENERATED_CODEX_NOTIFICATION_METHODS.has(method) ||
+    method === "thread/settings/updated"
+  );
 }
 
 function isKnownCodexServerRequestMethod(
@@ -593,6 +595,10 @@ function normalizeServerNotification(
   method: string,
   params: unknown,
 ): AppServerNotification {
+  if (method === "thread/settings/updated") {
+    return normalizeThreadSettingsUpdatedNotification(params);
+  }
+
   const record = asRecord(params) ?? {};
   const metadata = extractRequestMetadata(params);
   const itemRecord = asRecord(record.item);
@@ -617,6 +623,91 @@ function normalizeServerNotification(
       ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
     } as AppServerNotification["params"],
   } as AppServerNotification;
+}
+
+function normalizeThreadSettingsUpdatedNotification(
+  params: unknown,
+): AppServerNotification {
+  const record = asRecord(params) ?? {};
+  const settings = asRecord(record.threadSettings) ?? asRecord(record.thread_settings) ?? {};
+  const rawServiceTier =
+    readNullableString(settings, ["serviceTier", "service_tier"]) ??
+    readNullableString(record, ["serviceTier", "service_tier"]);
+  const normalizedServiceTier = normalizeObservedCodexServiceTier(rawServiceTier);
+  const threadId =
+    pickString(record, ["threadId", "thread_id"]) ??
+    pickString(settings, ["threadId", "thread_id"]);
+  return {
+    method: "thread/codexSettings/observed",
+    params: {
+      ...(threadId ? { threadId } : {}),
+      ...pickOptionalString(settings, "model", ["model"]),
+      ...pickOptionalString(settings, "reasoningEffort", ["reasoningEffort", "effort"]),
+      ...(rawServiceTier !== undefined ? { rawServiceTier } : {}),
+      ...(normalizedServiceTier !== undefined
+        ? { serviceTier: normalizedServiceTier }
+        : {}),
+      ...observedFastModeFromCodexServiceTier(rawServiceTier),
+    },
+  } as AppServerNotification;
+}
+
+function readNullableString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value === null) {
+      return null;
+    }
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function pickOptionalString(
+  record: Record<string, unknown>,
+  outputKey: string,
+  inputKeys: string[],
+): Record<string, string> {
+  const value = pickString(record, inputKeys);
+  return value ? { [outputKey]: value } : {};
+}
+
+function normalizeObservedCodexServiceTier(
+  serviceTier: string | null | undefined,
+): string | null | undefined {
+  if (serviceTier === null) {
+    return null;
+  }
+  const normalized = serviceTier?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "priority") {
+    return "fast";
+  }
+  if (normalized === "default") {
+    return null;
+  }
+  return normalized;
+}
+
+function observedFastModeFromCodexServiceTier(
+  serviceTier: string | null | undefined,
+): { fastMode?: boolean } {
+  const normalized = normalizeObservedCodexServiceTier(serviceTier);
+  if (normalized === undefined) {
+    return {};
+  }
+  return { fastMode: normalized === "fast" };
 }
 
 function extractConfigWarningMetadata(
@@ -3563,13 +3654,36 @@ function buildCodexSandboxPolicy(
 }
 
 function normalizeCodexServiceTier(
-  value?: string
-): CodexServiceTier | undefined {
+  value?: string | null
+): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
   const normalized = value?.trim();
-  if (normalized === "fast" || normalized === "flex") {
+  if (normalized === "fast" || normalized === "priority") {
+    return "priority";
+  }
+  if (normalized === "flex") {
     return normalized;
   }
   return undefined;
+}
+
+function resolveCodexServiceTier(params: {
+  fastMode?: boolean;
+  serviceTier?: string | null;
+}): string | null | undefined {
+  if (params.fastMode === true) {
+    return "priority";
+  }
+  if (params.fastMode === false) {
+    return params.serviceTier &&
+      params.serviceTier !== "fast" &&
+      params.serviceTier !== "priority"
+      ? params.serviceTier
+      : null;
+  }
+  return params.serviceTier;
 }
 
 function normalizeCodexReasoningEffort(
@@ -3594,7 +3708,8 @@ function buildThreadStartPayload(params: {
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
-  serviceTier?: string;
+  serviceTier?: string | null;
+  fastMode?: boolean;
   ephemeral?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadStartParams["config"];
@@ -3622,8 +3737,8 @@ function buildThreadStartPayload(params: {
     base.sandbox = sandbox;
   }
 
-  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
-  if (serviceTier) {
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
   if (params.ephemeral !== undefined) {
@@ -3657,7 +3772,7 @@ function buildThreadResumePayloads(params: {
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
-  serviceTier?: string;
+  serviceTier?: string | null;
   reasoningEffort?: string;
   fastMode?: boolean;
 }): CodexThreadResumeParams[] {
@@ -3683,8 +3798,8 @@ function buildThreadResumePayloads(params: {
     base.sandbox = sandbox;
   }
 
-  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
-  if (serviceTier) {
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
 
@@ -3755,7 +3870,8 @@ function buildTurnStartPayload(params: {
   cwd?: string;
   model?: string;
   reasoningEffort?: string;
-  serviceTier?: string;
+  serviceTier?: string | null;
+  fastMode?: boolean;
   approvalPolicy?: string;
   sandbox?: string;
   outputSchema?: CodexTurnStartParams["outputSchema"];
@@ -3779,8 +3895,8 @@ function buildTurnStartPayload(params: {
   if (reasoningEffort) {
     base.effort = reasoningEffort;
   }
-  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
-  if (serviceTier) {
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
   const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
@@ -4609,7 +4725,7 @@ export class CodexAppServerClient {
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
-    serviceTier?: string;
+    serviceTier?: string | null;
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -4645,7 +4761,7 @@ export class CodexAppServerClient {
     sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
+    serviceTier?: string | null;
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{
@@ -4696,6 +4812,7 @@ export class CodexAppServerClient {
           model: params.model,
           reasoningEffort: params.reasoningEffort,
           serviceTier: params.serviceTier,
+          fastMode: params.fastMode,
           approvalPolicy: params.approvalPolicy,
           sandbox: params.sandbox,
           collaborationMode: params.collaborationMode,
@@ -4734,7 +4851,7 @@ export class CodexAppServerClient {
         payloads: [
           buildThreadStartPayload({
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: "fast",
+            serviceTier: "priority",
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
           }),
@@ -4763,7 +4880,7 @@ export class CodexAppServerClient {
             threadId: helperThreadId,
             input: [{ type: "text", text: params.prompt }],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: "fast",
+            serviceTier: "priority",
             reasoningEffort: "low",
             outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
           }),
