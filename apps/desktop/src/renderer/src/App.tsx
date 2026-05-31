@@ -34,6 +34,7 @@ import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
+import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
@@ -697,7 +698,14 @@ function DesktopAppShell(props: {
       ) : null}
 
       <CodexConfigWarningBanner desktopApi={desktopApi} />
-      <AppUpdateBanner desktopApi={desktopApi} />
+      <div className="app-toast-stack" aria-live="polite">
+        <AppNoticeToast
+          desktopApi={desktopApi}
+          notice={navigation.archiveThreadNotice}
+          onDismiss={navigation.dismissArchiveThreadNotice}
+        />
+        <AppUpdateBanner desktopApi={desktopApi} />
+      </div>
     </div>
   );
 }

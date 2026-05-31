@@ -30,6 +30,13 @@ import type { DesktopApi } from "./desktop-api";
 export type BrowseMode = "inbox" | "recents" | "directories";
 export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree";
 
+export type ArchiveThreadNotice = {
+  id: string;
+  title: string;
+  message: string;
+  detail?: string;
+};
+
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
@@ -187,9 +194,9 @@ function directoryKeysForThread(
     .map((directory) => directory.key);
 }
 
-function formatArchiveCleanupFailure(
+function formatArchiveCleanupNotice(
   cleanup: ArchiveThreadCleanupResult[]
-): string | undefined {
+): ArchiveThreadNotice | undefined {
   const failures = cleanup.filter(
     (item) => !item.removedWorktree || item.error || item.skippedReason
   );
@@ -199,9 +206,21 @@ function formatArchiveCleanupFailure(
   }
 
   const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
-  return firstFailure.worktreePath
-    ? `Thread archived, but worktree cleanup failed for ${firstFailure.worktreePath}: ${reason}`
-    : `Thread archived, but worktree cleanup was skipped: ${reason}`;
+  const sharedWorktree = reason.startsWith("Worktree is still used by");
+  const title = sharedWorktree ? "Worktree kept" : "Worktree cleanup skipped";
+  const message = sharedWorktree
+    ? "Thread archived. The worktree was kept because another active thread is still using it."
+    : "Thread archived. The worktree cleanup did not complete.";
+  const detail = firstFailure.worktreePath
+    ? `${firstFailure.worktreePath}: ${reason}`
+    : reason;
+
+  return {
+    id: [firstFailure.worktreePath ?? "no-worktree", reason, Date.now().toString()].join("\n"),
+    title,
+    message,
+    detail,
+  };
 }
 
 function linkedDirectoriesEqual(
@@ -1615,6 +1634,8 @@ export function useThreadNavigation(
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
   archiveThreadError?: string;
+  archiveThreadNotice?: ArchiveThreadNotice;
+  dismissArchiveThreadNotice: () => void;
   worktreeArchiveError?: string;
   renameThreadError?: string;
   loading: boolean;
@@ -1761,6 +1782,7 @@ export function useThreadNavigation(
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
+  const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
@@ -3436,6 +3458,7 @@ export function useThreadNavigation(
 
       suppressedArchivedThreadKeysRef.current.add(threadKey);
       setArchiveThreadError(undefined);
+      setArchiveThreadNotice(undefined);
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setSetThreadExecutionModeError(undefined);
@@ -3468,9 +3491,9 @@ export function useThreadNavigation(
           backend: thread.source,
           threadId: thread.id,
         });
-        const cleanupFailure = formatArchiveCleanupFailure(response.cleanup);
-        if (cleanupFailure) {
-          setArchiveThreadError(cleanupFailure);
+        const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
+        if (cleanupNotice) {
+          setArchiveThreadNotice(cleanupNotice);
         }
         await refresh();
       } catch (error) {
@@ -4206,6 +4229,10 @@ export function useThreadNavigation(
     [refresh, setAcpSessionRuntimeOption]
   );
 
+  const dismissArchiveThreadNotice = useCallback((): void => {
+    setArchiveThreadNotice(undefined);
+  }, []);
+
   return {
     browseMode,
     createThread,
@@ -4219,6 +4246,8 @@ export function useThreadNavigation(
     recentThreads,
     launchpadError,
     archiveThreadError,
+    archiveThreadNotice,
+    dismissArchiveThreadNotice,
     worktreeArchiveError,
     renameThreadError,
     loading: state.loading,

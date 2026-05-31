@@ -1104,9 +1104,13 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBe(
-      "Thread archived, but worktree cleanup failed for /repo/.worktrees/archive-me: Worktree is not registered with Git",
-    );
+    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(result.current.archiveThreadNotice).toMatchObject({
+      title: "Worktree cleanup skipped",
+      message: "Thread archived. The worktree cleanup did not complete.",
+      detail:
+        "/repo/.worktrees/archive-me: Worktree is not registered with Git",
+    });
   });
 
   it("surfaces archive cleanup metadata lookup skips without requiring a worktree path", async () => {
@@ -1173,9 +1177,89 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBe(
-      "Thread archived, but worktree cleanup was skipped: Unable to load thread metadata for archive cleanup: thread list unavailable",
-    );
+    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(result.current.archiveThreadNotice).toMatchObject({
+      title: "Worktree cleanup skipped",
+      message: "Thread archived. The worktree cleanup did not complete.",
+      detail:
+        "Unable to load thread metadata for archive cleanup: thread list unavailable",
+    });
+  });
+
+  it("surfaces shared worktree archive cleanup skips as informational notices", async () => {
+    let archived = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: archived
+        ? []
+        : [
+            {
+              id: "thread-archived",
+              title: "Archive me",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: { inInbox: false },
+              updatedAt: 1_000,
+            },
+          ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => {
+      archived = true;
+      return {
+        backend: "codex" as const,
+        threadId: "thread-archived",
+        archivedAt: 3_000,
+        cleanup: [
+          {
+            worktreePath: "/repo/.worktrees/shared",
+            removedWorktree: false,
+            deletedBranch: false,
+            skippedReason: "Worktree is still used by another active thread: thread-parent.",
+          },
+        ],
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-archived",
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(result.current.archiveThreadNotice).toMatchObject({
+      title: "Worktree kept",
+      message:
+        "Thread archived. The worktree was kept because another active thread is still using it.",
+      detail:
+        "/repo/.worktrees/shared: Worktree is still used by another active thread: thread-parent.",
+    });
+
+    act(() => {
+      result.current.dismissArchiveThreadNotice();
+    });
+    expect(result.current.archiveThreadNotice).toBeUndefined();
   });
 
   it("restores focus to the selected thread when archive fails", async () => {
