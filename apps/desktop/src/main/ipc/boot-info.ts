@@ -13,7 +13,7 @@ import { getMainLogger } from "../log";
 import {
   assertUnreachableProfileBootDecision,
   findLiveProfileRuntimeMarkers,
-  isValidProfileName,
+  normalizeProfileName,
   resolveActiveProfileName,
 } from "../profile";
 import { getAppStateMode, getBootDecision } from "../state/app-state";
@@ -127,9 +127,11 @@ export function registerBootInfoIpcHandlers(options?: {
       _event,
       request: WaitForDesktopProfileAliveRequest,
     ): Promise<WaitForDesktopProfileAliveResponse> => {
-      const profile = request.profile.trim();
-      if (!isValidProfileName(profile)) {
-        throw new Error(`Invalid profile name "${profile}".`);
+      const profile = normalizeProfileName(request.profile);
+      if (!profile) {
+        throw new Error(
+          `Profile name "${request.profile}" must contain at least one letter or number.`,
+        );
       }
       const timeoutMs = request.timeoutMs ?? 10_000;
       const pollIntervalMs = 200;

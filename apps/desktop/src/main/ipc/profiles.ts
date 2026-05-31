@@ -37,7 +37,7 @@ import {
   ensureProfileExists,
   ensureNamedProfileExists,
   forgetDeletedProfile,
-  isValidProfileName,
+  normalizeProfileName,
   readProfilesRegistry,
   requestProfileInstanceFocus,
   resolveActiveProfileName,
@@ -128,9 +128,11 @@ function readPwrAgentProfileCodexProfile(profileName: string) {
 export function openDesktopPwrAgentProfile(
   request: OpenDesktopPwrAgentProfileRequest,
 ): OpenDesktopPwrAgentProfileResponse {
-  const profile = request.profile.trim();
-  if (!isValidProfileName(profile)) {
-    throw new Error(`Invalid profile name "${profile}".`);
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
   }
 
   const activeProfile = resolveActiveProfileName();
@@ -189,9 +191,11 @@ export function replaceProfileLaunchArgs(
 export function createDesktopPwrAgentProfile(
   request: CreateDesktopPwrAgentProfileRequest,
 ): CreateDesktopPwrAgentProfileResponse {
-  const profile = request.profile.trim();
-  if (!isValidProfileName(profile)) {
-    throw new Error(`Invalid profile name "${profile}".`);
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
   }
   const result = ensureNamedProfileExists(profile);
 
@@ -220,9 +224,11 @@ export function createDesktopPwrAgentProfile(
 export function setDefaultDesktopPwrAgentProfile(
   request: SetDefaultDesktopPwrAgentProfileRequest,
 ): SetDefaultDesktopPwrAgentProfileResponse {
-  const profile = request.profile.trim();
-  if (!isValidProfileName(profile)) {
-    throw new Error(`Invalid profile name "${profile}".`);
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
   }
   return { profile: setDefaultProfileName(profile) };
 }
@@ -230,7 +236,12 @@ export function setDefaultDesktopPwrAgentProfile(
 export async function deleteDesktopPwrAgentProfile(
   request: DeleteDesktopPwrAgentProfileRequest,
 ): Promise<DeleteDesktopPwrAgentProfileResponse> {
-  const profile = request.profile.trim();
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
   const profileDir = assertProfileCanBeDeleted(profile);
   let movedToTrash = false;
   if (process.platform === "darwin" && fs.existsSync(profileDir)) {
@@ -286,9 +297,11 @@ export async function deleteDesktopPwrAgentProfile(
 export function graduateDesktopBootstrapConfigToProfile(
   request: GraduateDesktopBootstrapConfigToProfileRequest,
 ): GraduateDesktopBootstrapConfigToProfileResponse {
-  const targetProfile = request.targetProfile.trim();
-  if (!isValidProfileName(targetProfile)) {
-    throw new Error(`Invalid profile name "${targetProfile}".`);
+  const targetProfile = normalizeProfileName(request.targetProfile);
+  if (!targetProfile) {
+    throw new Error(
+      `Profile name "${request.targetProfile}" must contain at least one letter or number.`,
+    );
   }
 
   if (getAppStateMode() !== "bootstrap") {
@@ -354,9 +367,11 @@ export function graduateDesktopBootstrapConfigToProfile(
 export function writeDesktopSecretsToProfile(
   request: WriteDesktopSecretsToProfileRequest,
 ): WriteDesktopSecretsToProfileResponse {
-  const profile = request.profile.trim();
-  if (!isValidProfileName(profile)) {
-    throw new Error(`Invalid profile name "${profile}".`);
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
   }
   // Dev-only opt-out: skip the entire write path when the env var
   // is set. Returns success with an empty `written` list so the
@@ -419,13 +434,17 @@ export function writeDesktopSecretsToProfile(
 export async function setDesktopPwrAgentProfileCodexProfile(
   request: SetDesktopPwrAgentProfileCodexProfileRequest,
 ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> {
-  const profile = request.profile.trim();
-  const codexProfile = request.codexProfile.trim();
-  if (!isValidProfileName(profile)) {
-    throw new Error(`Invalid profile name "${profile}".`);
+  const profile = normalizeProfileName(request.profile);
+  const codexProfile = normalizeProfileName(request.codexProfile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
   }
-  if (codexProfile && !isValidProfileName(codexProfile)) {
-    throw new Error(`Invalid Codex profile name "${codexProfile}".`);
+  if (request.codexProfile.trim() && !codexProfile) {
+    throw new Error(
+      `Codex profile name "${request.codexProfile}" must contain at least one letter or number.`,
+    );
   }
 
   ensureProfileExists({

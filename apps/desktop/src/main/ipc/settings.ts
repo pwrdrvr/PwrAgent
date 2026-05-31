@@ -90,7 +90,7 @@ import type {
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
 import { getAppStateDb } from "../state/app-state";
-import { resolveActiveProfileDir } from "../profile";
+import { normalizeProfileName, resolveActiveProfileDir } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const activeCodexLoginProcesses = new Map<
@@ -433,7 +433,13 @@ async function checkCodexProfileAuthStatus(
   service: DesktopSettingsService,
   request: CheckDesktopCodexAuthProfileStatusRequest,
 ): Promise<CheckDesktopCodexAuthProfileStatusResponse> {
-  const profile = request.profile.trim();
+  const profile =
+    request.profile.trim() === "" ? "" : normalizeProfileName(request.profile);
+  if (request.profile.trim() !== "" && !profile) {
+    throw new Error(
+      `Codex profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
   const codexHome = resolveRequiredCodexProfileHome(profile);
   const command = await resolveCodexCommandForProfileWorkflow(service);
   const result = await collectCodexStatus(command, codexHome);
@@ -960,7 +966,13 @@ export function registerSettingsIpcHandlers(
       _event,
       request: StartDesktopCodexAuthProfileLoginRequest,
     ): Promise<StartDesktopCodexAuthProfileLoginResponse> => {
-      const profile = request.profile.trim();
+      const profile =
+        request.profile.trim() === "" ? "" : normalizeProfileName(request.profile);
+      if (request.profile.trim() !== "" && !profile) {
+        throw new Error(
+          `Codex profile name "${request.profile}" must contain at least one letter or number.`,
+        );
+      }
       const codexHome = resolveRequiredCodexProfileHome(profile);
       const command = await resolveCodexCommandForProfileWorkflow(
         getService(service),

@@ -144,10 +144,13 @@ describe("rendered log entry buffer", () => {
 
 describe("LogsWindow", () => {
   it("loads a log snapshot and renders search controls", async () => {
+    const copyText = vi.fn(async () => undefined);
     const desktopApi = {
+      copyText,
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
+        logFilePath: "/Users/example/Library/Logs/PwrAgent/main.log",
         entries: [
           {
             sequence: 1,
@@ -172,8 +175,20 @@ describe("LogsWindow", () => {
     render(<LogsWindow />);
 
     expect(await screen.findByLabelText("Search logs")).toBeInTheDocument();
+    expect(
+      screen.getByText("/Users/example/Library/Logs/PwrAgent/main.log"),
+    ).toBeInTheDocument();
     expect(await screen.findByText("INFO booted")).toBeInTheDocument();
     expect(screen.getByText("Live app log stream")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy log file path" }));
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "/Users/example/Library/Logs/PwrAgent/main.log",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Copied log file path" }),
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(desktopApi.readAppLogSnapshot).toHaveBeenCalled();
     });

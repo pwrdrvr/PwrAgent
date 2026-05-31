@@ -8,11 +8,25 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopSettingsSecretName } from "@pwragent/shared";
-import { SecretFieldRow } from "../OnboardingWizard";
+import { SecretFieldRow, validateProfileNames } from "../OnboardingWizard";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+describe("validateProfileNames", () => {
+  it("rejects non-empty rows that cannot normalize", () => {
+    expect(validateProfileNames(["valid", "!!!"])).toBe(false);
+  });
+
+  it("accepts arbitrary names after normalization when every row is usable", () => {
+    expect(validateProfileNames(["My Work Profile", "Café Ops"])).toBe(true);
+  });
+
+  it("rejects duplicate normalized profile ids", () => {
+    expect(validateProfileNames(["My Work", "my-work"])).toBe(false);
+  });
 });
 
 /**

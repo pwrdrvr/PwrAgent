@@ -3,6 +3,7 @@ import type {
   DesktopCodexAuthProfileCandidate,
   DesktopCodexAuthProfileDiscoverySnapshot,
 } from "@pwragent/shared";
+import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const CREATE_VALUE = "__create_codex_profile__";
@@ -187,16 +188,16 @@ function CodexAuthProfileCreateDialog(props: {
   const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
   const authenticatedRef = useRef(false);
-  const normalizedName = profileName.trim();
+  const normalizedName = normalizeProfileName(profileName);
+  const hasInput = profileName.trim().length > 0;
   const existingNames = new Set(props.existingProfiles.map((profile) => profile.name));
-  const nameExists = Boolean(normalizedName) && existingNames.has(normalizedName);
-  const validName = /^[a-z0-9][a-z0-9_-]{0,31}$/.test(normalizedName);
+  const nameExists = hasInput && Boolean(normalizedName) && existingNames.has(normalizedName);
   const canSubmit = Boolean(
     props.desktopApi?.createCodexAuthProfile
       && props.desktopApi.startCodexAuthProfileLogin
       && props.desktopApi.checkCodexAuthProfileStatus
+      && hasInput
       && normalizedName
-      && validName
       && !nameExists,
   );
 
@@ -304,9 +305,14 @@ function CodexAuthProfileCreateDialog(props: {
               value={profileName}
               onChange={(event) => setProfileName(event.currentTarget.value)}
             />
-            {!validName && normalizedName ? (
+            {hasInput && !normalizedName ? (
               <p className="settings-row__error">
-                Use lowercase letters, numbers, dashes, or underscores.
+                Enter at least one letter or number.
+              </p>
+            ) : null}
+            {hasInput && normalizedName ? (
+              <p className="settings-profile-create-dialog__hint">
+                Profile ID: <code>{normalizedName}</code>
               </p>
             ) : null}
             {nameExists ? (
