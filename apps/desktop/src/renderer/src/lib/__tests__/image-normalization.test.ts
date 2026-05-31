@@ -278,6 +278,38 @@ describe("image normalization", () => {
     });
   });
 
+  it("preserves PNG bytes when clipboard item MIME fills an empty File type", async () => {
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 640,
+        height: 480,
+        draw: vi.fn(),
+      })),
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array([1, 2, 3])], "image"),
+      {
+        dependencies,
+        maxPatchCount: 1536,
+        sourceMimeType: "image/png",
+      },
+    );
+
+    expect(dependencies.encodeCanvas).not.toHaveBeenCalled();
+    expect(normalized).toMatchObject({
+      dataUrl: "data:image/png;base64,AQID",
+      height: 480,
+      mimeType: "image/png",
+      original: {
+        mimeType: "image/png",
+        size: 3,
+      },
+      size: 3,
+      width: 640,
+    });
+  });
+
   it("retries JPEG encoding when a resized output is larger than the source", async () => {
     const encodeCanvas = vi.fn(async (_canvas, mimeType, quality) => {
       const size = quality >= 0.85 ? 140 : 90;
@@ -336,7 +368,7 @@ describe("image normalization", () => {
     });
   });
 
-  it("normalizes extension-inferred JPEG files with empty blob MIME types", async () => {
+  it("preserves extension-inferred JPEG files with empty blob MIME types", async () => {
     const dependencies = makeDependencies({
       decode: vi.fn(async () => ({
         width: 640,
@@ -350,11 +382,7 @@ describe("image normalization", () => {
       { dependencies, maxPatchCount: 1536 },
     );
 
-    expect(dependencies.encodeCanvas).toHaveBeenCalledWith(
-      expect.anything(),
-      "image/jpeg",
-      expect.any(Number),
-    );
+    expect(dependencies.encodeCanvas).not.toHaveBeenCalled();
     expect(normalized).toMatchObject({
       dataUrl: "data:image/jpeg;base64,AQID",
       height: 480,

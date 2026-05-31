@@ -58,6 +58,7 @@ type TranscriptListProps = {
   loadingMore: boolean;
   pendingActivityEntry?: AppServerThreadActivityEntry;
   pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
+  pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -339,6 +340,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
       props.pendingProtocolActivityEntry ||
+      props.pendingUsageActivityEntry ||
       props.pendingAssistantMessage ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
@@ -399,6 +401,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingPlanEntry,
       props.pendingActivityEntry,
       props.pendingProtocolActivityEntry,
+      props.pendingUsageActivityEntry,
       props.pendingAssistantMessage,
     ])) {
       insertPendingEntry(entries, pendingEntry);
@@ -415,6 +418,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,
+    props.pendingUsageActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.messagingBindingTransitions,

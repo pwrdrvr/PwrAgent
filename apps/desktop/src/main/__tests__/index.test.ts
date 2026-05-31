@@ -92,6 +92,8 @@ const whenReadyMock = vi.fn(() => Promise.resolve());
 const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn(() => []);
 const dockSetIconMock = vi.fn();
+const protocolHandleMock = vi.fn();
+const protocolRegisterSchemesAsPrivilegedMock = vi.fn();
 const nativeImageMock = {
   isEmpty: vi.fn(() => false),
 };
@@ -154,6 +156,10 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: shellOpenExternalMock,
+  },
+  protocol: {
+    handle: protocolHandleMock,
+    registerSchemesAsPrivileged: protocolRegisterSchemesAsPrivilegedMock,
   },
   nativeImage: {
     createFromPath: nativeImageCreateFromPathMock,
@@ -470,6 +476,8 @@ describe("bootstrapApp", () => {
     quitMock.mockReset();
     getAllWindowsMock.mockReset();
     getAllWindowsMock.mockReturnValue([]);
+    protocolHandleMock.mockReset();
+    protocolRegisterSchemesAsPrivilegedMock.mockReset();
     profileFocusRequestWatcherStopMock.mockReset();
     resolveActiveProfileNameMock.mockReset();
     resolveActiveProfileNameMock.mockReturnValue("default");
@@ -529,6 +537,13 @@ describe("bootstrapApp", () => {
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(protocolRegisterSchemesAsPrivilegedMock).toHaveBeenCalledWith([
+      expect.objectContaining({ scheme: "pwragent-image" }),
+    ]);
+    expect(protocolHandleMock).toHaveBeenCalledWith(
+      "pwragent-image",
+      expect.any(Function)
+    );
     expect(startProfileFocusRequestWatcherMock).toHaveBeenCalledWith(
       "default",
       expect.objectContaining({ onFocus: expect.any(Function) }),
