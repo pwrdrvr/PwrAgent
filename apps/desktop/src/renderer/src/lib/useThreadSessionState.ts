@@ -1035,6 +1035,17 @@ function buildTurnMetadata(params: {
   };
 }
 
+function terminalTurnMatchesActiveTurn(
+  session: ThreadSessionEntry,
+  terminalTurnId: string | undefined,
+): boolean {
+  return Boolean(
+    !session.activeTurnId ||
+      !terminalTurnId ||
+      terminalTurnId === session.activeTurnId
+  );
+}
+
 function withTurnMetadata<T extends AppServerThreadMessageEntry>(
   entry: T,
   turn: AppServerThreadTurnMetadata | undefined
@@ -1915,6 +1926,7 @@ export function useThreadSessionState(params: {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   setPendingStatusText: (status?: string) => void;
+  threadBusy: boolean;
   thinkingThreadKeys: Record<string, boolean>;
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
@@ -2740,18 +2752,36 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
+            current,
+            completedTurn?.id,
+          );
           if (liveTranscriptEventFiltering && isUnfocusedThread) {
             return {
               ...current,
-              activeTurnId: undefined,
-              activeTurnStartedAt: undefined,
+              activeTurnId: completedTurnMatchesActive
+                ? undefined
+                : current.activeTurnId,
+              activeTurnStartedAt: completedTurnMatchesActive
+                ? undefined
+                : current.activeTurnStartedAt,
               error: undefined,
               lastTouchedAt: nextLastTouchedAt,
-              pendingAssistantMessage: undefined,
-              pendingMcpInteraction: undefined,
-              pendingRequest: undefined,
-              pendingUserInput: undefined,
-              pendingStatusText: undefined,
+              pendingAssistantMessage: completedTurnMatchesActive
+                ? undefined
+                : current.pendingAssistantMessage,
+              pendingMcpInteraction: completedTurnMatchesActive
+                ? undefined
+                : current.pendingMcpInteraction,
+              pendingRequest: completedTurnMatchesActive
+                ? undefined
+                : current.pendingRequest,
+              pendingUserInput: completedTurnMatchesActive
+                ? undefined
+                : current.pendingUserInput,
+              pendingStatusText: completedTurnMatchesActive
+                ? undefined
+                : current.pendingStatusText,
             };
           }
 
@@ -2789,7 +2819,7 @@ export function useThreadSessionState(params: {
                   )
                   : entry
               ),
-            ...(current.pendingAssistantMessage
+            ...(current.pendingAssistantMessage && completedTurnMatchesActive
               ? completedTurnHasReview
                 ? []
                 : [
@@ -2857,9 +2887,15 @@ export function useThreadSessionState(params: {
 
           return {
             ...current,
-            activeTurnId: undefined,
-            activeTurnStartedAt: undefined,
-            completionHydrationRetries: 0,
+            activeTurnId: completedTurnMatchesActive
+              ? undefined
+              : current.activeTurnId,
+            activeTurnStartedAt: completedTurnMatchesActive
+              ? undefined
+              : current.activeTurnStartedAt,
+            completionHydrationRetries: completedTurnMatchesActive
+              ? 0
+              : current.completionHydrationRetries,
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
@@ -2871,22 +2907,45 @@ export function useThreadSessionState(params: {
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion:
-              !completedText || shouldHydrateUnknownPhaseAssistant,
+              completedTurnMatchesActive
+                ? !completedText || shouldHydrateUnknownPhaseAssistant
+                : current.needsHydrationAfterCompletion ||
+                  !completedText ||
+                  shouldHydrateUnknownPhaseAssistant,
             nextLiveEntrySequence:
               shouldAppendFinalMessage && completedText
                 ? current.nextLiveEntrySequence + 1
                 : current.nextLiveEntrySequence,
             optimisticEntries: remainingOptimisticEntries,
-            pendingAssistantMessage: undefined,
-            pendingMcpInteraction: undefined,
-            pendingRequest: undefined,
-            pendingUserInput: undefined,
-            pendingStatusText: undefined,
+            pendingAssistantMessage: completedTurnMatchesActive
+              ? undefined
+              : current.pendingAssistantMessage,
+            pendingMcpInteraction: completedTurnMatchesActive
+              ? undefined
+              : current.pendingMcpInteraction,
+            pendingRequest: completedTurnMatchesActive
+              ? undefined
+              : current.pendingRequest,
+            pendingUserInput: completedTurnMatchesActive
+              ? undefined
+              : current.pendingUserInput,
+            pendingStatusText: completedTurnMatchesActive
+              ? undefined
+              : current.pendingStatusText,
             response: nextResponse,
           };
         }
 
         if (event.notification.method === "turn/failed") {
+          if (
+            !terminalTurnMatchesActiveTurn(
+              current,
+              event.notification.params.turnId,
+            )
+          ) {
+            return current;
+          }
+
           const errorMessage =
             typeof event.notification.params.turn.error?.message === "string" &&
             event.notification.params.turn.error.message.trim()
@@ -2911,6 +2970,15 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "turn/cancelled") {
+          if (
+            !terminalTurnMatchesActiveTurn(
+              current,
+              event.notification.params.turnId,
+            )
+          ) {
+            return current;
+          }
+
           return {
             ...current,
             activeTurnId: undefined,
@@ -3352,6 +3420,7 @@ export function useThreadSessionState(params: {
   const pendingStatusText =
     selectedSession?.pendingStatusText ??
     (selectedSession?.activeTurnId ? "Thinking" : undefined);
+  const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
 
   return {
     activeTurnId: selectedSession?.activeTurnId,
@@ -3379,6 +3448,7 @@ export function useThreadSessionState(params: {
     updatePendingUserInput,
     updatePendingMcpInteraction,
     setPendingStatusText,
+    threadBusy,
     thinkingThreadKeys,
     setViewport,
     viewport: selectedSession?.viewport,
