@@ -76,6 +76,55 @@ describe("codex environment runtime", () => {
     }
   }, 15_000);
 
+  it("captures detached stdout and stderr in arrival order", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-output-order-"));
+    try {
+      const detachedExit = new Promise<{ output: string }>((resolve, reject) => {
+        void startLocalCodexEnvironmentAction({
+          actionId: "start-dev",
+          runId: "test-run-output-order",
+          env: {
+            ...process.env,
+            SHELL: "/bin/sh",
+          },
+          onDetachedExit: resolve,
+          runtime: {
+            environmentId: "env",
+            environmentName: "Env",
+            executionTarget: "local",
+            cwd: root,
+            actions: [
+              {
+                id: "start-dev",
+                name: "Start dev",
+                command: [
+                  "printf 'stdout first\\n'",
+                  "sleep 0.05",
+                  "printf 'stderr second\\n' >&2",
+                  "sleep 0.05",
+                  "printf 'stdout third\\n'",
+                  "sleep 0.05",
+                  "printf 'stderr fourth\\n' >&2",
+                ].join("\n"),
+              },
+            ],
+          },
+        }).catch(reject);
+      });
+
+      await expect(detachedExit).resolves.toMatchObject({
+        output: [
+          "stdout first",
+          "stderr second",
+          "stdout third",
+          "stderr fourth",
+        ].join("\n"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("strips parent Electron runtime variables from detached actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
     const shellPath = path.join(root, "test-shell.sh");
@@ -549,25 +598,27 @@ describe("codex environment runtime", () => {
 
 describe("buildExitErrorSuffix", () => {
   it("returns an empty suffix when both streams are blank", () => {
-    expect(buildExitErrorSuffix("", "")).toBe("");
-    expect(buildExitErrorSuffix("   \n  ", "\n\n")).toBe("");
+    expect(buildExitErrorSuffix("")).toBe("");
+    expect(buildExitErrorSuffix("   \n  ")).toBe("");
   });
 
-  it("returns the stderr line when only stderr has content", () => {
-    expect(buildExitErrorSuffix("", "v24.14.1 is already installed.")).toBe(
+  it("returns the output line when only one stream has content", () => {
+    expect(buildExitErrorSuffix("v24.14.1 is already installed.")).toBe(
       ": v24.14.1 is already installed.",
     );
   });
 
-  it("returns the stdout content when only stdout has content (modern-CLI case)", () => {
-    expect(buildExitErrorSuffix("ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1", "")).toBe(
+  it("returns the stdout-style content for modern CLI failures", () => {
+    expect(buildExitErrorSuffix("ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1")).toBe(
       ": ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
     );
   });
 
-  it("includes both streams concatenated when both have content", () => {
-    expect(buildExitErrorSuffix("first stdout line", "first stderr line")).toBe(
-      ": first stdout line\nfirst stderr line",
+  it("preserves already-interleaved stdout and stderr order", () => {
+    expect(
+      buildExitErrorSuffix("first stdout line\nfirst stderr line\nsecond stdout line"),
+    ).toBe(
+      ": first stdout line\nfirst stderr line\nsecond stdout line",
     );
   });
 
@@ -584,7 +635,7 @@ describe("buildExitErrorSuffix", () => {
       "line 9",
       "line 10",
     ].join("\n");
-    const suffix = buildExitErrorSuffix(stdout, "");
+    const suffix = buildExitErrorSuffix(stdout);
     // Last 8 of 10 lines, joined with newlines and prefixed by ": "
     expect(suffix).toBe(
       ": line 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10",
@@ -596,13 +647,13 @@ describe("buildExitErrorSuffix", () => {
     // its real exit-1 diagnostic to stdout, while stderr only contains
     // unrelated benign chatter from an earlier `nvm install`. Both must
     // survive into the suffix so the dialog headline isn't misled.
-    const stdout = [
+    const output = [
       "Scope: all 5 workspace projects",
+      "v24.14.1 is already installed.",
       "Progress: resolved 463, reused 463, downloaded 0, added 463, done",
       "ERR_PNPM_IGNORED_BUILDS Ignored build scripts: @ffmpeg-installer/darwin-arm64",
     ].join("\n");
-    const stderr = "v24.14.1 is already installed.";
-    const suffix = buildExitErrorSuffix(stdout, stderr);
+    const suffix = buildExitErrorSuffix(output);
     expect(suffix).toContain("ERR_PNPM_IGNORED_BUILDS");
     expect(suffix).toContain("v24.14.1 is already installed.");
   });

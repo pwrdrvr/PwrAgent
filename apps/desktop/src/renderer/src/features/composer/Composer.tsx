@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -532,6 +533,56 @@ function tailLines(text: string, maxLines: number): string {
   ].join("\n");
 }
 
+type EnvActionOutputChunk = {
+  id: number;
+  text: string;
+};
+
+type EnvActionOutputState = {
+  rawOutput: string;
+  chunks: EnvActionOutputChunk[];
+  nextChunkId: number;
+};
+
+function buildEnvActionOutputState(
+  output: string,
+  nextChunkId = 1,
+): EnvActionOutputState {
+  const text = tailLines(output, ENV_ACTION_OUTPUT_MAX_LINES);
+  return {
+    rawOutput: output,
+    chunks: text ? [{ id: nextChunkId - 1, text }] : [],
+    nextChunkId,
+  };
+}
+
+function trimEnvActionOutputChunks(
+  chunks: EnvActionOutputChunk[],
+): EnvActionOutputChunk[] {
+  const text = chunks.map((chunk) => chunk.text).join("");
+  const trimmed = tailLines(text, ENV_ACTION_OUTPUT_MAX_LINES);
+  if (trimmed === text) return chunks;
+  return [{ id: chunks.at(-1)?.id ?? 0, text: trimmed }];
+}
+
+function elementContainsSelection(element: HTMLElement | null): boolean {
+  if (!element) return false;
+  const selection = element.ownerDocument.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const range = selection.getRangeAt(index);
+    if (
+      element.contains(range.startContainer) ||
+      element.contains(range.endContainer)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Exported for unit testing; the existing call sites import via the
 // in-file identifier.
 export function formatDurationMs(
@@ -694,7 +745,10 @@ export function EnvActionAnchorEntry(props: {
     }
   }
 
-  const truncatedOutput = tailLines((run.output ?? "").trim(), ENV_ACTION_OUTPUT_MAX_LINES);
+  const output = (run.output ?? "").trim();
+  const outputLineCount = output
+    ? tailLines(output, ENV_ACTION_OUTPUT_MAX_LINES).split("\n").length
+    : 0;
   const modifier =
     status === "failed"
       ? "composer__queued--env-action-failed"
@@ -747,23 +801,74 @@ export function EnvActionAnchorEntry(props: {
         <div className="composer__queued-env-action-section">
           <div className="composer__queued-env-action-section-label">
             Output
-            {truncatedOutput
-              ? ` · ${truncatedOutput.split("\n").length} line${
-                  truncatedOutput.split("\n").length === 1 ? "" : "s"
+            {outputLineCount
+              ? ` · ${outputLineCount} line${
+                  outputLineCount === 1 ? "" : "s"
                 }`
               : ""}
           </div>
-          <pre className="composer__queued-env-action-output">
-            <code>
-              {truncatedOutput ||
-                (status === "started"
-                  ? "(no output yet — waiting for the command to print something)"
-                  : "(no output captured)")}
-            </code>
-          </pre>
+          <EnvActionOutputBlock output={output} status={status} />
         </div>
       </div>
     </details>
+  );
+}
+
+function EnvActionOutputBlock(props: {
+  output: string;
+  status: CodexEnvironmentActionRun["status"];
+}): ReactNode {
+  const outputRef = useRef<HTMLPreElement | null>(null);
+  const [state, setState] = useState<EnvActionOutputState>(() =>
+    buildEnvActionOutputState(props.output),
+  );
+
+  useLayoutEffect(() => {
+    setState((current) => {
+      if (current.rawOutput === props.output) {
+        return current;
+      }
+
+      if (
+        current.rawOutput &&
+        props.output.startsWith(current.rawOutput)
+      ) {
+        const appended = props.output.slice(current.rawOutput.length);
+        if (!appended) {
+          return { ...current, rawOutput: props.output };
+        }
+        const nextChunks = [
+          ...current.chunks,
+          { id: current.nextChunkId, text: appended },
+        ];
+        return {
+          rawOutput: props.output,
+          chunks: elementContainsSelection(outputRef.current)
+            ? nextChunks
+            : trimEnvActionOutputChunks(nextChunks),
+          nextChunkId: current.nextChunkId + 1,
+        };
+      }
+
+      return buildEnvActionOutputState(props.output, current.nextChunkId + 1);
+    });
+  }, [props.output]);
+
+  const placeholder =
+    props.status === "started"
+      ? "(no output yet — waiting for the command to print something)"
+      : "(no output captured)";
+
+  return (
+    <pre className="composer__queued-env-action-output" ref={outputRef}>
+      <code>
+        {state.chunks.length > 0
+          ? state.chunks.map((chunk) => (
+              <span key={chunk.id}>{chunk.text}</span>
+            ))
+          : placeholder}
+      </code>
+    </pre>
   );
 }
 
