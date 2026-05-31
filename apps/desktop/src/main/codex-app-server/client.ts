@@ -155,6 +155,7 @@ type RawCodexThreadSummary = Omit<
   originator?: string;
   projectKey?: string;
   gitOriginUrl?: string;
+  rawPreview?: string;
 };
 
 type RawCodexThreadListPage = {
@@ -947,7 +948,51 @@ function isAllowedCodexSessionOriginator(value: string | undefined): boolean {
 function filterVisibleCodexThreads(
   threads: RawCodexThreadSummary[]
 ): RawCodexThreadSummary[] {
-  return threads.filter((thread) => isAllowedCodexSessionOriginator(thread.originator));
+  return threads.filter(
+    (thread) =>
+      isAllowedCodexSessionOriginator(thread.originator) &&
+      !isGeneratedAppRuntimeThread(thread),
+  );
+}
+
+function normalizeAbsoluteDirectoryPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return undefined;
+  }
+  return path.resolve(trimmed);
+}
+
+function hasRuntimeGeneratedContext(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return Boolean(
+    normalized?.startsWith("<runtime_context") &&
+      normalized.includes("runtime-generated") &&
+      normalized.includes("not user-authored"),
+  );
+}
+
+function isDatedChatsDirectory(projectKey: string | undefined): boolean {
+  const directoryPath = normalizeAbsoluteDirectoryPath(projectKey);
+  if (!directoryPath) {
+    return false;
+  }
+
+  const parentName = path.basename(path.dirname(directoryPath)).toLowerCase();
+  const directoryName = path.basename(directoryPath);
+  return parentName === "chats" && /^\d{4}-\d{2}-\d{2}(?:$|[-_])/.test(directoryName);
+}
+
+function isGeneratedAppRuntimeThread(thread: RawCodexThreadSummary): boolean {
+  if (
+    hasRuntimeGeneratedContext(thread.rawPreview) ||
+    hasRuntimeGeneratedContext(thread.title) ||
+    hasRuntimeGeneratedContext(thread.summary)
+  ) {
+    return true;
+  }
+
+  return !thread.gitOriginUrl && isDatedChatsDirectory(thread.projectKey);
 }
 
 function isPlaceholderThreadTitle(value: string | undefined): boolean {
@@ -3279,6 +3324,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           summary === normalizeThreadSummary(rawDerivedTitle))
           ? undefined
           : summary,
+      rawPreview: rawDerivedTitle,
       originator,
       projectKey,
       model:
@@ -4328,9 +4374,12 @@ export class CodexAppServerClient {
         filter: params?.filter,
         requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
-        enrichDirectories: params?.enrichDirectories ?? true,
-      });
+      return await this.enrichThreads(
+        filterVisibleCodexThreads(archivedThreads),
+        {
+          enrichDirectories: params?.enrichDirectories ?? true,
+        },
+      );
     }
 
     const activeThreads = filterVisibleCodexThreads(
@@ -4427,6 +4476,7 @@ export class CodexAppServerClient {
         const {
           gitOriginUrl: _gitOriginUrl,
           originator: _originator,
+          rawPreview: _rawPreview,
           ...publicThread
         } = thread;
         const projectKey = publicThread.projectKey?.trim() || undefined;
@@ -4469,6 +4519,7 @@ export class CodexAppServerClient {
         const enrichment = await this.threadDirectoryEnricher(projectKey);
         const {
           originator: _originator,
+          rawPreview: _rawPreview,
           ...publicThread
         } = thread;
         return {

@@ -1149,6 +1149,90 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("filters generated app chats without hiding normal project threads", async () => {
+    MockTransport.threadListResultBySearchTerm.set("generated-app-chat-filter", [
+      {
+        id: "thread-runtime-context",
+        preview:
+          "<runtime_context source=\"pwrsnap\" note=\"runtime-generated, not user-authored\">\n<current_reel id=\"sz_123\">",
+        updatedAt: 1_777_500_000,
+        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-30-004-chat-2026-05-30",
+      },
+      {
+        id: "thread-dated-chat-directory",
+        name: "Make those voiceovers spicier",
+        updatedAt: 1_777_400_000,
+        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-29-PwrSnap-8dd7bd",
+      },
+      {
+        id: "thread-runtime-context-in-project",
+        preview:
+          "<runtime_context source=\"pwrsnap\" note=\"runtime-generated, not user-authored\">\n<current_capture id=\"cap_123\">",
+        updatedAt: 1_777_350_000,
+        cwd: "/Users/huntharo/github/PwrSnap/apps/desktop",
+        gitInfo: {
+          branch: "main",
+          originUrl: "git@github.com:pwrdrvr/PwrSnap.git",
+        },
+      },
+      {
+        id: "thread-pwrsnap-project",
+        name: "PwrSnap feature work",
+        updatedAt: 1_777_300_000,
+        cwd: "/Users/huntharo/github/PwrSnap",
+        gitInfo: {
+          branch: "main",
+          originUrl: "git@github.com:pwrdrvr/PwrSnap.git",
+        },
+      },
+      {
+        id: "thread-managed-workspace",
+        name: "PwrAgent workspace chat",
+        updatedAt: 1_777_200_000,
+        cwd: "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+      },
+      {
+        id: "thread-without-directory",
+        name: "Inbox-only chat",
+        updatedAt: 1_777_100_000,
+      },
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => ({
+      linkedDirectories: projectKey
+        ? [
+            {
+              id: projectKey,
+              label: path.basename(projectKey),
+              path: projectKey,
+              kind: "local" as const,
+            },
+          ]
+        : [],
+    }));
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+
+    const threads = await client.listThreads({ filter: "generated-app-chat-filter" });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-pwrsnap-project",
+      "thread-managed-workspace",
+      "thread-without-directory",
+    ]);
+    expect(threadDirectoryEnricher).not.toHaveBeenCalledWith(
+      "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-30-004-chat-2026-05-30",
+    );
+    expect(threadDirectoryEnricher).not.toHaveBeenCalledWith(
+      "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-29-PwrSnap-8dd7bd",
+    );
+
+    await client.close();
+  });
+
   it("uses protocol originator when Codex exposes it directly", async () => {
     MockTransport.threadListResultBySearchTerm.set("protocol-originator-filter", [
       {
@@ -1635,8 +1719,8 @@ describe("CodexAppServerClient", () => {
         expect.objectContaining({
           id: "thread-forked-worktree",
           projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
-          linkedDirectories: []
-        })
+          linkedDirectories: [],
+        }),
       ]);
       expect(readFileMock).not.toHaveBeenCalled();
 
