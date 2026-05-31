@@ -34,6 +34,7 @@ import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalizati
 import { resolveActiveProfilePath } from "../profile";
 import {
   ACP_AGENTS_GROK_CLI_PATH_ENV,
+  ACP_AGENTS_QWEN_CLI_PATH_ENV,
   AGENT_CORE_GROK_ENV,
 } from "./desktop-settings-env";
 import {
@@ -173,6 +174,9 @@ export type DesktopSettingsConfig = {
     grok?: {
       cliPath?: string;
     };
+    qwen?: {
+      cliPath?: string;
+    };
   };
   applications?: {
     editor?: {
@@ -296,6 +300,26 @@ export function resolveGrokCliPathOverride(
   try {
     const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
     return config.acpAgents?.grok?.cliPath?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the active override path for the Qwen Code executable, used by the
+ * ACP local-discovery probe. Order: env var > on-disk config > undefined.
+ */
+export function resolveQwenCliPathOverride(
+  options?: { env?: NodeJS.ProcessEnv },
+): string | undefined {
+  const env = options?.env ?? process.env;
+  const envOverride = env[ACP_AGENTS_QWEN_CLI_PATH_ENV]?.trim() || undefined;
+  if (envOverride) {
+    return envOverride;
+  }
+  try {
+    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
+    return config.acpAgents?.qwen?.cliPath?.trim() || undefined;
   } catch {
     return undefined;
   }
@@ -860,6 +884,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.acpAgents?.grok?.cliPath !== undefined) {
     set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
   }
+  if (patch.acpAgents?.qwen?.cliPath !== undefined) {
+    set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -906,6 +933,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const codex = tables["models.codex"];
   const acpAgentsGrok = tables["acp_agents.grok"];
+  const acpAgentsQwen = tables["acp_agents.qwen"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
@@ -1096,6 +1124,9 @@ function normalizeDesktopConfig(
       grok: {
         cliPath: readString(acpAgentsGrok?.cli_path),
       },
+      qwen: {
+        cliPath: readString(acpAgentsQwen?.cli_path),
+      },
     },
     applications: {
       editor: {
@@ -1258,8 +1289,19 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   }
 
   const acpAgentsGrok = config.acpAgents?.grok;
-  if (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) {
-    pruned.acpAgents = { grok: acpAgentsGrok };
+  const acpAgentsQwen = config.acpAgents?.qwen;
+  if (
+    (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
+    (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
+  ) {
+    pruned.acpAgents = {
+      ...(acpAgentsGrok && hasDefinedValue(acpAgentsGrok)
+        ? { grok: acpAgentsGrok }
+        : {}),
+      ...(acpAgentsQwen && hasDefinedValue(acpAgentsQwen)
+        ? { qwen: acpAgentsQwen }
+        : {}),
+    };
   }
 
   const editor = config.applications?.editor;

@@ -95,6 +95,7 @@ describe("formatBackendLabel", () => {
     expect(formatBackendLabel("acp:gemini")).toBe("Gemini");
     expect(formatBackendLabel("acp:kimi")).toBe("Kimi");
     expect(formatBackendLabel("acp:grok")).toBe("Grok");
+    expect(formatBackendLabel("acp:qwen")).toBe("Qwen");
     expect(formatBackendLabel("acp:unknown")).toBe("unknown");
   });
 

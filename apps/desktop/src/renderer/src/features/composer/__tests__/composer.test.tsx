@@ -246,6 +246,38 @@ function acpGeminiBackendSummary(): BackendSummary {
   };
 }
 
+function acpQwenBackendSummary(): BackendSummary {
+  return {
+    ...backendSummary("acp:qwen"),
+    label: "Qwen Code",
+    executionModes: [],
+    acp: {
+      registryId: "qwen",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        configOptions: [
+          {
+            id: "mode",
+            label: "Mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              { value: "default", label: "Default" },
+              { value: "auto", label: "Auto" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
 const reportedSkillAutocompleteDraftPrefix =
   "Oh shoot... I was wrong about this I think. I thought the desktop app didn't show the tool use but I was looking at a version of the desktop app that didn't start the turn. I just now looked at the instance that started the turn and it does indeed have the tool use notifications.\n\n\n\nLet's use ";
 
@@ -5526,6 +5558,104 @@ describe("Composer", () => {
             currentModeId: "yolo",
           }),
           executionMode: "full-access",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("keeps Gemini Auto Edit launchpad mode in the default execution envelope", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[acpGeminiBackendSummary()]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:gemini",
+          executionMode: "default",
+          acpRuntime: { currentModeId: "default" },
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    chooseDropdownOption("Agent mode", "Auto Edit");
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          acpRuntime: expect.objectContaining({
+            currentModeId: "autoEdit",
+          }),
+          executionMode: "default",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("keeps Qwen Auto launchpad mode in the default execution envelope", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[acpQwenBackendSummary()]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:qwen",
+          executionMode: "default",
+          acpRuntime: { configValues: { mode: "default" } },
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    chooseDropdownOption("Agent mode", "Auto");
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          acpRuntime: expect.objectContaining({
+            configValues: expect.objectContaining({ mode: "auto" }),
+          }),
+          executionMode: "default",
         }),
         { stickySettingsChanged: true },
       );

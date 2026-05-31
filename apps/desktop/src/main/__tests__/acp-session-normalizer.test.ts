@@ -639,6 +639,42 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("Inspecting project files.");
   });
 
+  it("can hide thought chunks when the backend also sends user-visible messages", () => {
+    const normalizer = new AcpSessionReplayNormalizer({
+      surfaceThoughtsAsMessages: false,
+    });
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "The build completed successfully, so I should report this.",
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Yes, the project builds successfully." },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text: "Yes, the project builds successfully.",
+      }),
+    ]);
+    expect(replay.lastAssistantMessage).toBe(
+      "Yes, the project builds successfully.",
+    );
+  });
+
   it("preserves unknown update variants as structured activity", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

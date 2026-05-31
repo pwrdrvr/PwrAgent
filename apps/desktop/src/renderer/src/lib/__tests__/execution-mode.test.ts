@@ -73,9 +73,11 @@ describe("ACP execution mode labels", () => {
   it("identifies ACP runtime modes that need the privileged execution envelope", () => {
     expect(acpRuntimeModeRequiresFullAccess("yolo")).toBe(true);
     expect(acpRuntimeModeRequiresFullAccess("YOLO")).toBe(true);
-    expect(acpRuntimeModeRequiresFullAccess("autoEdit")).toBe(true);
-    expect(acpRuntimeModeRequiresFullAccess("auto_edit")).toBe(true);
-    expect(acpRuntimeModeRequiresFullAccess("auto edit")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("auto")).toBe(false);
+    expect(acpRuntimeModeRequiresFullAccess("autoEdit")).toBe(false);
+    expect(acpRuntimeModeRequiresFullAccess("auto_edit")).toBe(false);
+    expect(acpRuntimeModeRequiresFullAccess("auto-edit")).toBe(false);
+    expect(acpRuntimeModeRequiresFullAccess("auto edit")).toBe(false);
     expect(acpRuntimeModeRequiresFullAccess("default")).toBe(false);
     expect(acpRuntimeModeRequiresFullAccess("plan")).toBe(false);
   });

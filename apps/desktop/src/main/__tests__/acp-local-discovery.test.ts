@@ -3,7 +3,10 @@ import { discoverLocalAcpAgents, type LocalAcpAgentProbe } from "../acp/acp-loca
 
 describe("discoverLocalAcpAgents", () => {
   it("discovers Gemini CLI when the local command supports ACP", async () => {
-    const probe = vi.fn<LocalAcpAgentProbe>(async (_command, args) => {
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      if (command !== "gemini") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
       if (args[0] === "--version") {
         return { stdout: "0.42.0\n" };
       }
@@ -154,6 +157,53 @@ describe("discoverLocalAcpAgents", () => {
     ]);
   });
 
+  it("discovers Qwen Code when the local command supports ACP mode", async () => {
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      if (command !== "qwen") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "0.16.2\n" };
+      }
+      if (args[0] === "--help") {
+        return { stdout: "Usage: qwen [options]\n  --acp Enables ACP mode\n" };
+      }
+      throw new Error("unexpected probe");
+    });
+
+    await expect(
+      discoverLocalAcpAgents({ probe, now: () => 2468 }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        backendId: "acp:qwen",
+        registryId: "qwen",
+        name: "Qwen Code",
+        version: "0.16.2",
+        distributionKind: "local",
+        distributionSource: "qwen --acp",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-qwen-code-cli",
+        installedAt: 2468,
+        updatedAt: 2468,
+        launchDescriptor: expect.objectContaining({
+          backendId: "acp:qwen",
+          registryId: "qwen",
+          distributionKind: "local",
+          command: "qwen",
+          args: ["--acp"],
+        }),
+        registryAgent: expect.objectContaining({
+          id: "qwen",
+          authors: ["Qwen Team"],
+          license: "Apache-2.0",
+          repositoryUrl: "https://github.com/QwenLM/qwen-code",
+        }),
+      }),
+    ]);
+  });
+
   it("honors a Grok CLI path override before probing $PATH", async () => {
     const seen: string[] = [];
     const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
@@ -188,6 +238,56 @@ describe("discoverLocalAcpAgents", () => {
       command === "/custom/grok" || command === "grok" || command.endsWith("/grok"),
     );
     expect(grokProbes[0]).toBe("/custom/grok");
+  });
+
+  it("honors a Qwen Code path override before probing $PATH", async () => {
+    const seen: string[] = [];
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      seen.push(command);
+      if (command !== "/custom/qwen") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "qwen 0.16.2\n" };
+      }
+      if (args[0] === "--help") {
+        return { stdout: "Usage: qwen [options]\n--acp\n" };
+      }
+      throw new Error("unexpected probe");
+    });
+
+    const result = await discoverLocalAcpAgents({
+      probe,
+      now: () => 1,
+      overrides: { qwen: "/custom/qwen" },
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        backendId: "acp:qwen",
+        launchDescriptor: expect.objectContaining({
+          command: "/custom/qwen",
+        }),
+      }),
+    ]);
+    expect(seen).toContain("/custom/qwen");
+    const qwenProbes = seen.filter((command) =>
+      command === "/custom/qwen" || command === "qwen" || command.endsWith("/qwen"),
+    );
+    expect(qwenProbes[0]).toBe("/custom/qwen");
+  });
+
+  it("ignores Qwen Code versions that do not advertise ACP mode", async () => {
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      if (command !== "qwen") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "0.16.0\n" };
+      }
+      return { stdout: "Usage: qwen [OPTIONS]\n" };
+    });
+
+    await expect(discoverLocalAcpAgents({ probe })).resolves.toEqual([]);
   });
 
   it("ignores Grok CLI versions that do not advertise stdio ACP", async () => {

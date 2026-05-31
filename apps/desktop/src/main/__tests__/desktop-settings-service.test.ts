@@ -868,6 +868,39 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("round-trips ACP agent CLI path overrides through write + read", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({
+      acpAgents: {
+        grok: { cliPath: "/custom/grok" },
+        qwen: { cliPath: "/custom/qwen" },
+      },
+    });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.grok]");
+    expect(tomlOnDisk).toContain('cli_path = "/custom/grok"');
+    expect(tomlOnDisk).toContain("[acp_agents.qwen]");
+    expect(tomlOnDisk).toContain('cli_path = "/custom/qwen"');
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.acpAgents.grok.cliPath).toEqual({
+      value: "/custom/grok",
+      source: "config",
+    });
+    expect(snapshot.acpAgents.qwen.cliPath).toEqual({
+      value: "/custom/qwen",
+      source: "config",
+    });
+  });
+
   it("sets CODEX_HOME for the selected Codex auth profile", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

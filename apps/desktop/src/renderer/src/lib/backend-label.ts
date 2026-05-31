@@ -41,6 +41,9 @@ export function formatBackendLabel(
   if (backend === "acp:grok") {
     return "Grok";
   }
+  if (backend === "acp:qwen") {
+    return "Qwen";
+  }
   const summary = summaries.find((candidate) => candidate.kind === backend);
   if (summary?.label) {
     return summary.label;

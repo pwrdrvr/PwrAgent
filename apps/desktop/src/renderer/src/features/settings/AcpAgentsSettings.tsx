@@ -18,18 +18,26 @@ export function AcpAgentsSettings(props: {
   saving?: boolean;
   snapshot?: DesktopSettingsSnapshot;
   onGrokCliPathChange?: (cliPath: string) => Promise<void>;
+  onQwenCliPathChange?: (cliPath: string) => Promise<void>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const grokCliPathSnapshot = props.snapshot?.acpAgents?.grok?.cliPath;
+  const qwenCliPathSnapshot = props.snapshot?.acpAgents?.qwen?.cliPath;
   const [grokCliPathDraft, setGrokCliPathDraft] = useState<string>(
     grokCliPathSnapshot?.value ?? "",
+  );
+  const [qwenCliPathDraft, setQwenCliPathDraft] = useState<string>(
+    qwenCliPathSnapshot?.value ?? "",
   );
   useEffect(() => {
     setGrokCliPathDraft(grokCliPathSnapshot?.value ?? "");
   }, [grokCliPathSnapshot?.value]);
+  useEffect(() => {
+    setQwenCliPathDraft(qwenCliPathSnapshot?.value ?? "");
+  }, [qwenCliPathSnapshot?.value]);
 
   async function refresh(refreshRegistry = false): Promise<void> {
     if (!props.desktopApi?.listAcpAgents) {
@@ -116,6 +124,64 @@ export function AcpAgentsSettings(props: {
                     onClick={() => {
                       setGrokCliPathDraft("");
                       void props.onGrokCliPathChange?.("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              }
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
+
+      {props.snapshot && props.onQwenCliPathChange ? (
+        <SettingsSection
+          eyebrow="ACP"
+          title="Qwen Code path"
+          description="Override the executable used by Qwen Code auto-discovery. Leave empty to probe $PATH, ~/.qwen/bin/qwen, /opt/homebrew/bin/qwen, and /usr/local/bin/qwen in that order."
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="Custom path"
+              sub="Absolute path to the qwen executable. Click Discover new after saving to re-probe."
+              source={
+                qwenCliPathSnapshot ? sourceBadge(qwenCliPathSnapshot) : undefined
+              }
+              control={
+                <div className="settings-secret">
+                  <input
+                    aria-label="Qwen Code path"
+                    className="settings-input"
+                    disabled={props.saving}
+                    placeholder="/opt/homebrew/bin/qwen"
+                    type="text"
+                    value={qwenCliPathDraft}
+                    onChange={(event) =>
+                      setQwenCliPathDraft(event.currentTarget.value)
+                    }
+                  />
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      props.saving ||
+                      qwenCliPathDraft.trim() ===
+                        (qwenCliPathSnapshot?.value ?? "").trim()
+                    }
+                    type="button"
+                    onClick={() => {
+                      void props.onQwenCliPathChange?.(qwenCliPathDraft.trim());
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="button button--ghost"
+                    disabled={props.saving || qwenCliPathDraft === ""}
+                    type="button"
+                    onClick={() => {
+                      setQwenCliPathDraft("");
+                      void props.onQwenCliPathChange?.("");
                     }}
                   >
                     Clear

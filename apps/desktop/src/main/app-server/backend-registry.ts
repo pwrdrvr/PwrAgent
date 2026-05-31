@@ -25,11 +25,13 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadReplay,
   type AppServerThreadSummary,
+  type AppServerThreadTitleSource,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
+  type BackendAcpRuntimeCapabilities,
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
@@ -854,10 +856,64 @@ const EXECUTION_MODE_SUMMARIES: Record<
 };
 
 const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
-  "auto_edit",
-  "autoEdit",
   "yolo",
 ]);
+
+function acpRuntimeStateRequiresFullAccess(params: {
+  runtime?: BackendAcpSessionRuntimeState;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+}): boolean {
+  const { runtime, runtimeCapabilities } = params;
+  if (!runtime) {
+    return false;
+  }
+  if (acpRuntimeValueLooksPrivileged(runtime.currentModeId)) {
+    return true;
+  }
+
+  const configValues = runtime.configValues ?? {};
+  const modeOptionIds = new Set(
+    runtimeCapabilities?.configOptions
+      ?.filter((option) => option.category === "mode")
+      .map((option) => option.id) ?? [],
+  );
+  for (const key of ["mode", "approval-mode", "approval_mode"]) {
+    modeOptionIds.add(key);
+  }
+
+  for (const optionId of modeOptionIds) {
+    if (acpRuntimeValueLooksPrivileged(configValues[optionId])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function acpRuntimeModeDefaultsFromCapabilities(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+  now: number,
+): BackendAcpSessionRuntimeState | undefined {
+  const modeConfigOptions =
+    runtimeCapabilities?.configOptions?.filter(
+      (option) => option.category === "mode",
+    ) ?? [];
+  const configValues = Object.fromEntries(
+    modeConfigOptions.flatMap((option) =>
+      typeof option.currentValue === "string"
+        ? [[option.id, option.currentValue] as const]
+        : [],
+    ),
+  );
+  const state: BackendAcpSessionRuntimeState = {
+    updatedAt: now,
+    ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
+    ...(modeConfigOptions.length === 0 && runtimeCapabilities?.modes?.currentModeId
+      ? { currentModeId: runtimeCapabilities.modes.currentModeId }
+      : {}),
+  };
+  return Object.keys(state).length > 1 ? state : undefined;
+}
 
 function sanitizeAcpRuntimeForExecutionMode(params: {
   backend: AppServerBackendKind;
@@ -1005,6 +1061,40 @@ function buildPendingRequestKey(params: {
   requestId: string;
 }): string {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
+}
+
+function isAcpPermissionRequest(
+  request: AppServerPendingRequestNotification,
+): boolean {
+  return (
+    request.method === "item/commandExecution/requestApproval" &&
+    request.params.acpMethod === "session/request_permission"
+  );
+}
+
+function acpRuntimeHasExecutionModeSelection(params: {
+  runtime?: BackendAcpSessionRuntimeState;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+}): boolean {
+  const { runtime, runtimeCapabilities } = params;
+  if (!runtime) {
+    return false;
+  }
+  if (runtime.currentModeId) {
+    return true;
+  }
+
+  const configValues = runtime.configValues ?? {};
+  const modeOptionIds = new Set(
+    runtimeCapabilities?.configOptions
+      ?.filter((option) => option.category === "mode")
+      .map((option) => option.id) ?? [],
+  );
+  for (const key of ["mode", "approval-mode", "approval_mode"]) {
+    modeOptionIds.add(key);
+  }
+
+  return [...modeOptionIds].some((optionId) => configValues[optionId]);
 }
 
 function executionModeQueueKey(
@@ -3385,9 +3475,15 @@ export class DesktopBackendRegistry {
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
+    const nextExecutionMode = this.isAcpRuntimeExecutionModeOption(params)
+      ? acpRuntimeValueLooksPrivileged(params.value)
+        ? "full-access"
+        : "default"
+      : session.executionMode;
     this.acpBackend.upsertSession({
       ...session,
       acpRuntime: mergedRuntime,
+      executionMode: nextExecutionMode,
       updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
     });
 
@@ -3426,6 +3522,18 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (nextExecutionMode !== session.executionMode) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/updated",
+          params: {
+            threadId: params.threadId,
+            executionMode: nextExecutionMode,
+          },
+        },
+      });
+    }
 
     return {
       backend: params.backend,
@@ -3605,6 +3713,15 @@ export class DesktopBackendRegistry {
       agent?.runtimeCapabilities?.configOptions?.some(
         (option) => option.id === optionId && option.category === "mode",
       ) ?? false
+    );
+  }
+
+  private isAcpRuntimeExecutionModeOption(
+    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
+  ): boolean {
+    return (
+      params.source === "mode" ||
+      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
     );
   }
 
@@ -4058,6 +4175,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId,
     threadId: string,
     name: string,
+    options?: { titleSource?: AppServerThreadTitleSource },
   ): Promise<{ threadId: string }> {
     const nextName = name.trim();
     if (!nextName) {
@@ -4071,7 +4189,7 @@ export class DesktopBackendRegistry {
     this.acpBackend.upsertSession({
       ...session,
       title: nextName,
-      titleSource: "explicit",
+      titleSource: options?.titleSource ?? "explicit",
       updatedAt: Math.max(session.updatedAt, updatedAt),
     });
     await this.emit({
@@ -4175,7 +4293,6 @@ export class DesktopBackendRegistry {
       branchName,
       ...request
     } = params;
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
     let cwd =
       backend === "codex" && !request.cwd?.trim()
@@ -4205,18 +4322,42 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
+    const acpAgent = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)
+      : undefined;
+    const acpRuntimeCapabilities = acpAgent?.runtimeCapabilities;
+    const acpRuntimeStartedAt = Date.now();
+    const acpRuntimeWithDefaults = isAcpBackendId(backend)
+      ? mergeAcpRuntimeState(
+          acpRuntimeModeDefaultsFromCapabilities(
+            acpRuntimeCapabilities,
+            acpRuntimeStartedAt,
+          ),
+          request.acpRuntime,
+        )
+      : request.acpRuntime;
     const acpRuntimeWithModel = isAcpBackendId(backend)
       ? withAcpModelRuntimeSelection({
-          runtime: request.acpRuntime,
-          runtimeCapabilities:
-            this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+          runtime: acpRuntimeWithDefaults,
+          runtimeCapabilities: acpRuntimeCapabilities,
           model: modelSettings.model,
-          now: Date.now(),
+          now: acpRuntimeStartedAt,
         })
-      : request.acpRuntime;
+      : acpRuntimeWithDefaults;
+    const effectiveExecutionMode =
+      isAcpBackendId(backend) &&
+      acpAgent?.registryId === "qwen" &&
+      executionMode === "default" &&
+      acpRuntimeStateRequiresFullAccess({
+        runtime: acpRuntimeWithModel,
+        runtimeCapabilities: acpRuntimeCapabilities,
+      })
+        ? "full-access"
+        : executionMode;
+    const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveExecutionMode];
     const acpRuntime = sanitizeAcpRuntimeForExecutionMode({
       backend,
-      executionMode,
+      executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
     const dynamicTools =
@@ -4243,10 +4384,10 @@ export class DesktopBackendRegistry {
       ? await this.startAcpSession({
           backend,
           cwd,
-          executionMode,
+          executionMode: effectiveExecutionMode,
           acpRuntime,
         })
-      : await this.getClient(backend, executionMode).startThread({
+      : await this.getClient(backend, effectiveExecutionMode).startThread({
           ...request,
           ...modelSettings,
           cwd,
@@ -4267,7 +4408,7 @@ export class DesktopBackendRegistry {
         projectKey: cwd,
         createdAt: startedAt,
         updatedAt: startedAt,
-        executionMode,
+        executionMode: effectiveExecutionMode,
         ...modelSettings,
         acpRuntime,
         codexEnvironmentRuntime: request.codexEnvironmentRuntime,
@@ -4290,7 +4431,7 @@ export class DesktopBackendRegistry {
       await this.overlayStore.setThreadExecutionMode({
         backend,
         threadId: result.threadId,
-        executionMode,
+        executionMode: effectiveExecutionMode,
       });
       await this.updateThreadGitBranchMetadata({
         backend,
@@ -4321,7 +4462,7 @@ export class DesktopBackendRegistry {
     return {
       backend,
       threadId: result.threadId,
-      executionMode,
+      executionMode: effectiveExecutionMode,
       codexEnvironmentRuntime: request.codexEnvironmentRuntime,
     };
   }
@@ -4453,11 +4594,17 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        return await this.startAcpTurn({
+        const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
           input: params.input,
         });
+        this.scheduleThreadTitleGeneration({
+          backend: params.backend,
+          threadId: result.threadId,
+          input: params.input,
+        });
+        return result;
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
@@ -8624,6 +8771,13 @@ export class DesktopBackendRegistry {
           params,
           result?.reason ?? "title_generation_unavailable"
         );
+        if (isAcpBackendId(params.backend)) {
+          await this.applyPromptDerivedAcpThreadTitle({
+            backend: params.backend,
+            threadId: params.threadId,
+            prompt: params.prompt,
+          });
+        }
         return;
       }
       this.logThreadTitleGeneration("generated", params, undefined, {
@@ -8654,13 +8808,11 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      if (params.backend === "codex") {
-        await this.withCodexThreadClient(params.threadId, async (client) =>
-          await this.renameWithClient(client, params.threadId, result.title)
-        );
-      } else {
-        await this.renameWithClient(this.grokClient, params.threadId, result.title);
-      }
+      await this.applyGeneratedThreadTitle({
+        backend: params.backend,
+        threadId: params.threadId,
+        title: result.title,
+      });
       this.logThreadTitleGeneration("applied", params, undefined, {
         generatedTitle: truncateLogValue(result.title),
       });
@@ -8675,6 +8827,49 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
+    }
+  }
+
+  private async applyPromptDerivedAcpThreadTitle(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    prompt: string;
+  }): Promise<void> {
+    const title = shortenDerivedThreadTitle(params.prompt);
+    if (!title) {
+      return;
+    }
+    const latestThread = await this.findThreadForTitleGeneration({
+      backend: params.backend,
+      callerReason: "title-generation",
+      threadId: params.threadId,
+    });
+    if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      return;
+    }
+    await this.renameAcpSession(params.backend, params.threadId, title, {
+      titleSource: "fallback",
+    });
+    this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
+      generatedTitle: truncateLogValue(title),
+    });
+  }
+
+  private async applyGeneratedThreadTitle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    title: string;
+  }): Promise<void> {
+    if (isAcpBackendId(params.backend)) {
+      await this.renameAcpSession(params.backend, params.threadId, params.title, {
+        titleSource: "derived",
+      });
+    } else if (params.backend === "codex") {
+      await this.withCodexThreadClient(params.threadId, async (client) =>
+        await this.renameWithClient(client, params.threadId, params.title)
+      );
+    } else {
+      await this.renameWithClient(this.grokClient, params.threadId, params.title);
     }
   }
 
@@ -8713,6 +8908,36 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
+      const session = this.acpBackend.getSession(backend, request.params.threadId);
+      const runtimeCapabilities =
+        this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+      const runtimeControlsExecutionMode = acpRuntimeHasExecutionModeSelection({
+        runtime: session?.acpRuntime,
+        runtimeCapabilities,
+      });
+      const runtimeRequiresFullAccess = acpRuntimeStateRequiresFullAccess({
+        runtime: session?.acpRuntime,
+        runtimeCapabilities,
+      });
+      if (
+        runtimeControlsExecutionMode
+          ? runtimeRequiresFullAccess
+          : session?.executionMode === "full-access"
+      ) {
+        backendRegistryLog.info("auto-approving ACP permission request", {
+          backend,
+          executionMode: session?.executionMode ?? "default",
+          requestId: request.params.requestId,
+          runtimeControlsExecutionMode,
+          runtimeRequiresFullAccess,
+          threadId: request.params.threadId,
+          turnId: request.params.turnId,
+        });
+        return { decision: "approve" };
+      }
+    }
+
     const dynamicToolCall = readAutomationInspectionDynamicToolCall({
       method: request.method,
       params: request.params,
