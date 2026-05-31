@@ -7523,7 +7523,7 @@ script = "printf setup-output"
       threadId: "thread-parent",
       cwd: "/repo/app/.worktrees/parent/app",
       model: "gpt-5.5",
-      serviceTier: "fast",
+      serviceTier: "priority",
       fastMode: true,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -7547,7 +7547,7 @@ script = "printf setup-output"
       parentThreadId: "thread-parent",
       executionMode: "default",
       model: "gpt-5.5",
-      serviceTier: "fast",
+      serviceTier: "priority",
       fastMode: true,
     });
 

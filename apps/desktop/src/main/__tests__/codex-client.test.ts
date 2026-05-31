@@ -4509,7 +4509,7 @@ describe("CodexAppServerClient", () => {
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      serviceTier: "fast",
+      serviceTier: "priority",
       config: {
         fast_mode: true,
       },
