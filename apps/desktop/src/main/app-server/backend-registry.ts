@@ -2555,19 +2555,9 @@ export class DesktopBackendRegistry {
     const cached = this.threadListCache.get(cacheKey);
     const now = Date.now();
     if (cached?.threads && (cached.expiresAt ?? 0) > now) {
-      logDebug("threadListCache:hit", {
-        backend: params.backend ?? "all",
-        callerReason: params.callerReason ?? null,
-        ownerId: this.threadListCacheOwnerId,
-      });
       return cached.threads;
     }
     if (cached?.promise) {
-      logDebug("threadListCache:coalesced", {
-        backend: params.backend ?? "all",
-        callerReason: params.callerReason ?? null,
-        ownerId: this.threadListCacheOwnerId,
-      });
       return await cached.promise;
     }
 
@@ -5509,14 +5499,16 @@ export class DesktopBackendRegistry {
       expectedBranch: drifted ? expectedBranch : undefined,
     });
 
-    backendRegistryLog.debug("checked thread branch drift", {
-      backend: params.backend,
-      drifted,
-      expectedBranch,
-      observedBranch: normalizedObservedBranch,
-      workspaceCwd,
-      threadId: params.threadId,
-    });
+    if (drifted) {
+      backendRegistryLog.debug("checked thread branch drift", {
+        backend: params.backend,
+        drifted,
+        expectedBranch,
+        observedBranch: normalizedObservedBranch,
+        workspaceCwd,
+        threadId: params.threadId,
+      });
+    }
 
     return {
       backend: params.backend,
@@ -7418,18 +7410,6 @@ export class DesktopBackendRegistry {
       return {};
     }
 
-    logDebug("codexDirectoryBackfill:candidates", {
-      callerReason: params.diagnostics?.callerReason ?? null,
-      candidateCount: candidates.length,
-      candidates: candidates.slice(0, 10).map((thread) => ({
-        threadId: thread.id,
-        projectKey: thread.projectKey,
-        linkedDirectories: thread.linkedDirectories,
-        overlayExtraLinkedDirectories:
-          params.overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
-      })),
-    });
-
     try {
       const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
       const updatedOverlaysByThreadId: Record<
@@ -7470,11 +7450,14 @@ export class DesktopBackendRegistry {
           });
       }
 
-      logDebug("codexDirectoryBackfill:completed", {
-        callerReason: params.diagnostics?.callerReason ?? null,
-        candidateCount: candidates.length,
-        updatedThreadCount: Object.keys(updatedOverlaysByThreadId).length,
-      });
+      const updatedThreadCount = Object.keys(updatedOverlaysByThreadId).length;
+      if (updatedThreadCount > 0) {
+        logDebug("codexDirectoryBackfill:completed", {
+          callerReason: params.diagnostics?.callerReason ?? null,
+          candidateCount: candidates.length,
+          updatedThreadCount,
+        });
+      }
 
       return updatedOverlaysByThreadId;
     } catch (error) {
