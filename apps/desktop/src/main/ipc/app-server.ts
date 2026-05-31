@@ -520,10 +520,6 @@ class DesktopAppServerService {
     const requestKey = getNavigationSnapshotRequestKey(request);
     const pending = this.pendingNavigationSnapshots.get(requestKey);
     if (pending) {
-      logDebug("getNavigationSnapshot:coalesced", {
-        backend: request.backend ?? "all",
-        filter: request.filter ?? null,
-      });
       return await pending;
     }
 
@@ -540,22 +536,16 @@ class DesktopAppServerService {
   private async readNavigationSnapshot(
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
-    const startedAt = Date.now();
     const backend: AppServerBackendScope = request.backend ?? "all";
-    const listStartedAt = Date.now();
     const threads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: "navigation-snapshot",
       filter: request.filter,
     });
-    const listDurationMs = Date.now() - listStartedAt;
-    const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
-    const bindingsDurationMs = Date.now() - bindingsStartedAt;
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
-    const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       automationsByThreadKey,
@@ -565,8 +555,6 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
-    const overlayDurationMs = Date.now() - overlayStartedAt;
-    const directoryStartedAt = Date.now();
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
@@ -580,7 +568,6 @@ class DesktopAppServerService {
         return applyDirectoryGitStatus(directory, cached.gitStatus);
       }),
     );
-    const directoryDurationMs = Date.now() - directoryStartedAt;
     const previousDirectories = this.previousDirectoriesByBackend.get(backend);
     const directoriesUnchanged = previousDirectories
       ? directoryStatusesEqual(previousDirectories, directories)
@@ -590,19 +577,6 @@ class DesktopAppServerService {
       automatic: true,
       directories: snapshot.directories,
       requestKey: getNavigationSnapshotRequestKey(request),
-    });
-
-    logDebug("getNavigationSnapshot", {
-      backend,
-      count: snapshot.threads.length,
-      inboxCount: snapshot.inboxThreadKeys.length,
-      unchanged: snapshot.unchanged && directoriesUnchanged,
-      durationMs: Date.now() - startedAt,
-      listDurationMs,
-      bindingsDurationMs,
-      overlayDurationMs,
-      directoryDurationMs,
-      directoryStatusMode: "background",
     });
 
     return {
@@ -979,14 +953,6 @@ class DesktopAppServerService {
       threadId: request.threadId,
       prs,
       refreshKey: requestKey,
-    });
-
-    logDebug("refreshThreadPullRequests", {
-      backend,
-      threadId: request.threadId,
-      branch,
-      directoryCount: request.directoryPaths.length,
-      prCount: prs.length,
     });
 
     return { backend, threadId: request.threadId, prs, ghAvailable: true };
