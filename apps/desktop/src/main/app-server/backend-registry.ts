@@ -895,19 +895,21 @@ function acpRuntimeModeDefaultsFromCapabilities(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
   now: number,
 ): BackendAcpSessionRuntimeState | undefined {
+  const modeConfigOptions =
+    runtimeCapabilities?.configOptions?.filter(
+      (option) => option.category === "mode",
+    ) ?? [];
   const configValues = Object.fromEntries(
-    (runtimeCapabilities?.configOptions ?? [])
-      .filter((option) => option.category === "mode")
-      .flatMap((option) =>
-        typeof option.currentValue === "string"
-          ? [[option.id, option.currentValue] as const]
-          : [],
-      ),
+    modeConfigOptions.flatMap((option) =>
+      typeof option.currentValue === "string"
+        ? [[option.id, option.currentValue] as const]
+        : [],
+    ),
   );
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
-    ...(runtimeCapabilities?.modes?.currentModeId
+    ...(modeConfigOptions.length === 0 && runtimeCapabilities?.modes?.currentModeId
       ? { currentModeId: runtimeCapabilities.modes.currentModeId }
       : {}),
   };
@@ -8444,10 +8446,20 @@ export class DesktopBackendRegistry {
   ): Promise<unknown> {
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
-      if (session?.executionMode === "full-access") {
+      const runtimeRequiresFullAccess = acpRuntimeStateRequiresFullAccess({
+        runtime: session?.acpRuntime,
+        runtimeCapabilities:
+          this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+      });
+      if (
+        session?.executionMode === "full-access" ||
+        runtimeRequiresFullAccess
+      ) {
         backendRegistryLog.info("auto-approving ACP permission request", {
           backend,
+          executionMode: session?.executionMode ?? "default",
           requestId: request.params.requestId,
+          runtimeRequiresFullAccess,
           threadId: request.params.threadId,
           turnId: request.params.turnId,
         });

@@ -2770,6 +2770,13 @@ describe("DesktopBackendRegistry", () => {
                 ],
               },
             ],
+            modes: {
+              currentModeId: "default",
+              availableModes: [
+                { id: "default", label: "Default" },
+                { id: "auto", label: "Auto" },
+              ],
+            },
           },
         },
       ]),
@@ -2806,11 +2813,22 @@ describe("DesktopBackendRegistry", () => {
         }),
       }),
     );
+    expect(acpClient.startSession).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        acpRuntime: expect.objectContaining({ currentModeId: "default" }),
+      }),
+    );
     expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
       sessionId: "qwen-session-1",
       source: "configOption",
       optionId: "mode",
       value: "auto",
+    });
+    expect(acpClient.setRuntimeOption).not.toHaveBeenCalledWith({
+      sessionId: "qwen-session-1",
+      source: "mode",
+      optionId: "mode",
+      value: "default",
     });
     expect(sessions[0]).toMatchObject({
       executionMode: "full-access",
@@ -2852,6 +2870,95 @@ describe("DesktopBackendRegistry", () => {
           createdAt: 1000,
           updatedAt: 2000,
           executionMode: "full-access",
+          acpRuntime: {
+            configValues: { mode: "auto" },
+            currentModeId: "auto",
+            updatedAt: 2000,
+          },
+          status: "active",
+        },
+      ]),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await (
+      registry as unknown as {
+        handleServerRequest(
+          backend: AcpBackendId,
+          request: AppServerPendingRequestNotification,
+        ): Promise<unknown>;
+      }
+    ).handleServerRequest(acpBackendId, {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "qwen-session-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        acpMethod: "session/request_permission",
+        command: "pnpm build",
+      },
+    });
+
+    expect(response).toEqual({ decision: "approve" });
+    expect(events).toEqual([]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("auto-approves ACP permission requests for Auto runtime sessions", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "qwen",
+          name: "Qwen Code",
+          distributionKind: "local",
+          distributionSource: "qwen --experimental-acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-qwen-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "mode",
+                label: "Mode",
+                type: "select",
+                category: "mode",
+                currentValue: "default",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: acpBackendId,
+          sessionId: "qwen-session-1",
+          title: "Qwen thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 2000,
+          executionMode: "default",
           acpRuntime: {
             configValues: { mode: "auto" },
             currentModeId: "auto",
