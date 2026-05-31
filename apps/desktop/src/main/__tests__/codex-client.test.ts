@@ -1458,7 +1458,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.listThreads({ filter: "web-app" });
@@ -3528,6 +3528,85 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("normalizes Codex thread settings service tier notifications", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-2",
+        threadSettings: {
+          model: "gpt-5.5",
+          serviceTier: "priority",
+          effort: "medium"
+        }
+      }
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-2",
+        threadSettings: {
+          model: "gpt-5.5",
+          serviceTier: "default",
+          effort: "medium"
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+      "unknown codex notification",
+      expect.anything()
+    );
+    expect(notifications).toEqual([
+      {
+        method: "thread/codexSettings/observed",
+        params: {
+          threadId: "thread-2",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          rawServiceTier: "priority",
+          serviceTier: "fast",
+          fastMode: true
+        }
+      },
+      {
+        method: "thread/codexSettings/observed",
+        params: {
+          threadId: "thread-2",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          rawServiceTier: "default",
+          serviceTier: null,
+          fastMode: false
+        }
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("logs diagnostics for Codex skills changed notifications", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -4045,6 +4124,60 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("sends Fast mode as Codex priority serviceTier on the first turn of a newly created thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const created = await client.startThread({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      model: "gpt-5.5",
+      fastMode: true,
+    });
+    await client.startTurn({
+      threadId: created.threadId,
+      input: [{ type: "text", text: "First fast prompt" }],
+      model: "gpt-5.5",
+      fastMode: true,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+    );
+    expect(requests).not.toContainEqual(
+      expect.objectContaining({ method: "thread/resume" }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/start",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: "priority",
+        }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: "priority",
+        }),
+      }),
+    );
+
+    await client.close();
+  });
+
   it("resumes a created thread again after the first turn has started", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {
@@ -4277,7 +4410,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await expect(client.archiveThread({ threadId: "thread-2" })).resolves.toEqual({
@@ -4506,7 +4639,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           ephemeral: true,
           model: "gpt-5.4-mini",
-          serviceTier: "fast",
+          serviceTier: "priority",
           config: {
             web_search: "disabled",
           },
@@ -4519,7 +4652,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           threadId: "thread-title-helper",
           model: "gpt-5.4-mini",
-          serviceTier: "fast",
+          serviceTier: "priority",
           effort: "low",
           outputSchema: expect.objectContaining({
             type: "object",
@@ -4756,6 +4889,99 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       cwd: "/repo/app/.worktrees/thread-2/app",
     });
+
+    await client.close();
+  });
+
+  it("sends Fast mode as Codex priority serviceTier when resuming an existing thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply quickly" }],
+      model: "gpt-5.5",
+      fastMode: true,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/resume",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: "priority",
+        }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: "priority",
+        }),
+      }),
+    );
+
+    await client.close();
+  });
+
+  it("sends an explicit serviceTier clear when Fast mode is unchecked on an existing thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply without fast" }],
+      model: "gpt-5.5",
+      serviceTier: "fast",
+      fastMode: false,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/resume",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: null,
+        }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          model: "gpt-5.5",
+          serviceTier: null,
+        }),
+      }),
+    );
 
     await client.close();
   });

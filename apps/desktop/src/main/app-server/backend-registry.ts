@@ -1419,6 +1419,21 @@ type ModelSettings = {
   fastMode?: boolean;
 };
 
+type CodexFastModeMismatchWarning = {
+  threadId: string;
+  turnId: string;
+  expectedFastMode: boolean;
+  observedFastMode: boolean;
+  observedServiceTier?: string | null;
+};
+
+type ObservedCodexSettings = {
+  fastMode?: boolean;
+  serviceTier?: string | null;
+  rawServiceTier?: string | null;
+  observedAt: number;
+};
+
 type ThreadListCallerReason =
   | "archive-cleanup"
   | "branch-drift"
@@ -1779,12 +1794,189 @@ function resolveModelSettingsFromOptions(
       : getDefaultReasoningEffort(options)
     : undefined;
   const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
+  const shouldClearCodexFastTier =
+    backend === "codex" &&
+    !supportsFast &&
+    (settings.serviceTier === "fast" ||
+      settings.serviceTier === "priority" ||
+      settings.fastMode === false);
 
   return {
     model: selectedModel?.id,
     reasoningEffort,
-    serviceTier: settings.serviceTier,
-    fastMode: supportsFast ? settings.fastMode : undefined,
+    serviceTier: resolveCodexFastModeServiceTier({
+      backend,
+      serviceTier: settings.serviceTier,
+      fastMode: settings.fastMode,
+      supportsFast,
+    }),
+    fastMode: supportsFast
+      ? settings.fastMode
+      : shouldClearCodexFastTier
+        ? false
+        : undefined,
+  };
+}
+
+function resolveCodexFastModeServiceTier(params: {
+  backend: AppServerBackendKind;
+  fastMode?: boolean;
+  serviceTier?: string;
+  supportsFast: boolean;
+}): string | undefined {
+  if (params.backend !== "codex") {
+    return params.serviceTier;
+  }
+  if (params.fastMode === true && params.supportsFast) {
+    return "priority";
+  }
+  if (params.fastMode === false) {
+    return params.serviceTier &&
+      params.serviceTier !== "fast" &&
+      params.serviceTier !== "priority"
+      ? params.serviceTier
+      : undefined;
+  }
+  if (
+    !params.supportsFast &&
+    (params.serviceTier === "fast" || params.serviceTier === "priority")
+  ) {
+    return undefined;
+  }
+  return params.serviceTier;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readStringLike(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string | null | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (!(key in record)) {
+      continue;
+    }
+    const value = record[key];
+    if (value === null) {
+      return null;
+    }
+    if (typeof value === "string") {
+      return value.trim() || null;
+    }
+  }
+  return undefined;
+}
+
+function readBooleanLike(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): boolean | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function firstDefinedStringLike(
+  ...values: Array<string | null | undefined>
+): string | null | undefined {
+  for (const value of values) {
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readObservedCodexFastMode(
+  notificationParams: unknown,
+): { fastMode?: boolean; serviceTier?: string | null } {
+  const params = readRecord(notificationParams);
+  const turn = readRecord(params?.turn);
+  const config = readRecord(params?.config) ?? readRecord(turn?.config);
+  const serviceTier = firstDefinedStringLike(
+    readStringLike(params, ["serviceTier", "service_tier"]),
+    readStringLike(turn, ["serviceTier", "service_tier"]),
+    readStringLike(config, ["service_tier", "serviceTier"]),
+  );
+  if (serviceTier !== undefined) {
+    const normalizedServiceTier =
+      typeof serviceTier === "string" ? serviceTier.toLowerCase() : serviceTier;
+    return {
+      fastMode: normalizedServiceTier === "fast" || normalizedServiceTier === "priority",
+      serviceTier,
+    };
+  }
+
+  const fastMode =
+    readBooleanLike(params, ["fastMode", "fast_mode"]) ??
+    readBooleanLike(turn, ["fastMode", "fast_mode"]) ??
+    readBooleanLike(config, ["fastMode", "fast_mode"]);
+  return { fastMode };
+}
+
+export function getCodexFastModeMismatchWarning(params: {
+  expectedFastMode: boolean;
+  notificationParams: unknown;
+  threadId: string;
+  turnId: string;
+}): CodexFastModeMismatchWarning | undefined {
+  const observed = readObservedCodexFastMode(params.notificationParams);
+  if (observed.fastMode === undefined) {
+    return undefined;
+  }
+  if (observed.fastMode === params.expectedFastMode) {
+    return undefined;
+  }
+  return {
+    threadId: params.threadId,
+    turnId: params.turnId,
+    expectedFastMode: params.expectedFastMode,
+    observedFastMode: observed.fastMode,
+    observedServiceTier: observed.serviceTier,
+  };
+}
+
+export function buildCodexFastModeMismatchNotificationParams(
+  notificationParams: unknown,
+  observedSettings?: { fastMode?: boolean; serviceTier?: string | null },
+): unknown {
+  const base = readRecord(notificationParams) ?? {};
+  if (!observedSettings) {
+    return base;
+  }
+  const hasTerminalFastMode =
+    "fastMode" in base ||
+    "fast_mode" in base ||
+    readRecord(base.turn)?.fastMode !== undefined ||
+    readRecord(base.turn)?.fast_mode !== undefined;
+  const hasTerminalServiceTier =
+    "serviceTier" in base ||
+    "service_tier" in base ||
+    readRecord(base.turn)?.serviceTier !== undefined ||
+    readRecord(base.turn)?.service_tier !== undefined;
+
+  return {
+    ...base,
+    ...(!hasTerminalFastMode && observedSettings.fastMode !== undefined
+      ? { fastMode: observedSettings.fastMode }
+      : {}),
+    ...(!hasTerminalServiceTier && observedSettings.serviceTier !== undefined
+      ? { serviceTier: observedSettings.serviceTier }
+      : {}),
   };
 }
 
@@ -1867,6 +2059,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
@@ -4036,6 +4229,16 @@ export class DesktopBackendRegistry {
       });
     }
 
+    backendRegistryLog.info("startThread", {
+      backend,
+      cwd,
+      executionMode,
+      model: modelSettings.model ?? null,
+      reasoningEffort: modelSettings.reasoningEffort ?? null,
+      serviceTier: modelSettings.serviceTier ?? null,
+      fastMode: modelSettings.fastMode ?? null,
+    });
+
     const result = isAcpBackendId(backend)
       ? await this.startAcpSession({
           backend,
@@ -5895,6 +6098,9 @@ export class DesktopBackendRegistry {
     const nextLaunchpad: NavigationLaunchpadDraft = {
       ...current,
       ...request.patch,
+      ...("fastMode" in request.patch
+        ? { serviceTier: undefined }
+        : {}),
       directoryKey: request.directoryKey,
       settingsTouchedAt: request.stickySettingsChanged
         ? Date.now()
@@ -5921,6 +6127,7 @@ export class DesktopBackendRegistry {
     }
     if (request.stickySettingsChanged && "fastMode" in request.patch) {
       stickyPatch.fastMode = request.patch.fastMode;
+      stickyPatch.serviceTier = undefined;
     }
     if (request.stickySettingsChanged && request.patch.workMode) {
       stickyPatch.workMode = request.patch.workMode;
@@ -6345,9 +6552,10 @@ export class DesktopBackendRegistry {
     },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
+      request.launchpad ??
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
-      })) ?? request.launchpad;
+      }));
     if (!launchpad) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
@@ -6457,10 +6665,10 @@ export class DesktopBackendRegistry {
       model: launchpad.model,
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
-        fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
-        acpRuntime: launchpad.acpRuntime,
-        codexEnvironmentRuntime,
-      });
+      fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      acpRuntime: launchpad.acpRuntime,
+      codexEnvironmentRuntime,
+    });
     pendingActionThreadId = startThreadResponse.threadId;
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
@@ -6622,6 +6830,13 @@ export class DesktopBackendRegistry {
       ),
       ...modelSettings,
     };
+    if (
+      resolvedDefaults.backend === "codex" &&
+      (resolvedDefaults.serviceTier === "fast" ||
+        resolvedDefaults.serviceTier === "priority")
+    ) {
+      delete resolvedDefaults.serviceTier;
+    }
 
     if (launchpadDefaultsEqual(storedDefaults, resolvedDefaults)) {
       return storedDefaults;
@@ -6663,6 +6878,9 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        if (backend === "codex") {
+          this.recordObservedCodexSettings(notification);
+        }
         if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
           this.invalidateThreadListCache(backend);
         }
@@ -6689,6 +6907,38 @@ export class DesktopBackendRegistry {
         client.onRequest(async (request) => await this.handleServerRequest(backend, request)),
       );
     }
+  }
+
+  private recordObservedCodexSettings(notification: AppServerNotification): void {
+    if (notification.method !== "thread/codexSettings/observed") {
+      return;
+    }
+    const params = notification.params as {
+      fastMode?: unknown;
+      rawServiceTier?: unknown;
+      serviceTier?: unknown;
+      threadId?: unknown;
+    };
+    if (typeof params.threadId !== "string") {
+      return;
+    }
+    const observed = {
+      ...(typeof params.fastMode === "boolean" ? { fastMode: params.fastMode } : {}),
+      ...(typeof params.serviceTier === "string" || params.serviceTier === null
+        ? { serviceTier: params.serviceTier }
+        : {}),
+      ...(typeof params.rawServiceTier === "string" || params.rawServiceTier === null
+        ? { rawServiceTier: params.rawServiceTier }
+        : {}),
+      observedAt: Date.now(),
+    };
+    this.observedCodexSettingsByThread.set(params.threadId, observed);
+    backendRegistryLog.info("codex thread settings observed", {
+      threadId: params.threadId,
+      fastMode: observed.fastMode ?? null,
+      serviceTier: observed.serviceTier ?? null,
+      rawServiceTier: observed.rawServiceTier ?? null,
+    });
   }
 
   private async emitHeadlessAutomationLifecycle(
@@ -8741,6 +8991,33 @@ export class DesktopBackendRegistry {
           await this.adoptThreadBranchChangeFromActiveTurn({
             backend: event.backend,
             threadId: notification.params.threadId,
+          });
+        }
+        try {
+          const overlay = await this.overlayStore.getThreadOverlayState({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+          });
+          const observedSettings = this.observedCodexSettingsByThread.get(
+            notification.params.threadId,
+          );
+          const warning = getCodexFastModeMismatchWarning({
+            threadId: notification.params.threadId,
+            turnId,
+            expectedFastMode: Boolean(overlay?.fastMode),
+            notificationParams: buildCodexFastModeMismatchNotificationParams(
+              notification.params,
+              observedSettings,
+            ),
+          });
+          if (warning) {
+            backendRegistryLog.warn("codex fast mode state mismatch", warning);
+          }
+        } catch (error) {
+          backendRegistryLog.warn("codex fast mode state mismatch check failed", {
+            error: error instanceof Error ? error.message : String(error),
+            threadId: notification.params.threadId,
+            turnId,
           });
         }
       }

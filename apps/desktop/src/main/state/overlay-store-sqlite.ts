@@ -51,6 +51,19 @@ function parseDirectoryGitStatusCachePayload(
   }
 }
 
+function normalizeLaunchpadDefaults(
+  defaults: NavigationLaunchpadDefaults,
+): NavigationLaunchpadDefaults {
+  const next: NavigationLaunchpadDefaults = { ...defaults };
+  if (
+    next.backend === "codex" &&
+    (next.serviceTier === "fast" || next.serviceTier === "priority")
+  ) {
+    delete next.serviceTier;
+  }
+  return next;
+}
+
 export class SqliteOverlayStore {
   constructor(private readonly stateDb: StateDb) {}
 
@@ -719,7 +732,7 @@ export class SqliteOverlayStore {
     patch: Partial<NavigationLaunchpadDefaults>,
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
-    const next = { ...current, ...patch };
+    const next = normalizeLaunchpadDefaults({ ...current, ...patch });
     this.writeLaunchpadDefaults(next);
     return next;
   }
@@ -913,21 +926,32 @@ export class SqliteOverlayStore {
     for (const row of rows) {
       defaults[row.key] = JSON.parse(row.value);
     }
-    return (
+    const parsed = (
       Object.keys(defaults).length > 0
         ? defaults
         : { backend: "codex", executionMode: "default" }
     ) as NavigationLaunchpadDefaults;
+    const normalized = normalizeLaunchpadDefaults(parsed);
+    if (
+      parsed.backend === "codex" &&
+      (parsed.serviceTier === "fast" || parsed.serviceTier === "priority")
+    ) {
+      this.writeLaunchpadDefaults(normalized);
+    }
+    return normalized;
   }
 
   private writeLaunchpadDefaults(defaults: NavigationLaunchpadDefaults): void {
-    const stmt = this.stateDb.raw.prepare(
+    const normalizedDefaults = normalizeLaunchpadDefaults(defaults);
+    const deleteStmt = this.stateDb.raw.prepare("DELETE FROM launchpad_defaults");
+    const insertStmt = this.stateDb.raw.prepare(
       "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
     );
     const write = this.stateDb.raw.transaction(() => {
-      for (const [key, value] of Object.entries(defaults)) {
+      deleteStmt.run();
+      for (const [key, value] of Object.entries(normalizedDefaults)) {
         if (value !== undefined) {
-          stmt.run(key, JSON.stringify(value));
+          insertStmt.run(key, JSON.stringify(value));
         }
       }
     });
