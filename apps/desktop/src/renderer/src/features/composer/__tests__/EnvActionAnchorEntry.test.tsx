@@ -148,6 +148,44 @@ describe("EnvActionAnchorEntry", () => {
         screen.getByText("(no output captured)"),
       ).toBeInTheDocument();
     });
+
+    it("appends live output without moving an existing text selection", () => {
+      const run = buildRun({
+        status: "started",
+        output: "alpha\nbeta",
+      });
+      const { container, rerender } = render(
+        <EnvActionAnchorEntry
+          run={run}
+          environmentName={undefined}
+          onDismiss={() => {}}
+        />,
+      );
+      const outputBlock = container.querySelector(
+        ".composer__queued-env-action-output",
+      );
+      const firstChunk = outputBlock?.querySelector("span")?.firstChild;
+      expect(firstChunk).toBeInstanceOf(Text);
+
+      const range = document.createRange();
+      range.setStart(firstChunk!, 0);
+      range.setEnd(firstChunk!, "alpha".length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      expect(selection?.toString()).toBe("alpha");
+
+      rerender(
+        <EnvActionAnchorEntry
+          run={{ ...run, output: "alpha\nbeta\ngamma" }}
+          environmentName={undefined}
+          onDismiss={() => {}}
+        />,
+      );
+
+      expect(outputBlock?.textContent).toContain("gamma");
+      expect(selection?.toString()).toBe("alpha");
+    });
   });
 
   describe("dismiss interaction", () => {
