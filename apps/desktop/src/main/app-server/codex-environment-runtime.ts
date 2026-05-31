@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
+import path from "node:path";
 import type {
   CodexEnvironmentActionRun,
   CodexEnvironmentOption,
@@ -767,7 +768,6 @@ function resolveCommandShell(env: NodeJS.ProcessEnv): string {
   const requested = env.SHELL?.trim() || process.env.SHELL?.trim();
   const candidates = [
     requested,
-    process.platform === "win32" ? process.env.ComSpec : undefined,
     "/bin/zsh",
     "/bin/bash",
     "/bin/sh",
@@ -793,14 +793,14 @@ function resolveCommandShell(env: NodeJS.ProcessEnv): string {
 
   // Preserve the old behavior when no candidate can be statted. The
   // spawn error path below will attach cwd/shell diagnostics.
-  return requested || (process.platform === "win32" ? "cmd.exe" : "/bin/sh");
+  return requested || "/bin/sh";
 }
 
 function inspectCommandPath(shell: string): { available: true } | {
   available: false;
   reason: string;
 } {
-  if (!shell.startsWith("/")) {
+  if (!isAbsoluteCommandPath(shell)) {
     return { available: true };
   }
 
@@ -824,6 +824,10 @@ function inspectCommandPath(shell: string): { available: true } | {
       reason: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function isAbsoluteCommandPath(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
 }
 
 function inspectCommandCwd(cwd: string | undefined): { message: string } | undefined {

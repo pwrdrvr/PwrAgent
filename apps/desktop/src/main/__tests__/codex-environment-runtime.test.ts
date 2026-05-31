@@ -191,6 +191,48 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("falls back when the stale hydrated shell is a Windows absolute path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-win-shell-fallback-"));
+    const outputPath = path.join(root, "env.txt");
+
+    try {
+      const result = await startLocalCodexEnvironmentAction({
+        actionId: "start-dev",
+        runId: "test-run-win-shell-fallback",
+        env: {
+          ...process.env,
+          SHELL: "C:\\Users\\operator\\missing-shell.exe",
+        },
+        runtime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          cwd: root,
+          actions: [
+            {
+              id: "start-dev",
+              name: "Start dev",
+              command: `printf fallback > ${JSON.stringify(outputPath)}`,
+            },
+          ],
+        },
+      });
+
+      expect(result.actionRuns).toEqual([
+        expect.objectContaining({
+          runId: "test-run-win-shell-fallback",
+          actionId: "start-dev",
+          status: "started",
+        }),
+      ]);
+      await expect(
+        expectEventually(async () => await readFile(outputPath, "utf8")),
+      ).resolves.toBe("fallback");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("chooses the command shell from the provided hydrated environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-"));
     const shellPath = path.join(root, "test-shell.sh");
