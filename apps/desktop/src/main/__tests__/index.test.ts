@@ -805,6 +805,31 @@ describe("bootstrapApp", () => {
     });
   });
 
+  it("does not recreate a window from Dock activation after quit teardown begins", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.();
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes closing the last window through the shared quit flow", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(requestQuitMock).toHaveBeenCalledWith({
+      source: "window-all-closed",
+    });
+  });
+
   it("initializes app state in active-profile mode when boot decision is open", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 

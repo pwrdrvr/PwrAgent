@@ -565,6 +565,10 @@ export function bootstrapApp(): void {
     initAutoUpdater();
 
     app.on("activate", () => {
+      if (mainProcessResourcesDisposed) {
+        mainLog.info("ignoring activate after main process teardown");
+        return;
+      }
       if (BrowserWindow.getAllWindows().length === 0) {
         createMainWindow({
           startupCpuProfiler,
@@ -574,9 +578,7 @@ export function bootstrapApp(): void {
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      void requestQuit({ source: "window-all-closed" });
-    }
+    void requestQuit({ source: "window-all-closed" });
   });
 
   app.on("before-quit", (event) => {
