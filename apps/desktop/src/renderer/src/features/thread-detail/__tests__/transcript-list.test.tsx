@@ -757,6 +757,62 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("shows a copyable source when an inline image fails to load", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const fileUrl =
+      "file:///Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png";
+    const renderUrl = `pwragent-image://file/${encodeURIComponent(fileUrl)}`;
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What's in this?",
+            parts: [
+              {
+                type: "text",
+                text: "What's in this?",
+              },
+              {
+                type: "image",
+                url: renderUrl,
+                alt: "Missing transcript image",
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const image = screen.getByAltText("Missing transcript image");
+    expect(image).toHaveAttribute("src", renderUrl);
+
+    fireEvent.error(image);
+
+    await waitFor(() => {
+      expect(screen.getByText("Image failed to load")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png")
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy image path" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png"
+      );
+    });
+  });
+
   it("renders pending status inside the transcript list", () => {
     render(
       <TranscriptList

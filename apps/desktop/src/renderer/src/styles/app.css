@@ -6605,6 +6605,51 @@ textarea,
   object-fit: contain;
 }
 
+.transcript-message__image-fallback {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  justify-self: start;
+  max-width: min(100%, 640px);
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-message__image-fallback-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.transcript-message__image-fallback-title {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.transcript-message__image-fallback-path {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.transcript-copy-button--image-path {
+  flex: 0 0 auto;
+  opacity: 1;
+}
+
 .thread-header__summary .transcript-message__paragraph,
 .thread-header__summary .transcript-message__list,
 .thread-header__summary .transcript-message__blockquote {

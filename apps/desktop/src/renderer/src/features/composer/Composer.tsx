@@ -3504,6 +3504,7 @@ export function Composer(props: ComposerProps) {
           const normalized = await normalizeImageFile(file, {
             fallback: props.desktopApi?.normalizeImageForUpload,
             maxPatchCount: props.pastedImageMaxPatches,
+            sourceMimeType: type,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
             fileName: file.name || fallbackName,

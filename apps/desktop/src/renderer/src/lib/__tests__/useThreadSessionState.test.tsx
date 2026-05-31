@@ -343,6 +343,277 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => {
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "assistant-final",
+                role: "assistant" as const,
+                phase: "final" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 2_000,
+              },
+            ],
+            messages: [
+              {
+                id: "assistant-final",
+                role: "assistant" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 2_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+    const desktopApi: DesktopApi = { readThread };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+          optimisticUserMessage: {
+            text: "What's in this image?",
+            createdAt: 1_000,
+            imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "user:What's in this image?",
+        "assistant:It is a screenshot of PwrAgent.",
+      ]);
+    });
+    expect(
+      result.current.messages.map((message) => `${message.role}:${message.text}`)
+    ).toEqual([
+      "user:What's in this image?",
+      "assistant:It is a screenshot of PwrAgent.",
+    ]);
+  });
+
+  it("deduplicates hydrated image prompt wrappers against selected optimistic input", async () => {
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => {
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "What's in this image?\n\n<image name=[Image #1]>\n\n</image>",
+                parts: [
+                  { type: "text" as const, text: "What's in this image?" },
+                  { type: "text" as const, text: "<image name=[Image #1]>" },
+                  { type: "image" as const, url: "file:///tmp/materialized.png" },
+                  { type: "text" as const, text: "</image>" },
+                ],
+                createdAt: 2_000,
+              },
+              {
+                type: "message" as const,
+                id: "assistant-final",
+                role: "assistant" as const,
+                phase: "final" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            messages: [
+              {
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "What's in this image?\n\n<image name=[Image #1]>\n\n</image>",
+                parts: [
+                  { type: "text" as const, text: "What's in this image?" },
+                  { type: "text" as const, text: "<image name=[Image #1]>" },
+                  { type: "image" as const, url: "file:///tmp/materialized.png" },
+                  { type: "text" as const, text: "</image>" },
+                ],
+                createdAt: 2_000,
+              },
+              {
+                id: "assistant-final",
+                role: "assistant" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+    const desktopApi: DesktopApi = { readThread };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 3_000 }),
+          optimisticUserMessage: {
+            text: "What's in this image?",
+            createdAt: 1_000,
+            imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "user:What's in this image?",
+        "assistant:It is a screenshot of PwrAgent.",
+      ]);
+    });
+    const [userEntry] = result.current.entries;
+    expect(userEntry).toMatchObject({
+      type: "message",
+      role: "user",
+      text: "What's in this image?",
+      parts: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", url: "file:///tmp/materialized.png" },
+      ],
+    });
+  });
+
+  it("preserves selected optimistic image input when hydrated prompt is text-only", async () => {
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => {
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "what's in this?",
+                createdAt: 2_000,
+              },
+              {
+                type: "message" as const,
+                id: "assistant-final",
+                role: "assistant" as const,
+                phase: "final" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            messages: [
+              {
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "what's in this?",
+                createdAt: 2_000,
+              },
+              {
+                id: "assistant-final",
+                role: "assistant" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+    const desktopApi: DesktopApi = { readThread };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 3_000 }),
+          optimisticUserMessage: {
+            text: "what's in this?",
+            createdAt: 1_000,
+            imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "user:what's in this?",
+        "assistant:It is a screenshot of PwrAgent.",
+      ]);
+    });
+    const [userEntry] = result.current.entries;
+    expect(userEntry).toMatchObject({
+      type: "message",
+      role: "user",
+      text: "what's in this?",
+      parts: [
+        { type: "text", text: "what's in this?" },
+        { type: "image", url: "data:image/png;base64,AQID" },
+      ],
+    });
+  });
+
   it("materializes completed steer user messages in the transcript", async () => {
     let agentEventHandler:
       | ((event: {
@@ -471,6 +742,103 @@ describe("useThreadSessionState", () => {
         "user:Steer while thinking.",
         "assistant:Steer acknowledged.",
       ]);
+    });
+  });
+
+  it("preserves optimistic image attachments when Codex echoes a text-only user message", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.addOptimisticUserMessage("What's in this image?", [
+        { type: "image", url: "data:image/png;base64,AQID" },
+      ]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "userMessage",
+              id: "user-message-1",
+              content: [
+                {
+                  type: "text",
+                  text: "What's in this image?",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual(["user:What's in this image?"]);
+    });
+    const [entry] = result.current.entries;
+    expect(entry).toMatchObject({
+      type: "message",
+      role: "user",
+      text: "What's in this image?",
+      parts: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", url: "data:image/png;base64,AQID" },
+      ],
     });
   });
 
@@ -2979,6 +3347,212 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingStatusText).toBe("Thinking");
     expect(result.current.activeTurnId).toBe("turn-1");
+  });
+
+  it("stores token usage updates as session-owned transcript entries", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                reasoning_output_tokens: 10,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Usage: 1,000 uncached in · 200 cached · 50 out (10 reasoning)",
+    ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-token-usage-turn-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    });
+  });
+
+  it("keeps completed token usage before the next turn user prompt during hydration", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(async ({ backend, threadId }) => {
+      readCount += 1;
+      const secondHydration = readCount > 1;
+      return {
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: secondHydration
+            ? [
+                {
+                  type: "message" as const,
+                  id: "assistant-turn-1",
+                  role: "assistant" as const,
+                  phase: "final" as const,
+                  text: "Done.",
+                  createdAt: 10_000,
+                },
+                {
+                  type: "message" as const,
+                  id: "user-turn-2",
+                  role: "user" as const,
+                  text: "Take another look",
+                  createdAt: 20_000,
+                },
+              ]
+            : [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Done.",
+        "activity:Usage: 1,000 uncached in · 200 cached · 50 out",
+        "message:Take another look",
+      ]);
+    });
   });
 
   it("derives the transcript thinking status from an active turn when status text is cleared", async () => {

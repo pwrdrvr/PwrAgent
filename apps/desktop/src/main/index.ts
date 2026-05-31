@@ -101,6 +101,10 @@ import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import { appQuitManager, requestQuit } from "./quit-manager";
 import {
+  installTranscriptImageProtocol,
+  registerTranscriptImageProtocolScheme,
+} from "./transcript-image-protocol";
+import {
   getAuxiliaryWindowMenuTitle,
   reapplyAuxiliaryWindowMenuBars,
 } from "./auxiliary-window-chrome";
@@ -128,6 +132,8 @@ let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
   | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
   | undefined;
+
+registerTranscriptImageProtocolScheme();
 
 function logBootDecision(decision: ProfileBootDecision): void {
   // Single structured log line on every boot so troubleshooting
@@ -487,6 +493,7 @@ export function bootstrapApp(): void {
     });
     registerComposerDraftIpcHandlers();
     registerImageNormalizationIpcHandlers();
+    installTranscriptImageProtocol();
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();

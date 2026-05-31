@@ -187,6 +187,7 @@ import {
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
+import { materializeLocalImageInputs } from "./image-input-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 
 type InitializeResult = {
@@ -4610,6 +4611,7 @@ export class DesktopBackendRegistry {
       }
     }
 
+    const input = await materializeLocalImageInputs(params.input);
     const reserveCodexStart = params.backend === "codex";
     if (reserveCodexStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
@@ -4630,7 +4632,6 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    const input = params.input;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
