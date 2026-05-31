@@ -115,6 +115,127 @@ describe("useThreadSessionState", () => {
     expect(getContextWindowMoonPhase(100.01)).toBe(8);
   });
 
+  it("exposes selected thread busy state from the same thinking state as row indicators", () => {
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "idle" as const,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    expect(result.current.threadBusy).toBe(false);
+
+    act(() => {
+      result.current.setPendingStatusText("Thinking");
+    });
+
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => {
+      result.current.setPendingStatusText(undefined);
+    });
+
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it("keeps a newer active turn busy when an older turn completion arrives", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "active" as const,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(agentEventHandler).toBeDefined();
+    });
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+      result.current.setPendingStatusText("Thinking");
+    });
+    expect(result.current.threadBusy).toBe(true);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "First turn finished late." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toContain("assistant:First turn finished late.");
+    });
+    expect(result.current.activeTurnId).toBe("turn-2");
+    expect(result.current.threadBusy).toBe(true);
+    expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {
     let agentEventHandler:
       | ((event: {

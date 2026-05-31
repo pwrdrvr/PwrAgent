@@ -785,6 +785,7 @@ export type ThreadViewProps = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  threadBusy?: boolean;
   pastedImageMaxPatches?: number;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
@@ -2212,6 +2213,7 @@ export function ThreadView(props: ThreadViewProps) {
             skillLoading={props.skillLoading}
             skills={props.skills}
             thread={selectedThread!}
+            threadBusy={props.threadBusy}
             updatingExecutionMode={props.updatingExecutionMode}
           />
         </div>

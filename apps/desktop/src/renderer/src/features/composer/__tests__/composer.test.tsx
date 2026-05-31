@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import type {
   BackendSummary,
   ComposerDraftRecoveryCandidate,
@@ -1265,6 +1266,61 @@ describe("Composer", () => {
     });
   });
 
+  it("queues Enter while the selected thread is busy before an active turn id arrives", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Busy thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        threadBusy
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Follow up after thinking" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Follow up after thinking"
+    );
+    expect(textarea).toHaveValue("");
+
+    rerender(<Composer {...baseProps} threadBusy={false} />);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Follow up after thinking" }],
+        })
+      );
+    });
+  });
+
   it("keeps active-turn messages in oldest-first queue order", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
@@ -1325,6 +1381,247 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Second queued reply"
     );
+  });
+
+  it("keeps the second queued turn waiting after the first queued turn dispatches", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: `turn-${startTurn.mock.calls.length + 1}`,
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+          listener: infer Listener,
+        ) => unknown
+          ? Listener
+          : never) => {
+          agentEventHandler = callback as typeof agentEventHandler;
+          return () => undefined;
+        },
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Stacked queue",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <StrictMode>
+        <Composer {...baseProps} activeTurnId="turn-1" />
+      </StrictMode>
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "First queued turn" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "Second queued turn" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "First queued turn"
+    );
+    expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
+      "Second queued turn"
+    );
+
+    rerender(
+      <StrictMode>
+        <Composer {...baseProps} activeTurnId={undefined} />
+      </StrictMode>
+    );
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    await flushReactUpdates();
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Second queued turn"
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      });
+    });
+    await flushReactUpdates();
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Second queued turn"
+    );
+  });
+
+  it("only releases one queued turn when duplicate focused composers share a queue", async () => {
+    const draftStore = createComposerDraftStore();
+    const thread = {
+      id: "thread-1",
+      title: "Duplicate queue owner",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const scopeKey = "thread:codex:thread-1";
+    draftStore.setQueuedTurns(scopeKey, [
+      {
+        id: "queued-1",
+        text: "First duplicate-owned turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "First duplicate-owned turn" }],
+      },
+      {
+        id: "queued-2",
+        text: "Second duplicate-owned turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Second duplicate-owned turn" }],
+      },
+      {
+        id: "queued-3",
+        text: "Third duplicate-owned turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Third duplicate-owned turn" }],
+      },
+    ]);
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: `turn-${startTurn.mock.calls.length + 1}`,
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+      thread,
+    };
+
+    render(
+      <>
+        <Composer {...baseProps} />
+        <Composer {...baseProps} />
+      </>
+    );
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    await flushReactUpdates();
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(draftStore.getQueuedTurns(scopeKey).map((entry) => entry.text)).toEqual([
+      "Second duplicate-owned turn",
+      "Third duplicate-owned turn",
+    ]);
+  });
+
+  it("releases the queued-turn lock when a queued review start fails", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = "thread:codex:thread-1";
+    draftStore.setQueuedTurns(scopeKey, [
+      {
+        id: "queued-review",
+        text: "/review main",
+        imageAttachments: [],
+        reviewCommand: {
+          displayText: "Review changes against main",
+          target: { type: "baseBranch", branch: "main" },
+        },
+      },
+      {
+        id: "queued-turn",
+        text: "Run after failed review",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Run after failed review" }],
+      },
+    ]);
+    const startReview = vi.fn(async () => {
+      throw new Error("review unavailable");
+    });
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-after-review",
+    }));
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              startReview: true,
+            },
+            methods: ["thread/start", "turn/start", "review/start"],
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Failed queued review",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [{ type: "text", text: "Run after failed review" }],
+        })
+      );
+    });
   });
 
   it("keeps a queued review local when the previous queued turn lands in the server queue", async () => {
