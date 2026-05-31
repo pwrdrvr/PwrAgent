@@ -54,7 +54,10 @@ import {
 } from "../../shared/ipc";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { resolveGrokCliPathOverride } from "../settings/desktop-config";
+import {
+  resolveGrokCliPathOverride,
+  resolveQwenCliPathOverride,
+} from "../settings/desktop-config";
 import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
@@ -168,8 +171,15 @@ async function listInstalledAndLocalAcpAgents(
   if (options?.refreshLocal) {
     try {
       const grokOverride = resolveGrokCliPathOverride();
+      const qwenOverride = resolveQwenCliPathOverride();
       discovered = await discoverLocalAcpAgents({
-        overrides: grokOverride ? { grok: grokOverride } : undefined,
+        overrides:
+          grokOverride || qwenOverride
+            ? {
+                ...(grokOverride ? { grok: grokOverride } : {}),
+                ...(qwenOverride ? { qwen: qwenOverride } : {}),
+              }
+            : undefined,
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       for (const record of discovered) {

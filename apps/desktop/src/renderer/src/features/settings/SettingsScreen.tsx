@@ -484,6 +484,11 @@ function SettingsSectionBody(props: {
             acpAgents: { grok: { cliPath } },
           });
         }}
+        onQwenCliPathChange={async (cliPath: string) => {
+          await props.settings.writeConfig({
+            acpAgents: { qwen: { cliPath } },
+          });
+        }}
       />
     );
   }

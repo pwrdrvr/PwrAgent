@@ -16,6 +16,14 @@ export type AcpSessionUpdate = {
   receivedAt?: number;
 };
 
+export type AcpSessionReplayNormalizerOptions = {
+  surfaceThoughtsAsMessages?: boolean;
+};
+
+export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
+  return backendId !== "acp:qwen";
+}
+
 export class AcpSessionReplayNormalizer {
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
@@ -24,6 +32,8 @@ export class AcpSessionReplayNormalizer {
   private activeAssistantMessageId?: string;
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
+
+  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -207,6 +217,9 @@ export class AcpSessionReplayNormalizer {
   }
 
   private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {
+    if (this.options.surfaceThoughtsAsMessages === false) {
+      return;
+    }
     const text =
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??

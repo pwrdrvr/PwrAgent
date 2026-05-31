@@ -239,6 +239,7 @@ function createSnapshot(
     },
     acpAgents: {
       grok: { cliPath: { value: "", source: "default" } },
+      qwen: { cliPath: { value: "", source: "default" } },
     },
     applications: {
       editors: [
@@ -1088,6 +1089,9 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
+    expect(
+      screen.getByRole("textbox", { name: "Qwen Code path" }),
+    ).toBeInTheDocument();
   });
 
   it("can restart login for an existing Codex auth profile", async () => {

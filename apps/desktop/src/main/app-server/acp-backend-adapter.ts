@@ -35,7 +35,10 @@ import {
 } from "../acp/acp-client";
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
-import { resolveGrokCliPathOverride } from "../settings/desktop-config";
+import {
+  resolveGrokCliPathOverride,
+  resolveQwenCliPathOverride,
+} from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -48,6 +51,7 @@ import {
 import {
   AcpSessionReplayNormalizer,
   readAcpContentText,
+  shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
@@ -299,6 +303,9 @@ function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
   if (agent.registryId === "kimi") {
     return "Kimi";
   }
+  if (agent.registryId === "qwen") {
+    return "Qwen";
+  }
   return agent.name;
 }
 
@@ -441,7 +448,9 @@ export function mergeAcpRuntimeState(
 }
 
 export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  return value === "yolo" || value === "autoEdit" || value === "auto_edit";
+  // ACP agents such as Qwen implement Auto/Auto-Edit internally; only Yolo
+  // means the client should bypass every permission request.
+  return value === "yolo";
 }
 
 export function formatAcpRuntimeLabel(value: string): string {
@@ -668,8 +677,15 @@ export class AcpBackendAdapter {
       options.discoverLocalAcpAgents ??
       (async () => {
         const grokOverride = resolveGrokCliPathOverride();
+        const qwenOverride = resolveQwenCliPathOverride();
         return await discoverLocalAcpAgents({
-          overrides: grokOverride ? { grok: grokOverride } : undefined,
+          overrides:
+            grokOverride || qwenOverride
+              ? {
+                  ...(grokOverride ? { grok: grokOverride } : {}),
+                  ...(qwenOverride ? { qwen: qwenOverride } : {}),
+                }
+              : undefined,
         });
       });
     this.createAcpTransport = options.createAcpTransport;
@@ -1165,7 +1181,8 @@ export class AcpBackendAdapter {
         }
         if (
           updateKind === "agent_message_chunk" ||
-          updateKind === "agent_thought_chunk"
+          (updateKind === "agent_thought_chunk" &&
+            shouldSurfaceAcpThoughtsAsMessages(agent.backendId))
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {
