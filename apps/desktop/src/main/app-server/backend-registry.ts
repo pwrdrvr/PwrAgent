@@ -1025,6 +1025,31 @@ function isAcpPermissionRequest(
   );
 }
 
+function acpRuntimeHasExecutionModeSelection(params: {
+  runtime?: BackendAcpSessionRuntimeState;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+}): boolean {
+  const { runtime, runtimeCapabilities } = params;
+  if (!runtime) {
+    return false;
+  }
+  if (runtime.currentModeId) {
+    return true;
+  }
+
+  const configValues = runtime.configValues ?? {};
+  const modeOptionIds = new Set(
+    runtimeCapabilities?.configOptions
+      ?.filter((option) => option.category === "mode")
+      .map((option) => option.id) ?? [],
+  );
+  for (const key of ["mode", "approval-mode", "approval_mode"]) {
+    modeOptionIds.add(key);
+  }
+
+  return [...modeOptionIds].some((optionId) => configValues[optionId]);
+}
+
 function executionModeQueueKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -3124,9 +3149,15 @@ export class DesktopBackendRegistry {
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
+    const nextExecutionMode = this.isAcpRuntimeExecutionModeOption(params)
+      ? acpRuntimeValueLooksPrivileged(params.value)
+        ? "full-access"
+        : "default"
+      : session.executionMode;
     this.acpBackend.upsertSession({
       ...session,
       acpRuntime: mergedRuntime,
+      executionMode: nextExecutionMode,
       updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
     });
 
@@ -3165,6 +3196,18 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (nextExecutionMode !== session.executionMode) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/updated",
+          params: {
+            threadId: params.threadId,
+            executionMode: nextExecutionMode,
+          },
+        },
+      });
+    }
 
     return {
       backend: params.backend,
@@ -3344,6 +3387,15 @@ export class DesktopBackendRegistry {
       agent?.runtimeCapabilities?.configOptions?.some(
         (option) => option.id === optionId && option.category === "mode",
       ) ?? false
+    );
+  }
+
+  private isAcpRuntimeExecutionModeOption(
+    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
+  ): boolean {
+    return (
+      params.source === "mode" ||
+      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
     );
   }
 
@@ -8446,19 +8498,26 @@ export class DesktopBackendRegistry {
   ): Promise<unknown> {
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
+      const runtimeCapabilities =
+        this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+      const runtimeControlsExecutionMode = acpRuntimeHasExecutionModeSelection({
+        runtime: session?.acpRuntime,
+        runtimeCapabilities,
+      });
       const runtimeRequiresFullAccess = acpRuntimeStateRequiresFullAccess({
         runtime: session?.acpRuntime,
-        runtimeCapabilities:
-          this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+        runtimeCapabilities,
       });
       if (
-        session?.executionMode === "full-access" ||
-        runtimeRequiresFullAccess
+        runtimeControlsExecutionMode
+          ? runtimeRequiresFullAccess
+          : session?.executionMode === "full-access"
       ) {
         backendRegistryLog.info("auto-approving ACP permission request", {
           backend,
           executionMode: session?.executionMode ?? "default",
           requestId: request.params.requestId,
+          runtimeControlsExecutionMode,
           runtimeRequiresFullAccess,
           threadId: request.params.threadId,
           turnId: request.params.turnId,

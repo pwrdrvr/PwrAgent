@@ -2909,6 +2909,125 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("updates ACP execution mode when runtime mode changes to Default", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "qwen-session-1",
+        title: "Qwen thread",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "full-access",
+        acpRuntime: {
+          configValues: { mode: "auto" },
+          currentModeId: "auto",
+          updatedAt: 2000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption: vi.fn(
+        async (): Promise<BackendAcpSessionRuntimeState> => ({
+          configValues: { mode: "default" },
+          currentModeId: "default",
+          updatedAt: 3000,
+        }),
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "qwen",
+          name: "Qwen Code",
+          distributionKind: "local",
+          distributionSource: "qwen --experimental-acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-qwen-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "mode",
+                label: "Mode",
+                type: "select",
+                category: "mode",
+                currentValue: "auto",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      source: "configOption",
+      optionId: "mode",
+      value: "default",
+    });
+
+    expect(sessions[0]).toMatchObject({
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { mode: "default" },
+        currentModeId: "default",
+      },
+    });
+    expect(events).toContainEqual({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: "qwen-session-1",
+          executionMode: "default",
+        },
+      },
+    });
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("auto-approves ACP permission requests for Auto runtime sessions", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const registry = new DesktopBackendRegistry({
@@ -2993,6 +3112,112 @@ describe("DesktopBackendRegistry", () => {
 
     expect(response).toEqual({ decision: "approve" });
     expect(events).toEqual([]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("does not auto-approve ACP permission requests when runtime mode is Default", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "qwen",
+          name: "Qwen Code",
+          distributionKind: "local",
+          distributionSource: "qwen --experimental-acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-qwen-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "mode",
+                label: "Mode",
+                type: "select",
+                category: "mode",
+                currentValue: "default",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: acpBackendId,
+          sessionId: "qwen-session-1",
+          title: "Qwen thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 2000,
+          executionMode: "full-access",
+          acpRuntime: {
+            configValues: { mode: "default" },
+            currentModeId: "default",
+            updatedAt: 2000,
+          },
+          status: "active",
+        },
+      ]),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    const request: AppServerPendingRequestNotification = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "qwen-session-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        acpMethod: "session/request_permission",
+        command: "npm view eslint",
+      },
+    };
+
+    const responsePromise = (
+      registry as unknown as {
+        handleServerRequest(
+          backend: AcpBackendId,
+          request: AppServerPendingRequestNotification,
+        ): Promise<unknown>;
+      }
+    ).handleServerRequest(acpBackendId, request);
+    await waitForCondition(() =>
+      events.some(
+        (event) =>
+          event.notification.method === "item/commandExecution/requestApproval",
+      ),
+    );
+
+    expect(events).toContainEqual({
+      backend: acpBackendId,
+      notification: request,
+    });
+    await registry.submitServerRequest({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    await expect(responsePromise).resolves.toEqual({ decision: "approve" });
 
     unsubscribe();
     await registry.close();
