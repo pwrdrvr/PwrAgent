@@ -286,6 +286,8 @@ export type EnsureDirectoryLaunchpadRequest = {
   directoryLabel: string;
   directoryPath?: string;
   currentBranch?: string;
+  parentThreadId?: string;
+  parentThreadTitle?: string;
   preferredBackend?: AppServerBackendKind;
   registeredAt?: number;
 };
@@ -312,6 +314,8 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "acpRuntime"
       | "workMode"
       | "branchName"
+      | "parentThreadId"
+      | "parentThreadTitle"
       | "codexEnvironmentId"
       | "codexEnvironmentExecutionTarget"
       | "codexEnvironmentSetupEnabled"

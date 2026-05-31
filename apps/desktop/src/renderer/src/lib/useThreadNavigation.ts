@@ -1322,6 +1322,8 @@ function mergeLaunchpadUpdateResponse(
   preserveSetting("fastMode");
   preserveSetting("workMode");
   preserveSetting("branchName");
+  preserveSetting("parentThreadId");
+  preserveSetting("parentThreadTitle");
   preserveEnvironment("codexEnvironmentId");
   preserveEnvironment("codexEnvironmentExecutionTarget");
   preserveEnvironment("codexEnvironmentSetupEnabled");
@@ -2908,9 +2910,15 @@ export function useThreadNavigation(
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
+          parentThreadId: parent.id,
+          parentThreadTitle: parent.title,
           preferredBackend: parent.source,
         });
-        let launchpad = response.launchpad;
+        let launchpad: NavigationLaunchpadDraft = {
+          ...response.launchpad,
+          parentThreadId: parent.id,
+          parentThreadTitle: parent.title,
+        };
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         const patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"] = {
           backend: parent.source,
@@ -2918,15 +2926,25 @@ export function useThreadNavigation(
           workMode: directory.workMode,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
+          parentThreadId: parent.id,
+          parentThreadTitle: parent.title,
         };
         if (desktopApi.updateDirectoryLaunchpad) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
             directoryKey,
             patch,
           });
-          launchpad = updated.launchpad;
+          launchpad = {
+            ...updated.launchpad,
+            parentThreadId: parent.id,
+            parentThreadTitle: parent.title,
+          };
           defaults = updated.defaults;
         }
+        setLocalLaunchpads((current) => ({
+          ...current,
+          [directoryKey]: launchpad,
+        }));
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(current.response, launchpad, defaults),
@@ -3230,7 +3248,11 @@ export function useThreadNavigation(
           current[directoryKey]
             ? {
                 ...current,
-                [directoryKey]: response.launchpad,
+                [directoryKey]: mergeLaunchpadUpdateResponse(
+                  current[directoryKey],
+                  response.launchpad,
+                  patch,
+                ),
               }
             : current
         );

@@ -1865,6 +1865,22 @@ export function ThreadView(props: ThreadViewProps) {
       props.selectedDirectory.kind === "workspace"
         ? "New thread"
         : selectedLaunchpad.directoryLabel;
+    const launchpadBranchLabel =
+      selectedLaunchpad.workMode === "worktree"
+        ? selectedLaunchpad.branchName ??
+          props.selectedDirectory.gitStatus?.currentBranch ??
+          "Pick one"
+        : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached";
+    const launchpadBranchDetailLabel =
+      selectedLaunchpad.workMode === "worktree" ? "Base branch" : "Current branch";
+    const launchpadBranchDetailValue =
+      selectedLaunchpad.workMode === "worktree"
+        ? launchpadBranchLabel
+        : props.selectedDirectory.gitStatus?.currentBranch ??
+          (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
+            ? "Unavailable"
+            : "Not a Git repo");
+    const launchpadIsSubthread = Boolean(selectedLaunchpad.parentThreadId);
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpad.codexEnvironmentId &&
         selectedLaunchpad.codexEnvironmentSetupEnabled,
@@ -1923,13 +1939,7 @@ export function ThreadView(props: ThreadViewProps) {
               </div>
               <div>
                 <span className="thread-header__stat-label">Branch</span>
-                <strong>
-                  {selectedLaunchpad.workMode === "worktree"
-                    ? selectedLaunchpad.branchName ??
-                      props.selectedDirectory.gitStatus?.currentBranch ??
-                      "Pick one"
-                    : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached"}
-                </strong>
+                <strong>{launchpadBranchLabel}</strong>
               </div>
             </div>
             <MessagingStatusBar
@@ -1952,9 +1962,23 @@ export function ThreadView(props: ThreadViewProps) {
                 {props.selectedDirectory.threadKeys.length === 1 ? "" : "s"}
               </strong>
             </div>
+            {launchpadIsSubthread ? (
+              <div>
+                <span className="launchpad-panel__label">Grouped under</span>
+                <strong
+                  title={selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
+                >
+                  {selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
+                </strong>
+              </div>
+            ) : null}
             <div>
-              <span className="launchpad-panel__label">Status</span>
-              <strong>{syncLabel ?? "Directory context only"}</strong>
+              <span className="launchpad-panel__label">
+                {launchpadIsSubthread ? "History" : "Status"}
+              </span>
+              <strong>
+                {launchpadIsSubthread ? "Starts empty" : syncLabel ?? "Directory context only"}
+              </strong>
             </div>
           </div>
 
@@ -1964,13 +1988,8 @@ export function ThreadView(props: ThreadViewProps) {
               <dd>{props.selectedDirectory.path ?? "Not recorded"}</dd>
             </div>
             <div>
-              <dt>Current branch</dt>
-              <dd>
-                {props.selectedDirectory.gitStatus?.currentBranch ??
-                  (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
-                    ? "Unavailable"
-                    : "Not a Git repo")}
-              </dd>
+              <dt>{launchpadBranchDetailLabel}</dt>
+              <dd>{launchpadBranchDetailValue}</dd>
             </div>
             <div>
               <dt>Upstream</dt>

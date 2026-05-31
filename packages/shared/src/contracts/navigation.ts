@@ -211,6 +211,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   settingsTouchedAt?: number;
   workMode: LaunchpadWorkMode;
   branchName?: string;
+  parentThreadId?: string;
+  parentThreadTitle?: string;
   codexEnvironmentId?: string;
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
   codexEnvironmentSetupEnabled?: boolean;

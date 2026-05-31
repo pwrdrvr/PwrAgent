@@ -5946,6 +5946,42 @@ script = "pnpm install"
     await registry.close();
   });
 
+  it("keeps sub-thread parent metadata when launchpad drafts update", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "subthread:codex:thread-parent:new-worktree",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      currentBranch: "main",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+    });
+
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "subthread:codex:thread-parent:new-worktree",
+      patch: { prompt: "Start a child investigation" },
+    });
+
+    expect(updated.launchpad).toMatchObject({
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+      prompt: "Start a child investigation",
+    });
+
+    await registry.close();
+  });
+
   it("repairs stale non-empty launchpad directory metadata when reopened", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({

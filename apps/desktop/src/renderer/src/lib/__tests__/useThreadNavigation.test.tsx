@@ -2653,6 +2653,8 @@ describe("useThreadNavigation", () => {
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Local parent",
       preferredBackend: "codex",
     });
     expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
@@ -2663,11 +2665,17 @@ describe("useThreadNavigation", () => {
         workMode: "local",
         directoryLabel: "app",
         directoryPath: "/repo/app",
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Local parent",
       },
     });
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(
       "subthread:codex:thread-parent:local",
     );
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Local parent",
+    });
   });
 
   it("refreshes the selected thread when only the observed branch changes", async () => {

@@ -6293,10 +6293,18 @@ export class DesktopBackendRegistry {
         executionMode,
         ...modelSettings,
       };
+      const requestParentThreadId =
+        request.parentThreadId ?? normalizedExisting.parentThreadId;
+      const requestParentThreadTitle =
+        request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
         normalizedExisting.directoryKind !== request.directoryKind ||
         normalizedExisting.directoryLabel !== request.directoryLabel ||
         normalizedExisting.directoryPath !== request.directoryPath;
+      const parentChanged =
+        request.parentThreadId !== undefined &&
+        (normalizedExisting.parentThreadId !== request.parentThreadId ||
+          normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
@@ -6312,6 +6320,8 @@ export class DesktopBackendRegistry {
           fastMode: defaults.fastMode,
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
+          parentThreadId: requestParentThreadId,
+          parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
         };
@@ -6332,7 +6342,8 @@ export class DesktopBackendRegistry {
         normalizedExisting.reasoningEffort !== existing.reasoningEffort ||
         normalizedExisting.serviceTier !== existing.serviceTier ||
         normalizedExisting.fastMode !== existing.fastMode ||
-        registeredAt !== existing.registeredAt
+        registeredAt !== existing.registeredAt ||
+        parentChanged
       ) {
         return {
           launchpad: withCodexEnvironmentOptions(
@@ -6341,6 +6352,8 @@ export class DesktopBackendRegistry {
               directoryKind: request.directoryKind,
               directoryLabel: request.directoryLabel,
               directoryPath: request.directoryPath,
+              parentThreadId: requestParentThreadId,
+              parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
             }),
@@ -6371,6 +6384,8 @@ export class DesktopBackendRegistry {
       registeredAt: request.registeredAt,
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
+      parentThreadId: request.parentThreadId,
+      parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
