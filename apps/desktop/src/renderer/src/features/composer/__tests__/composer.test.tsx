@@ -5057,6 +5057,55 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps Gemini Auto Edit launchpad mode in the default execution envelope", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[acpGeminiBackendSummary()]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:gemini",
+          executionMode: "default",
+          acpRuntime: { currentModeId: "default" },
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    chooseDropdownOption("Agent mode", "Auto Edit");
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          acpRuntime: expect.objectContaining({
+            currentModeId: "autoEdit",
+          }),
+          executionMode: "default",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
   it("keeps Qwen Auto launchpad mode in the default execution envelope", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 

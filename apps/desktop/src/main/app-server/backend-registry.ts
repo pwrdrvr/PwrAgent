@@ -855,8 +855,6 @@ const EXECUTION_MODE_SUMMARIES: Record<
 };
 
 const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
-  "auto_edit",
-  "autoEdit",
   "yolo",
 ]);
 
