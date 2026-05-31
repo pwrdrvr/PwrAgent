@@ -10037,6 +10037,158 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("skips worktree cleanup when another active thread still uses the same worktree", async () => {
+    const parentThread: AppServerThreadSummary = {
+      id: "019e79f9-7ff1-7f31-9a67-f92435a1c9fa",
+      title: "Parent thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/shared",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/parent",
+      updatedAt: 1,
+    };
+    const forkedThread: AppServerThreadSummary = {
+      id: "019e7f4d-6fbb-75f1-8cc9-cc78f7ccc844",
+      title: "Forked thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/shared",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/parent",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread, forkedThread],
+    });
+    const archiveWorktree = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "019e7f4d-6fbb-75f1-8cc9-cc78f7ccc844",
+    });
+
+    expect(codexClient.lastArchiveThreadParams).toEqual({
+      threadId: "019e7f4d-6fbb-75f1-8cc9-cc78f7ccc844",
+    });
+    expect(archiveWorktree).not.toHaveBeenCalled();
+    expect(response.cleanup).toEqual([
+      {
+        worktreePath: "/repo/.worktrees/shared",
+        branch: "codex/parent",
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason:
+          "Worktree is still used by another active thread: 019e79f9-7ff1-7f31-9a67-f92435a1c9fa.",
+      },
+    ]);
+
+    await registry.close();
+  });
+
+  it("removes a linked worktree when only archived threads still reference it", async () => {
+    const activeThread: AppServerThreadSummary = {
+      id: "thread-active",
+      title: "Archive me",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/shared",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/shared",
+      updatedAt: 2,
+    };
+    const archivedThread: AppServerThreadSummary = {
+      ...activeThread,
+      id: "thread-already-archived",
+      title: "Already archived",
+      updatedAt: 1,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      archivedThreads: [archivedThread],
+      threads: [activeThread],
+    });
+    const archiveWorktree = vi.fn(async () => ({
+      id: "snapshot-1",
+      backend: "codex" as const,
+      threadId: "thread-active",
+      worktreePath: "/repo/.worktrees/shared",
+      repositoryPath: "/repo/app",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      snapshotCommit: "abc123",
+      sourceBranch: "codex/shared",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived" as const,
+      ignoredFilesExcluded: true,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-active",
+    });
+
+    expect(archiveWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-active",
+      worktreePath: "/repo/.worktrees/shared",
+      repositoryPath: "/repo/app",
+    });
+    expect(response.cleanup).toEqual([
+      {
+        worktreePath: "/repo/.worktrees/shared",
+        branch: "codex/shared",
+        removedWorktree: true,
+        deletedBranch: false,
+      },
+    ]);
+
+    await registry.close();
+  });
+
   it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

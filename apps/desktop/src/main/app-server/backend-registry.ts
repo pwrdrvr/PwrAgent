@@ -728,12 +728,27 @@ type WorktreeArchiveCandidate = {
   worktreePath: string;
 };
 
+type ArchiveCleanupMetadata = {
+  activeThreads: AppServerThreadSummary[];
+  thread: AppServerThreadSummary;
+};
+
 type WorktreeRestoreCandidate = {
   branch?: string;
   repositoryPath?: string;
   snapshot?: WorktreeSnapshotSummary;
   worktreePath: string;
 };
+
+function linkedDirectoryWorktreePath(
+  directory: LinkedDirectorySummary,
+): string | undefined {
+  return directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+}
+
+function normalizeWorktreePathForComparison(worktreePath: string): string {
+  return path.normalize(worktreePath.trim());
+}
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
@@ -3825,10 +3840,10 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
       });
     }
-    let thread: AppServerThreadSummary | undefined;
+    let cleanupMetadata: ArchiveCleanupMetadata | undefined;
     let cleanupMetadataError: string | undefined;
     try {
-      thread = await this.findThreadForArchiveCleanup({
+      cleanupMetadata = await this.findThreadForArchiveCleanup({
         backend,
         threadId: request.threadId,
       });
@@ -3853,10 +3868,11 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       origin: "thread-archive",
     });
-    const cleanup = thread
+    const cleanup = cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend,
-          thread,
+          activeThreads: cleanupMetadata.activeThreads,
+          thread: cleanupMetadata.thread,
         })
       : this.buildArchiveCleanupMetadataSkippedResult({
           backend,
@@ -8347,7 +8363,7 @@ export class DesktopBackendRegistry {
   private async findThreadForArchiveCleanup(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<AppServerThreadSummary> {
+  }): Promise<ArchiveCleanupMetadata> {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
@@ -8355,7 +8371,10 @@ export class DesktopBackendRegistry {
     });
     const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
     if (activeThread) {
-      return activeThread;
+      return {
+        activeThreads,
+        thread: activeThread,
+      };
     }
 
     const archivedThreads = await this.listThreads({
@@ -8365,7 +8384,10 @@ export class DesktopBackendRegistry {
     });
     const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
     if (archivedThread) {
-      return archivedThread;
+      return {
+        activeThreads,
+        thread: archivedThread,
+      };
     }
 
     throw new Error("Thread metadata was not found.");
@@ -8501,6 +8523,7 @@ export class DesktopBackendRegistry {
   }
 
   private async archiveThreadWorktrees(params: {
+    activeThreads: AppServerThreadSummary[];
     backend: AppServerBackendKind;
     thread: AppServerThreadSummary;
   }): Promise<ArchiveThreadCleanupResult[]> {
@@ -8542,6 +8565,33 @@ export class DesktopBackendRegistry {
     return await Promise.all(
       uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
         try {
+          const activeUsers = this.findActiveThreadsUsingWorktree({
+            activeThreads: params.activeThreads,
+            archivedThreadId: params.thread.id,
+            worktreePath: candidate.worktreePath,
+          });
+          if (activeUsers.length > 0) {
+            const activeThreadIds = activeUsers.map((thread) => thread.id);
+            const skippedReason =
+              activeThreadIds.length === 1
+                ? `Worktree is still used by another active thread: ${activeThreadIds[0]}.`
+                : `Worktree is still used by other active threads: ${activeThreadIds.join(", ")}.`;
+            backendRegistryLog.info("archive thread worktree cleanup skipped: shared worktree", {
+              backend: params.backend,
+              threadId: params.thread.id,
+              activeThreadIds,
+              repositoryPath: candidate.repositoryPath,
+              worktreePath: candidate.worktreePath,
+            });
+            return {
+              worktreePath: candidate.worktreePath,
+              branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+              removedWorktree: false,
+              deletedBranch: false,
+              skippedReason,
+            };
+          }
+
           backendRegistryLog.info("archive thread worktree cleanup removing worktree", {
             backend: params.backend,
             threadId: params.thread.id,
@@ -8627,6 +8677,27 @@ export class DesktopBackendRegistry {
         }
       }),
     );
+  }
+
+  private findActiveThreadsUsingWorktree(params: {
+    activeThreads: AppServerThreadSummary[];
+    archivedThreadId: string;
+    worktreePath: string;
+  }): AppServerThreadSummary[] {
+    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    return params.activeThreads.filter((thread) => {
+      if (thread.id === params.archivedThreadId) {
+        return false;
+      }
+
+      return thread.linkedDirectories.some((directory) => {
+        const candidatePath = linkedDirectoryWorktreePath(directory);
+        return (
+          candidatePath !== undefined &&
+          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+        );
+      });
+    });
   }
 
   private async restoreThreadWorktrees(params: {
