@@ -28,7 +28,11 @@ import type {
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { buildNavigationSnapshot } from "@pwragent/agent-core";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import {
+  buildCodexFastModeMismatchNotificationParams,
+  DesktopBackendRegistry,
+  getCodexFastModeMismatchWarning,
+} from "../app-server/backend-registry";
 import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
@@ -4926,6 +4930,56 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("clears stale Codex Fast serviceTier from launchpad defaults when Fast mode changes", async () => {
+    const overlayStore = createOverlayStoreMock({
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+        workMode: "local",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        serviceTier: "fast",
+        fastMode: false,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { fastMode: true },
+      stickySettingsChanged: true,
+    });
+    const next = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-b",
+      directoryKind: "directory",
+      directoryLabel: "Repo B",
+      directoryPath: "/repo-b",
+    });
+
+    expect(updated.defaults.fastMode).toBe(true);
+    expect(updated.defaults.serviceTier).toBeUndefined();
+    expect(updated.launchpad.fastMode).toBe(true);
+    expect(updated.launchpad.serviceTier).toBeUndefined();
+    expect(next.launchpad.fastMode).toBe(true);
+    expect(next.launchpad.serviceTier).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("keeps environment options available after switching a launchpad to ACP", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-env-options-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
@@ -5438,6 +5492,82 @@ script = "pnpm install"
     expect(codexClient.lastStartThreadParams?.cwd).toBe(
       "/Users/test/.pwragent/projects/2026-05-02-a1b2c3",
     );
+
+    await registry.close();
+  });
+
+  it("uses submitted launchpad Fast mode instead of stale persisted launchpad settings", async () => {
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "stale prompt",
+      workMode: "worktree",
+      model: "gpt-5.5",
+      reasoningEffort: "low",
+      serviceTier: "fast",
+      fastMode: false,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app/.worktrees/thread-1/app",
+          repositoryPath: "/repo/app",
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      input: [{ type: "text", text: "submitted prompt" }],
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "worktree",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        fastMode: true,
+        createdAt: 1_000,
+        updatedAt: 2_500,
+      },
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "submitted prompt" }],
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      serviceTier: "priority",
+      fastMode: true,
+    });
 
     await registry.close();
   });
@@ -6941,6 +7071,7 @@ command = "pnpm dev"
       serviceTier: "priority",
       reasoningEffort: "high",
       fastMode: true,
+      collaborationMode: undefined,
     });
 
     await registry.startTurn({
@@ -6958,9 +7089,260 @@ command = "pnpm dev"
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
+      collaborationMode: undefined,
     });
 
     await registry.close();
+  });
+
+  it("maps checked Codex Fast mode to priority serviceTier when starting turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-fast": {
+            backend: "codex",
+            threadId: "thread-fast",
+            executionMode: "default",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            fastMode: true,
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-fast",
+      input: [{ type: "text", text: "Use fast tier" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-fast",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("clears Codex Fast serviceTier when Fast mode is unchecked", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-standard": {
+            backend: "codex",
+            threadId: "thread-standard",
+            executionMode: "default",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            serviceTier: "fast",
+            fastMode: false,
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-standard",
+      input: [{ type: "text", text: "Use standard tier" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-standard",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: undefined,
+      fastMode: false,
+    });
+
+    await registry.close();
+  });
+
+  it("clears stale Codex Fast serviceTier when the selected model does not support Fast", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        {
+          id: "gpt-5.4-mini",
+          label: "GPT 5.4 mini",
+          current: true,
+          supportsReasoning: true,
+          supportsFast: false,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-unsupported-fast": {
+            backend: "codex",
+            threadId: "thread-unsupported-fast",
+            executionMode: "default",
+            model: "gpt-5.4-mini",
+            reasoningEffort: "low",
+            serviceTier: "fast",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+
+    await registry.listBackends();
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-unsupported-fast",
+      input: [{ type: "text", text: "Use the unsupported model" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-unsupported-fast",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: undefined,
+      fastMode: false,
+    });
+
+    await registry.close();
+  });
+
+  it("detects Codex Fast mode drift when the completed turn reports a mismatched tier", () => {
+    expect(
+      getCodexFastModeMismatchWarning({
+        threadId: "thread-fast",
+        turnId: "turn-1",
+        expectedFastMode: true,
+        notificationParams: {
+          threadId: "thread-fast",
+          turnId: "turn-1",
+          serviceTier: null,
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      }),
+    ).toMatchObject({
+      threadId: "thread-fast",
+      turnId: "turn-1",
+      expectedFastMode: true,
+      observedFastMode: false,
+    });
+
+    expect(
+      getCodexFastModeMismatchWarning({
+        threadId: "thread-fast",
+        turnId: "turn-2",
+        expectedFastMode: false,
+        notificationParams: {
+          threadId: "thread-fast",
+          turnId: "turn-2",
+          serviceTier: "fast",
+          turn: { id: "turn-2", status: "completed", output: [] },
+        },
+      }),
+    ).toMatchObject({
+      threadId: "thread-fast",
+      turnId: "turn-2",
+      expectedFastMode: false,
+      observedFastMode: true,
+    });
+
+    expect(
+      getCodexFastModeMismatchWarning({
+        threadId: "thread-fast",
+        turnId: "turn-3",
+        expectedFastMode: false,
+        notificationParams: {
+          threadId: "thread-fast",
+          turnId: "turn-3",
+          serviceTier: "priority",
+        },
+      }),
+    ).toMatchObject({
+      threadId: "thread-fast",
+      turnId: "turn-3",
+      expectedFastMode: false,
+      observedFastMode: true,
+      observedServiceTier: "priority",
+    });
+  });
+
+  it("checks Codex Fast mode drift against observed thread settings when terminal events omit tier", () => {
+    const notificationParams = buildCodexFastModeMismatchNotificationParams(
+      {
+        threadId: "thread-fast",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+      {
+        fastMode: true,
+        serviceTier: "fast",
+      },
+    );
+
+    expect(
+      getCodexFastModeMismatchWarning({
+        threadId: "thread-fast",
+        turnId: "turn-1",
+        expectedFastMode: false,
+        notificationParams,
+      }),
+    ).toMatchObject({
+      threadId: "thread-fast",
+      turnId: "turn-1",
+      expectedFastMode: false,
+      observedFastMode: true,
+      observedServiceTier: "fast",
+    });
+  });
+
+  it("prefers terminal Codex Fast settings over cached observed thread settings", () => {
+    const notificationParams = buildCodexFastModeMismatchNotificationParams(
+      {
+        threadId: "thread-fast",
+        turn: { id: "turn-1", status: "completed", output: [] },
+        serviceTier: "priority",
+      },
+      {
+        fastMode: false,
+        serviceTier: null,
+      },
+    );
+
+    expect(
+      getCodexFastModeMismatchWarning({
+        threadId: "thread-fast",
+        turnId: "turn-1",
+        expectedFastMode: false,
+        notificationParams,
+      }),
+    ).toMatchObject({
+      threadId: "thread-fast",
+      turnId: "turn-1",
+      expectedFastMode: false,
+      observedFastMode: true,
+      observedServiceTier: "priority",
+    });
   });
 
   it("resumes Codex turns in the current handoff worktree cwd", async () => {

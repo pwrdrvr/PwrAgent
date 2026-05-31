@@ -991,6 +991,17 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/codexSettings/observed";
+      params: {
+        threadId: string;
+        model?: string;
+        fastMode?: boolean;
+        reasoningEffort?: string;
+        serviceTier?: string | null;
+        rawServiceTier?: string | null;
+      };
+    }
+  | {
       method: "thread/acpRuntime/updated";
       params: {
         threadId: string;
