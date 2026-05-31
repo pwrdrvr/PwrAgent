@@ -24,7 +24,7 @@ import {
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon } from "../../icons";
-import type { BrowseMode } from "../../lib/useThreadNavigation";
+import type { BrowseMode, ThreadWorkspaceMode } from "../../lib/useThreadNavigation";
 import {
   formatRuntimeGitRef,
   formatRuntimePath,
@@ -73,11 +73,11 @@ type SidebarProps = {
   onCreateThread: () => Promise<void>;
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
-    mode: "same-worktree" | "new-worktree",
+    mode: ThreadWorkspaceMode,
   ) => Promise<void>;
   onForkThread?: (
     thread: NavigationThreadSummary,
-    mode: "same-worktree" | "new-worktree",
+    mode: ThreadWorkspaceMode,
   ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenLaunchpad: (
@@ -424,7 +424,7 @@ export function Sidebar(props: SidebarProps) {
 
   const createSubthreadFromContextMenu = (
     thread: NavigationThreadSummary,
-    mode: "same-worktree" | "new-worktree",
+    mode: ThreadWorkspaceMode,
   ): void => {
     setContextMenu(undefined);
     void props.onCreateSubthread?.(thread, mode);
@@ -432,7 +432,7 @@ export function Sidebar(props: SidebarProps) {
 
   const forkThreadFromContextMenu = (
     thread: NavigationThreadSummary,
-    mode: "same-worktree" | "new-worktree",
+    mode: ThreadWorkspaceMode,
   ): void => {
     setContextMenu(undefined);
     void props.onForkThread?.(thread, mode);
@@ -584,15 +584,23 @@ export function Sidebar(props: SidebarProps) {
   );
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
+  const contextMenuHasLocalWorkspace = Boolean(contextMenuLocalPath);
+  const contextMenuHasWorktreeWorkspace = Boolean(contextMenuWorktreePath);
+  const contextMenuHasWorkspace =
+    contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuIsSubthread = Boolean(contextMenu?.thread.parentThreadId);
   const contextMenuCanCreateSubthread = Boolean(
-    contextMenu && !contextMenuIsSubthread && props.onCreateSubthread,
+    contextMenu &&
+      !contextMenuIsSubthread &&
+      contextMenuHasWorkspace &&
+      props.onCreateSubthread,
   );
   const contextMenuCanFork = Boolean(
     contextMenu &&
       contextMenu.thread.source === "codex" &&
       !contextMenuIsSubthread &&
+      contextMenuHasWorkspace &&
       canForkThread(contextMenu.thread) &&
       props.onForkThread,
   );
@@ -891,46 +899,90 @@ export function Sidebar(props: SidebarProps) {
               {contextMenuCanCreateSubthread || contextMenuCanFork ? (
                 <>
                   {contextMenuCanCreateSubthread ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        createSubthreadFromContextMenu(
-                          contextMenu.thread,
-                          "same-worktree",
-                        )
-                      }
-                    >
-                      New Sub-thread
-                    </button>
+                    contextMenuHasWorktreeWorkspace ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "same-worktree",
+                            )
+                          }
+                        >
+                          Sub-thread in Same Worktree
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Sub-thread in New Worktree
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          createSubthreadFromContextMenu(
+                            contextMenu.thread,
+                            "local",
+                          )
+                        }
+                      >
+                        Sub-thread in Local
+                      </button>
+                    )
                   ) : null}
                   {contextMenuCanFork ? (
-                    <>
+                    contextMenuHasWorktreeWorkspace ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "same-worktree",
+                            )
+                          }
+                        >
+                          Fork into Same Worktree
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Fork into New Worktree
+                        </button>
+                      </>
+                    ) : (
                       <button
                         role="menuitem"
                         type="button"
                         onClick={() =>
                           forkThreadFromContextMenu(
                             contextMenu.thread,
-                            "same-worktree",
+                            "local",
                           )
                         }
                       >
-                        Fork into Same Worktree
+                        Fork in Local
                       </button>
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          forkThreadFromContextMenu(
-                            contextMenu.thread,
-                            "new-worktree",
-                          )
-                        }
-                      >
-                        Fork into New Worktree
-                      </button>
-                    </>
+                    )
                   ) : null}
                 </>
               ) : null}

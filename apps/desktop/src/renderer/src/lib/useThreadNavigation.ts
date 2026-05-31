@@ -28,6 +28,7 @@ import {
 import type { DesktopApi } from "./desktop-api";
 
 export type BrowseMode = "inbox" | "recents" | "directories";
+export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree";
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
@@ -66,7 +67,7 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
 
 function buildSubthreadLaunchpadKey(
   parent: Pick<NavigationThreadSummary, "id" | "source">,
-  mode: "same-worktree" | "new-worktree",
+  mode: ThreadWorkspaceMode,
 ): string {
   return `subthread:${encodeURIComponent(parent.source)}:${encodeURIComponent(parent.id)}:${mode}`;
 }
@@ -85,7 +86,7 @@ function getParentThreadIdFromSubthreadLaunchpadKey(directoryKey: string): strin
 
 function selectThreadWorkspace(
   thread: NavigationThreadSummary,
-  mode: "same-worktree" | "new-worktree",
+  mode: ThreadWorkspaceMode,
 ): {
   directoryKind: NavigationDirectorySummary["kind"];
   directoryLabel: string;
@@ -107,10 +108,15 @@ function selectThreadWorkspace(
   }
 
   const sameWorkspacePath =
-    worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey;
+    mode === "same-worktree"
+      ? worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey
+      : local?.path ?? thread.projectKey;
   return {
     directoryKind: sameWorkspacePath ? "directory" : "workspace",
-    directoryLabel: preferred?.label ?? thread.title,
+    directoryLabel:
+      mode === "local"
+        ? local?.label ?? thread.title
+        : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
     workMode: "local",
   };
@@ -1590,11 +1596,11 @@ export function useThreadNavigation(
   ) => Promise<void>;
   createSubthread: (
     parent: NavigationThreadSummary,
-    mode?: "same-worktree" | "new-worktree",
+    mode?: ThreadWorkspaceMode,
   ) => Promise<void>;
   forkThread: (
     parent: NavigationThreadSummary,
-    mode: "same-worktree" | "new-worktree",
+    mode: ThreadWorkspaceMode,
   ) => Promise<void>;
   createThreadError?: string;
   creatingThread?: {
@@ -2878,7 +2884,7 @@ export function useThreadNavigation(
   const createSubthread = useCallback(
     async (
       parent: NavigationThreadSummary,
-      mode: "same-worktree" | "new-worktree" = "same-worktree",
+      mode: ThreadWorkspaceMode = "same-worktree",
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
@@ -2938,7 +2944,7 @@ export function useThreadNavigation(
   const forkThread = useCallback(
     async (
       parent: NavigationThreadSummary,
-      mode: "same-worktree" | "new-worktree",
+      mode: ThreadWorkspaceMode,
     ): Promise<void> => {
       if (!forkThreadRequest) {
         setCreateThreadError("Desktop bridge is missing forkThread().");
