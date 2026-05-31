@@ -448,13 +448,9 @@ export function mergeAcpRuntimeState(
 }
 
 export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  return (
-    value === "yolo" ||
-    value === "auto" ||
-    value === "autoEdit" ||
-    value === "auto_edit" ||
-    value === "auto-edit"
-  );
+  // ACP agents such as Qwen implement Auto/Auto-Edit internally; only Yolo
+  // means the client should bypass every permission request.
+  return value === "yolo";
 }
 
 export function formatAcpRuntimeLabel(value: string): string {

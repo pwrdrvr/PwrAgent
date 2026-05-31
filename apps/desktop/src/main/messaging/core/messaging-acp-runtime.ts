@@ -127,7 +127,8 @@ export function formatMessagingAcpRuntimeModeLabel(value: string): string {
 export function messagingAcpRuntimeValueLooksPrivileged(
   value: string | undefined,
 ): boolean {
-  return value === "yolo" || value === "autoEdit" || value === "auto_edit";
+  // Auto/Auto-Edit are provider-managed ACP modes, not PwrAgent full access.
+  return value === "yolo";
 }
 
 function isRuntimeModeConfigOption(option: BackendAcpRuntimeConfigOption): boolean {

@@ -5057,7 +5057,7 @@ describe("Composer", () => {
     });
   });
 
-  it("marks Qwen Auto launchpad mode as full-access before materialization", async () => {
+  it("keeps Qwen Auto launchpad mode in the default execution envelope", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 
     render(
@@ -5099,7 +5099,7 @@ describe("Composer", () => {
           acpRuntime: expect.objectContaining({
             configValues: expect.objectContaining({ mode: "auto" }),
           }),
-          executionMode: "full-access",
+          executionMode: "default",
         }),
         { stickySettingsChanged: true },
       );

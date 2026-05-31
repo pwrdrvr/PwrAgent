@@ -2672,7 +2672,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("materializes Qwen launchpads with implicit Auto runtime as full-access", async () => {
+  it("materializes Qwen launchpads with implicit Auto runtime in the default execution envelope", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [];
     const acpClient = {
@@ -2803,11 +2803,11 @@ describe("DesktopBackendRegistry", () => {
     expect(response).toMatchObject({
       backend: acpBackendId,
       threadId: "qwen-session-1",
-      executionMode: "full-access",
+      executionMode: "default",
     });
     expect(acpClient.startSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        executionMode: "full-access",
+        executionMode: "default",
         acpRuntime: expect.objectContaining({
           configValues: expect.objectContaining({ mode: "auto" }),
         }),
@@ -2831,7 +2831,7 @@ describe("DesktopBackendRegistry", () => {
       value: "default",
     });
     expect(sessions[0]).toMatchObject({
-      executionMode: "full-access",
+      executionMode: "default",
       acpRuntime: expect.objectContaining({
         configValues: expect.objectContaining({ mode: "auto" }),
       }),
@@ -2840,7 +2840,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("auto-approves ACP permission requests for full-access sessions", async () => {
+  it("auto-approves ACP permission requests for Yolo runtime sessions", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
@@ -2871,8 +2871,8 @@ describe("DesktopBackendRegistry", () => {
           updatedAt: 2000,
           executionMode: "full-access",
           acpRuntime: {
-            configValues: { mode: "auto" },
-            currentModeId: "auto",
+            configValues: { mode: "yolo" },
+            currentModeId: "yolo",
             updatedAt: 2000,
           },
           status: "active",
@@ -3028,7 +3028,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("auto-approves ACP permission requests for Auto runtime sessions", async () => {
+  it("does not auto-approve ACP permission requests for Auto runtime sessions", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
@@ -3092,14 +3092,7 @@ describe("DesktopBackendRegistry", () => {
       events.push(event);
     });
 
-    const response = await (
-      registry as unknown as {
-        handleServerRequest(
-          backend: AcpBackendId,
-          request: AppServerPendingRequestNotification,
-        ): Promise<unknown>;
-      }
-    ).handleServerRequest(acpBackendId, {
+    const request: AppServerPendingRequestNotification = {
       method: "item/commandExecution/requestApproval",
       params: {
         threadId: "qwen-session-1",
@@ -3108,10 +3101,34 @@ describe("DesktopBackendRegistry", () => {
         acpMethod: "session/request_permission",
         command: "pnpm build",
       },
-    });
+    };
 
-    expect(response).toEqual({ decision: "approve" });
-    expect(events).toEqual([]);
+    const responsePromise = (
+      registry as unknown as {
+        handleServerRequest(
+          backend: AcpBackendId,
+          request: AppServerPendingRequestNotification,
+        ): Promise<unknown>;
+      }
+    ).handleServerRequest(acpBackendId, request);
+    await waitForCondition(() =>
+      events.some(
+        (event) =>
+          event.notification.method === "item/commandExecution/requestApproval",
+      ),
+    );
+
+    expect(events).toContainEqual({
+      backend: acpBackendId,
+      notification: request,
+    });
+    await registry.submitServerRequest({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    await expect(responsePromise).resolves.toEqual({ decision: "approve" });
 
     unsubscribe();
     await registry.close();
