@@ -29,3 +29,12 @@ nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 '''
+
+[[actions]]
+name = "Dev - Protocol Capture"
+icon = "run"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
+'''
