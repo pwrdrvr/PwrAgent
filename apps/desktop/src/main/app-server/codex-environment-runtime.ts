@@ -34,15 +34,13 @@ function truncateForLog(value: string | undefined): string | undefined {
  * stderr buffer (e.g. nvm's "v24.14.1 is already installed" trailing a
  * pnpm install that exited 1 with ERR_PNPM_IGNORED_BUILDS on stdout).
  *
- * The fix: include the tail of the combined stdout+stderr buffer, the way
+ * The fix: include the tail of the arrival-ordered stdout+stderr buffer, the way
  * a user running the script in a terminal would have seen it. The full
  * output is still preserved on `CodexEnvironmentCommandError.output` for
  * the dialog's collapsible details — this is just the headline.
  */
-export function buildExitErrorSuffix(stdout: string, stderr: string): string {
-  const combined = [stdout.trimEnd(), stderr.trimEnd()]
-    .filter(Boolean)
-    .join("\n");
+export function buildExitErrorSuffix(output: string): string {
+  const combined = output.trimEnd();
   if (!combined) return "";
   const lines = combined.split("\n");
   const tail =
@@ -441,13 +439,16 @@ function runShellCommand(
       stdio: "pipe",
     });
 
-    let stdout = "";
-    let stderr = "";
+    let combinedOutput = "";
     let settled = false;
     let closed = false;
     let timedOut = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
+
+    const appendOutput = (text: string) => {
+      combinedOutput = `${combinedOutput}${text}`.slice(-32_000);
+    };
 
     const terminateChild = (signal: NodeJS.Signals) => {
       if (!child.pid) {
@@ -515,11 +516,8 @@ function runShellCommand(
       }
       snapshotTimer = setTimeout(() => {
         snapshotTimer = undefined;
-        const snapshotOutput = [stdout.trimEnd(), stderr.trimEnd()]
-          .filter(Boolean)
-          .join("\n");
         try {
-          params.onDetachedOutput?.({ output: snapshotOutput });
+          params.onDetachedOutput?.({ output: combinedOutput.trimEnd() });
         } catch (callbackError) {
           environmentRuntimeLog.warn(
             "codex-environment-detached-output-callback-failed",
@@ -537,7 +535,7 @@ function runShellCommand(
 
     child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      stdout = `${stdout}${text}`.slice(-32_000);
+      appendOutput(text);
       params.onProgress?.({
         phase: "stdout",
         chunk: text,
@@ -547,7 +545,7 @@ function runShellCommand(
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      stderr = `${stderr}${text}`.slice(-4096);
+      appendOutput(text);
       params.onProgress?.({
         phase: "stderr",
         chunk: text,
@@ -609,9 +607,7 @@ function runShellCommand(
           snapshotTimer = undefined;
         }
         const durationMs = Date.now() - startedAt;
-        const combinedOutput = [stdout.trimEnd(), stderr.trimEnd()]
-          .filter(Boolean)
-          .join("\n");
+        const output = combinedOutput.trimEnd();
         if (code === 0) {
           environmentRuntimeLog.info("codex-environment-detached-exit", {
             processId,
@@ -629,7 +625,7 @@ function runShellCommand(
             durationMs,
             command: params.command,
             cwd: params.cwd,
-            output: truncateForLog(combinedOutput),
+            output: truncateForLog(output),
           });
         }
         try {
@@ -637,7 +633,7 @@ function runShellCommand(
             exitCode: typeof code === "number" ? code : null,
             exitSignal: signal ?? null,
             durationMs,
-            output: combinedOutput,
+            output,
           });
         } catch (callbackError) {
           environmentRuntimeLog.warn(
@@ -662,9 +658,7 @@ function runShellCommand(
         killHandle = undefined;
       }
       const durationMs = Date.now() - startedAt;
-      const combinedOutput = [stdout.trimEnd(), stderr.trimEnd()]
-        .filter(Boolean)
-        .join("\n");
+      const output = combinedOutput.trimEnd();
       if (timedOut) {
         environmentRuntimeLog.error("codex-environment-command-exit", {
           processId,
@@ -674,7 +668,7 @@ function runShellCommand(
           timedOut: true,
           command: params.command,
           cwd: params.cwd,
-          output: truncateForLog(combinedOutput),
+          output: truncateForLog(output),
         });
         settle(() => {
           reject(
@@ -682,7 +676,7 @@ function runShellCommand(
               `Codex environment command timed out after ${params.timeoutMs}ms`,
               {
                 durationMs,
-                output: combinedOutput,
+                output,
               },
             ),
           );
@@ -700,7 +694,7 @@ function runShellCommand(
           resolve({
             durationMs,
             exitCode: code,
-            output: combinedOutput,
+            output,
             pid: child.pid,
           });
         });
@@ -713,9 +707,9 @@ function runShellCommand(
         durationMs,
         command: params.command,
         cwd: params.cwd,
-        output: truncateForLog(combinedOutput),
+        output: truncateForLog(output),
       });
-      const suffix = buildExitErrorSuffix(stdout, stderr);
+      const suffix = buildExitErrorSuffix(output);
       settle(() => {
         reject(
           new CodexEnvironmentCommandError(
@@ -723,7 +717,7 @@ function runShellCommand(
             {
               durationMs,
               exitCode: typeof code === "number" ? code : undefined,
-              output: combinedOutput,
+              output,
             },
           ),
         );
