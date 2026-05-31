@@ -239,6 +239,52 @@ describe("profile IPC helpers", () => {
     expect(contents).not.toContain('completed_source = "wizard"');
   });
 
+  it("createDesktopPwrAgentProfile normalizes arbitrary profile names", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    const response = createDesktopPwrAgentProfile({ profile: "My Work Profile" });
+
+    expect(response.profile).toBe("my-work-profile");
+    expect(response.profileDir).toBe(
+      path.join(root, "profiles", "my-work-profile"),
+    );
+    expect(fs.existsSync(response.profileDir)).toBe(true);
+  });
+
+  it("openDesktopPwrAgentProfile normalizes before launching", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    ensureNamedProfileExists("my-work-profile", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    const response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+
+    expect(response).toEqual({ opened: true, profile: "my-work-profile" });
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      expect.arrayContaining(["--profile", "my-work-profile"]),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          [PWRAGENT_PROFILE_ENV]: "my-work-profile",
+        }),
+      }),
+    );
+  });
+
   it("createDesktopPwrAgentProfile with seedOnboardingCompleted=true marks the new profile as wizard-completed", async () => {
     // Wizard's Isolated + Multiple path: the operator just went through
     // the wizard to create this profile, so it should NOT re-fire the
@@ -434,12 +480,12 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
 
       const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
-      expect(() =>
-        writeDesktopSecretsToProfile({
-          profile: "Bad Name",
-          secrets: { grokApiKey: "x" },
-        }),
-      ).toThrow(/Invalid profile name/);
+    expect(() =>
+      writeDesktopSecretsToProfile({
+        profile: "!!!",
+        secrets: { grokApiKey: "x" },
+      }),
+    ).toThrow(/must contain at least one letter or number/);
       expect(safeStorageEncryptMock).not.toHaveBeenCalled();
     });
 

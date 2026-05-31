@@ -71,7 +71,11 @@ import {
   disposeWindowPointerIpcHandlers,
   registerWindowPointerIpcHandlers,
 } from "./ipc/window-pointer";
-import { getMainLogger, initializeMainLogger } from "./log";
+import {
+  getMainLogger,
+  initializeMainLogger,
+  resolveMainLogProfileName,
+} from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import {
   disposeDesktopMessagingRuntime,
@@ -408,7 +412,10 @@ export function bootstrapApp(): void {
     applicationVersion: app.getVersion(),
     copyright: APP_COPYRIGHT,
   });
-  initializeMainLogger();
+  const bootDecision = resolveProfileBootDecision();
+  initializeMainLogger({
+    profileName: resolveMainLogProfileName(bootDecision),
+  });
   installProcessShutdownHandlers();
 
   app.whenReady().then(async () => {
@@ -425,7 +432,6 @@ export function bootstrapApp(): void {
     // into "bootstrap" mode against the throwaway .bootstrap/ dir.
     // Wizard Finish graduates the bootstrap state into a real
     // profile and opens a new window for it (see Task E).
-    const bootDecision = resolveProfileBootDecision();
     // Reduce the 4-variant decision to a 2-variant app-state mode.
     // The explicit switch (vs. a bare `kind === "open" ? … : …`)
     // forces a compile error if a future variant is added — the

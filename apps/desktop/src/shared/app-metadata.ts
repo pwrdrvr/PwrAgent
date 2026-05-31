@@ -29,6 +29,7 @@ export type AppChangelogDocument = {
 export type AppLogSnapshot = {
   kind: "log-snapshot";
   title: string;
+  logFilePath?: string;
   entries: AppLogEntry[];
   readAt: number;
   truncated: boolean;

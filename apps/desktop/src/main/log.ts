@@ -1,5 +1,6 @@
 import electronLog from "electron-log/main.js";
 import { appendAppLogEntry } from "./app-logs";
+import type { ProfileBootDecision } from "./profile";
 
 let initialized = false;
 const MAX_COMPACT_STRING_LENGTH = 320;
@@ -15,12 +16,17 @@ if (process.env.VITEST === "true" && electronLogConsoleTransport) {
   electronLogConsoleTransport.level = false;
 }
 
-export function initializeMainLogger(): void {
+export function initializeMainLogger(options?: { profileName?: string }): void {
   if (initialized) {
     return;
   }
 
   initialized = true;
+  if (options?.profileName) {
+    electronLog.transports.file.fileName = resolveMainLogFileNameForProfile(
+      options.profileName,
+    );
+  }
   electronLog.initialize();
   electronLog.scope.labelPadding = false;
   electronLog.hooks.push((
@@ -46,6 +52,33 @@ export function initializeMainLogger(): void {
 
 export function getMainLogger(scope: string) {
   return electronLog.scope(scope);
+}
+
+export function resolveMainLogProfileName(
+  decision: ProfileBootDecision,
+): string {
+  switch (decision.kind) {
+    case "open":
+      return decision.profileName;
+    case "missing-named-profile":
+      return decision.requestedName;
+    case "missing-default-profile":
+      return decision.configuredName;
+    case "no-profile-configured":
+      return "bootstrap";
+  }
+}
+
+export function resolveMainLogFileNameForProfile(profileName: string): string {
+  return `profile-${profileName}.main.log`;
+}
+
+export function getMainLogFilePath(): string | undefined {
+  try {
+    return electronLog.transports?.file?.getFile().path;
+  } catch {
+    return undefined;
+  }
 }
 
 type CompactField = {

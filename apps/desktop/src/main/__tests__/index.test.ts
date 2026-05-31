@@ -41,6 +41,20 @@ const disposeSettingsIpcHandlersMock = vi.fn();
 const registerWindowPointerIpcHandlersMock = vi.fn();
 const disposeWindowPointerIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
+const resolveMainLogProfileNameMock = vi.fn((decision: BootDecisionLike) => {
+  switch (decision.kind) {
+    case "open":
+      return String(decision.profileName);
+    case "missing-named-profile":
+      return String(decision.requestedName);
+    case "missing-default-profile":
+      return String(decision.configuredName);
+    case "no-profile-configured":
+      return "bootstrap";
+    default:
+      return "bootstrap";
+  }
+});
 const requestOpenSettingsMock = vi.fn();
 const requestQuitMock = vi.fn(async () => true);
 const allowImmediateQuitMock = vi.fn();
@@ -255,6 +269,7 @@ vi.mock("../ipc/window-pointer", () => ({
 
 vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
+  resolveMainLogProfileName: resolveMainLogProfileNameMock,
   getMainLogger: vi.fn(() => ({
     info: mainLogInfoMock,
     warn: mainLogWarnMock,
@@ -398,6 +413,7 @@ describe("bootstrapApp", () => {
     registerWindowPointerIpcHandlersMock.mockReset();
     disposeWindowPointerIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
+    resolveMainLogProfileNameMock.mockClear();
     requestOpenSettingsMock.mockReset();
     requestQuitMock.mockReset();
     requestQuitMock.mockResolvedValue(true);
@@ -795,6 +811,9 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
+    expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      profileName: "default",
+    });
     // Open decision → today's flow. No bootstrap cleanup needed
     // mid-boot (the previous-boot's bootstrap dir, if any, gets
     // wiped only on `open` decisions — see comment in index.ts).
@@ -809,6 +828,9 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
+    expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      profileName: "bootstrap",
+    });
     // Bootstrap mode runs the wizard against the .bootstrap/ dir.
     // No cleanup at boot — we ARE the bootstrap session that will
     // own that dir; cleanup happens at graduation in Task E.
@@ -827,6 +849,9 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
+    expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      profileName: "ghost",
+    });
     // PWRAGENT_PROFILE=ghost on a host that doesn't have a ghost
     // profile dir: pre-#524 silently materialized one. Now we drop
     // into bootstrap mode so the wizard can ask "set up ghost,

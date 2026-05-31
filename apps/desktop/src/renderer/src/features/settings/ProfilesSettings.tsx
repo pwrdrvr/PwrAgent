@@ -4,6 +4,7 @@ import type {
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
+import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   usePwrAgentProfiles,
@@ -302,12 +303,12 @@ function ProfileCreateDialog(props: {
   onCreate: (profile: string) => void;
 }) {
   const [profileName, setProfileName] = useState("");
-  const normalizedName = profileName.trim();
-  const validName = /^[a-z0-9][a-z0-9_-]{0,31}$/.test(normalizedName);
+  const normalizedName = normalizeProfileName(profileName);
+  const hasInput = profileName.trim().length > 0;
   const exists = props.existingProfiles.some(
     (profile) => profile.name === normalizedName,
   );
-  const canCreate = Boolean(normalizedName && validName && !exists);
+  const canCreate = Boolean(hasInput && normalizedName && !exists);
 
   return (
     <div className="settings-confirm-modal" role="presentation">
@@ -328,9 +329,14 @@ function ProfileCreateDialog(props: {
           value={profileName}
           onChange={(event) => setProfileName(event.currentTarget.value)}
         />
-        {!validName && normalizedName ? (
+        {hasInput && !normalizedName ? (
           <p className="settings-row__error">
-            Use lowercase letters, numbers, dashes, or underscores.
+            Enter at least one letter or number.
+          </p>
+        ) : null}
+        {hasInput && normalizedName ? (
+          <p className="settings-profile-create-dialog__hint">
+            Profile ID: <code>{normalizedName}</code>
           </p>
         ) : null}
         {exists ? (

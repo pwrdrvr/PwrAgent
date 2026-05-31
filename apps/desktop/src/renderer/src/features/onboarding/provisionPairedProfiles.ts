@@ -1,13 +1,19 @@
+import {
+  isCanonicalProfileName,
+  normalizeProfileName,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+
+export { normalizeProfileName };
 
 /**
  * Profile-name guard matching the validation rule the main-process
  * `createDesktopPwrAgentProfile` and `setDesktopPwrAgentProfileCodexProfile`
  * IPC handlers enforce: lowercase letters, digits, underscores, hyphens —
- * 1 to 31 characters, must start with a letter or digit.
+ * 1 to 32 characters, must start with a letter or digit.
  */
 export function isValidProfileName(name: string): boolean {
-  return /^[a-z0-9][a-z0-9_-]{0,30}$/.test(name);
+  return isCanonicalProfileName(name);
 }
 
 export type PairedProfileApi = Pick<
@@ -41,8 +47,8 @@ export async function provisionPairedProfiles(
   }
   const created: string[] = [];
   for (const raw of names) {
-    const name = raw.trim();
-    if (!isValidProfileName(name)) continue;
+    const name = normalizeProfileName(raw);
+    if (!name) continue;
     try {
       await api.createPwrAgentProfile({
         profile: name,
