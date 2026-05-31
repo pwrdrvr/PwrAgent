@@ -10,7 +10,7 @@ import {
 } from "../app-server/codex-environment-runtime";
 
 describe("codex environment runtime", () => {
-  it("rejects detached actions that fail before spawn", async () => {
+  it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
     await expect(
       startLocalCodexEnvironmentAction({
         actionId: "start-dev",
@@ -29,7 +29,9 @@ describe("codex environment runtime", () => {
           ],
         },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(
+      "Codex environment working directory does not exist: /definitely/not/a/pwragent/worktree",
+    );
   });
 
   it("runs detached actions with the provided hydrated environment", async () => {
@@ -142,6 +144,90 @@ describe("codex environment runtime", () => {
           return output;
         }),
       ).resolves.toBe(expectedOutput);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back when the hydrated shell path is stale", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-fallback-"));
+    const outputPath = path.join(root, "env.txt");
+
+    try {
+      const result = await startLocalCodexEnvironmentAction({
+        actionId: "start-dev",
+        runId: "test-run-shell-fallback",
+        env: {
+          ...process.env,
+          SHELL: path.join(root, "missing-shell"),
+        },
+        runtime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          cwd: root,
+          actions: [
+            {
+              id: "start-dev",
+              name: "Start dev",
+              command: `printf fallback > ${JSON.stringify(outputPath)}`,
+            },
+          ],
+        },
+      });
+
+      expect(result.actionRuns).toEqual([
+        expect.objectContaining({
+          runId: "test-run-shell-fallback",
+          actionId: "start-dev",
+          status: "started",
+        }),
+      ]);
+      await expect(
+        expectEventually(async () => await readFile(outputPath, "utf8")),
+      ).resolves.toBe("fallback");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back when the stale hydrated shell is a Windows absolute path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-win-shell-fallback-"));
+    const outputPath = path.join(root, "env.txt");
+
+    try {
+      const result = await startLocalCodexEnvironmentAction({
+        actionId: "start-dev",
+        runId: "test-run-win-shell-fallback",
+        env: {
+          ...process.env,
+          SHELL: "C:\\Users\\operator\\missing-shell.exe",
+        },
+        runtime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          cwd: root,
+          actions: [
+            {
+              id: "start-dev",
+              name: "Start dev",
+              command: `printf fallback > ${JSON.stringify(outputPath)}`,
+            },
+          ],
+        },
+      });
+
+      expect(result.actionRuns).toEqual([
+        expect.objectContaining({
+          runId: "test-run-win-shell-fallback",
+          actionId: "start-dev",
+          status: "started",
+        }),
+      ]);
+      await expect(
+        expectEventually(async () => await readFile(outputPath, "utf8")),
+      ).resolves.toBe("fallback");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
