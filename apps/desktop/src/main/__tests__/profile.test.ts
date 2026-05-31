@@ -23,6 +23,7 @@ import {
   setDefaultProfileName,
   startProfileFocusRequestWatcher,
   startProfileRuntimeHeartbeat,
+  normalizeProfileName,
 } from "../profile";
 
 const roots: string[] = [];
@@ -125,6 +126,13 @@ describe("PwrAgent profiles", () => {
     );
   });
 
+  it("normalizes arbitrary display names into canonical profile ids", () => {
+    expect(normalizeProfileName("My Work Profile")).toBe("my-work-profile");
+    expect(normalizeProfileName("Café Ops")).toBe("cafe-ops");
+    expect(normalizeProfileName("con")).toBe("con-profile");
+    expect(normalizeProfileName("!!!")).toBe("");
+  });
+
   it("deletes inactive custom profiles and clears the startup default", () => {
     const { env, root } = createRoot();
     const activeEnv = {
@@ -218,11 +226,11 @@ describe("PwrAgent profiles", () => {
     it("returns missing-named-profile when PWRAGENT_PROFILE names a non-existent profile", () => {
       const { env } = createRoot();
       const decision = resolveProfileBootDecision({
-        env: { ...env, [PWRAGENT_PROFILE_ENV]: "ghost" },
+        env: { ...env, [PWRAGENT_PROFILE_ENV]: "Ghost Profile" },
       });
       expect(decision).toEqual({
         kind: "missing-named-profile",
-        requestedName: "ghost",
+        requestedName: "ghost-profile",
         source: "env",
       });
     });
@@ -231,11 +239,11 @@ describe("PwrAgent profiles", () => {
       const { env } = createRoot();
       const decision = resolveProfileBootDecision({
         env,
-        argv: ["PwrAgent", "--profile", "ghost"],
+        argv: ["PwrAgent", "--profile", "Ghost Profile"],
       });
       expect(decision).toEqual({
         kind: "missing-named-profile",
-        requestedName: "ghost",
+        requestedName: "ghost-profile",
         source: "cli",
       });
     });
@@ -333,23 +341,26 @@ describe("PwrAgent profiles", () => {
       });
     });
 
-    it("rejects invalid names from CLI before deciding existence", () => {
+    it("normalizes arbitrary names from CLI before deciding existence", () => {
       const { env } = createRoot();
-      expect(() =>
+      expect(
         resolveProfileBootDecision({
           env,
           argv: ["PwrAgent", "--profile", "Bad Name"],
         }),
-      ).toThrow(/Invalid profile name/);
+      ).toMatchObject({
+        kind: "missing-named-profile",
+        requestedName: "bad-name",
+      });
     });
 
-    it("rejects invalid names from env var before deciding existence", () => {
+    it("rejects env names that cannot normalize to a profile id", () => {
       const { env } = createRoot();
       expect(() =>
         resolveProfileBootDecision({
-          env: { ...env, [PWRAGENT_PROFILE_ENV]: "Bad Name" },
+          env: { ...env, [PWRAGENT_PROFILE_ENV]: "!!!" },
         }),
-      ).toThrow(/Invalid PWRAGENT_PROFILE/);
+      ).toThrow(/must contain at least one letter or number/);
     });
 
     it("ignores a stale .bootstrap/ dir — only profiles/ counts for decisions", () => {

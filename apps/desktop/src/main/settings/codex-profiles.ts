@@ -5,7 +5,7 @@ import type {
   DesktopCodexAuthProfileCandidate,
   DesktopCodexAuthProfileDiscoverySnapshot,
 } from "@pwragent/shared";
-import { isValidProfileName } from "../profile";
+import { isValidProfileName, normalizeProfileName } from "../profile";
 
 export const CODEX_HOME_ENV = "CODEX_HOME";
 
@@ -30,9 +30,8 @@ export function resolveCodexHomeForProfile(
   profileName: string | undefined,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): string | undefined {
-  const name = profileName?.trim();
+  const name = normalizeProfileName(profileName ?? "");
   if (!name) return undefined;
-  if (!isValidProfileName(name)) return undefined;
   return path.join(resolveCodexProfileRoot(options), name);
 }
 
@@ -40,9 +39,9 @@ export function createCodexAuthProfile(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): { profile: string; codexHome: string; created: boolean } {
-  const name = profileName.trim();
-  if (!isValidProfileName(name)) {
-    throw new Error("Codex profile names must match PwrAgent profile naming rules.");
+  const name = normalizeProfileName(profileName);
+  if (!name) {
+    throw new Error("Codex profile names must contain at least one letter or number.");
   }
   const codexHome = path.join(resolveCodexProfileRoot(options), name);
   const created = !fs.existsSync(codexHome);
@@ -58,9 +57,7 @@ export function discoverCodexAuthProfiles(options?: {
   const defaultCodexHome = resolveDefaultCodexHome(options);
   const profileRoot = resolveCodexProfileRoot(options);
   const configuredProfile = options?.configuredProfile?.trim() ?? "";
-  const selectedProfile = isValidProfileName(configuredProfile)
-    ? configuredProfile
-    : "";
+  const selectedProfile = normalizeProfileName(configuredProfile);
   const profiles: DesktopCodexAuthProfileCandidate[] = [
     {
       name: "",
@@ -97,7 +94,7 @@ export function discoverCodexAuthProfiles(options?: {
   }
 
   if (configuredProfile && !selectedProfile) {
-    error = `Invalid Codex profile "${configuredProfile}". Profile names must match PwrAgent profile naming rules.`;
+    error = `Invalid Codex profile "${configuredProfile}". Profile names must contain at least one letter or number.`;
   }
 
   const selected =

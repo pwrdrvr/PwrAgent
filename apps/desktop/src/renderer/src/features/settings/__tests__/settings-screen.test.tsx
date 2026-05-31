@@ -2228,11 +2228,12 @@ describe("SettingsScreen", () => {
       within(createDialog).getByRole("textbox", {
         name: "PwrAgent profile name",
       }),
-      { target: { value: "work" } },
+      { target: { value: "My Work" } },
     );
+    expect(within(createDialog).getByText("my-work")).toBeInTheDocument();
     fireEvent.click(within(createDialog).getByRole("button", { name: "Add profile" }));
     await waitFor(() => {
-      expect(createPwrAgentProfile).toHaveBeenCalledWith({ profile: "work" });
+      expect(createPwrAgentProfile).toHaveBeenCalledWith({ profile: "my-work" });
     });
 
     expect(await screen.findByText("scratch")).toBeInTheDocument();

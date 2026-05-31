@@ -28,6 +28,7 @@ import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
   isValidProfileName,
+  normalizeProfileName,
   provisionPairedProfiles,
 } from "./provisionPairedProfiles";
 import {
@@ -172,8 +173,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // create `foo`" without retyping the name in the Profiles step.
   const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() => {
     const initialNames = props.initialCodexProfileNames
-      ?.map((name) => name.trim())
-      .filter(isValidProfileName);
+      ?.map((name) => normalizeProfileName(name))
+      .filter(Boolean);
     if (initialNames?.length) {
       return [...initialNames];
     }
@@ -181,8 +182,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       props.bootInfo?.decisionKind === "missing-named-profile"
         ? props.bootInfo.requestedProfileName?.trim()
         : undefined;
-    if (requested && isValidProfileName(requested)) {
-      return [requested];
+    const normalizedRequested = normalizeProfileName(requested ?? "");
+    if (normalizedRequested) {
+      return [normalizedRequested];
     }
     return props.initialCodexProfileModel === "isolated"
       ? ["pwragent"]
@@ -1163,11 +1165,18 @@ function DismissConfirmModal(props: {
   );
 }
 
-function validateProfileNames(names: readonly string[]): boolean {
-  const trimmed = names.map((n) => n.trim()).filter((n) => n.length > 0);
-  if (trimmed.length < 1 || trimmed.length > 5) return false;
-  const set = new Set(trimmed);
-  return set.size === trimmed.length && trimmed.every(isValidProfileName);
+export function validateProfileNames(names: readonly string[]): boolean {
+  const rows = names
+    .map((raw) => ({
+      raw: raw.trim(),
+      normalized: normalizeProfileName(raw),
+    }))
+    .filter((row) => row.raw.length > 0);
+  if (rows.some((row) => !row.normalized)) return false;
+  const normalized = rows.map((row) => row.normalized);
+  if (normalized.length < 1 || normalized.length > 5) return false;
+  const set = new Set(normalized);
+  return set.size === normalized.length;
 }
 
 
@@ -2913,8 +2922,8 @@ function NameCodexProfilesStep(props: {
     const api = apiRef.current;
     if (!api?.checkCodexAuthProfileStatus) return;
     for (const raw of props.names) {
-      const name = raw.trim();
-      if (!isValidProfileName(name)) continue;
+      const name = normalizeProfileName(raw);
+      if (!name) continue;
       if (stateFor(name).kind !== "idle") continue;
       void (async () => {
         try {
@@ -2941,9 +2950,9 @@ function NameCodexProfilesStep(props: {
 
   // Propagate auth completion to the wizard root for Continue gating.
   useEffect(() => {
-    const validNames = props.names
-      .map((name) => name.trim())
-      .filter((name) => isValidProfileName(name));
+  const validNames = props.names
+      .map((name) => normalizeProfileName(name))
+      .filter(Boolean);
     const allAuthed =
       validNames.length > 0 &&
       validNames.every((name) => stateFor(name).kind === "ok");
@@ -2989,9 +2998,10 @@ function NameCodexProfilesStep(props: {
       <div className="onboarding-wizard__profile-list">
         {props.names.map((name, idx) => {
           const trimmed = name.trim();
-          const valid = trimmed === "" || isValidProfileName(trimmed);
-          const state = trimmed ? stateFor(trimmed) : { kind: "idle" as const };
-          const locked = isRowLocked(trimmed);
+          const normalized = normalizeProfileName(name);
+          const valid = trimmed === "" || Boolean(normalized);
+          const state = normalized ? stateFor(normalized) : { kind: "idle" as const };
+          const locked = isRowLocked(normalized);
           return (
             <div
               key={idx}
@@ -3009,11 +3019,11 @@ function NameCodexProfilesStep(props: {
                   readOnly={locked}
                 />
                 <ProfileRowLoginControls
-                  name={trimmed}
-                  valid={valid && trimmed.length > 0}
+                  name={normalized}
+                  valid={valid && Boolean(normalized)}
                   state={state}
-                  onLogin={() => void startLogin(trimmed)}
-                  onCheck={() => void refreshStatus(trimmed)}
+                  onLogin={() => void startLogin(normalized)}
+                  onCheck={() => void refreshStatus(normalized)}
                   onCopyUrl={() => void copyLoginUrl("url" in state ? state.url : undefined)}
                 />
                 {!isSingle && props.names.length > 1 ? (
@@ -3029,13 +3039,13 @@ function NameCodexProfilesStep(props: {
                 ) : null}
               </div>
               <ProfileRowLoginStatus state={state} />
-              {trimmed ? (
+              {normalized ? (
                 <ProfileRowXaiKey
-                  profileName={trimmed}
+                  profileName={normalized}
                   globalKey={props.globalXaiKey}
-                  override={props.xaiKeyByProfile[trimmed] ?? ""}
+                  override={props.xaiKeyByProfile[normalized] ?? ""}
                   onChange={(value) =>
-                    props.onSetXaiKeyForProfile(trimmed, value)
+                    props.onSetXaiKeyForProfile(normalized, value)
                   }
                 />
               ) : null}

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isValidProfileName,
+  normalizeProfileName,
   provisionPairedProfiles,
   type PairedProfileApi,
 } from "../provisionPairedProfiles";
@@ -67,7 +68,8 @@ describe("isValidProfileName", () => {
     ["personal-2024", true],
     ["my_profile", true],
     ["a".repeat(31), true],
-    ["a".repeat(32), false],
+    ["a".repeat(32), true],
+    ["a".repeat(33), false],
     ["", false],
     ["-leading-hyphen", false],
     ["_leading-underscore", false],
@@ -76,6 +78,11 @@ describe("isValidProfileName", () => {
     ["has.dot", false],
   ])("%j -> %s", (name, expected) => {
     expect(isValidProfileName(name)).toBe(expected);
+  });
+
+  it("normalizes arbitrary display names into canonical profile ids", () => {
+    expect(normalizeProfileName("My Work Profile")).toBe("my-work-profile");
+    expect(normalizeProfileName("Café Ops")).toBe("cafe-ops");
   });
 });
 
@@ -95,6 +102,18 @@ describe("provisionPairedProfiles", () => {
       "pwragent:pwragent",
       "codex:pwragent",
       "pair:pwragent↔pwragent",
+    ]);
+  });
+
+  it("normalizes profile names before provisioning", async () => {
+    const mock = makeApi();
+    const created = await provisionPairedProfiles(mock.api, ["My Work Profile"]);
+
+    expect(created).toEqual(["my-work-profile"]);
+    expect(mock.callLog).toEqual([
+      "pwragent:my-work-profile",
+      "codex:my-work-profile",
+      "pair:my-work-profile↔my-work-profile",
     ]);
   });
 
@@ -167,7 +186,7 @@ describe("provisionPairedProfiles", () => {
     const created = await provisionPairedProfiles(mock.api, [
       "",
       "valid",
-      "UPPERCASE",
+      "!!!",
       "also-valid",
     ]);
     expect(created).toEqual(["valid", "also-valid"]);

@@ -100,10 +100,10 @@ describe("Codex auth profile discovery", () => {
     });
   });
 
-  it("rejects invalid profile names before resolving a CODEX_HOME override", () => {
+  it("returns undefined when a profile name cannot normalize", () => {
     const root = createTempRoot();
     expect(
-      resolveCodexHomeForProfile("../work", {
+      resolveCodexHomeForProfile("!!!", {
         env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
       }),
     ).toBeUndefined();
@@ -113,19 +113,19 @@ describe("Codex auth profile discovery", () => {
     const root = createTempRoot();
     const codexHome = path.join(root, "codex");
 
-    const created = createCodexAuthProfile("work", {
+    const created = createCodexAuthProfile("My Work", {
       env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
     });
 
     expect(created).toEqual({
-      profile: "work",
-      codexHome: path.join(codexHome, "profiles", "work"),
+      profile: "my-work",
+      codexHome: path.join(codexHome, "profiles", "my-work"),
       created: true,
     });
     expect(fs.statSync(created.codexHome).isDirectory()).toBe(true);
 
     expect(
-      createCodexAuthProfile("work", {
+      createCodexAuthProfile("My Work", {
         env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
       }).created,
     ).toBe(false);

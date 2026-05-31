@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import type { AppLogEntry } from "../../../../shared/app-metadata";
+import { CopyIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 
 const BOTTOM_THRESHOLD_PX = 32;
@@ -47,8 +49,11 @@ export function LogsWindow() {
   const activeMatchRef = useRef<HTMLElement | null>(null);
   const followingRef = useRef(true);
   const entryBufferRef = useRef(createRenderedLogEntryBuffer());
+  const copyResetTimerRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [logFilePath, setLogFilePath] = useState<string | undefined>();
+  const [copiedLogFilePath, setCopiedLogFilePath] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -64,6 +69,14 @@ export function LogsWindow() {
     document.title = "Logs";
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
+
   const loadSnapshot = useCallback(async () => {
     const reader = desktopApi?.readAppLogSnapshot;
     if (!reader) {
@@ -75,6 +88,7 @@ export function LogsWindow() {
       const value = await reader();
       entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
       setRenderVersion((version) => version + 1);
+      setLogFilePath(value.logFilePath);
       setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
       setError(undefined);
     } catch (err: unknown) {
@@ -209,6 +223,26 @@ export function LogsWindow() {
     }
   }, [setFollowingMode]);
 
+  const handleCopyLogFilePath = useCallback(() => {
+    if (!logFilePath) {
+      return;
+    }
+    void copyText(logFilePath, desktopApi)
+      .then(() => {
+        if (copyResetTimerRef.current) {
+          window.clearTimeout(copyResetTimerRef.current);
+        }
+        setCopiedLogFilePath(true);
+        copyResetTimerRef.current = window.setTimeout(() => {
+          setCopiedLogFilePath(false);
+          copyResetTimerRef.current = undefined;
+        }, 1400);
+      })
+      .catch((copyError: unknown) => {
+        console.error("Failed to copy log file path", copyError);
+      });
+  }, [desktopApi, logFilePath]);
+
   const activeMatchLabel =
     rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
 
@@ -269,6 +303,30 @@ export function LogsWindow() {
               Follow
             </button>
           </div>
+
+          {logFilePath ? (
+            <div className="log-window__file" aria-label="Log file path">
+              <span className="log-window__file-label">File</span>
+              <code className="log-window__file-path" title={logFilePath}>
+                {logFilePath}
+              </code>
+              <button
+                className="log-window__file-copy"
+                type="button"
+                data-copied={copiedLogFilePath ? "true" : undefined}
+                aria-label={
+                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
+                }
+                title={
+                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
+                }
+                onClick={handleCopyLogFilePath}
+              >
+                <CopyIcon size={13} aria-hidden="true" />
+                <span>{copiedLogFilePath ? "Copied" : "Copy"}</span>
+              </button>
+            </div>
+          ) : null}
 
           <div className="log-window__status">
             <span className="log-window__status-text">

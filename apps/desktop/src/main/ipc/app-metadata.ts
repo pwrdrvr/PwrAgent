@@ -25,6 +25,7 @@ import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
 import { showChangelogWindow } from "../changelog-window";
 import { showThirdPartyNoticesWindow } from "../license-document-window";
+import { getMainLogFilePath } from "../log";
 import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -129,7 +130,11 @@ export function registerAppMetadataIpcHandlers(): void {
   );
   ipcMain.handle(
     APP_LOG_SNAPSHOT_READ_CHANNEL,
-    async (): Promise<AppLogSnapshot> => readAppLogSnapshot(),
+    async (): Promise<AppLogSnapshot> => {
+      const snapshot = readAppLogSnapshot();
+      const logFilePath = getMainLogFilePath();
+      return logFilePath ? { ...snapshot, logFilePath } : snapshot;
+    },
   );
   ipcMain.handle(APP_LOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
     showAppLogWindow();
