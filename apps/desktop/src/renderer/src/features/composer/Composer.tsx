@@ -154,6 +154,8 @@ type ComposerProps = {
   providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
+  threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
@@ -272,6 +274,8 @@ function createQueuedTurnId(): string {
   queuedTurnIdSequence += 1;
   return `queued-turn-${Date.now().toString(36)}-${queuedTurnIdSequence.toString(36)}`;
 }
+
+const globalQueuedTurnReleaseScopeKeys = new Set<string>();
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -1956,6 +1960,14 @@ export function Composer(props: ComposerProps) {
       restoreClaimedQueuedTurn(queued);
     }
   };
+  const releaseQueuedTurnScopeLockIfClaimed = (
+    queued: QueuedTurnDraft | undefined,
+    queueClaimed: boolean | undefined,
+  ): void => {
+    if (queued && queueClaimed) {
+      globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+    }
+  };
   const setPendingSteer = (nextPendingSteer?: PendingSteerDraft): void => {
     if (nextPendingSteer?.status === "pending") {
       savePendingSteerSnapshot(composerScopeKey, nextPendingSteer);
@@ -2354,6 +2366,12 @@ export function Composer(props: ComposerProps) {
   }, [composerScopeKey, props.thread]);
 
   useEffect(() => {
+    return () => {
+      globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+    };
+  }, [composerScopeKey]);
+
+  useEffect(() => {
     updateActiveTurnId(props.activeTurnId);
 
     if (!props.activeTurnId) {
@@ -2420,6 +2438,7 @@ export function Composer(props: ComposerProps) {
           turnQueueRecord.status === "failed" ||
           turnQueueRecord.status === "cancelled"
         ) {
+          globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
           updateServerQueuedTurnEntryId(undefined);
         }
       }
@@ -2455,6 +2474,21 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "turn/failed" ||
         event.notification.method === "turn/cancelled"
       ) {
+        const terminalTurnId =
+          typeof event.notification.params.turnId === "string"
+            ? event.notification.params.turnId
+            : undefined;
+        if (
+          activeTurnIdRef.current &&
+          terminalTurnId &&
+          terminalTurnId !== activeTurnIdRef.current
+        ) {
+          return;
+        }
+        const clearsReleasedQueuedTurn =
+          Boolean(activeTurnIdRef.current) &&
+          (!terminalTurnId || terminalTurnId === activeTurnIdRef.current);
+
         if (
           activeOptimisticMessageId &&
           (event.notification.method === "turn/failed" ||
@@ -2463,6 +2497,9 @@ export function Composer(props: ComposerProps) {
           props.removeOptimisticMessage?.(activeOptimisticMessageId);
         }
         props.onPendingStatusChange?.(undefined);
+        if (clearsReleasedQueuedTurn) {
+          globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+        }
         updateSending(false);
         setInterrupting(false);
         setSteering(false);
@@ -2558,10 +2595,12 @@ export function Composer(props: ComposerProps) {
   }): Promise<void> => {
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
     if (!supportsReview) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
       setSendError("Selected backend does not support reviews.");
       return;
     }
@@ -2600,6 +2639,7 @@ export function Composer(props: ComposerProps) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+        releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -2611,6 +2651,7 @@ export function Composer(props: ComposerProps) {
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
 
@@ -2651,6 +2692,7 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2787,6 +2829,9 @@ export function Composer(props: ComposerProps) {
   ): Promise<void> => {
     if (!props.thread || !props.desktopApi?.startTurn) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
+      if (queued && options?.queueClaimed) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+      }
       return;
     }
 
@@ -2795,6 +2840,9 @@ export function Composer(props: ComposerProps) {
       : buildTurnPayload(canonicalDraft, imageAttachments);
     if (payload.input.length === 0 || props.disabled) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
+      if (queued && options?.queueClaimed) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+      }
       return;
     }
 
@@ -2811,6 +2859,9 @@ export function Composer(props: ComposerProps) {
     if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
       updateSending(false);
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
+      if (queued && options?.queueClaimed) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+      }
       return;
     }
 
@@ -2871,6 +2922,9 @@ export function Composer(props: ComposerProps) {
       props.onActiveTurnIdChange?.(undefined);
       setActiveOptimisticMessageId(undefined);
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
+      if (queued && options?.queueClaimed) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+      }
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2878,6 +2932,7 @@ export function Composer(props: ComposerProps) {
   const sendQueuedTurn = async (queued: QueuedTurnDraft): Promise<void> => {
     const claimedQueuedTurn = claimQueuedTurn(queued);
     if (!claimedQueuedTurn) {
+      globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
       return;
     }
 
@@ -2899,6 +2954,8 @@ export function Composer(props: ComposerProps) {
     }
     if (
       !queuedTurn ||
+      globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
+      props.threadBusy ||
       activeTurnId ||
       serverQueuedTurnEntryId ||
       sending ||
@@ -2912,6 +2969,7 @@ export function Composer(props: ComposerProps) {
     }
 
     queuedAutoReleaseAttemptIdRef.current = queuedTurn.id;
+    globalQueuedTurnReleaseScopeKeys.add(composerScopeKey);
     updateSending(true);
     void sendQueuedTurn(queuedTurn).finally(() => {
       updateSending(false);
@@ -2921,6 +2979,7 @@ export function Composer(props: ComposerProps) {
     queuedTurn,
     serverQueuedTurnEntryId,
     sending,
+    props.threadBusy,
     props.disabled,
     props.launchpad,
   ]);
@@ -3000,7 +3059,8 @@ export function Composer(props: ComposerProps) {
 
   const shouldQueueThreadSubmit = (): boolean =>
     !props.launchpad &&
-    (Boolean(activeTurnIdRef.current) ||
+    (Boolean(props.threadBusy) ||
+      Boolean(activeTurnIdRef.current) ||
       Boolean(serverQueuedTurnEntryIdRef.current) ||
       sendingRef.current);
 
@@ -5476,7 +5536,7 @@ export function Composer(props: ComposerProps) {
             }
             type="submit"
           >
-            {activeTurnId || serverQueuedTurnEntryId
+            {activeTurnId || serverQueuedTurnEntryId || props.threadBusy
               ? "Queue"
               : sending
               ? props.launchpad
