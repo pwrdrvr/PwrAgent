@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { accessSync, constants, statSync } from "node:fs";
+import path from "node:path";
 import type {
   CodexEnvironmentActionRun,
   CodexEnvironmentOption,
@@ -417,7 +419,11 @@ function runShellCommand(
   params: CodexEnvironmentCommandParams,
 ): Promise<CodexEnvironmentCommandResult> {
   const commandEnv = sanitizeLocalEnvironmentCommandEnv(params.env ?? process.env);
-  const shell = commandEnv.SHELL?.trim() || process.env.SHELL?.trim() || "/bin/sh";
+  const cwdProblem = inspectCommandCwd(params.cwd);
+  if (cwdProblem) {
+    return Promise.reject(new CodexEnvironmentCommandError(cwdProblem.message));
+  }
+  const shell = resolveCommandShell(commandEnv);
   const processId = `pwragent-env-${randomUUID()}`;
   const startedAt = Date.now();
   environmentRuntimeLog.info("codex-environment-command-start", {
@@ -557,12 +563,16 @@ function runShellCommand(
     });
 
     child.once("error", (error) => {
+      const message = describeSpawnError(error, {
+        cwd: params.cwd,
+        shell,
+      });
       environmentRuntimeLog.error("codex-environment-command-error", {
         processId,
-        message: error.message,
+        message,
       });
       settle(() => {
-        reject(error);
+        reject(new CodexEnvironmentCommandError(message));
       });
     });
 
@@ -752,6 +762,123 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
     key.startsWith("PRELOAD_VITE_") ||
     key.startsWith("RENDERER_VITE_")
   );
+}
+
+function resolveCommandShell(env: NodeJS.ProcessEnv): string {
+  const requested = env.SHELL?.trim() || process.env.SHELL?.trim();
+  const candidates = [
+    requested,
+    "/bin/zsh",
+    "/bin/bash",
+    "/bin/sh",
+  ];
+  const inspected: Array<{ shell: string; reason: string }> = [];
+
+  for (const shell of [...new Set(candidates.filter(Boolean))] as string[]) {
+    const availability = inspectCommandPath(shell);
+    if (availability.available) {
+      if (requested && shell !== requested) {
+        environmentRuntimeLog.warn("codex-environment-shell-fallback", {
+          requested,
+          shell,
+          failures: inspected
+            .map((entry) => `${entry.shell}:${entry.reason}`)
+            .join("; "),
+        });
+      }
+      return shell;
+    }
+    inspected.push({ shell, reason: availability.reason });
+  }
+
+  // Preserve the old behavior when no candidate can be statted. The
+  // spawn error path below will attach cwd/shell diagnostics.
+  return requested || "/bin/sh";
+}
+
+function inspectCommandPath(shell: string): { available: true } | {
+  available: false;
+  reason: string;
+} {
+  if (!isAbsoluteCommandPath(shell)) {
+    return { available: true };
+  }
+
+  try {
+    const stats = statSync(shell);
+    if (!stats.isFile()) {
+      return { available: false, reason: "not a file" };
+    }
+    accessSync(shell, constants.X_OK);
+    return { available: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return { available: false, reason: "not found" };
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      return { available: false, reason: "not executable" };
+    }
+    return {
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function isAbsoluteCommandPath(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function inspectCommandCwd(cwd: string | undefined): { message: string } | undefined {
+  const trimmed = cwd?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const stats = statSync(trimmed);
+    if (!stats.isDirectory()) {
+      return {
+        message: `Codex environment working directory is not a directory: ${trimmed}`,
+      };
+    }
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return {
+        message: `Codex environment working directory does not exist: ${trimmed}`,
+      };
+    }
+    return {
+      message: `Codex environment working directory is not accessible: ${trimmed}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+function describeSpawnError(
+  error: Error,
+  params: { cwd?: string; shell: string },
+): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code !== "ENOENT") {
+    return error.message;
+  }
+
+  const cwdProblem = inspectCommandCwd(params.cwd);
+  if (cwdProblem) {
+    return `${error.message}; ${cwdProblem.message}`;
+  }
+
+  const shellAvailability = inspectCommandPath(params.shell);
+  if (!shellAvailability.available) {
+    return `${error.message}; Codex environment shell is not available: ${params.shell} (${shellAvailability.reason})`;
+  }
+
+  return error.message;
 }
 
 function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
