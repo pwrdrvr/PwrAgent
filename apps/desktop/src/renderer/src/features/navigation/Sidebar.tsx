@@ -24,7 +24,11 @@ import {
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon } from "../../icons";
-import type { BrowseMode } from "../../lib/useThreadNavigation";
+import type {
+  ArchiveThreadOptions,
+  BrowseMode,
+  ThreadWorkspaceMode,
+} from "../../lib/useThreadNavigation";
 import {
   formatRuntimeGitRef,
   formatRuntimePath,
@@ -71,6 +75,14 @@ type SidebarProps = {
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
+  onCreateSubthread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<void>;
+  onForkThread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -79,7 +91,10 @@ type SidebarProps = {
   onOpenSettings?: () => void;
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
-  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onArchiveThread?: (
+    thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   onSetThreadReaction?: (
     thread: NavigationThreadSummary,
@@ -93,6 +108,18 @@ type SidebarProps = {
   onReorderThreadPins?: (
     backend: AppServerBackendKind,
     threadIds: string[],
+  ) => Promise<void>;
+  onSetThreadParent?: (
+    thread: NavigationThreadSummary,
+    parentThreadId?: string,
+  ) => Promise<void>;
+  onUpdateSubthreadOrder?: (
+    parent: NavigationThreadSummary,
+    threadIds: string[],
+  ) => Promise<void>;
+  onSetSubthreadsCollapsed?: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
   ) => Promise<void>;
   /**
    * Directory pinning (plan 2026-05-09-002). Mirror of thread-pin
@@ -237,6 +264,14 @@ export function Sidebar(props: SidebarProps) {
         backend.kind === thread.source &&
         backend.available &&
         backend.capabilities.archiveThread === true
+    );
+
+  const canForkThread = (thread: NavigationThreadSummary): boolean =>
+    props.backends.some(
+      (backend) =>
+        backend.kind === thread.source &&
+        backend.available &&
+        backend.capabilities.forkThread === true
     );
 
   useEffect(() => {
@@ -389,9 +424,37 @@ export function Sidebar(props: SidebarProps) {
     setRenameValidationError(undefined);
   };
 
-  const archiveFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const archiveFromContextMenu = (
+    thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ): void => {
     setContextMenu(undefined);
+    if (options) {
+      void onArchiveThread(thread, options);
+      return;
+    }
     void onArchiveThread(thread);
+  };
+
+  const createSubthreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ): void => {
+    setContextMenu(undefined);
+    void props.onCreateSubthread?.(thread, mode);
+  };
+
+  const forkThreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ): void => {
+    setContextMenu(undefined);
+    void props.onForkThread?.(thread, mode);
+  };
+
+  const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void props.onSetThreadParent?.(thread, undefined);
   };
 
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
@@ -527,6 +590,14 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanArchive = contextMenu
     ? canArchiveThread(contextMenu.thread)
     : false;
+  const contextMenuChildThreadCount = contextMenu
+    ? props.threads.filter(
+        (thread) =>
+          thread.source === contextMenu.thread.source &&
+          thread.parentThreadId === contextMenu.thread.id,
+      ).length
+    : 0;
+  const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
   const contextMenuLocalPath = contextMenu?.thread.linkedDirectories.find(
     (directory) => directory.kind === "local"
   )?.path;
@@ -535,8 +606,32 @@ export function Sidebar(props: SidebarProps) {
   );
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
+  const contextMenuHasLocalWorkspace = Boolean(contextMenuLocalPath);
+  const contextMenuHasWorktreeWorkspace = Boolean(contextMenuWorktreePath);
+  const contextMenuHasWorkspace =
+    contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
-  const contextMenuCanPin = Boolean(contextMenu && props.onSetThreadPin);
+  const contextMenuIsSubthread = Boolean(contextMenu?.thread.parentThreadId);
+  const contextMenuCanCreateSubthread = Boolean(
+    contextMenu &&
+      !contextMenuIsSubthread &&
+      contextMenuHasWorkspace &&
+      props.onCreateSubthread,
+  );
+  const contextMenuCanFork = Boolean(
+    contextMenu &&
+      contextMenu.thread.source === "codex" &&
+      !contextMenuIsSubthread &&
+      contextMenuHasWorkspace &&
+      canForkThread(contextMenu.thread) &&
+      props.onForkThread,
+  );
+  const contextMenuCanUnlinkSubthread = Boolean(
+    contextMenuIsSubthread && props.onSetThreadParent,
+  );
+  const contextMenuCanPin = Boolean(
+    contextMenu && !contextMenuIsSubthread && props.onSetThreadPin,
+  );
   /**
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
@@ -564,6 +659,9 @@ export function Sidebar(props: SidebarProps) {
     contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
   const contextMenuHasTopActions =
     contextMenuCanPin ||
+    contextMenuCanCreateSubthread ||
+    contextMenuCanFork ||
+    contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
     contextMenuCanArchive;
@@ -763,6 +861,8 @@ export function Sidebar(props: SidebarProps) {
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onReorderThreadPins={props.onReorderThreadPins}
+              onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
+              onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
               onSetDirectoryPin={props.onSetDirectoryPin}
               onReorderDirectoryPins={props.onReorderDirectoryPins}
               onOpenDirectoryContextMenu={
@@ -784,6 +884,8 @@ export function Sidebar(props: SidebarProps) {
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onReorderThreadPins={props.onReorderThreadPins}
+                onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
+                onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}
                 onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -814,6 +916,105 @@ export function Sidebar(props: SidebarProps) {
                   onClick={() => togglePinFromContextMenu(contextMenu.thread)}
                 >
                   {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                </button>
+              ) : null}
+              {contextMenuCanCreateSubthread || contextMenuCanFork ? (
+                <>
+                  {contextMenuCanCreateSubthread ? (
+                    contextMenuHasWorktreeWorkspace ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "same-worktree",
+                            )
+                          }
+                        >
+                          Sub-thread in Same Worktree
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Sub-thread in New Worktree
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          createSubthreadFromContextMenu(
+                            contextMenu.thread,
+                            "local",
+                          )
+                        }
+                      >
+                        Sub-thread in Local
+                      </button>
+                    )
+                  ) : null}
+                  {contextMenuCanFork ? (
+                    contextMenuHasWorktreeWorkspace ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "same-worktree",
+                            )
+                          }
+                        >
+                          Fork into Same Worktree
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Fork into New Worktree
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          forkThreadFromContextMenu(
+                            contextMenu.thread,
+                            "local",
+                          )
+                        }
+                      >
+                        Fork in Local
+                      </button>
+                    )
+                  ) : null}
+                </>
+              ) : null}
+              {contextMenuCanUnlinkSubthread ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => unlinkSubthreadFromContextMenu(contextMenu.thread)}
+                >
+                  Unlink from Parent
                 </button>
               ) : null}
               {contextMenuShowMoveItems ? (
@@ -863,7 +1064,51 @@ export function Sidebar(props: SidebarProps) {
                   Rename Thread
                 </button>
               ) : null}
-              {contextMenuCanArchive ? (
+              {contextMenuCanArchive && contextMenuHasChildThreads ? (
+                <>
+                  <button
+                    aria-label={`Archive Thread Only. Ungroup ${
+                      contextMenuChildThreadCount === 1
+                        ? "1 sub-thread"
+                        : `${contextMenuChildThreadCount} sub-threads`
+                    }`}
+                    className="thread-context-menu__button--stacked"
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      archiveFromContextMenu(contextMenu.thread, {
+                        includeSubthreads: false,
+                      })
+                    }
+                  >
+                    <span>Archive Thread Only</span>
+                    <span className="thread-context-menu__item-detail">
+                      Ungroup{" "}
+                      {contextMenuChildThreadCount === 1
+                        ? "1 sub-thread"
+                        : `${contextMenuChildThreadCount} sub-threads`}
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Archive Thread and Sub-Threads. Archive ${
+                      contextMenuChildThreadCount + 1
+                    } threads`}
+                    className="thread-context-menu__button--stacked"
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      archiveFromContextMenu(contextMenu.thread, {
+                        includeSubthreads: true,
+                      })
+                    }
+                  >
+                    <span>Archive Thread + Sub-Threads</span>
+                    <span className="thread-context-menu__item-detail">
+                      Archive {contextMenuChildThreadCount + 1} threads
+                    </span>
+                  </button>
+                </>
+              ) : contextMenuCanArchive ? (
                 <button
                   role="menuitem"
                   type="button"

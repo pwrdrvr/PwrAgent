@@ -1960,6 +1960,69 @@ textarea,
   min-width: 0;
 }
 
+.thread-group {
+  min-width: 0;
+}
+
+.subthread-list {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  margin: 1px 0 4px 18px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.subthread-list--compact {
+  margin-left: 14px;
+}
+
+.thread-row-shell--nested .thread-row {
+  padding-left: 12px;
+}
+
+.thread-row-shell.has-subthreads .thread-row {
+  padding-left: 30px;
+}
+
+.thread-row__subthread-toggle {
+  position: absolute;
+  top: 13px;
+  left: 8px;
+  z-index: 4;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-row__subthread-toggle::before {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.thread-row__subthread-toggle.is-open::before {
+  transform: rotate(90deg);
+}
+
+.thread-row__subthread-toggle:hover,
+.thread-row__subthread-toggle:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
 .thread-row-shell.is-draggable {
   cursor: grab;
 }
@@ -3079,6 +3142,25 @@ textarea,
   cursor: default;
 }
 
+.thread-context-menu .thread-context-menu__button--stacked {
+  min-height: 46px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+}
+
+.thread-context-menu__item-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__item-detail {
+  color: var(--accent-bright);
+}
+
 /* macOS-native pattern: action label on the left, keyboard
    shortcut hint chip on the right (margin-left: auto). Used by
    the pin/move items in the thread + directory context menus so
@@ -3277,31 +3359,59 @@ textarea,
   padding: 0 10px;
 }
 
-.app-update-banner {
+.app-toast-stack {
   position: fixed;
   z-index: 80;
   left: 16px;
   bottom: 16px;
+  display: flex;
+  max-width: min(420px, calc(100vw - 32px));
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.app-toast-stack > * {
+  pointer-events: auto;
+}
+
+.app-notice-toast,
+.app-update-banner {
+  position: relative;
   display: grid;
   width: max-content;
-  max-width: min(300px, calc(100vw - 32px));
+  max-width: 100%;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--accent-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
   box-shadow: var(--shadow-popover);
   animation: app-update-banner-enter 160ms ease-out;
+  -webkit-app-region: no-drag;
 }
 
+.app-notice-toast {
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr) auto;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 96%, var(--text-muted) 4%);
+}
+
+.app-update-banner {
+  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
+}
+
+.app-notice-toast__content,
 .app-update-banner__content {
   min-width: 0;
+  user-select: text;
 }
 
+.app-notice-toast__eyebrow,
 .app-update-banner__eyebrow {
   margin: 0 0 4px;
-  color: var(--accent-bright);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -3309,15 +3419,33 @@ textarea,
   text-transform: uppercase;
 }
 
+.app-notice-toast__eyebrow {
+  color: var(--text-secondary);
+}
+
+.app-update-banner__eyebrow {
+  color: var(--accent-bright);
+}
+
+.app-notice-toast__message,
+.app-notice-toast__detail,
 .app-update-banner__message,
 .app-update-banner__error {
   margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.35;
 }
 
+.app-notice-toast__message,
 .app-update-banner__message {
   color: var(--text-primary);
+}
+
+.app-notice-toast__detail {
+  margin-top: 8px;
+  color: var(--text-secondary);
 }
 
 .app-update-banner__error {
@@ -3325,16 +3453,65 @@ textarea,
   color: var(--danger-text);
 }
 
+.app-notice-toast__actions,
 .app-update-banner__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
+.app-notice-toast__actions {
+  align-self: start;
+}
+
+.app-notice-toast__icon-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.app-notice-toast__icon-button:hover,
+.app-notice-toast__icon-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.app-notice-toast__timer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  transform-origin: left center;
+  animation: app-notice-toast-countdown 9000ms linear forwards;
+}
+
+.app-notice-toast__timer[data-paused="true"] {
+  animation-play-state: paused;
+}
+
 .app-update-banner__restart,
 .app-update-banner__dismiss {
   min-height: 30px;
   padding: 0 10px;
+}
+
+@keyframes app-notice-toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
 }
 
 @keyframes app-update-banner-enter {

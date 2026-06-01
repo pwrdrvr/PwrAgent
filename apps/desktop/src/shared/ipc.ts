@@ -12,6 +12,7 @@ export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
+export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
@@ -53,6 +54,12 @@ export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
+export const NAVIGATION_SET_THREAD_PARENT_CHANNEL =
+  "navigation:set-thread-parent";
+export const NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL =
+  "navigation:update-subthread-order";
+export const NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL =
+  "navigation:set-subthreads-collapsed";
 /**
  * Directory pin IPC (plan 2026-05-09-002, Unit G). Mirror of the
  * thread-pin channels with the per-backend dimension dropped —

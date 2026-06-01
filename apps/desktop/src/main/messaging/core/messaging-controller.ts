@@ -691,7 +691,11 @@ export class MessagingController {
     if (
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
-      event.notification.method === "thread/codexEnvironment/updated"
+      event.notification.method === "thread/codexEnvironment/updated" ||
+      event.notification.method === "thread/parent/set" ||
+      event.notification.method === "thread/parent/cleared" ||
+      event.notification.method === "thread/subthreadOrder/updated" ||
+      event.notification.method === "thread/subthreadsCollapsed/updated"
     ) {
       await this.refreshStatusSurfacesForThread(
         event.backend,
@@ -10453,8 +10457,14 @@ function sharedConversationMentionInstruction(
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
-  const params = event.notification.params as { threadId?: unknown };
-  return typeof params.threadId === "string" ? params.threadId : undefined;
+  const params = event.notification.params as {
+    parentThreadId?: unknown;
+    threadId?: unknown;
+  };
+  if (typeof params.threadId === "string") {
+    return params.threadId;
+  }
+  return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
 }
 
 function turnIdForBackendEvent(event: AgentEvent): string | undefined {

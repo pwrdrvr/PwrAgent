@@ -44,6 +44,8 @@ import {
   type BackendSummary,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type ForkThreadRequest,
+  type ForkThreadResponse,
   isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
@@ -318,6 +320,15 @@ type BackendClient = {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     dynamicTools?: CodexDynamicToolSpec[];
+  }): Promise<{ threadId: string }>;
+  forkThread?(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -717,12 +728,41 @@ type WorktreeArchiveCandidate = {
   worktreePath: string;
 };
 
+type ArchiveCleanupMetadata = {
+  activeThreads: AppServerThreadSummary[];
+  archivedThreads: AppServerThreadSummary[];
+  thread: AppServerThreadSummary;
+};
+
 type WorktreeRestoreCandidate = {
   branch?: string;
   repositoryPath?: string;
   snapshot?: WorktreeSnapshotSummary;
   worktreePath: string;
 };
+
+function linkedDirectoryWorktreePath(
+  directory: LinkedDirectorySummary,
+): string | undefined {
+  const explicitWorktreePath = directory.worktreePath?.trim();
+  if (explicitWorktreePath) {
+    return explicitWorktreePath;
+  }
+
+  if (directory.kind === "worktree") {
+    return directory.path;
+  }
+
+  if (directory.kind === "local" && isLikelyToolManagedWorktreePath(directory.path)) {
+    return directory.path;
+  }
+
+  return undefined;
+}
+
+function normalizeWorktreePathForComparison(worktreePath: string): string {
+  return path.normalize(worktreePath.trim());
+}
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
@@ -969,6 +1009,12 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       supported.has("thread/start") ||
       supported.has("thread/new") ||
       assumeCodexAppServerSurface,
+    // Empty Codex method lists are emitted by older supported app-server
+    // surfaces that predate method discovery. PwrAgent's supported Codex
+    // floor includes thread/fork, so keep the legacy "assume app-server
+    // surface" behavior for empty lists while respecting explicit method
+    // lists from feature-gated builds.
+    forkThread: supported.has("thread/fork") || assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
     archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
     restoreThread: supported.has("thread/unarchive") || assumeCodexAppServerSurface,
@@ -3818,10 +3864,10 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
       });
     }
-    let thread: AppServerThreadSummary | undefined;
+    let cleanupMetadata: ArchiveCleanupMetadata | undefined;
     let cleanupMetadataError: string | undefined;
     try {
-      thread = await this.findThreadForArchiveCleanup({
+      cleanupMetadata = await this.findThreadForArchiveCleanup({
         backend,
         threadId: request.threadId,
       });
@@ -3846,10 +3892,17 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       origin: "thread-archive",
     });
-    const cleanup = thread
+    await this.ungroupChildrenOfArchivedThread({
+      backend,
+      activeThreads: cleanupMetadata?.activeThreads ?? [],
+      parentThreadId: result.threadId,
+    });
+    const cleanup = cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend,
-          thread,
+          activeThreads: cleanupMetadata.activeThreads,
+          archivedThreads: cleanupMetadata.archivedThreads,
+          thread: cleanupMetadata.thread,
         })
       : this.buildArchiveCleanupMetadataSkippedResult({
           backend,
@@ -4475,6 +4528,126 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
       codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+    };
+  }
+
+  async forkThread(request: ForkThreadRequest): Promise<ForkThreadResponse> {
+    this.assertNotBootstrap("forkThread");
+    const backend = request.backend ?? "codex";
+    if (backend !== "codex") {
+      throw new Error("Thread forking is currently supported only by the Codex backend.");
+    }
+
+    const executionMode = request.executionMode ?? "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modelSettings = await this.resolveModelSettings(backend, request);
+    const directoryKind =
+      request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
+    const directoryLabel =
+      request.directoryLabel?.trim() ||
+      (request.directoryPath ? path.basename(request.directoryPath) : undefined) ||
+      "Forked thread";
+    const preparedWorkspace = await this.gitDirectoryService.prepareLaunchpadWorkspace({
+      backend,
+      branchName: request.branchName,
+      directoryKind,
+      directoryLabel,
+      directoryPath: request.directoryPath,
+      workMode: request.workMode ?? "local",
+    });
+    const cwd = preparedWorkspace.cwd;
+    const linkedDirectories =
+      preparedWorkspace.workMode === "worktree"
+        ? buildWorktreeLinkedDirectory({
+            label: directoryLabel,
+            repositoryPath: preparedWorkspace.repositoryPath ?? request.directoryPath,
+            worktreePath: cwd,
+          })
+        : buildLocalLinkedDirectory(cwd);
+    const client = this.getClient(backend, executionMode);
+    if (!client.forkThread) {
+      throw new Error("Selected backend does not support thread/fork.");
+    }
+
+    const result = await client.forkThread({
+      threadId: request.sourceThreadId,
+      cwd,
+      ...modelSettings,
+      approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+      sandbox: request.sandbox ?? modeSettings.sandbox,
+    });
+    const forkedAt = Date.now();
+    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+    this.pendingStartedThreads.set(`${backend}:${result.threadId}`, {
+      id: result.threadId,
+      source: backend,
+      title: "Forked thread",
+      titleSource: "fallback",
+      projectKey: cwd,
+      createdAt: forkedAt,
+      updatedAt: forkedAt,
+      executionMode,
+      ...modelSettings,
+      linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
+      gitBranch,
+    });
+
+    if (preparedWorkspace.workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend,
+        threadId: result.threadId,
+        worktreePath: cwd,
+      });
+    }
+
+    await this.overlayStore.setThreadExecutionMode({
+      backend,
+      threadId: result.threadId,
+      executionMode,
+    });
+    if (
+      modelSettings.model !== undefined ||
+      modelSettings.reasoningEffort !== undefined ||
+      modelSettings.serviceTier !== undefined ||
+      modelSettings.fastMode !== undefined
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend,
+        threadId: result.threadId,
+        ...modelSettings,
+      });
+    }
+    if (request.parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend,
+        threadId: result.threadId,
+        parentThreadId: request.parentThreadId,
+      });
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: result.threadId,
+            parentThreadId: request.parentThreadId,
+          },
+        },
+      });
+    }
+    await this.updateThreadGitBranchMetadata({
+      backend,
+      threadId: result.threadId,
+      branch: gitBranch,
+    });
+    this.invalidateThreadListCache(backend);
+
+    return {
+      backend,
+      sourceThreadId: request.sourceThreadId,
+      threadId: result.threadId,
+      executionMode,
+      linkedDirectory: linkedDirectories[0],
+      workMode: preparedWorkspace.workMode,
     };
   }
 
@@ -6199,10 +6372,18 @@ export class DesktopBackendRegistry {
         executionMode,
         ...modelSettings,
       };
+      const requestParentThreadId =
+        request.parentThreadId ?? normalizedExisting.parentThreadId;
+      const requestParentThreadTitle =
+        request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
         normalizedExisting.directoryKind !== request.directoryKind ||
         normalizedExisting.directoryLabel !== request.directoryLabel ||
         normalizedExisting.directoryPath !== request.directoryPath;
+      const parentChanged =
+        request.parentThreadId !== undefined &&
+        (normalizedExisting.parentThreadId !== request.parentThreadId ||
+          normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
@@ -6218,6 +6399,8 @@ export class DesktopBackendRegistry {
           fastMode: defaults.fastMode,
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
+          parentThreadId: requestParentThreadId,
+          parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
         };
@@ -6238,7 +6421,8 @@ export class DesktopBackendRegistry {
         normalizedExisting.reasoningEffort !== existing.reasoningEffort ||
         normalizedExisting.serviceTier !== existing.serviceTier ||
         normalizedExisting.fastMode !== existing.fastMode ||
-        registeredAt !== existing.registeredAt
+        registeredAt !== existing.registeredAt ||
+        parentChanged
       ) {
         return {
           launchpad: withCodexEnvironmentOptions(
@@ -6247,6 +6431,8 @@ export class DesktopBackendRegistry {
               directoryKind: request.directoryKind,
               directoryLabel: request.directoryLabel,
               directoryPath: request.directoryPath,
+              parentThreadId: requestParentThreadId,
+              parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
             }),
@@ -6277,6 +6463,8 @@ export class DesktopBackendRegistry {
       registeredAt: request.registeredAt,
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
+      parentThreadId: request.parentThreadId,
+      parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -6877,6 +7065,23 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
+    if (request.parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend: startThreadResponse.backend,
+        threadId: startThreadResponse.threadId,
+        parentThreadId: request.parentThreadId,
+      });
+      await this.emit({
+        backend: startThreadResponse.backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: startThreadResponse.threadId,
+            parentThreadId: request.parentThreadId,
+          },
+        },
+      });
+    }
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
@@ -7476,7 +7681,11 @@ export class DesktopBackendRegistry {
       method === "thread/executionMode/queued" ||
       method === "thread/executionMode/updated" ||
       method === "thread/name/updated" ||
+      method === "thread/parent/cleared" ||
+      method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/subthreadOrder/updated" ||
+      method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
       method === "turn/completed" ||
       method === "turn/failed"
@@ -8248,25 +8457,45 @@ export class DesktopBackendRegistry {
   private async findThreadForArchiveCleanup(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<AppServerThreadSummary> {
+  }): Promise<ArchiveCleanupMetadata> {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
       callerReason: "archive-cleanup",
     });
     const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    let archivedThreads: AppServerThreadSummary[] = [];
+    try {
+      archivedThreads = await this.listThreads({
+        backend: params.backend,
+        archived: true,
+        callerReason: "archive-cleanup",
+      });
+    } catch (error) {
+      if (!activeThread) {
+        throw error;
+      }
+      backendRegistryLog.warn("archive cleanup archived-thread lookup failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (activeThread) {
-      return activeThread;
+      return {
+        activeThreads,
+        archivedThreads,
+        thread: activeThread,
+      };
     }
 
-    const archivedThreads = await this.listThreads({
-      backend: params.backend,
-      archived: true,
-      callerReason: "archive-cleanup",
-    });
     const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
     if (archivedThread) {
-      return archivedThread;
+      return {
+        activeThreads,
+        archivedThreads,
+        thread: archivedThread,
+      };
     }
 
     throw new Error("Thread metadata was not found.");
@@ -8402,13 +8631,14 @@ export class DesktopBackendRegistry {
   }
 
   private async archiveThreadWorktrees(params: {
+    activeThreads: AppServerThreadSummary[];
+    archivedThreads: AppServerThreadSummary[];
     backend: AppServerBackendKind;
     thread: AppServerThreadSummary;
   }): Promise<ArchiveThreadCleanupResult[]> {
     const candidates: WorktreeArchiveCandidate[] =
       params.thread.linkedDirectories.flatMap((directory) => {
-        const worktreePath =
-          directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+        const worktreePath = linkedDirectoryWorktreePath(directory);
         if (!worktreePath?.trim()) {
           return [];
         }
@@ -8443,6 +8673,33 @@ export class DesktopBackendRegistry {
     return await Promise.all(
       uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
         try {
+          const activeUsers = this.findActiveThreadsUsingWorktree({
+            activeThreads: params.activeThreads,
+            archivedThreadId: params.thread.id,
+            worktreePath: candidate.worktreePath,
+          });
+          if (activeUsers.length > 0) {
+            const activeThreadIds = activeUsers.map((thread) => thread.id);
+            const skippedReason =
+              activeThreadIds.length === 1
+                ? `Worktree is still used by another active thread: ${activeThreadIds[0]}.`
+                : `Worktree is still used by other active threads: ${activeThreadIds.join(", ")}.`;
+            backendRegistryLog.info("archive thread worktree cleanup skipped: shared worktree", {
+              backend: params.backend,
+              threadId: params.thread.id,
+              activeThreadIds,
+              repositoryPath: candidate.repositoryPath,
+              worktreePath: candidate.worktreePath,
+            });
+            return {
+              worktreePath: candidate.worktreePath,
+              branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+              removedWorktree: false,
+              deletedBranch: false,
+              skippedReason,
+            };
+          }
+
           backendRegistryLog.info("archive thread worktree cleanup removing worktree", {
             backend: params.backend,
             threadId: params.thread.id,
@@ -8459,6 +8716,13 @@ export class DesktopBackendRegistry {
             backend: params.backend,
             threadId: params.thread.id,
             snapshot,
+          });
+          await this.retainSharedWorktreeSnapshotForArchivedThreads({
+            archivedThreadId: params.thread.id,
+            archivedThreads: params.archivedThreads,
+            backend: params.backend,
+            snapshot,
+            worktreePath: candidate.worktreePath,
           });
 
           let worktreeStillExists = false;
@@ -8527,6 +8791,103 @@ export class DesktopBackendRegistry {
           };
         }
       }),
+    );
+  }
+
+  private async retainSharedWorktreeSnapshotForArchivedThreads(params: {
+    archivedThreadId: string;
+    archivedThreads: AppServerThreadSummary[];
+    backend: AppServerBackendKind;
+    snapshot: WorktreeSnapshotSummary;
+    worktreePath: string;
+  }): Promise<void> {
+    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    const siblingThreads = params.archivedThreads.filter((thread) => {
+      if (thread.source !== params.backend || thread.id === params.archivedThreadId) {
+        return false;
+      }
+
+      return thread.linkedDirectories.some((directory) => {
+        const candidatePath = linkedDirectoryWorktreePath(directory);
+        return (
+          candidatePath !== undefined &&
+          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+        );
+      });
+    });
+
+    if (siblingThreads.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      siblingThreads.map((thread) =>
+        this.overlayStore.upsertWorktreeSnapshot({
+          backend: params.backend,
+          threadId: thread.id,
+          snapshot: {
+            ...params.snapshot,
+            threadId: thread.id,
+          },
+        }),
+      ),
+    );
+  }
+
+  private findActiveThreadsUsingWorktree(params: {
+    activeThreads: AppServerThreadSummary[];
+    archivedThreadId: string;
+    worktreePath: string;
+  }): AppServerThreadSummary[] {
+    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    return params.activeThreads.filter((thread) => {
+      if (thread.id === params.archivedThreadId) {
+        return false;
+      }
+
+      return thread.linkedDirectories.some((directory) => {
+        const candidatePath = linkedDirectoryWorktreePath(directory);
+        return (
+          candidatePath !== undefined &&
+          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+        );
+      });
+    });
+  }
+
+  private async ungroupChildrenOfArchivedThread(params: {
+    activeThreads: AppServerThreadSummary[];
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+  }): Promise<void> {
+    const setThreadParent = this.overlayStore.setThreadParent;
+    if (!setThreadParent) {
+      return;
+    }
+
+    const activeThreadIds = params.activeThreads
+      .filter((thread) => thread.source === params.backend)
+      .map((thread) => thread.id);
+    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+      backend: params.backend,
+      threadIds: activeThreadIds,
+    });
+    const childThreadIds = activeThreadIds.filter(
+      (threadId) =>
+        overlaysByThreadId[threadId]?.parentThreadId === params.parentThreadId,
+    );
+    if (childThreadIds.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      childThreadIds.map((threadId) =>
+        setThreadParent.call(this.overlayStore, {
+          backend: params.backend,
+          threadId,
+          parentThreadId: undefined,
+        }),
+      ),
     );
   }
 

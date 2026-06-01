@@ -28,6 +28,15 @@ class MockTransport implements JsonRpcTransport {
     },
     model: "gpt-5.4"
   };
+  static threadForkResult: unknown = {
+    thread: {
+      id: "thread-fork",
+      forkedFromId: "thread-2",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+    },
+    model: "gpt-5.4",
+    cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+  };
   static threadResumeResult: unknown = {
     threadId: "thread-2",
     threadName: "Ship desktop shell",
@@ -751,6 +760,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/fork") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadForkResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "thread/resume") {
       if (MockTransport.threadResumeError) {
         this.messageHandler(
@@ -922,6 +942,15 @@ describe("CodexAppServerClient", () => {
         cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
       },
       model: "gpt-5.4"
+    };
+    MockTransport.threadForkResult = {
+      thread: {
+        id: "thread-fork",
+        forkedFromId: "thread-2",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      },
+      model: "gpt-5.4",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
     };
     MockTransport.threadResumeResult = {
       threadId: "thread-2",
@@ -4445,6 +4474,48 @@ describe("CodexAppServerClient", () => {
 
     expect(created).toEqual({
       threadId: "thread-3"
+    });
+
+    await client.close();
+  });
+
+  it("forks a Codex thread through thread/fork with workspace and permission overrides", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const forked = await client.forkThread({
+      threadId: "thread-2",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      serviceTier: "fast",
+      fastMode: true,
+    });
+
+    expect(forked).toEqual({
+      threadId: "thread-fork",
+    });
+    const request = MockTransport.instances[0]?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/fork");
+    expect(request?.params).toMatchObject({
+      threadId: "thread-2",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      serviceTier: "priority",
+      config: {
+        fast_mode: true,
+      },
+      excludeTurns: true,
+      persistExtendedHistory: false,
+      threadSource: "user",
     });
 
     await client.close();

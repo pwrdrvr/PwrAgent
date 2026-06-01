@@ -45,8 +45,12 @@ import type {
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetSubthreadsCollapsedRequest,
+  SetSubthreadsCollapsedResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetThreadParentRequest,
+  SetThreadParentResponse,
   SetThreadAgentRequest,
   SetThreadAgentResponse,
   SetThreadPinRequest,
@@ -64,6 +68,8 @@ import type {
   ThreadOverlayState,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
@@ -90,7 +96,9 @@ import {
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
@@ -99,6 +107,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
+  NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
@@ -1103,6 +1112,111 @@ class DesktopAppServerService {
     return { backend, pinnedRanks };
   }
 
+  async setThreadParent(
+    request: SetThreadParentRequest,
+  ): Promise<SetThreadParentResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadParent({
+      backend,
+      threadId: request.threadId,
+      parentThreadId: request.parentThreadId,
+    });
+
+    logDebug("setThreadParent", {
+      backend,
+      threadId: request.threadId,
+      parentThreadId: overlay.parentThreadId ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: overlay.parentThreadId
+        ? {
+            method: "thread/parent/set",
+            params: {
+              threadId: request.threadId,
+              parentThreadId: overlay.parentThreadId,
+            },
+          }
+        : {
+            method: "thread/parent/cleared",
+            params: {
+              threadId: request.threadId,
+            },
+          },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      parentThreadId: overlay.parentThreadId,
+    };
+  }
+
+  async updateSubthreadOrder(
+    request: UpdateSubthreadOrderRequest,
+  ): Promise<UpdateSubthreadOrderResponse> {
+    const backend = request.backend ?? "codex";
+    const threadIds = await this.getOverlayStore().updateSubthreadOrder({
+      backend,
+      parentThreadId: request.parentThreadId,
+      threadIds: request.threadIds,
+    });
+
+    logDebug("updateSubthreadOrder", {
+      backend,
+      parentThreadId: request.parentThreadId,
+      childCount: threadIds.length,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/subthreadOrder/updated",
+        params: {
+          parentThreadId: request.parentThreadId,
+          threadIds,
+        },
+      },
+    });
+
+    return { backend, parentThreadId: request.parentThreadId, threadIds };
+  }
+
+  async setSubthreadsCollapsed(
+    request: SetSubthreadsCollapsedRequest,
+  ): Promise<SetSubthreadsCollapsedResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setSubthreadsCollapsed({
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: request.collapsed,
+    });
+
+    logDebug("setSubthreadsCollapsed", {
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: overlay.subthreadsCollapsed === true,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/subthreadsCollapsed/updated",
+        params: {
+          parentThreadId: request.parentThreadId,
+          collapsed: overlay.subthreadsCollapsed === true,
+        },
+      },
+    });
+
+    return {
+      backend,
+      parentThreadId: request.parentThreadId,
+      collapsed: overlay.subthreadsCollapsed === true,
+    };
+  }
+
   /**
    * Directory pin handlers (plan 2026-05-09-002, Unit G). Mirror of
    * `setThreadPin` / `reorderThreadPins` with the `backend` dim
@@ -1529,6 +1643,36 @@ export function registerAppServerIpcHandlers(): void {
       request: ReorderThreadPinsRequest,
     ): Promise<ReorderThreadPinsResponse> => {
       return await appServerService.reorderThreadPins(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_PARENT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_PARENT_CHANNEL,
+    async (
+      _event,
+      request: SetThreadParentRequest,
+    ): Promise<SetThreadParentResponse> => {
+      return await appServerService.setThreadParent(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
+    async (
+      _event,
+      request: UpdateSubthreadOrderRequest,
+    ): Promise<UpdateSubthreadOrderResponse> => {
+      return await appServerService.updateSubthreadOrder(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
+    async (
+      _event,
+      request: SetSubthreadsCollapsedRequest,
+    ): Promise<SetSubthreadsCollapsedResponse> => {
+      return await appServerService.setSubthreadsCollapsed(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_DIRECTORY_PIN_CHANNEL);

@@ -34,6 +34,7 @@ import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
+import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
@@ -515,6 +516,14 @@ function DesktopAppShell(props: {
           setMainView("thread");
           await navigation.createThread();
         }}
+        onCreateSubthread={async (thread, mode) => {
+          setMainView("thread");
+          await navigation.createSubthread(thread, mode);
+        }}
+        onForkThread={async (thread, mode) => {
+          setMainView("thread");
+          await navigation.forkThread(thread, mode);
+        }}
         onOpenAutomations={() => {
           setMainView("automations");
         }}
@@ -536,6 +545,9 @@ function DesktopAppShell(props: {
         onSetThreadReaction={navigation.setThreadReaction}
         onSetThreadPin={navigation.setThreadPin}
         onReorderThreadPins={navigation.reorderThreadPins}
+        onSetThreadParent={navigation.setThreadParent}
+        onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
+        onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
         onSetDirectoryPin={navigation.setDirectoryPin}
         onReorderDirectoryPins={navigation.reorderDirectoryPins}
         onPrefetchPullRequests={pullRequests.prefetch}
@@ -686,7 +698,14 @@ function DesktopAppShell(props: {
       ) : null}
 
       <CodexConfigWarningBanner desktopApi={desktopApi} />
-      <AppUpdateBanner desktopApi={desktopApi} />
+      <div className="app-toast-stack" aria-live="polite">
+        <AppNoticeToast
+          desktopApi={desktopApi}
+          notice={navigation.archiveThreadNotice}
+          onDismiss={navigation.dismissArchiveThreadNotice}
+        />
+        <AppUpdateBanner desktopApi={desktopApi} />
+      </div>
     </div>
   );
 }

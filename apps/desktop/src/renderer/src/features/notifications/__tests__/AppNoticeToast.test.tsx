@@ -1,0 +1,63 @@
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AppNoticeToast } from "../AppNoticeToast";
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe("AppNoticeToast", () => {
+  const notice = {
+    id: "notice-1",
+    title: "Worktree kept",
+    message: "Thread archived. The worktree was kept because another active thread is still using it.",
+    detail: "/repo/.worktrees/shared: Worktree is still used by another active thread.",
+  };
+
+  it("renders selectable notice text with copy and dismiss controls", () => {
+    const copyText = vi.fn(async () => undefined);
+    const onDismiss = vi.fn();
+
+    render(
+      <AppNoticeToast
+        desktopApi={{ copyText }}
+        notice={notice}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    expect(screen.getByText("Worktree kept")).toBeInTheDocument();
+    expect(screen.getByText(notice.message)).toBeInTheDocument();
+    expect(screen.getByText(notice.detail)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyText).toHaveBeenCalledWith(
+      [notice.title, notice.message, notice.detail].join("\n"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-dismisses unless the notice is hovered", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+
+    render(<AppNoticeToast notice={notice} onDismiss={onDismiss} />);
+
+    const toast = screen.getByRole("status");
+    fireEvent.mouseEnter(toast);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.mouseLeave(toast);
+    act(() => {
+      vi.advanceTimersByTime(9_000);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
