@@ -1121,42 +1121,51 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function parseThreadTurnKeyBody(
+  body: string,
+): { threadId: string; turnId: string } | undefined {
+  const pendingSeparator = body.indexOf(":pending:");
+  if (pendingSeparator > 0) {
+    const beforePending = body.slice(0, pendingSeparator);
+    const afterPending = body.slice(pendingSeparator + ":pending:".length);
+    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
+      return { threadId: beforePending, turnId: `pending:${afterPending}` };
+    }
+  }
+  const turnSeparator = body.lastIndexOf(":");
+  if (turnSeparator <= 0) return undefined;
+  return {
+    threadId: body.slice(0, turnSeparator),
+    turnId: body.slice(turnSeparator + 1),
+  };
+}
+
 function parseActiveTurnKey(
   key: string,
-): { backend: AppServerBackendKind; threadId: string } | undefined {
+): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined {
   if (key.startsWith("acp:")) {
     const registrySeparator = key.indexOf(":", "acp:".length);
     if (registrySeparator <= "acp:".length) return undefined;
     const backend = key.slice(0, registrySeparator);
     if (!isAcpBackendId(backend)) return undefined;
-    const threadId = parseThreadIdFromThreadTurnKeyBody(
+    const parsed = parseThreadTurnKeyBody(
       key.slice(registrySeparator + 1),
     );
-    return threadId ? { backend, threadId } : undefined;
+    return parsed ? { backend, ...parsed } : undefined;
   }
 
   const backendSeparator = key.indexOf(":");
   if (backendSeparator <= 0) return undefined;
   const backend = key.slice(0, backendSeparator);
   if (backend !== "codex" && backend !== "grok") return undefined;
-  const threadId = parseThreadIdFromThreadTurnKeyBody(
+  const parsed = parseThreadTurnKeyBody(
     key.slice(backendSeparator + 1),
   );
-  return threadId ? { backend, threadId } : undefined;
+  return parsed ? { backend, ...parsed } : undefined;
 }
 
 function parseThreadIdFromThreadTurnKeyBody(body: string): string | undefined {
-  const pendingSeparator = body.indexOf(":pending:");
-  if (pendingSeparator > 0) {
-    const beforePending = body.slice(0, pendingSeparator);
-    const afterPending = body.slice(pendingSeparator + ":pending:".length);
-    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
-      return beforePending;
-    }
-  }
-  const turnSeparator = body.lastIndexOf(":");
-  if (turnSeparator <= 0) return undefined;
-  return body.slice(0, turnSeparator);
+  return parseThreadTurnKeyBody(body)?.threadId;
 }
 
 function buildHeadlessAutomationTurnKey(
@@ -2150,6 +2159,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
@@ -4849,30 +4859,69 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(params.backend)) {
       throw new Error("Selected backend does not support review/start");
     }
-    if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
-      throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
-    }
-    if (params.backend === "codex") {
-      await this.flushQueuedExecutionModeIfPresent(params.threadId);
-    }
-
-    const startWithClient = async (
-      client: BackendClient,
-    ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
-      if (!client.startReview) {
-        throw new Error("Selected backend does not support review/start");
+    const reserveCodexReviewStart = params.backend === "codex";
+    if (reserveCodexReviewStart) {
+      if (this.threadHasActiveTurn(params.threadId)) {
+        throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
       }
-      return await client.startReview({
-        threadId: params.threadId,
-        target: params.target,
-        delivery: params.delivery ?? "inline",
-      });
-    };
+      this.reservedCodexStartThreadIds.add(params.threadId);
+    }
 
-    const result =
-      params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, startWithClient)
-        : await startWithClient(this.getClient(params.backend));
+    let result: { threadId: string; reviewThreadId: string; turnId: string };
+    try {
+      if (params.backend === "codex") {
+        await this.flushQueuedExecutionModeIfPresent(params.threadId);
+      }
+
+      const startWithClient = async (
+        client: BackendClient,
+      ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
+        if (!client.startReview) {
+          throw new Error("Selected backend does not support review/start");
+        }
+        return await client.startReview({
+          threadId: params.threadId,
+          target: params.target,
+          delivery: params.delivery ?? "inline",
+        });
+      };
+
+      result =
+        params.backend === "codex"
+          ? await this.withCodexThreadClient(params.threadId, startWithClient)
+          : await startWithClient(this.getClient(params.backend));
+    } catch (error) {
+      if (reserveCodexReviewStart) {
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
+      throw error;
+    }
+
+    if (params.backend === "codex") {
+      try {
+        const reviewThreadId = result.reviewThreadId || result.threadId;
+        // Codex review/start returns the real review turn id, but current
+        // Codex builds can also emit a lone, mismatched turn/started for the
+        // same thread. Treat the returned review turn as active so queued
+        // turns cannot release in parallel and so the matching terminal
+        // review notification clears the active state.
+        const activeTurnMode = await this.resolveCodexThreadExecutionModeForActiveTurn(
+          reviewThreadId,
+        );
+        this.activeTurnKeys.add(
+          buildActiveTurnKey(params.backend, reviewThreadId, result.turnId),
+        );
+        this.activeCodexTurnModes.set(
+          buildActiveTurnModeKey(reviewThreadId, result.turnId),
+          activeTurnMode,
+        );
+        this.activeCodexReviewTurnKeys.add(
+          buildActiveTurnModeKey(reviewThreadId, result.turnId),
+        );
+      } finally {
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
+    }
 
     return {
       backend: params.backend,
@@ -4924,9 +4973,9 @@ export class DesktopBackendRegistry {
         : await this.grokClient.interruptTurn(params);
 
     if (params.backend === "codex") {
-      this.activeCodexTurnModes.delete(
-        buildActiveTurnModeKey(result.threadId, result.turnId),
-      );
+      const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
+      this.activeCodexTurnModes.delete(activeTurnModeKey);
+      this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
     }
 
     return {
@@ -5691,6 +5740,16 @@ export class DesktopBackendRegistry {
     }
     const prefix = `${backend}:${threadId}:`;
     for (const key of this.activeTurnKeys) {
+      if (key.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private threadHasActiveCodexReviewTurn(threadId: string): boolean {
+    const prefix = `${threadId}:`;
+    for (const key of this.activeCodexReviewTurnKeys) {
       if (key.startsWith(prefix)) {
         return true;
       }
@@ -9213,6 +9272,7 @@ export class DesktopBackendRegistry {
           !turnId.startsWith("pending:") &&
           this.activeCodexTurnModes.has(activeTurnModeKey);
         this.activeCodexTurnModes.delete(activeTurnModeKey);
+        this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
         if (wasKnownActiveTurn) {
           await this.adoptThreadBranchChangeFromActiveTurn({
             backend: event.backend,
@@ -9278,9 +9338,23 @@ export class DesktopBackendRegistry {
       event.notification.method === "thread/status/changed" &&
       readStatusType(event.notification.params.status) !== "active"
     ) {
+      const threadId = event.notification.params.threadId;
+      const hasActiveCodexReviewTurn =
+        event.backend === "codex" &&
+        this.threadHasActiveCodexReviewTurn(threadId);
       const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
       for (const key of Array.from(this.activeTurnKeys)) {
         if (key.startsWith(genericKeyPrefix)) {
+          const parsed = parseActiveTurnKey(key);
+          if (
+            hasActiveCodexReviewTurn &&
+            parsed?.backend === "codex" &&
+            this.activeCodexReviewTurnKeys.has(
+              buildActiveTurnModeKey(parsed.threadId, parsed.turnId),
+            )
+          ) {
+            continue;
+          }
           this.activeTurnKeys.delete(key);
         }
       }
@@ -9302,6 +9376,9 @@ export class DesktopBackendRegistry {
         let hadKnownActiveTurn = false;
         for (const key of this.activeCodexTurnModes.keys()) {
           if (key.startsWith(keyPrefix)) {
+            if (this.activeCodexReviewTurnKeys.has(key)) {
+              continue;
+            }
             if (!key.startsWith(`${keyPrefix}pending:`)) {
               hadKnownActiveTurn = true;
             }
@@ -9318,9 +9395,19 @@ export class DesktopBackendRegistry {
         // `thread/status/changed → idle` path (codex emits both, depending
         // on the protocol shape; we cover both for resilience). Idempotent
         // when no queue is set.
-        void this.flushQueuedExecutionModeIfPresent(
-          event.notification.params.threadId,
-        );
+        if (!hasActiveCodexReviewTurn) {
+          void this.flushQueuedExecutionModeIfPresent(
+            event.notification.params.threadId,
+          );
+        }
+      }
+      if (hasActiveCodexReviewTurn) {
+        // Codex review/start currently returns the real review turn id, then
+        // may emit a mismatched turn/started and an idle status before the
+        // review's own terminal event. Do not release queued turns at that
+        // stray idle boundary; the matching review turn/completed is the real
+        // point where the thread becomes available again.
+        return;
       }
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,

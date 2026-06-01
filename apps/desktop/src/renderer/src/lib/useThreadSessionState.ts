@@ -981,6 +981,10 @@ function isLiveOptimisticEntry(entry: AppServerThreadEntry): boolean {
     return true;
   }
 
+  if (entry.type === "activity" && entry.status !== "in_progress") {
+    return false;
+  }
+
   if (entry.turn?.status) {
     return entry.turn.status === "in_progress";
   }
@@ -1349,6 +1353,10 @@ function shouldAdoptStartedTurn(
     return true;
   }
 
+  // Review turns are claimed from review/start and review-mode items before
+  // Codex may emit a lone, mismatched turn/started. Do not let that stray
+  // lifecycle notification replace the review turn; it has no matching items
+  // or terminal event, so adopting it leaves the thread stuck as thinking.
   return session.activeTurnId.startsWith("pending:");
 }
 

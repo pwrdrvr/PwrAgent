@@ -8853,6 +8853,65 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("treats a Codex review as active until its terminal turn notification", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    await codexClient.emit({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-1",
+        status: { type: "idle" },
+      },
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Follow-up while review is running" }],
+      }),
+    ).rejects.toThrow("A turn is already active for this thread.");
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-review-1",
+        turn: {
+          id: "turn-review-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Follow-up after review" }],
+    });
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
   it("normalizes backend notifications with backend identity", async () => {
     const grokClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

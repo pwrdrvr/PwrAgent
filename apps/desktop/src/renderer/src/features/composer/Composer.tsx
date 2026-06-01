@@ -2478,6 +2478,9 @@ export function Composer(props: ComposerProps) {
           activeReviewTurnIdRef.current &&
           startedTurnRecord.id !== activeReviewTurnIdRef.current
         ) {
+          // Codex reviews can surface a separate turn/started id while all
+          // review items and the terminal event stay on review/start's turn.
+          // Keep Stop/active-turn wiring pointed at the real review turn.
           return;
         }
         updateActiveTurnId(startedTurnRecord.id);
