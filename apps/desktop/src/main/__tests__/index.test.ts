@@ -820,6 +820,115 @@ describe("bootstrapApp", () => {
     });
   });
 
+  it("does not recreate a window from Dock activation after quit teardown begins", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.();
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recreate a window from profile focus after quit begins", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
+      [string, { onFocus: () => void }]
+    >;
+    const onFocus = watcherCalls[0]?.[1].onFocus;
+    expect(onFocus).toBeTypeOf("function");
+    if (!onFocus) {
+      return;
+    }
+
+    appEventHandlers.get("before-quit")?.();
+    onFocus();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ipc handlers registered until Electron reaches will-quit", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.();
+
+    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeSettingsIpcHandlersMock).not.toHaveBeenCalled();
+
+    appEventHandlers.get("will-quit")?.();
+
+    expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes closing the last window through the shared quit flow", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(requestQuitMock).toHaveBeenCalledWith({
+      source: "window-all-closed",
+    });
+  });
+
+  it("does not re-enter quit when the confirmation window closes after cancellation", async () => {
+    let resolveQuit!: (didQuit: boolean) => void;
+    requestQuitMock.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveQuit = resolve;
+      }),
+    );
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("window-all-closed")?.();
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(requestQuitMock).toHaveBeenCalledTimes(1);
+
+    resolveQuit(false);
+    await flushMicrotasks();
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("completes quit when all windows close after before-quit approves shutdown", async () => {
+    const event = { preventDefault: vi.fn() };
+    isQuitAllowedMock.mockReturnValue(false);
+    requestQuitMock.mockImplementation(async () => {
+      isQuitAllowedMock.mockReturnValue(true);
+      return true;
+    });
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(requestQuitMock).toHaveBeenCalledWith({ source: "before-quit" });
+    expect(quitMock).toHaveBeenCalledTimes(1);
+  });
+
   it("initializes app state in active-profile mode when boot decision is open", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
@@ -883,7 +992,7 @@ describe("bootstrapApp", () => {
 
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
-    appEventHandlers.get("before-quit")?.();
+    appEventHandlers.get("will-quit")?.();
     expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);

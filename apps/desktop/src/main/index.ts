@@ -128,6 +128,7 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 let mainProcessResourcesDisposed = false;
+let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
   | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
@@ -231,9 +232,30 @@ function disposeMainProcessResourcesSync(): void {
   disposeAppState();
 }
 
+function beginQuitInProgress(source: string): void {
+  if (quitInProgress) {
+    return;
+  }
+  quitInProgress = true;
+  mainLog.info("quit in progress", { source });
+}
+
+function cancelQuitInProgress(source: string): void {
+  if (!quitInProgress) {
+    return;
+  }
+  quitInProgress = false;
+  mainLog.info("quit cancelled", { source });
+}
+
+function isWindowCreationBlocked(): boolean {
+  return quitInProgress || mainProcessResourcesDisposed;
+}
+
 function installProcessShutdownHandlers(): void {
   const handleSignal = (signal: NodeJS.Signals): void => {
     mainLog.info("main process shutdown signal received", { signal });
+    beginQuitInProgress(signal);
     disposeMainProcessResourcesSync();
     appQuitManager.allowImmediateQuit();
     app.quit();
@@ -261,6 +283,11 @@ function installDevelopmentDockIcon(): void {
 }
 
 function focusPwrAgentWindows(): void {
+  if (isWindowCreationBlocked()) {
+    mainLog.info("ignoring focus request during shutdown");
+    return;
+  }
+
   const windows = subscribersForChannel(WINDOW_OPEN_SETTINGS_CHANNEL)
     .map((webContents) => BrowserWindow.fromWebContents(webContents))
     .filter((window): window is BrowserWindow =>
@@ -572,6 +599,10 @@ export function bootstrapApp(): void {
     initAutoUpdater();
 
     app.on("activate", () => {
+      if (isWindowCreationBlocked()) {
+        mainLog.info("ignoring activate during shutdown");
+        return;
+      }
       if (BrowserWindow.getAllWindows().length === 0) {
         createMainWindow({
           startupCpuProfiler,
@@ -581,17 +612,38 @@ export function bootstrapApp(): void {
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      void requestQuit({ source: "window-all-closed" });
+    if (quitInProgress) {
+      if (appQuitManager.isQuitAllowed()) {
+        mainLog.info("quitting after windows closed during shutdown");
+        app.quit();
+        return;
+      }
+      mainLog.info("ignoring window-all-closed during shutdown");
+      return;
     }
+    beginQuitInProgress("window-all-closed");
+    void requestQuit({ source: "window-all-closed" }).then((didQuit) => {
+      if (!didQuit) {
+        cancelQuitInProgress("window-all-closed");
+      }
+    });
   });
 
   app.on("before-quit", (event) => {
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
-      void requestQuit({ source: "before-quit" });
+      beginQuitInProgress("before-quit");
+      void requestQuit({ source: "before-quit" }).then((didQuit) => {
+        if (!didQuit) {
+          cancelQuitInProgress("before-quit");
+        }
+      });
       return;
     }
+    beginQuitInProgress("before-quit");
+  });
+
+  app.on("will-quit", () => {
     disposeMainProcessResourcesSync();
   });
 }
