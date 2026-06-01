@@ -2192,6 +2192,10 @@ export function Composer(props: ComposerProps) {
       skillTokens,
     };
     flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
+    if (!props.thread && previousScopeKey.startsWith("thread:")) {
+      serverQueuedTurnEntryIdsRef.current.delete(previousScopeKey);
+      globalQueuedTurnReleaseScopeKeys.delete(previousScopeKey);
+    }
 
     activeComposerScopeKeyRef.current = composerScopeKey;
     const current = pasteScopeRef.current;

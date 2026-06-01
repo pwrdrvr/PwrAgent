@@ -1996,6 +1996,94 @@ describe("Composer", () => {
     );
   });
 
+  it("drops server queued turn state after switching through an empty composer", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "server-queue-entry-1",
+      queueStatus: "queued" as const,
+      queueEntryId: "server-queue-entry-1",
+    }));
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startReview,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+    };
+    const thread = {
+      id: "thread-1",
+      title: "Server queued thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={thread}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "make a branch and PR" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "/review main" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={thread}
+      />
+    );
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          input: [{ type: "text", text: "make a branch and PR" }],
+        })
+      );
+    });
+    await flushReactUpdates();
+    expect(startReview).not.toHaveBeenCalled();
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={thread}
+      />
+    );
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
   it("clears optimistic pending UI when a server queued turn fails before starting", async () => {
     let agentEventHandler:
       | ((event: {
