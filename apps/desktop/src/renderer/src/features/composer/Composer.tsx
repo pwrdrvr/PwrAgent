@@ -978,6 +978,11 @@ function parseStaleSteerError(
   return undefined;
 }
 
+function parseStaleInterruptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("no active turn to interrupt");
+}
+
 function reviewCommandToDraftText(command: {
   target: AppServerReviewTarget;
 }): string {
@@ -2435,6 +2440,13 @@ export function Composer(props: ComposerProps) {
         event.notification.params.turn !== null
           ? (event.notification.params.turn as { id?: unknown })
           : undefined;
+      const startedTurnId =
+        typeof startedTurnRecord?.id === "string"
+          ? startedTurnRecord.id
+          : event.notification.method === "turn/started" &&
+              typeof event.notification.params.turnId === "string"
+            ? event.notification.params.turnId
+            : undefined;
       const turnQueueRecord =
         event.notification.method === "thread/turnQueue/updated" &&
         typeof event.notification.params === "object" &&
@@ -2526,19 +2538,19 @@ export function Composer(props: ComposerProps) {
 
       if (
         event.notification.method === "turn/started" &&
-        typeof startedTurnRecord?.id === "string"
+        typeof startedTurnId === "string"
       ) {
         if (
           activeReviewTurnIdRef.current &&
-          startedTurnRecord.id !== activeReviewTurnIdRef.current
+          startedTurnId !== activeReviewTurnIdRef.current
         ) {
           // Codex reviews can surface a separate turn/started id while all
           // review items and the terminal event stay on review/start's turn.
           // Keep Stop/active-turn wiring pointed at the real review turn.
           return;
         }
-        updateActiveTurnId(startedTurnRecord.id);
-        props.onActiveTurnIdChange?.(startedTurnRecord.id);
+        updateActiveTurnId(startedTurnId);
+        props.onActiveTurnIdChange?.(startedTurnId);
       }
 
       if (
@@ -3394,6 +3406,17 @@ export function Composer(props: ComposerProps) {
       });
     } catch (error) {
       setInterrupting(false);
+      if (parseStaleInterruptError(error)) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+        queuedAutoReleaseAttemptIdRef.current = undefined;
+        updateSending(false);
+        setSteering(false);
+        updateActiveTurnId(undefined);
+        props.onActiveTurnIdChange?.(undefined);
+        props.onPendingStatusChange?.(undefined);
+        setSendError(undefined);
+        return;
+      }
       props.onPendingStatusChange?.(
         props.pendingRequestActive
           ? "Waiting for approval"
