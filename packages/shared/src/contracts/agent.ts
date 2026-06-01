@@ -71,6 +71,99 @@ export type ForkThreadResponse = {
   workMode: LaunchpadWorkMode;
 };
 
+export type ThreadMigrationOperation = "move" | "copy";
+
+export type ThreadMigrationCopyStrategy =
+  | "source-branch-suffix"
+  | "destination-branch-suffix"
+  | "detached-destination";
+
+export type ThreadMigrationRunStatus =
+  | "pending"
+  | "copying"
+  | "validating"
+  | "worktree"
+  | "archiving-source"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ThreadMigrationSourceProfileSummary = {
+  profile: string;
+  displayName: string;
+  codexHome: string;
+  source: "default" | "directory" | "config";
+  exists: boolean;
+  selected: boolean;
+  available: boolean;
+  unavailableReason?: string;
+  accountEmail?: string;
+};
+
+export type ListThreadMigrationSourcesResponse = {
+  activeCodexProfile: string;
+  profiles: ThreadMigrationSourceProfileSummary[];
+};
+
+export type ThreadMigrationSourceThreadSummary = {
+  sourceProfile: string;
+  threadId: ThreadIdentifier;
+  title: string;
+  summary?: string;
+  projectKey?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  archivedAt?: number;
+  gitBranch?: string;
+  linkedDirectories: LinkedDirectorySummary[];
+};
+
+export type ThreadMigrationSourceProjectGroup = {
+  key: string;
+  label: string;
+  path?: string;
+  threads: ThreadMigrationSourceThreadSummary[];
+};
+
+export type ListThreadMigrationSourceThreadsRequest = {
+  sourceProfile: string;
+  archived?: boolean;
+  filter?: string;
+};
+
+export type ListThreadMigrationSourceThreadsResponse = {
+  sourceProfile: string;
+  fetchedAt: number;
+  projects: ThreadMigrationSourceProjectGroup[];
+};
+
+export type StartThreadMigrationRequest = {
+  sourceProfile: string;
+  operation: ThreadMigrationOperation;
+  copyStrategy?: ThreadMigrationCopyStrategy;
+  threadIds: ThreadIdentifier[];
+};
+
+export type ThreadMigrationRunItem = {
+  sourceProfile: string;
+  sourceThreadId: ThreadIdentifier;
+  destinationThreadId?: ThreadIdentifier;
+  status: ThreadMigrationRunStatus;
+  error?: string;
+  validation?: {
+    sourceMessageCount: number;
+    destinationMessageCount: number;
+    matched: boolean;
+  };
+};
+
+export type StartThreadMigrationResponse = {
+  runId: string;
+  operation: ThreadMigrationOperation;
+  startedAt: number;
+  items: ThreadMigrationRunItem[];
+};
+
 export type StartTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

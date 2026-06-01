@@ -2602,6 +2602,7 @@ describe("SettingsScreen", () => {
       "ACP Agents",
       "Messaging",
       "Worktrees",
+      "Thread Management",
       "Archived Threads",
       "Experimental",
       "About",

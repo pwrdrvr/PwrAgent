@@ -4619,6 +4619,39 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forks a Codex thread from a CAS-provided rollout path without reading it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.forkThread({
+        threadId: "source-thread",
+        path: "/Users/example/.codex/sessions/source-thread.jsonl",
+        cwd: "/Users/example/project",
+      }),
+    ).resolves.toEqual({
+      threadId: "thread-fork",
+    });
+
+    const request = MockTransport.instances[0]?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/fork");
+    expect(request?.params).toMatchObject({
+      threadId: "source-thread",
+      path: "/Users/example/.codex/sessions/source-thread.jsonl",
+      cwd: "/Users/example/project",
+      excludeTurns: true,
+      persistExtendedHistory: false,
+      threadSource: "user",
+    });
+
+    await client.close();
+  });
+
   it("passes dynamic tool specs when creating a thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

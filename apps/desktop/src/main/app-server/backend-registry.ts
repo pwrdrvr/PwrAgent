@@ -323,6 +323,7 @@ type BackendClient = {
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
+    path?: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
@@ -382,6 +383,10 @@ type BackendClient = {
     projectPath: string;
     configPath?: string;
   }): Promise<{ projectPath: string; configPath?: string }>;
+};
+
+type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  sourceThreadPath?: string;
 };
 
 /**
@@ -1081,7 +1086,7 @@ function mergeCommandSummaries(
   return merged;
 }
 
-function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
+export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   const args = [
     "-c",
     'approval_policy="on-request"',
@@ -4531,7 +4536,9 @@ export class DesktopBackendRegistry {
     };
   }
 
-  async forkThread(request: ForkThreadRequest): Promise<ForkThreadResponse> {
+  async forkThread(
+    request: BackendRegistryForkThreadRequest,
+  ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
     if (backend !== "codex") {
@@ -4571,6 +4578,9 @@ export class DesktopBackendRegistry {
 
     const result = await client.forkThread({
       threadId: request.sourceThreadId,
+      ...(request.sourceThreadPath?.trim()
+        ? { path: request.sourceThreadPath.trim() }
+        : {}),
       cwd,
       ...modelSettings,
       approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,

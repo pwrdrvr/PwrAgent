@@ -17,6 +17,7 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
+import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
@@ -38,6 +39,7 @@ export type SettingsSection =
   | "profiles"
   | "applications"
   | "worktrees"
+  | "thread-management"
   | "archived"
   | "about";
 
@@ -49,6 +51,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "agents", label: "ACP Agents" },
   { id: "messaging", label: "Messaging" },
   { id: "worktrees", label: "Worktrees" },
+  { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
@@ -72,6 +75,7 @@ const SECTION_LABELS = new Map(
 const ORDERED_SECTION_IDS: SettingsSection[] = [
   ...PRIMARY_SECTIONS,
   "worktrees",
+  "thread-management",
   "archived",
   "experimental",
   "about",
@@ -478,6 +482,10 @@ function SettingsSectionBody(props: {
 
   if (props.section === "archived") {
     return <ArchivedThreadsSettings desktopApi={props.desktopApi} />;
+  }
+
+  if (props.section === "thread-management") {
+    return <ThreadManagementSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "agents") {

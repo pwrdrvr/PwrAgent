@@ -154,8 +154,13 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   originator?: string;
+  path?: string;
   projectKey?: string;
   gitOriginUrl?: string;
+};
+
+export type CodexThreadMigrationMetadata = AppServerThreadSummary & {
+  rolloutPath?: string;
 };
 
 type RawCodexThreadListPage = {
@@ -3812,6 +3817,9 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     const originator =
       pickString(record, ["originator"]) ??
       pickString(sessionRecord ?? {}, ["originator"]);
+    const rolloutPath =
+      pickString(record, ["path"]) ??
+      pickString(sessionRecord ?? {}, ["path"]);
     const titleInfo = getThreadTitleInfo(record);
     const rawDerivedTitle =
       pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
@@ -3849,6 +3857,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           ? undefined
           : summary,
       originator,
+      path: rolloutPath,
       projectKey,
       model:
         pickString(record, ["model"]) ??
@@ -4246,6 +4255,7 @@ function buildThreadStartPayload(params: {
 
 function buildThreadForkPayload(params: {
   threadId: string;
+  path?: string;
   cwd?: string;
   model?: string;
   approvalPolicy?: string;
@@ -4260,6 +4270,9 @@ function buildThreadForkPayload(params: {
     threadSource: "user",
   };
 
+  if (params.path?.trim()) {
+    base.path = params.path.trim();
+  }
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
   }
@@ -4994,6 +5007,33 @@ export class CodexAppServerClient {
     });
   }
 
+  async listThreadsForMigration(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<CodexThreadMigrationMetadata[]> {
+    await this.ensureInitialized();
+
+    const rawThreads = filterVisibleCodexThreads(
+      await requestThreadListPages({
+        archived: params?.archived === true,
+        client: this.connection,
+        filter: params?.filter,
+        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      }),
+    );
+    const enrichedThreads = await this.enrichThreads(rawThreads, {
+      enrichDirectories: true,
+    });
+    const rolloutPathsByThreadId = new Map(
+      rawThreads.map((thread) => [thread.id, thread.path?.trim() || undefined]),
+    );
+
+    return enrichedThreads.map((thread) => ({
+      ...thread,
+      rolloutPath: rolloutPathsByThreadId.get(thread.id),
+    }));
+  }
+
   private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
     return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
   }
@@ -5068,6 +5108,7 @@ export class CodexAppServerClient {
         const {
           gitOriginUrl: _gitOriginUrl,
           originator: _originator,
+          path: _path,
           ...publicThread
         } = thread;
         const projectKey = publicThread.projectKey?.trim() || undefined;
@@ -5110,6 +5151,7 @@ export class CodexAppServerClient {
         const enrichment = await this.threadDirectoryEnricher(projectKey);
         const {
           originator: _originator,
+          path: _path,
           ...publicThread
         } = thread;
         return {
@@ -5280,6 +5322,7 @@ export class CodexAppServerClient {
 
   async forkThread(params: {
     threadId: string;
+    path?: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;

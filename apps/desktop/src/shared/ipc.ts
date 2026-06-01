@@ -8,6 +8,11 @@ export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree"
 export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
   "app-server:handoff-thread-workspace";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
+export const THREAD_MIGRATION_LIST_SOURCES_CHANNEL =
+  "thread-migration:list-sources";
+export const THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL =
+  "thread-migration:list-source-threads";
+export const THREAD_MIGRATION_START_CHANNEL = "thread-migration:start";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
