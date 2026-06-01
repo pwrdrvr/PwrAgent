@@ -800,6 +800,7 @@ describe("MessagingController", () => {
   });
 
   it("debounces split first prompts before creating a messaging-started thread", async () => {
+    vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 100 });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
@@ -819,7 +820,7 @@ describe("MessagingController", () => {
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
 
-    await new Promise((resolve) => setTimeout(resolve, 125));
+    await vi.advanceTimersByTimeAsync(100);
 
     await vi.waitFor(() => {
       expect(harness.startThread).not.toHaveBeenCalled();

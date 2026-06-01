@@ -1371,6 +1371,7 @@ export function Composer(props: ComposerProps) {
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
+  const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
@@ -2048,7 +2049,15 @@ export function Composer(props: ComposerProps) {
     saveComposerDraftSnapshot(scopeKey, snapshot);
     persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
-  const updateActiveTurnId = (nextTurnId?: string): void => {
+  const updateActiveTurnId = (
+    nextTurnId?: string,
+    options?: { review?: boolean },
+  ): void => {
+    if (options?.review) {
+      activeReviewTurnIdRef.current = nextTurnId;
+    } else if (!nextTurnId || activeReviewTurnIdRef.current !== nextTurnId) {
+      activeReviewTurnIdRef.current = undefined;
+    }
     activeTurnIdRef.current = nextTurnId;
     setActiveTurnId(nextTurnId);
   };
@@ -2465,6 +2474,15 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "turn/started" &&
         typeof startedTurnRecord?.id === "string"
       ) {
+        if (
+          activeReviewTurnIdRef.current &&
+          startedTurnRecord.id !== activeReviewTurnIdRef.current
+        ) {
+          // Codex reviews can surface a separate turn/started id while all
+          // review items and the terminal event stay on review/start's turn.
+          // Keep Stop/active-turn wiring pointed at the real review turn.
+          return;
+        }
         updateActiveTurnId(startedTurnRecord.id);
         props.onActiveTurnIdChange?.(startedTurnRecord.id);
       }
@@ -2666,7 +2684,7 @@ export function Composer(props: ComposerProps) {
         target: reviewCommand.target,
         delivery: "inline",
       });
-      updateActiveTurnId(response.turnId);
+      updateActiveTurnId(response.turnId, { review: true });
       props.onActiveTurnIdChange?.(response.turnId);
       if (options?.queued) {
         if (!options.queueClaimed) {
