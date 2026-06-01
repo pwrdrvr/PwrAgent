@@ -303,7 +303,25 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         ) : null}
         {threadsState.projects.map((project) => (
           <div className="settings-thread-management__project" key={project.key}>
-            <div className="settings-thread-management__project-head">
+            <label className="settings-thread-management__project-head">
+              <input
+                checked={project.threads.every((thread) =>
+                  selectedThreadIds.has(thread.threadId),
+                )}
+                className="settings-thread-management__checkbox-input"
+                type="checkbox"
+                onChange={() => selectProject(project)}
+              />
+              <span
+                aria-hidden="true"
+                className={`settings-thread-management__checkbox settings-thread-management__checkbox--project${
+                  project.threads.every((thread) =>
+                    selectedThreadIds.has(thread.threadId),
+                  )
+                    ? " is-checked"
+                    : ""
+                }`}
+              />
               <div>
                 <p className="settings-thread-management__project-title">
                   {project.label}
@@ -314,32 +332,14 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                   </p>
                 ) : null}
               </div>
-              <label className="settings-thread-management__project-select">
-                <input
-                  checked={project.threads.every((thread) =>
-                    selectedThreadIds.has(thread.threadId),
-                  )}
-                  className="settings-thread-management__checkbox-input"
-                  type="checkbox"
-                  onChange={() => selectProject(project)}
-                />
-                <span
-                  aria-hidden="true"
-                  className={`settings-thread-management__checkbox${
-                    project.threads.every((thread) =>
-                      selectedThreadIds.has(thread.threadId),
-                    )
-                      ? " is-checked"
-                      : ""
-                  }`}
-                />
+              <span className="settings-thread-management__project-select">
                 {project.threads.every((thread) =>
                   selectedThreadIds.has(thread.threadId),
                 )
                   ? "Clear"
                   : "Select project"}
-              </label>
-            </div>
+              </span>
+            </label>
             <div>
               {project.threads.map((thread) => (
                 <label

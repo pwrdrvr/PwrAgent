@@ -5106,13 +5106,14 @@ textarea,
 }
 
 .settings-thread-management__project-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 12px;
-  align-items: center;
-  justify-content: space-between;
+  align-items: start;
   padding: 14px 18px 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
+  cursor: pointer;
 }
 
 .settings-thread-management__project-title,
@@ -5141,7 +5142,7 @@ textarea,
   gap: 12px;
   align-items: start;
   width: 100%;
-  padding: 13px 18px 13px 30px;
+  padding: 13px 18px 13px 48px;
   border-top: 1px solid var(--border-subtle);
   background: transparent;
   cursor: pointer;
@@ -5156,7 +5157,6 @@ textarea,
   display: inline-flex;
   min-height: 30px;
   align-items: center;
-  gap: 8px;
   padding: 0 10px;
   border: 1px solid var(--border-default, var(--border-subtle));
   border-radius: 6px;
@@ -5180,26 +5180,34 @@ textarea,
 .settings-thread-management__checkbox {
   position: relative;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-default, var(--border-subtle));
+  margin-top: 1px;
+  border: 1.5px solid var(--text-muted);
   border-radius: 4px;
   background: var(--bg-input);
+  box-shadow: inset 0 0 0 1px var(--bg-app);
+}
+
+.settings-thread-management__checkbox--project {
+  margin-top: 2px;
+  border-color: var(--text-secondary);
 }
 
 .settings-thread-management__checkbox.is-checked {
   border-color: var(--accent-border);
   background: var(--accent);
+  box-shadow: none;
 }
 
 .settings-thread-management__checkbox.is-checked::after {
-  width: 7px;
-  height: 4px;
-  border-bottom: 2px solid var(--bg-app);
-  border-left: 2px solid var(--bg-app);
+  width: 8px;
+  height: 5px;
+  border-bottom: 2px solid var(--bg-panel);
+  border-left: 2px solid var(--bg-panel);
   content: "";
   transform: translateY(-1px) rotate(-45deg);
 }
