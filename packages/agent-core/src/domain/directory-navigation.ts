@@ -76,6 +76,13 @@ function matchScratchProjectsRoot(value: string): string | undefined {
   return scratchWorkspaceMatch?.[1];
 }
 
+function matchCodexChatsRoot(value: string): string | undefined {
+  const codexChatsRootMatch = value.match(
+    /^(.*[\\/]Documents[\\/]Codex)(?:[\\/]\d{4}-\d{2}-\d{2}(?:[\\/].*)?)?$/,
+  );
+  return codexChatsRootMatch?.[1];
+}
+
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   // Match both current ".pwragent" and legacy ".pwragnt" home directory names
   // so pre-rebrand thread data classifies correctly.
@@ -86,6 +93,16 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
       kind: "workspace",
       label: "Workspaces",
       path: scratchProjectsRoot,
+    };
+  }
+
+  const codexChatsRoot = matchCodexChatsRoot(directory.path);
+  if (codexChatsRoot) {
+    return {
+      key: `directory:${codexChatsRoot}`,
+      kind: "directory",
+      label: "Codex Chats",
+      path: codexChatsRoot,
     };
   }
 

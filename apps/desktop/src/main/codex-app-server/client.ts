@@ -1040,10 +1040,44 @@ function isAllowedCodexSessionOriginator(value: string | undefined): boolean {
   );
 }
 
+function normalizeComparableFilesystemPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return path.resolve(trimmed).replace(/[\\/]+$/, "").replaceAll("\\", "/");
+}
+
+function isPwrSnapChatWorkspacePath(value: string | undefined): boolean {
+  const normalized = normalizeComparableFilesystemPath(value);
+  return Boolean(normalized?.match(/\/Documents\/PwrSnap\/Chats(?:\/|$)/));
+}
+
+function isPwrSnapRuntimeContext(value: string | undefined): boolean {
+  return Boolean(value?.trim().startsWith('<runtime_context source="pwrsnap"'));
+}
+
+function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean {
+  if (isPwrSnapChatWorkspacePath(thread.projectKey)) {
+    return true;
+  }
+
+  if (thread.title.trim() === "PwrSnap Capture Metadata Worker") {
+    return true;
+  }
+
+  return isPwrSnapRuntimeContext(thread.title) || isPwrSnapRuntimeContext(thread.summary);
+}
+
 function filterVisibleCodexThreads(
   threads: RawCodexThreadSummary[]
 ): RawCodexThreadSummary[] {
-  return threads.filter((thread) => isAllowedCodexSessionOriginator(thread.originator));
+  return threads.filter(
+    (thread) =>
+      isAllowedCodexSessionOriginator(thread.originator) &&
+      !isKnownCompanionAppCodexThread(thread),
+  );
 }
 
 function isPlaceholderThreadTitle(value: string | undefined): boolean {

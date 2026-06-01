@@ -1190,6 +1190,73 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("filters PwrSnap-generated Codex threads when Codex reports them as normal vscode sessions", async () => {
+    MockTransport.threadListResultBySearchTerm.set("pwrsnap-workspace-filter", [
+      {
+        id: "thread-pwrsnap-library-chat",
+        preview:
+          '<runtime_context source="pwrsnap" note="runtime-generated, not user-authored">...',
+        updatedAt: 1_780_282_928,
+        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-06-01-001-chat-2026-05-31",
+        source: "vscode",
+      },
+      {
+        id: "thread-pwrsnap-metadata",
+        name: "PwrSnap Capture Metadata Worker",
+        preview: "Capture metadata:\n- Source application name: Electron",
+        updatedAt: 1_780_272_250,
+        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/.capture-metadata",
+        source: "vscode",
+      },
+      {
+        id: "thread-pwrsnap-repo-work",
+        name: "Fix PwrSnap export",
+        preview: "Work on the product codebase.",
+        updatedAt: 1_780_200_000,
+        cwd: "/Users/huntharo/github/PwrSnap",
+        source: "vscode",
+      },
+      {
+        id: "thread-pwragent",
+        name: "PwrAgent workspace chat",
+        preview: "Normal Codex thread",
+        updatedAt: 1_780_100_000,
+        cwd: "/Users/huntharo/github/PwrAgnt",
+        source: "vscode",
+      },
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => ({
+      linkedDirectories: projectKey
+        ? [
+            {
+              id: projectKey,
+              label: path.basename(projectKey),
+              path: projectKey,
+              kind: "local" as const,
+            },
+          ]
+        : [],
+    }));
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+
+    const threads = await client.listThreads({ filter: "pwrsnap-workspace-filter" });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-pwrsnap-repo-work",
+      "thread-pwragent",
+    ]);
+    expect(threadDirectoryEnricher).toHaveBeenCalledTimes(2);
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrSnap");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrAgnt");
+
+    await client.close();
+  });
+
   it("preserves thread order while enriching directories concurrently", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
