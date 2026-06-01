@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { buildDirectorySummaries } from "@pwragent/agent-core";
 import {
+  buildThreadIdentityKey,
   isToolManagedWorktreePath,
   type AppServerThreadReplay,
   type ForkThreadRequest,
@@ -15,6 +17,7 @@ import {
   type ThreadMigrationRunItem,
   type ThreadMigrationSourceProjectGroup,
   type ThreadMigrationSourceThreadSummary,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { normalizeProfileName } from "../profile";
@@ -378,26 +381,68 @@ function normalizeSourceThread(
 function groupSourceThreads(
   threads: InternalSourceThread[],
 ): ThreadMigrationSourceProjectGroup[] {
-  const groups = new Map<string, ThreadMigrationSourceProjectGroup>();
+  const threadByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey("codex", thread.threadId),
+      thread,
+    ]),
+  );
+  const groupedThreadKeys = new Set<string>();
+  const groups = buildDirectorySummaries({
+    threads: threads.map(toNavigationThreadSummary),
+  }).map((directory): ThreadMigrationSourceProjectGroup => {
+    const groupThreads = directory.threadKeys
+      .map((threadKey) => {
+        groupedThreadKeys.add(threadKey);
+        return threadByKey.get(threadKey);
+      })
+      .filter((thread): thread is InternalSourceThread => Boolean(thread))
+      .map(stripInternalThread);
+
+    return {
+      key: directory.key,
+      label: directory.label,
+      ...(directory.path ? { path: directory.path } : {}),
+      threads: groupThreads,
+    };
+  });
+
   for (const thread of threads) {
-    const pathValue =
-      thread.projectKey ?? thread.linkedDirectories[0]?.worktreePath ?? thread.linkedDirectories[0]?.path;
-    const key = pathValue ? `project:${pathValue}` : "unlinked";
-    const existing =
-      groups.get(key) ??
-      ({
-        key,
-        label: pathValue ? path.basename(pathValue) || pathValue : "No project",
-        ...(pathValue ? { path: pathValue } : {}),
-        threads: [],
-      } satisfies ThreadMigrationSourceProjectGroup);
-    existing.threads.push(stripInternalThread(thread));
-    groups.set(key, existing);
+    const threadKey = buildThreadIdentityKey("codex", thread.threadId);
+    if (groupedThreadKeys.has(threadKey)) {
+      continue;
+    }
+    const projectPath = thread.projectKey?.trim();
+    groups.push({
+      key: projectPath ? `directory:${projectPath}` : "unlinked",
+      label: projectPath ? path.basename(projectPath) || projectPath : "No project",
+      ...(projectPath ? { path: projectPath } : {}),
+      threads: [stripInternalThread(thread)],
+    });
   }
 
-  return [...groups.values()].sort((left, right) =>
-    left.label.localeCompare(right.label),
-  );
+  return groups
+    .filter((group) => group.threads.length > 0)
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function toNavigationThreadSummary(
+  thread: InternalSourceThread,
+): NavigationThreadSummary {
+  return {
+    id: thread.threadId,
+    source: "codex",
+    title: thread.title,
+    titleSource: "explicit",
+    linkedDirectories: thread.linkedDirectories,
+    inbox: { inInbox: false },
+    ...(thread.summary ? { summary: thread.summary } : {}),
+    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(thread.createdAt ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
+    ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
+  };
 }
 
 function stripInternalThread(

@@ -148,7 +148,7 @@ describe("ThreadMigrationService", () => {
       fetchedAt: 1234,
       projects: [
         {
-          key: "project:/repo/app",
+          key: "directory:/repo/app",
           label: "app",
           path: "/repo/app",
         },
@@ -160,6 +160,67 @@ describe("ThreadMigrationService", () => {
       title: "Source thread",
     });
     expect(response.projects[0]!.threads[0]).not.toHaveProperty("rolloutPath");
+  });
+
+  it("groups source worktrees with their repository project like navigation", async () => {
+    const sourceClient = {
+      listThreadsForMigration: vi.fn(async () => [
+        makeSourceThread({
+          id: "local-thread",
+          projectKey: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+          title: "Local thread",
+          linkedDirectories: [
+            {
+              id: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              label: "giphy-bandwidth-saver",
+              path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              kind: "local",
+            },
+          ],
+        }),
+        makeSourceThread({
+          id: "worktree-thread",
+          projectKey:
+            "/Users/alice/.codex/profiles/work/worktrees/mph2i055/giphy-bandwidth-saver",
+          title: "Worktree thread",
+          linkedDirectories: [
+            {
+              id: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              label: "giphy-bandwidth-saver",
+              path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              worktreePath:
+                "/Users/alice/.codex/profiles/work/worktrees/mph2i055/giphy-bandwidth-saver",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ]),
+      readThread: vi.fn(),
+      archiveThread: vi.fn(),
+      close: vi.fn(),
+    };
+    const service = new ThreadMigrationService({
+      destination: {} as never,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+    });
+
+    const response = await service.listSourceThreads({ sourceProfile: "" });
+
+    expect(response.projects).toHaveLength(1);
+    expect(response.projects[0]).toMatchObject({
+      key: "directory:/Users/alice/GIPHY/giphy-bandwidth-saver",
+      label: "giphy-bandwidth-saver",
+      path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+    });
+    expect(response.projects[0]!.threads.map((thread) => thread.threadId)).toEqual(
+      expect.arrayContaining(["local-thread", "worktree-thread"]),
+    );
+    expect(response.projects[0]!.threads).toHaveLength(2);
   });
 
   it("moves a thread by forking the source rollout path, validating, then archiving source", async () => {
