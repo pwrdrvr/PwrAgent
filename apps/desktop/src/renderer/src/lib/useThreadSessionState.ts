@@ -1333,6 +1333,25 @@ function terminalTurnMatchesActiveTurn(
   );
 }
 
+function shouldAdoptStartedTurn(
+  session: ThreadSessionEntry,
+  startedTurnId: string | undefined,
+): boolean {
+  if (!startedTurnId) {
+    return false;
+  }
+
+  if (!session.activeTurnId) {
+    return true;
+  }
+
+  if (startedTurnId === session.activeTurnId) {
+    return true;
+  }
+
+  return session.activeTurnId.startsWith("pending:");
+}
+
 function withTurnMetadata<T extends AppServerThreadMessageEntry>(
   entry: T,
   turn: AppServerThreadTurnMetadata | undefined
@@ -2916,6 +2935,10 @@ export function useThreadSessionState(params: {
           const startedAt =
             normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
 
+          if (!shouldAdoptStartedTurn(current, turnId)) {
+            return current;
+          }
+
           return {
             ...current,
             activeTurnId: turnId,
@@ -3060,6 +3083,14 @@ export function useThreadSessionState(params: {
 
             return {
               ...current,
+              activeTurnId:
+                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
+                  ? reviewEntry.turn.id
+                  : current.activeTurnId,
+              activeTurnStartedAt:
+                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
+                  ? current.activeTurnStartedAt ?? Date.now()
+                  : current.activeTurnStartedAt,
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
