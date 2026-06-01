@@ -1,13 +1,20 @@
 import { useId, useState } from "react";
-import type { AppServerThreadActivityEntry } from "@pwragent/shared";
+import type {
+  AppServerSkillSummary,
+  AppServerThreadActivityEntry,
+  DesktopApplicationsSnapshot,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptDiff } from "./TranscriptDiff";
 
 type TranscriptActivityProps = {
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   entry: AppServerThreadActivityEntry;
+  skills?: AppServerSkillSummary[];
 };
 
 export function TranscriptActivity(props: TranscriptActivityProps) {
@@ -90,6 +97,18 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
             const nestedId = `${detailsId}-${detail.id}`;
             const hasNestedDetails = Boolean(detail.fileDiff || detail.command);
             const isDetailExpanded = expandedDetailIds.has(detail.id);
+            const markdown = detail.markdown?.trim();
+            const markdownContent =
+              markdown && !hasNestedDetails ? (
+                <ThreadMarkdown
+                  applications={props.applications}
+                  className="transcript-activity__detail-markdown"
+                  desktopApi={props.desktopApi}
+                  skills={props.skills}
+                  text={markdown}
+                  variant="summary"
+                />
+              ) : null;
             const label = detail.url && !hasNestedDetails ? (
               <a
                 className="transcript-activity__detail-label"
@@ -105,52 +124,56 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
 
             return (
               <li key={detail.id} className="transcript-activity__detail">
-                <div className="transcript-activity__detail-row">
-                  {hasNestedDetails ? (
-                    <button
-                      type="button"
-                      className="transcript-activity__detail-toggle"
-                      aria-controls={nestedId}
-                      aria-expanded={isDetailExpanded}
-                      onClick={() => {
-                        setExpandedDetailIds((current) => {
-                          const next = new Set(current);
-                          if (next.has(detail.id)) {
-                            next.delete(detail.id);
-                          } else {
-                            next.add(detail.id);
-                          }
-                          return next;
-                        });
-                      }}
-                    >
-                      <span className="transcript-activity__chevron" aria-hidden="true" />
-                      {label}
-                    </button>
-                  ) : (
-                    label
-                  )}
-                  {detail.fileDiff ? (
-                    <span className="transcript-activity__detail-stats" aria-label="File diff summary">
-                      <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
-                        -{detail.fileDiff.removals.toLocaleString()}
+                {markdownContent && !detail.fileDiff && !detail.status ? (
+                  markdownContent
+                ) : (
+                  <div className="transcript-activity__detail-row">
+                    {hasNestedDetails ? (
+                      <button
+                        type="button"
+                        className="transcript-activity__detail-toggle"
+                        aria-controls={nestedId}
+                        aria-expanded={isDetailExpanded}
+                        onClick={() => {
+                          setExpandedDetailIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(detail.id)) {
+                              next.delete(detail.id);
+                            } else {
+                              next.add(detail.id);
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        <span className="transcript-activity__chevron" aria-hidden="true" />
+                        {label}
+                      </button>
+                    ) : (
+                      markdownContent ?? label
+                    )}
+                    {detail.fileDiff ? (
+                      <span className="transcript-activity__detail-stats" aria-label="File diff summary">
+                        <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
+                          -{detail.fileDiff.removals.toLocaleString()}
+                        </span>
+                        <span className="transcript-activity__detail-stat transcript-activity__detail-stat--added">
+                          +{detail.fileDiff.additions.toLocaleString()}
+                        </span>
                       </span>
-                      <span className="transcript-activity__detail-stat transcript-activity__detail-stat--added">
-                        +{detail.fileDiff.additions.toLocaleString()}
+                    ) : null}
+                    {detail.status ? (
+                      <span
+                        className={[
+                          "transcript-activity__detail-status",
+                          `transcript-activity__detail-status--${detail.status}`
+                        ].join(" ")}
+                      >
+                        {formatActivityDetailStatus(detail.status)}
                       </span>
-                    </span>
-                  ) : null}
-                  {detail.status ? (
-                    <span
-                      className={[
-                        "transcript-activity__detail-status",
-                        `transcript-activity__detail-status--${detail.status}`
-                      ].join(" ")}
-                    >
-                      {formatActivityDetailStatus(detail.status)}
-                    </span>
-                  ) : null}
-                </div>
+                    ) : null}
+                  </div>
+                )}
                 {hasNestedDetails && isDetailExpanded ? (
                   <div id={nestedId} className="transcript-activity__detail-body">
                     {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}

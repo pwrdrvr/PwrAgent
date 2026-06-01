@@ -7937,6 +7937,12 @@ textarea,
   color: var(--text-primary);
 }
 
+.transcript-activity__detail-markdown {
+  min-width: 0;
+  width: 100%;
+  color: var(--text-primary);
+}
+
 .transcript-activity__detail-stats {
   display: inline-flex;
   flex: 0 0 auto;

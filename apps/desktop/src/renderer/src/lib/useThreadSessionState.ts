@@ -1494,6 +1494,7 @@ function activityDetailsEqual(
       leftDetail.id === rightDetail?.id &&
       leftDetail.kind === rightDetail.kind &&
       leftDetail.label === rightDetail.label &&
+      leftDetail.markdown === rightDetail.markdown &&
       leftDetail.path === rightDetail.path &&
       leftDetail.status === rightDetail.status &&
       leftDetail.url === rightDetail.url &&
@@ -1561,6 +1562,7 @@ function liveActivityNotificationSignature(params: {
       detail.id,
       detail.kind,
       detail.label,
+      detail.markdown ?? "",
       detail.path ?? "",
       detail.status ?? "",
       detail.url ?? "",

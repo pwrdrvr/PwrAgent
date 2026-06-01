@@ -348,6 +348,7 @@ export type AppServerThreadActivityDetail = {
   id: string;
   kind: "read" | "write" | "command";
   label: string;
+  markdown?: string;
   path?: string;
   url?: string;
   status?: AppServerThreadActivityStatus;
