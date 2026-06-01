@@ -63,6 +63,32 @@ function migrationThreadsResponse(
   };
 }
 
+function migrationSourcesResponse(): ListThreadMigrationSourcesResponse {
+  return {
+    activeCodexProfile: "work",
+    profiles: [
+      {
+        profile: "",
+        displayName: "System default",
+        codexHome: "/Users/alice/.codex",
+        source: "default",
+        exists: true,
+        selected: false,
+        available: true,
+      },
+      {
+        profile: "personal",
+        displayName: "personal",
+        codexHome: "/Users/alice/.codex/profiles/personal",
+        source: "directory",
+        exists: true,
+        selected: false,
+        available: true,
+      },
+    ],
+  };
+}
+
 describe("ThreadManagementSettings", () => {
   it("ignores stale source thread responses after switching profiles", async () => {
     const defaultThreads = createDeferred<ListThreadMigrationSourceThreadsResponse>();
@@ -75,31 +101,7 @@ describe("ThreadManagementSettings", () => {
         : defaultThreads.promise,
     );
     const desktopApi: DesktopApi = {
-      listThreadMigrationSources: vi.fn(
-        async (): Promise<ListThreadMigrationSourcesResponse> => ({
-          activeCodexProfile: "work",
-          profiles: [
-            {
-              profile: "",
-              displayName: "System default",
-              codexHome: "/Users/alice/.codex",
-              source: "default",
-              exists: true,
-              selected: false,
-              available: true,
-            },
-            {
-              profile: "personal",
-              displayName: "personal",
-              codexHome: "/Users/alice/.codex/profiles/personal",
-              source: "directory",
-              exists: true,
-              selected: false,
-              available: true,
-            },
-          ],
-        }),
-      ),
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
       listThreadMigrationSourceThreads,
     };
 
@@ -135,5 +137,26 @@ describe("ThreadManagementSettings", () => {
 
     expect(screen.getByText("Personal profile thread")).toBeInTheDocument();
     expect(screen.queryByText("Stale default profile thread")).not.toBeInTheDocument();
+  });
+
+  it("uses direct action buttons and tolerates threads without linked directories", async () => {
+    const threadsResponse = migrationThreadsResponse("", "Thread without dirs");
+    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = undefined as never;
+    const desktopApi: DesktopApi = {
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
+      listThreadMigrationSourceThreads: vi.fn(async () => threadsResponse),
+    };
+
+    render(<ThreadManagementSettings desktopApi={desktopApi} />);
+
+    expect(await screen.findByRole("button", { name: "Move 0" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy 0" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Move" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: /System default/ }));
+
+    expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy 1" })).toBeEnabled();
   });
 });

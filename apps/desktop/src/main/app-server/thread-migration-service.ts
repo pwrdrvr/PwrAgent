@@ -372,7 +372,7 @@ function normalizeSourceThread(
     ...(thread.updatedAt ? { updatedAt: thread.updatedAt } : {}),
     ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
-    linkedDirectories: thread.linkedDirectories,
+    linkedDirectories: thread.linkedDirectories ?? [],
     ...(thread.rolloutPath ? { rolloutPath: thread.rolloutPath } : {}),
   };
 }

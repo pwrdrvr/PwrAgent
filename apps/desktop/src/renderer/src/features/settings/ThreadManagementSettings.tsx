@@ -42,10 +42,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<ThreadIdentifier>>(
     () => new Set(),
   );
-  const [operation, setOperation] = useState<ThreadMigrationOperation>("move");
   const [run, setRun] = useState<StartThreadMigrationResponse>();
   const [startError, setStartError] = useState<string>();
-  const [starting, setStarting] = useState(false);
+  const [startingOperation, setStartingOperation] =
+    useState<ThreadMigrationOperation>();
   const sourceThreadsRequestIdRef = useRef(0);
 
   const loadSources = useCallback(async () => {
@@ -150,7 +150,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
           (thread) =>
             selectedThreadIds.has(thread.threadId) &&
             (isToolManagedWorktreePath(thread.projectKey) ||
-              thread.linkedDirectories.some(
+              (thread.linkedDirectories ?? []).some(
                 (directory) =>
                   isToolManagedWorktreePath(directory.worktreePath) ||
                   isToolManagedWorktreePath(directory.path),
@@ -163,7 +163,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     Boolean(selectedSource?.available) &&
     selectedCount > 0 &&
     !selectedHasProfileOwnedWorktree &&
-    !starting &&
+    !startingOperation &&
     !threadsState.loading;
 
   const toggleThread = (threadId: ThreadIdentifier) => {
@@ -195,13 +195,13 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     });
   };
 
-  const startMigration = async () => {
+  const startMigration = async (operation: ThreadMigrationOperation) => {
     const startThreadMigration = props.desktopApi?.startThreadMigration;
     if (!startThreadMigration || !selectedSource) {
       setStartError("Desktop bridge is missing startThreadMigration().");
       return;
     }
-    setStarting(true);
+    setStartingOperation(operation);
     setStartError(undefined);
     try {
       const response = await startThreadMigration({
@@ -213,7 +213,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     } catch (error) {
       setStartError(error instanceof Error ? error.message : String(error));
     } finally {
-      setStarting(false);
+      setStartingOperation(undefined);
     }
   };
 
@@ -311,131 +311,128 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
             No source threads found.
           </p>
         ) : null}
-        {threadsState.projects.map((project) => (
-          <div className="settings-thread-management__project" key={project.key}>
-            <label className="settings-thread-management__project-head">
-              <input
-                checked={project.threads.every((thread) =>
-                  selectedThreadIds.has(thread.threadId),
-                )}
-                className="settings-thread-management__checkbox-input"
-                type="checkbox"
-                onChange={() => selectProject(project)}
-              />
-              <span
-                aria-hidden="true"
-                className={`settings-thread-management__checkbox settings-thread-management__checkbox--project${
-                  project.threads.every((thread) =>
-                    selectedThreadIds.has(thread.threadId),
-                  )
-                    ? " is-checked"
-                    : ""
-                }`}
-              />
-              <div>
-                <p className="settings-thread-management__project-title">
-                  {project.label}
-                </p>
-                {project.path ? (
-                  <p className="settings-thread-management__project-path">
-                    {project.path}
-                  </p>
-                ) : null}
-              </div>
-            </label>
-            <div>
-              {project.threads.map((thread) => (
-                <label
-                  key={thread.threadId}
-                  className={`settings-thread-management__thread${
-                    selectedThreadIds.has(thread.threadId) ? " is-selected" : ""
-                  }`}
-                >
+        <div className="settings-thread-management__selection-shell">
+          <div className="settings-thread-management__projects-list">
+            {threadsState.projects.map((project) => (
+              <div className="settings-thread-management__project" key={project.key}>
+                <label className="settings-thread-management__project-head">
                   <input
-                    checked={selectedThreadIds.has(thread.threadId)}
+                    checked={project.threads.every((thread) =>
+                      selectedThreadIds.has(thread.threadId),
+                    )}
                     className="settings-thread-management__checkbox-input"
                     type="checkbox"
-                    onChange={() => toggleThread(thread.threadId)}
+                    onChange={() => selectProject(project)}
                   />
                   <span
                     aria-hidden="true"
-                    className={`settings-thread-management__checkbox${
-                      selectedThreadIds.has(thread.threadId) ? " is-checked" : ""
+                    className={`settings-thread-management__checkbox settings-thread-management__checkbox--project${
+                      project.threads.every((thread) =>
+                        selectedThreadIds.has(thread.threadId),
+                      )
+                        ? " is-checked"
+                        : ""
                     }`}
                   />
-                  <span className="settings-archive-row__body">
-                    <span className="settings-archive-row__title">
-                      {thread.title}
-                    </span>
-                    {thread.summary ? (
-                      <span className="settings-archive-row__summary">
-                        {thread.summary}
-                      </span>
+                  <div>
+                    <p className="settings-thread-management__project-title">
+                      {project.label}
+                    </p>
+                    {project.path ? (
+                      <p className="settings-thread-management__project-path">
+                        {project.path}
+                      </p>
                     ) : null}
-                    <span className="settings-archive-row__meta">
-                      <span>{thread.threadId}</span>
-                      {thread.gitBranch ? <span>{thread.gitBranch}</span> : null}
-                      {thread.updatedAt ? (
-                        <span>Updated {dateFormatter.format(thread.updatedAt)}</span>
-                      ) : null}
-                    </span>
-                  </span>
-                  <span className="settings-archive-row__side">
-                    <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
-                  </span>
+                  </div>
                 </label>
-              ))}
+                <div>
+                  {project.threads.map((thread) => (
+                    <label
+                      key={thread.threadId}
+                      className={`settings-thread-management__thread${
+                        selectedThreadIds.has(thread.threadId) ? " is-selected" : ""
+                      }`}
+                    >
+                      <input
+                        checked={selectedThreadIds.has(thread.threadId)}
+                        className="settings-thread-management__checkbox-input"
+                        type="checkbox"
+                        onChange={() => toggleThread(thread.threadId)}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className={`settings-thread-management__checkbox${
+                          selectedThreadIds.has(thread.threadId)
+                            ? " is-checked"
+                            : ""
+                        }`}
+                      />
+                      <span className="settings-archive-row__body">
+                        <span className="settings-archive-row__title">
+                          {thread.title}
+                        </span>
+                        {thread.summary ? (
+                          <span className="settings-archive-row__summary">
+                            {thread.summary}
+                          </span>
+                        ) : null}
+                        <span className="settings-archive-row__meta">
+                          <span>{thread.threadId}</span>
+                          {thread.gitBranch ? <span>{thread.gitBranch}</span> : null}
+                          {thread.updatedAt ? (
+                            <span>Updated {dateFormatter.format(thread.updatedAt)}</span>
+                          ) : null}
+                        </span>
+                      </span>
+                      <span className="settings-archive-row__side">
+                        <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="settings-thread-management__actionbar">
+            <div className="settings-thread-management__actioncopy">
+              <p className="settings-thread-management__action-title">
+                Migration action
+              </p>
+              <p className="settings-thread-management__action-description">
+                {selectedHasProfileOwnedWorktree
+                  ? "Profile-owned worktree migration is blocked until branch and worktree relocation is implemented."
+                  : selectedCount > 0
+                    ? "Move copies, validates, then archives source last. Copy leaves source threads active."
+                    : "Select one or more threads to enable Move or Copy."}
+              </p>
+            </div>
+            <div className="settings-thread-management__controls">
+              <button
+                className="button button--primary"
+                disabled={!canStart}
+                type="button"
+                onClick={() => {
+                  void startMigration("move");
+                }}
+              >
+                {startingOperation === "move"
+                  ? `Moving ${selectedCount}`
+                  : `Move ${selectedCount}`}
+              </button>
+              <button
+                className="button button--secondary"
+                disabled={!canStart}
+                type="button"
+                onClick={() => {
+                  void startMigration("copy");
+                }}
+              >
+                {startingOperation === "copy"
+                  ? `Copying ${selectedCount}`
+                  : `Copy ${selectedCount}`}
+              </button>
             </div>
           </div>
-        ))}
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="Run"
-        title="Migration action"
-        description={
-          selectedHasProfileOwnedWorktree
-            ? "Profile-owned worktree migration is blocked until branch and worktree relocation is implemented."
-            : "Move copies, validates, then archives source last. Copy leaves source threads active."
-        }
-        chip={operation === "move" ? "recommended" : "advanced"}
-        chipKind={operation === "move" ? "ok" : "warn"}
-      >
-        <div className="settings-thread-management__controls">
-          <div className="settings-thread-management__segmented" role="group">
-            <button
-              className={`button ${
-                operation === "move" ? "button--primary" : "button--secondary"
-              }`}
-              type="button"
-              onClick={() => setOperation("move")}
-            >
-              Move
-            </button>
-            <button
-              className={`button ${
-                operation === "copy" ? "button--primary" : "button--secondary"
-              }`}
-              type="button"
-              onClick={() => setOperation("copy")}
-            >
-              Copy
-            </button>
-          </div>
-          <button
-            className="button button--primary"
-            disabled={!canStart}
-            type="button"
-            onClick={() => {
-              void startMigration();
-            }}
-          >
-            {starting
-              ? "Starting"
-              : operation === "move"
-                ? `Move ${selectedCount || ""}`.trim()
-                : `Copy ${selectedCount || ""}`.trim()}
-          </button>
         </div>
         {startError ? (
           <p className="settings-row__error settings-thread-management__status" role="alert">
