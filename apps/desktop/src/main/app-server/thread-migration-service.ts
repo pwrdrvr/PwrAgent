@@ -7,7 +7,6 @@ import {
   type AppServerThreadReplay,
   type ForkThreadRequest,
   type ForkThreadResponse,
-  type LinkedDirectorySummary,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
   type ListThreadMigrationSourcesResponse,
@@ -195,7 +194,7 @@ export class ThreadMigrationService {
       if (!sourceThread.rolloutPath) {
         throw new Error("Source CAS did not provide a rollout path for this thread.");
       }
-      if (hasProfileOwnedWorktree(sourceThread.linkedDirectories)) {
+      if (hasProfileOwnedWorktree(sourceThread)) {
         throw new Error(
           request.operation === "copy"
             ? "Copy is blocked until branch conflict strategies for profile-owned worktrees are implemented."
@@ -452,11 +451,16 @@ function stripInternalThread(
   return publicThread;
 }
 
-function hasProfileOwnedWorktree(directories: LinkedDirectorySummary[]): boolean {
-  return directories.some(
-    (directory) =>
-      isToolManagedWorktreePath(directory.worktreePath) ||
-      isToolManagedWorktreePath(directory.path),
+function hasProfileOwnedWorktree(
+  thread: Pick<InternalSourceThread, "linkedDirectories" | "projectKey">,
+): boolean {
+  return Boolean(
+    (thread.projectKey && isToolManagedWorktreePath(thread.projectKey)) ||
+      thread.linkedDirectories.some(
+        (directory) =>
+          isToolManagedWorktreePath(directory.worktreePath) ||
+          isToolManagedWorktreePath(directory.path),
+      ),
   );
 }
 

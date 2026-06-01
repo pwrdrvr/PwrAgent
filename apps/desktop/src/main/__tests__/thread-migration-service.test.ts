@@ -444,4 +444,46 @@ describe("ThreadMigrationService", () => {
     expect(destination.forkThread).not.toHaveBeenCalled();
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
   });
+
+  it("blocks Move before fork/archive when projectKey is a profile-owned worktree", async () => {
+    const sourceClient = {
+      listThreadsForMigration: vi.fn(async () => [
+        makeSourceThread({
+          projectKey:
+            "/Users/alice/.codex/profiles/personal/worktrees/mph2i055/repo-app",
+          linkedDirectories: [],
+        }),
+      ]),
+      readThread: vi.fn(),
+      archiveThread: vi.fn(),
+      close: vi.fn(),
+    };
+    const destination = {
+      forkThread: vi.fn(),
+      readThread: vi.fn(),
+    };
+    const service = new ThreadMigrationService({
+      destination,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+    });
+
+    const response = await service.startMigration({
+      sourceProfile: "",
+      operation: "move",
+      threadIds: ["source-thread"],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      status: "failed",
+      error:
+        "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+    });
+    expect(destination.forkThread).not.toHaveBeenCalled();
+    expect(sourceClient.archiveThread).not.toHaveBeenCalled();
+  });
 });

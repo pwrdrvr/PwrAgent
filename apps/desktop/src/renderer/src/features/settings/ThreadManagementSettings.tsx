@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isToolManagedWorktreePath,
   type ListThreadMigrationSourcesResponse,
@@ -46,6 +46,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const [run, setRun] = useState<StartThreadMigrationResponse>();
   const [startError, setStartError] = useState<string>();
   const [starting, setStarting] = useState(false);
+  const sourceThreadsRequestIdRef = useRef(0);
 
   const loadSources = useCallback(async () => {
     const listSources = props.desktopApi?.listThreadMigrationSources;
@@ -75,6 +76,8 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
 
   const loadSourceThreads = useCallback(
     async (profile: string | undefined) => {
+      const requestId = sourceThreadsRequestIdRef.current + 1;
+      sourceThreadsRequestIdRef.current = requestId;
       if (profile === undefined) {
         setThreadsState({ loading: false, projects: [] });
         setSelectedThreadIds(new Set());
@@ -99,12 +102,18 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       setRun(undefined);
       try {
         const response = await listThreads({ sourceProfile: profile });
+        if (sourceThreadsRequestIdRef.current !== requestId) {
+          return;
+        }
         setThreadsState({
           fetchedAt: response.fetchedAt,
           loading: false,
           projects: response.projects,
         });
       } catch (error) {
+        if (sourceThreadsRequestIdRef.current !== requestId) {
+          return;
+        }
         setThreadsState({
           error: error instanceof Error ? error.message : String(error),
           loading: false,
@@ -140,11 +149,12 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         project.threads.some(
           (thread) =>
             selectedThreadIds.has(thread.threadId) &&
-            thread.linkedDirectories.some(
-              (directory) =>
-                isToolManagedWorktreePath(directory.worktreePath) ||
-                isToolManagedWorktreePath(directory.path),
-            ),
+            (isToolManagedWorktreePath(thread.projectKey) ||
+              thread.linkedDirectories.some(
+                (directory) =>
+                  isToolManagedWorktreePath(directory.worktreePath) ||
+                  isToolManagedWorktreePath(directory.path),
+              )),
         ),
       ),
     [selectedThreadIds, threadsState.projects],
