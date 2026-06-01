@@ -10441,6 +10441,148 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("retains parent worktree snapshots for archived same-worktree children", async () => {
+    const worktreePath = "/Users/test/.codex/worktrees/shared/PwrAgnt";
+    const parentThread: AppServerThreadSummary = {
+      id: "thread-parent",
+      title: "Parent thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/PwrAgnt",
+          label: "PwrAgnt",
+          path: "/repo/PwrAgnt",
+          kind: "worktree",
+          worktreePath,
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/shared",
+      updatedAt: 1,
+    };
+    const childThread: AppServerThreadSummary = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: `directory:${worktreePath}`,
+          label: "PwrAgnt",
+          path: worktreePath,
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/shared",
+      updatedAt: 2,
+    };
+    const archivedThreads: AppServerThreadSummary[] = [];
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      archivedThreads,
+      threads: [parentThread, childThread],
+    });
+    const snapshot: WorktreeSnapshotSummary = {
+      id: "snapshot-1",
+      backend: "codex",
+      threadId: "thread-parent",
+      worktreePath,
+      repositoryPath: "/repo/PwrAgnt",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      snapshotCommit: "abc123",
+      sourceBranch: "codex/shared",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived",
+      ignoredFilesExcluded: true,
+    };
+    const archiveWorktree = vi.fn(async () => snapshot);
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-child": {
+          backend: "codex",
+          threadId: "thread-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "thread-parent",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const childResponse = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-child",
+    });
+    expect(childResponse.cleanup).toEqual([
+      {
+        worktreePath,
+        branch: "codex/shared",
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason: "Worktree is still used by another active thread: thread-parent.",
+      },
+    ]);
+    expect(archiveWorktree).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-child",
+      }),
+    ).resolves.not.toMatchObject({
+      worktreeSnapshots: expect.any(Array),
+    });
+
+    archivedThreads.push(childThread);
+    codexClient.setThreads([parentThread]);
+    const parentResponse = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+
+    expect(parentResponse.cleanup).toEqual([
+      {
+        worktreePath,
+        branch: "codex/shared",
+        removedWorktree: true,
+        deletedBranch: false,
+      },
+    ]);
+    expect(archiveWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-parent",
+      worktreePath,
+      repositoryPath: "/repo/PwrAgnt",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-child",
+      }),
+    ).resolves.toMatchObject({
+      worktreeSnapshots: [
+        expect.objectContaining({
+          id: "snapshot-1",
+          threadId: "thread-child",
+          worktreePath,
+          snapshotRef: "refs/codex/snapshots/snapshot-1",
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

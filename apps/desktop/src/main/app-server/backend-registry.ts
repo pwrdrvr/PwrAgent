@@ -730,6 +730,7 @@ type WorktreeArchiveCandidate = {
 
 type ArchiveCleanupMetadata = {
   activeThreads: AppServerThreadSummary[];
+  archivedThreads: AppServerThreadSummary[];
   thread: AppServerThreadSummary;
 };
 
@@ -3890,6 +3891,7 @@ export class DesktopBackendRegistry {
       ? await this.archiveThreadWorktrees({
           backend,
           activeThreads: cleanupMetadata.activeThreads,
+          archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread,
         })
       : this.buildArchiveCleanupMetadataSkippedResult({
@@ -8403,22 +8405,36 @@ export class DesktopBackendRegistry {
       callerReason: "archive-cleanup",
     });
     const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    let archivedThreads: AppServerThreadSummary[] = [];
+    try {
+      archivedThreads = await this.listThreads({
+        backend: params.backend,
+        archived: true,
+        callerReason: "archive-cleanup",
+      });
+    } catch (error) {
+      if (!activeThread) {
+        throw error;
+      }
+      backendRegistryLog.warn("archive cleanup archived-thread lookup failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (activeThread) {
       return {
         activeThreads,
+        archivedThreads,
         thread: activeThread,
       };
     }
 
-    const archivedThreads = await this.listThreads({
-      backend: params.backend,
-      archived: true,
-      callerReason: "archive-cleanup",
-    });
     const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
     if (archivedThread) {
       return {
         activeThreads,
+        archivedThreads,
         thread: archivedThread,
       };
     }
@@ -8557,6 +8573,7 @@ export class DesktopBackendRegistry {
 
   private async archiveThreadWorktrees(params: {
     activeThreads: AppServerThreadSummary[];
+    archivedThreads: AppServerThreadSummary[];
     backend: AppServerBackendKind;
     thread: AppServerThreadSummary;
   }): Promise<ArchiveThreadCleanupResult[]> {
@@ -8641,6 +8658,13 @@ export class DesktopBackendRegistry {
             threadId: params.thread.id,
             snapshot,
           });
+          await this.retainSharedWorktreeSnapshotForArchivedThreads({
+            archivedThreadId: params.thread.id,
+            archivedThreads: params.archivedThreads,
+            backend: params.backend,
+            snapshot,
+            worktreePath: candidate.worktreePath,
+          });
 
           let worktreeStillExists = false;
           try {
@@ -8708,6 +8732,46 @@ export class DesktopBackendRegistry {
           };
         }
       }),
+    );
+  }
+
+  private async retainSharedWorktreeSnapshotForArchivedThreads(params: {
+    archivedThreadId: string;
+    archivedThreads: AppServerThreadSummary[];
+    backend: AppServerBackendKind;
+    snapshot: WorktreeSnapshotSummary;
+    worktreePath: string;
+  }): Promise<void> {
+    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    const siblingThreads = params.archivedThreads.filter((thread) => {
+      if (thread.source !== params.backend || thread.id === params.archivedThreadId) {
+        return false;
+      }
+
+      return thread.linkedDirectories.some((directory) => {
+        const candidatePath = linkedDirectoryWorktreePath(directory);
+        return (
+          candidatePath !== undefined &&
+          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+        );
+      });
+    });
+
+    if (siblingThreads.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      siblingThreads.map((thread) =>
+        this.overlayStore.upsertWorktreeSnapshot({
+          backend: params.backend,
+          threadId: thread.id,
+          snapshot: {
+            ...params.snapshot,
+            threadId: thread.id,
+          },
+        }),
+      ),
     );
   }
 
