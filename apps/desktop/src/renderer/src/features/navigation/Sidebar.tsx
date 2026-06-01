@@ -24,7 +24,11 @@ import {
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon } from "../../icons";
-import type { BrowseMode, ThreadWorkspaceMode } from "../../lib/useThreadNavigation";
+import type {
+  ArchiveThreadOptions,
+  BrowseMode,
+  ThreadWorkspaceMode,
+} from "../../lib/useThreadNavigation";
 import {
   formatRuntimeGitRef,
   formatRuntimePath,
@@ -87,7 +91,10 @@ type SidebarProps = {
   onOpenSettings?: () => void;
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
-  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onArchiveThread?: (
+    thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   onSetThreadReaction?: (
     thread: NavigationThreadSummary,
@@ -417,8 +424,15 @@ export function Sidebar(props: SidebarProps) {
     setRenameValidationError(undefined);
   };
 
-  const archiveFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const archiveFromContextMenu = (
+    thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ): void => {
     setContextMenu(undefined);
+    if (options) {
+      void onArchiveThread(thread, options);
+      return;
+    }
     void onArchiveThread(thread);
   };
 
@@ -576,6 +590,14 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanArchive = contextMenu
     ? canArchiveThread(contextMenu.thread)
     : false;
+  const contextMenuChildThreadCount = contextMenu
+    ? props.threads.filter(
+        (thread) =>
+          thread.source === contextMenu.thread.source &&
+          thread.parentThreadId === contextMenu.thread.id,
+      ).length
+    : 0;
+  const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
   const contextMenuLocalPath = contextMenu?.thread.linkedDirectories.find(
     (directory) => directory.kind === "local"
   )?.path;
@@ -1042,7 +1064,51 @@ export function Sidebar(props: SidebarProps) {
                   Rename Thread
                 </button>
               ) : null}
-              {contextMenuCanArchive ? (
+              {contextMenuCanArchive && contextMenuHasChildThreads ? (
+                <>
+                  <button
+                    aria-label={`Archive Thread Only. Ungroup ${
+                      contextMenuChildThreadCount === 1
+                        ? "1 sub-thread"
+                        : `${contextMenuChildThreadCount} sub-threads`
+                    }`}
+                    className="thread-context-menu__button--stacked"
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      archiveFromContextMenu(contextMenu.thread, {
+                        includeSubthreads: false,
+                      })
+                    }
+                  >
+                    <span>Archive Thread Only</span>
+                    <span className="thread-context-menu__item-detail">
+                      Ungroup{" "}
+                      {contextMenuChildThreadCount === 1
+                        ? "1 sub-thread"
+                        : `${contextMenuChildThreadCount} sub-threads`}
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Archive Thread and Sub-Threads. Archive ${
+                      contextMenuChildThreadCount + 1
+                    } threads`}
+                    className="thread-context-menu__button--stacked"
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      archiveFromContextMenu(contextMenu.thread, {
+                        includeSubthreads: true,
+                      })
+                    }
+                  >
+                    <span>Archive Thread + Sub-Threads</span>
+                    <span className="thread-context-menu__item-detail">
+                      Archive {contextMenuChildThreadCount + 1} threads
+                    </span>
+                  </button>
+                </>
+              ) : contextMenuCanArchive ? (
                 <button
                   role="menuitem"
                   type="button"

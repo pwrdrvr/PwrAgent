@@ -10147,6 +10147,134 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("skips worktree cleanup when an active same-worktree child is recorded as local", async () => {
+    const parentThread: AppServerThreadSummary = {
+      id: "thread-parent",
+      title: "Parent thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/shared",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/parent",
+      updatedAt: 1,
+    };
+    const childThread: AppServerThreadSummary = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/.worktrees/shared",
+          label: "app",
+          path: "/repo/.worktrees/shared",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/parent",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread, childThread],
+    });
+    const archiveWorktree = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+
+    expect(archiveWorktree).not.toHaveBeenCalled();
+    expect(response.cleanup).toEqual([
+      {
+        worktreePath: "/repo/.worktrees/shared",
+        branch: "codex/parent",
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason:
+          "Worktree is still used by another active thread: thread-child.",
+      },
+    ]);
+
+    await registry.close();
+  });
+
+  it("ungroups active child threads when archiving only the parent", async () => {
+    const parentThread: AppServerThreadSummary = {
+      id: "thread-parent",
+      title: "Parent thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 1,
+    };
+    const childThread: AppServerThreadSummary = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-child": {
+          backend: "codex",
+          threadId: "thread-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "thread-parent",
+        },
+      },
+    });
+    const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread, childThread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      worktreeArchiveService: {
+        archive: vi.fn(),
+      } as unknown as WorktreeArchiveService,
+    });
+
+    await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: undefined,
+    });
+
+    await registry.close();
+  });
+
   it("removes a linked worktree when only archived threads still reference it", async () => {
     const activeThread: AppServerThreadSummary = {
       id: "thread-active",

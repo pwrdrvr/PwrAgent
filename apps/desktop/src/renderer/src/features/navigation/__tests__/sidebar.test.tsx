@@ -1026,6 +1026,106 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
+  it("splits parent archive actions between ungrouping children and archiving the group", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child thread",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread, childThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, childThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+    );
+
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread Only. Ungroup 1 sub-thread",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread and Sub-Threads. Archive 2 threads",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread Only. Ungroup 1 sub-thread",
+      }),
+    );
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+      includeSubthreads: false,
+    });
+  });
+
+  it("archives the whole group from the parent row menu", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child thread",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread, childThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, childThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread and Sub-Threads. Archive 2 threads",
+      }),
+    );
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+      includeSubthreads: true,
+    });
+  });
+
   it("pins from the row menu and renders pinned threads above recents", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {

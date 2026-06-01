@@ -743,7 +743,10 @@ type WorktreeRestoreCandidate = {
 function linkedDirectoryWorktreePath(
   directory: LinkedDirectorySummary,
 ): string | undefined {
-  return directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+  return directory.worktreePath ??
+    (directory.kind === "worktree" || directory.kind === "local"
+      ? directory.path
+      : undefined);
 }
 
 function normalizeWorktreePathForComparison(worktreePath: string): string {
@@ -3867,6 +3870,11 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
       origin: "thread-archive",
+    });
+    await this.ungroupChildrenOfArchivedThread({
+      backend,
+      activeThreads: cleanupMetadata?.activeThreads ?? [],
+      parentThreadId: result.threadId,
     });
     const cleanup = cleanupMetadata
       ? await this.archiveThreadWorktrees({
@@ -8713,6 +8721,42 @@ export class DesktopBackendRegistry {
         );
       });
     });
+  }
+
+  private async ungroupChildrenOfArchivedThread(params: {
+    activeThreads: AppServerThreadSummary[];
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+  }): Promise<void> {
+    const setThreadParent = this.overlayStore.setThreadParent;
+    if (!setThreadParent) {
+      return;
+    }
+
+    const activeThreadIds = params.activeThreads
+      .filter((thread) => thread.source === params.backend)
+      .map((thread) => thread.id);
+    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+      backend: params.backend,
+      threadIds: activeThreadIds,
+    });
+    const childThreadIds = activeThreadIds.filter(
+      (threadId) =>
+        overlaysByThreadId[threadId]?.parentThreadId === params.parentThreadId,
+    );
+    if (childThreadIds.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      childThreadIds.map((threadId) =>
+        setThreadParent.call(this.overlayStore, {
+          backend: params.backend,
+          threadId,
+          parentThreadId: undefined,
+        }),
+      ),
+    );
   }
 
   private async restoreThreadWorktrees(params: {

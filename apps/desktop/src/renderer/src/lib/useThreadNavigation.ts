@@ -37,6 +37,10 @@ export type ArchiveThreadNotice = {
   detail?: string;
 };
 
+export type ArchiveThreadOptions = {
+  includeSubthreads?: boolean;
+};
+
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
@@ -725,6 +729,64 @@ function updateThreadParentInSnapshot(
   });
 
   return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function ungroupChildThreadsInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (
+      thread.source !== params.backend ||
+      thread.parentThreadId !== params.parentThreadId
+    ) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, parentThreadId: undefined };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function collectDescendantThreads(
+  threads: NavigationThreadSummary[],
+  parent: NavigationThreadSummary,
+): NavigationThreadSummary[] {
+  const descendants: NavigationThreadSummary[] = [];
+  const queue = threads.filter(
+    (thread) =>
+      thread.source === parent.source &&
+      thread.parentThreadId === parent.id,
+  );
+  const seen = new Set<string>();
+
+  while (queue.length > 0) {
+    const thread = queue.shift()!;
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    descendants.push(thread);
+    queue.push(
+      ...threads.filter(
+        (candidate) =>
+          candidate.source === thread.source &&
+          candidate.parentThreadId === thread.id,
+      ),
+    );
+  }
+
+  return descendants;
 }
 
 function updateSubthreadOrderInSnapshot(
@@ -1699,7 +1761,10 @@ export function useThreadNavigation(
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
-  archiveThread: (thread: NavigationThreadSummary) => Promise<void>;
+  archiveThread: (
+    thread: NavigationThreadSummary,
+    options?: ArchiveThreadOptions,
+  ) => Promise<void>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
     directory: LinkedDirectorySummary
@@ -3445,7 +3510,10 @@ export function useThreadNavigation(
   );
 
   const archiveThread = useCallback(
-    async (thread: NavigationThreadSummary): Promise<void> => {
+    async (
+      thread: NavigationThreadSummary,
+      options?: ArchiveThreadOptions,
+    ): Promise<void> => {
       if (!archiveThreadRequest) {
         setArchiveThreadError("Desktop bridge is missing archiveThread().");
         return;
@@ -3455,8 +3523,18 @@ export function useThreadNavigation(
       const optimisticThreadKey = optimisticThread
         ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
         : undefined;
+      const targetThreads = options?.includeSubthreads
+        ? [...collectDescendantThreads(threads, thread).reverse(), thread]
+        : [thread];
+      const targetThreadKeys = new Set(
+        targetThreads.map((target) =>
+          buildThreadIdentityKey(target.source, target.id)
+        )
+      );
 
-      suppressedArchivedThreadKeysRef.current.add(threadKey);
+      for (const targetKey of targetThreadKeys) {
+        suppressedArchivedThreadKeysRef.current.add(targetKey);
+      }
       setArchiveThreadError(undefined);
       setArchiveThreadNotice(undefined);
       setCreateThreadError(undefined);
@@ -3465,13 +3543,22 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
       setState((current) => ({
         ...current,
-        response: removeThreadFromSnapshot(current.response, {
-          backend: thread.source,
-          threadId: thread.id,
-        }),
+        response: targetThreads.reduce(
+          (snapshot, target) =>
+            removeThreadFromSnapshot(snapshot, {
+              backend: target.source,
+              threadId: target.id,
+            }),
+          options?.includeSubthreads
+            ? current.response
+            : ungroupChildThreadsInSnapshot(current.response, {
+                backend: thread.source,
+                parentThreadId: thread.id,
+              })
+        ),
       }));
       setSelectedItemKey((current) =>
-        current === threadKey
+        current && targetThreadKeys.has(current)
           ? getFallbackSelectionAfterRemoval(state.response, {
               backend: thread.source,
               threadId: thread.id,
@@ -3480,29 +3567,37 @@ export function useThreadNavigation(
           : current
       );
       setRetainedUnreadThread((current) =>
-        current?.source === thread.source && current.id === thread.id ? undefined : current
+        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+          ? undefined
+          : current
       );
       setOptimisticThread((current) =>
-        current?.source === thread.source && current.id === thread.id ? undefined : current
+        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+          ? undefined
+          : current
       );
 
       try {
-        const response = await archiveThreadRequest({
-          backend: thread.source,
-          threadId: thread.id,
-        });
-        const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
-        if (cleanupNotice) {
-          setArchiveThreadNotice(cleanupNotice);
+        for (const target of targetThreads) {
+          const response = await archiveThreadRequest({
+            backend: target.source,
+            threadId: target.id,
+          });
+          const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
+          if (cleanupNotice) {
+            setArchiveThreadNotice(cleanupNotice);
+          }
         }
         await refresh();
       } catch (error) {
-        suppressedArchivedThreadKeysRef.current.delete(threadKey);
+        for (const targetKey of targetThreadKeys) {
+          suppressedArchivedThreadKeysRef.current.delete(targetKey);
+        }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh(threadKey, undefined, true);
       }
     },
-    [archiveThreadRequest, optimisticThread, refresh, state.response]
+    [archiveThreadRequest, optimisticThread, refresh, state.response, threads]
   );
 
   const archiveWorktree = useCallback(

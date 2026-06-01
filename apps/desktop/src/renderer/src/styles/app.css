@@ -3142,6 +3142,25 @@ textarea,
   cursor: default;
 }
 
+.thread-context-menu .thread-context-menu__button--stacked {
+  min-height: 46px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+}
+
+.thread-context-menu__item-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__item-detail {
+  color: var(--accent-bright);
+}
+
 /* macOS-native pattern: action label on the left, keyboard
    shortcut hint chip on the right (margin-left: auto). Used by
    the pin/move items in the thread + directory context menus so

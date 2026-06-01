@@ -1262,6 +1262,81 @@ describe("useThreadNavigation", () => {
     expect(result.current.archiveThreadNotice).toBeUndefined();
   });
 
+  it("archives sub-threads before the parent when archiving a group", async () => {
+    const archivedThreadIds = new Set<string>();
+    const parentThread = {
+      id: "thread-parent",
+      title: "Parent thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      updatedAt: 1_000,
+    };
+    const childThread = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit" as const,
+      parentThreadId: "thread-parent",
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      updatedAt: 2_000,
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [parentThread, childThread].filter(
+        (thread) => !archivedThreadIds.has(thread.id),
+      ),
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async (request: { threadId: string }) => {
+      archivedThreadIds.add(request.threadId);
+      return {
+        backend: "codex" as const,
+        threadId: request.threadId,
+        archivedAt: 3_000,
+        cleanup: [],
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-parent",
+        "thread-child",
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!, {
+        includeSubthreads: true,
+      });
+    });
+
+    expect(archiveThread.mock.calls.map(([request]) => request.threadId)).toEqual([
+      "thread-child",
+      "thread-parent",
+    ]);
+    await waitFor(() => {
+      expect(result.current.threads).toEqual([]);
+    });
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,
