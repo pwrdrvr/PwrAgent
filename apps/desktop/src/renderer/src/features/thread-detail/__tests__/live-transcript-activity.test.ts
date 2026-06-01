@@ -63,12 +63,31 @@ describe("buildTokenUsageActivityEntry", () => {
     });
     expect(entry?.summary).toContain("2,432 cached");
     expect(entry?.summary).toContain("174 out (25 reasoning)");
-    expect(entry?.summary).toContain("$0.1042 list price");
+    expect(entry?.summary).toContain("$0.11 list price");
     expect(entry?.details.map((detail) => detail.label)).toEqual([
       "Input: 21,981 tokens (19,549 uncached, 2,432 cached)",
       "Output: 174 tokens, including 25 reasoning",
-      "Cost: $0.1042 list price for gpt-5.5",
+      "Cost: $0.11 list price for gpt-5.5",
     ]);
+  });
+
+  it("rounds list-price costs below ten cents to tenths of a penny", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "usage-small-cost",
+      model: "gpt-5.4-mini",
+      tokenUsage: {
+        total: {
+          inputTokens: 1_000,
+          cachedInputTokens: 0,
+          outputTokens: 1_000,
+        },
+      },
+    });
+
+    expect(entry?.summary).toContain("$0.006 list price");
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost: $0.006 list price for gpt-5.4-mini",
+    );
   });
 
   it("reports unavailable cost without dropping token accounting", () => {
