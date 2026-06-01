@@ -5347,6 +5347,111 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("keeps a review turn active when a separate turn/started arrives", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "turn-review-entered",
+              type: "enteredReviewMode",
+              review: "Review changes against main",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "turn-review-exited",
+              type: "exitedReviewMode",
+              review: "No findings.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+      expect(
+        result.current.entries.filter((entry) => entry.type === "review")
+      ).toHaveLength(2);
+    });
+  });
+
   it("stores context window usage from token usage notifications", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
@@ -5677,6 +5782,79 @@ describe("useThreadSessionState", () => {
         }),
       }),
     ]);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it("does not keep list thinking from completed usage with stale turn metadata", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                reasoning_output_tokens: 10,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([
+      expect.objectContaining({
+        id: "live-token-usage-turn-1",
+        status: "completed",
+        type: "activity",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "in_progress",
+        }),
+      }),
+    ]);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => {
+      result.current.setActiveTurnId(undefined);
+    });
+
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
