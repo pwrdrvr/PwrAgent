@@ -5107,7 +5107,7 @@ textarea,
 
 .settings-thread-management__project-head {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   padding: 14px 18px 12px;
@@ -5151,20 +5151,6 @@ textarea,
 
 .settings-thread-management__thread.is-selected {
   background: var(--bg-row-active);
-}
-
-.settings-thread-management__project-select {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  padding: 0 10px;
-  border: 1px solid var(--border-default, var(--border-subtle));
-  border-radius: 6px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .settings-thread-management__checkbox-input {

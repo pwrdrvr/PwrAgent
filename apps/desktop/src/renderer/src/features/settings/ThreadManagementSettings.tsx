@@ -332,13 +332,6 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                   </p>
                 ) : null}
               </div>
-              <span className="settings-thread-management__project-select">
-                {project.threads.every((thread) =>
-                  selectedThreadIds.has(thread.threadId),
-                )
-                  ? "Clear"
-                  : "Select project"}
-              </span>
             </label>
             <div>
               {project.threads.map((thread) => (
