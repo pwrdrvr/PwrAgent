@@ -151,9 +151,6 @@ export class ThreadMigrationService {
     request: StartThreadMigrationRequest,
   ): Promise<StartThreadMigrationResponse> {
     const sourceProfile = normalizeSourceProfile(request.sourceProfile);
-    if (request.operation === "copy" && !request.copyStrategy) {
-      throw new Error("Copy migrations require an explicit branch conflict strategy.");
-    }
     await this.assertProfileSelectable(sourceProfile);
 
     const run: StartThreadMigrationResponse = {
@@ -195,12 +192,11 @@ export class ThreadMigrationService {
       if (!sourceThread.rolloutPath) {
         throw new Error("Source CAS did not provide a rollout path for this thread.");
       }
-      if (
-        request.operation === "move" &&
-        hasProfileOwnedWorktree(sourceThread.linkedDirectories)
-      ) {
+      if (hasProfileOwnedWorktree(sourceThread.linkedDirectories)) {
         throw new Error(
-          "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+          request.operation === "copy"
+            ? "Copy is blocked until branch conflict strategies for profile-owned worktrees are implemented."
+            : "Move is blocked until this thread's profile-owned worktree can be migrated first.",
         );
       }
 

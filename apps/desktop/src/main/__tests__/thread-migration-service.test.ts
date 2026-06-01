@@ -240,6 +240,52 @@ describe("ThreadMigrationService", () => {
     ]);
   });
 
+  it("copies a non-worktree thread without requiring a branch strategy", async () => {
+    const sourceClient = {
+      listThreadsForMigration: vi.fn(async () => [makeSourceThread()]),
+      readThread: vi.fn(async () => makeReplay()),
+      archiveThread: vi.fn(),
+      close: vi.fn(),
+    };
+    const destination = {
+      forkThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        sourceThreadId: "source-thread",
+        threadId: "destination-thread",
+        executionMode: "default" as const,
+        linkedDirectory: {
+          id: "local:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local" as const,
+        },
+        workMode: "local" as const,
+      })),
+      readThread: vi.fn(async () => ({ replay: makeReplay() })),
+    };
+    const service = new ThreadMigrationService({
+      destination,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+    });
+
+    const response = await service.startMigration({
+      sourceProfile: "",
+      operation: "copy",
+      threadIds: ["source-thread"],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      destinationThreadId: "destination-thread",
+      status: "completed",
+    });
+    expect(sourceClient.archiveThread).not.toHaveBeenCalled();
+  });
+
   it("blocks Move before fork/archive when a source thread has a profile-owned worktree", async () => {
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [
@@ -284,6 +330,55 @@ describe("ThreadMigrationService", () => {
       status: "failed",
       error:
         "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+    });
+    expect(destination.forkThread).not.toHaveBeenCalled();
+    expect(sourceClient.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("blocks Copy before fork/archive when a source thread has a profile-owned worktree", async () => {
+    const sourceClient = {
+      listThreadsForMigration: vi.fn(async () => [
+        makeSourceThread({
+          linkedDirectories: [
+            {
+              id: "worktree:/Users/alice/.codex/profiles/personal/worktrees/repo/app",
+              label: "app",
+              path: "/repo/app",
+              worktreePath:
+                "/Users/alice/.codex/profiles/personal/worktrees/repo/app",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ]),
+      readThread: vi.fn(),
+      archiveThread: vi.fn(),
+      close: vi.fn(),
+    };
+    const destination = {
+      forkThread: vi.fn(),
+      readThread: vi.fn(),
+    };
+    const service = new ThreadMigrationService({
+      destination,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+    });
+
+    const response = await service.startMigration({
+      sourceProfile: "",
+      operation: "copy",
+      threadIds: ["source-thread"],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      status: "failed",
+      error:
+        "Copy is blocked until branch conflict strategies for profile-owned worktrees are implemented.",
     });
     expect(destination.forkThread).not.toHaveBeenCalled();
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
