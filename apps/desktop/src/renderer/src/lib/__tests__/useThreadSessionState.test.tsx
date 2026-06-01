@@ -5381,6 +5381,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
 
     act(() => {
+      result.current.addOptimisticReviewEntry("Review changes against main");
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -5449,6 +5450,9 @@ describe("useThreadSessionState", () => {
       expect(
         result.current.entries.filter((entry) => entry.type === "review")
       ).toHaveLength(2);
+      expect(
+        result.current.entries.some((entry) => entry.id.startsWith("optimistic-review-"))
+      ).toBe(false);
     });
   });
 

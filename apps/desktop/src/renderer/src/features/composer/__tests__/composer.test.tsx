@@ -7955,10 +7955,11 @@ describe("Composer", () => {
                 method: "turn/started";
                 params: {
                   threadId: string;
+                  turnId?: string;
                   turn: {
                     id: string;
                     status: string;
-                  };
+                  } | undefined;
                 };
               }
             | {
@@ -8030,10 +8031,8 @@ describe("Composer", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            turn: {
-              id: "turn-99",
-              status: "inProgress",
-            },
+            turnId: "turn-99",
+            turn: undefined,
           },
         },
       });
@@ -8070,6 +8069,132 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
     });
+  });
+
+  it("clears stale thinking when Stop finds no active backend turn", async () => {
+    const interruptTurn = vi.fn(async () => {
+      throw new Error("json-rpc error (-32600): no active turn to interrupt");
+    });
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-stale"
+        desktopApi={{
+          interruptTurn,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onPendingStatusChange={onPendingStatusChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await clickButton("Stop");
+
+    await waitFor(() => {
+      expect(interruptTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-stale",
+      });
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    });
+    expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
+    expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
+    expect(
+      screen.queryByText(/no active turn to interrupt/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("releases the queued-turn lock when Stop repairs stale active state", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = "thread:codex:thread-stale-queue";
+    draftStore.setQueuedTurns(scopeKey, [
+      {
+        id: "queued-1",
+        text: "First queued stale turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "First queued stale turn" }],
+      },
+      {
+        id: "queued-2",
+        text: "Second queued follow-up",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Second queued follow-up" }],
+      },
+    ]);
+    const interruptTurn = vi.fn(async () => {
+      throw new Error("json-rpc error (-32600): no active turn to interrupt");
+    });
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: `turn-${startTurn.mock.calls.length}`,
+    }));
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          interruptTurn,
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-stale-queue",
+          title: "Stale queued stop",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "First queued stale turn" }],
+      })
+    );
+
+    await clickButton("Stop");
+
+    await waitFor(() => {
+      expect(interruptTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-stale-queue",
+        turnId: "turn-1",
+      });
+      expect(startTurn).toHaveBeenCalledTimes(2);
+    });
+    expect(startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "Second queued follow-up" }],
+      })
+    );
   });
 
   it("keeps the stop button visible when idle status arrives before completion", async () => {
