@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.0-beta.20 - 2026-06-01
+
+- Added Qwen Code as a first-class ACP backend with local discovery, configurable executable path, model/mode support, launchpad/runtime plumbing, and Qwen-specific permission handling.
+- Added provider-native commands in the composer slash menu so ACP/Codex command shortcuts can be surfaced from the active backend while preserving local skill mentions.
+- Added a messaging status controller popover with a master on/off switch, per-platform status rows, degradation details, and quick access to messaging activity.
+- Added quit confirmation when Codex or ACP threads are active or queued, with a Settings -> General opt-out for operators who prefer immediate quit behavior.
+- Improved turn reliability by queueing follow-up sends while a thread is thinking, stabilizing review turns, and preventing queued review dispatch races.
+- Improved Codex Fast mode behavior by wiring the Fast checkbox to Codex's `priority` service tier, clearing stale service tiers when Fast is off, and keeping launchpad settings aligned with the submitted UI state.
+- Improved Codex usage and transcript handling with image-token accounting, cached/uncached/reasoning token display, list-price estimates, reusable local image inputs, and stronger hydration for image turns.
+- Improved environment actions with clearer spawn-failure diagnostics, stale-shell fallback behavior, terminal-ordered stdout/stderr output, stable live-output selection, and protocol-capture support.
+- Fixed desktop usability issues including spellcheck context menus, copyable activity/error cards, clearer unavailable reasons when Codex is logged out, external Codex session filtering, generated Codex chat cleanup, image-only steering-card cleanup, and safer shutdown window lifecycle handling.
+- Improved performance, packaging, and maintenance with lazy-loaded Settings/Onboarding screens, renderer vendor chunk splitting, Electron runtime repair, normalized profile log scoping, quieter background polling logs, and dependency updates.
+
 ## v1.0.0-beta.19 - 2026-05-30
 
 - Added opt-in native attention notifications for background approval requests, user-input questions, and terminal turn completion/failure/cancellation, contributed by Serhii Novachenko (@serejja) in #578.
