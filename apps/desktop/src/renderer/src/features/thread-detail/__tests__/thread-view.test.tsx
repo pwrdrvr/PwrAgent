@@ -433,6 +433,62 @@ describe("ThreadView", () => {
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
   });
 
+  it("describes same-worktree sub-thread launchpads as shared worktrees", () => {
+    const selectedDirectory = {
+      key: "subthread:codex:thread-parent:same-worktree",
+      kind: "directory",
+      label: "PwrAgnt",
+      path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      branchName: "feat/messaging-artifact-delivery",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(screen.getByText("Workspace").nextElementSibling).toHaveTextContent(
+      "Same worktree",
+    );
+    expect(screen.getByText("Current branch").nextElementSibling).toHaveTextContent(
+      "feat/messaging-artifact-delivery",
+    );
+    expect(screen.getByText("Status").nextElementSibling).toHaveTextContent(
+      "Git worktree",
+    );
+    expect(screen.queryByText("Local checkout")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
+  });
+
   it("keeps launchpad drafts editable until a known backend reports unavailable", async () => {
     const selectedDirectory = {
       key: "workspace:new-thread",

@@ -26,9 +26,14 @@ import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import {
+  buildSubthreadLaunchpadKey,
+  getParentThreadIdFromSubthreadLaunchpadKey,
+  type ThreadWorkspaceMode,
+} from "./subthread-launchpads";
 
 export type BrowseMode = "inbox" | "recents" | "directories";
-export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree";
+export type { ThreadWorkspaceMode } from "./subthread-launchpads";
 
 export type ArchiveThreadNotice = {
   id: string;
@@ -76,25 +81,6 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
   return selectionKey.slice("launchpad:".length);
 }
 
-function buildSubthreadLaunchpadKey(
-  parent: Pick<NavigationThreadSummary, "id" | "source">,
-  mode: ThreadWorkspaceMode,
-): string {
-  return `subthread:${encodeURIComponent(parent.source)}:${encodeURIComponent(parent.id)}:${mode}`;
-}
-
-function getParentThreadIdFromSubthreadLaunchpadKey(directoryKey: string): string | undefined {
-  const parts = directoryKey.split(":");
-  if (parts.length !== 4 || parts[0] !== "subthread") {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(parts[2]!);
-  } catch {
-    return undefined;
-  }
-}
-
 function selectThreadWorkspace(
   thread: NavigationThreadSummary,
   mode: ThreadWorkspaceMode,
@@ -103,6 +89,7 @@ function selectThreadWorkspace(
   directoryLabel: string;
   directoryPath?: string;
   workMode: NavigationLaunchpadDraft["workMode"];
+  branchName?: string;
 } {
   const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
   const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
@@ -130,6 +117,9 @@ function selectThreadWorkspace(
         : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
     workMode: "local",
+    ...(mode === "same-worktree"
+      ? { branchName: thread.observedGitBranch ?? thread.gitBranch }
+      : {}),
   };
 }
 
@@ -3013,6 +3003,7 @@ export function useThreadNavigation(
           workMode: directory.workMode,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
+          ...(directory.branchName ? { branchName: directory.branchName } : {}),
           parentThreadId: parent.id,
           parentThreadTitle: parent.title,
         };

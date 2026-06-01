@@ -41,6 +41,7 @@ import {
   formatAccessModeLabel,
   formatExecutionModeLabel,
 } from "../../lib/execution-mode";
+import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
@@ -1855,12 +1856,20 @@ export function ThreadView(props: ThreadViewProps) {
       (backend) => backend.kind === selectedLaunchpad.backend
     );
     const syncLabel = formatDirectorySync(props.selectedDirectory);
+    const sameWorktreeSubthread = isSameWorktreeSubthreadLaunchpad(
+      selectedLaunchpad.directoryKey,
+    );
+    const launchpadIsSubthread = Boolean(selectedLaunchpad.parentThreadId);
+    const launchpadCurrentBranch =
+      props.selectedDirectory.gitStatus?.currentBranch ?? selectedLaunchpad.branchName;
     const workspaceLabel =
       props.selectedDirectory.kind === "workspace"
         ? "Workspace"
-        : selectedLaunchpad.workMode === "worktree"
-          ? "New worktree"
-          : "Local checkout";
+        : sameWorktreeSubthread
+          ? "Same worktree"
+          : selectedLaunchpad.workMode === "worktree"
+            ? "New worktree"
+            : "Local checkout";
     const launchpadTitle =
       props.selectedDirectory.kind === "workspace"
         ? "New thread"
@@ -1870,17 +1879,25 @@ export function ThreadView(props: ThreadViewProps) {
         ? selectedLaunchpad.branchName ??
           props.selectedDirectory.gitStatus?.currentBranch ??
           "Pick one"
-        : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached";
+        : launchpadCurrentBranch ?? "Not attached";
     const launchpadBranchDetailLabel =
       selectedLaunchpad.workMode === "worktree" ? "Base branch" : "Current branch";
     const launchpadBranchDetailValue =
       selectedLaunchpad.workMode === "worktree"
         ? launchpadBranchLabel
-        : props.selectedDirectory.gitStatus?.currentBranch ??
+        : launchpadCurrentBranch ??
           (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
             ? "Unavailable"
             : "Not a Git repo");
-    const launchpadIsSubthread = Boolean(selectedLaunchpad.parentThreadId);
+    const launchpadStatusValue =
+      launchpadIsSubthread
+        ? "Starts empty"
+        : syncLabel ?? "Directory context only";
+    const launchpadDirectoryStatusValue =
+      syncLabel ??
+      (sameWorktreeSubthread && selectedLaunchpad.branchName
+        ? "Git worktree"
+        : "Directory context only");
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpad.codexEnvironmentId &&
         selectedLaunchpad.codexEnvironmentSetupEnabled,
@@ -1976,9 +1993,7 @@ export function ThreadView(props: ThreadViewProps) {
               <span className="launchpad-panel__label">
                 {launchpadIsSubthread ? "History" : "Status"}
               </span>
-              <strong>
-                {launchpadIsSubthread ? "Starts empty" : syncLabel ?? "Directory context only"}
-              </strong>
+              <strong>{launchpadStatusValue}</strong>
             </div>
           </div>
 
@@ -1997,7 +2012,7 @@ export function ThreadView(props: ThreadViewProps) {
             </div>
             <div>
               <dt>Status</dt>
-              <dd>{syncLabel ?? "Directory context only"}</dd>
+              <dd>{launchpadDirectoryStatusValue}</dd>
             </div>
           </dl>
         </div>

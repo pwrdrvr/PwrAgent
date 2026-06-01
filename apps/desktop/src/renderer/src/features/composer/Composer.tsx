@@ -43,6 +43,7 @@ import {
   formatExecutionModeLabel,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
+import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -5854,6 +5855,10 @@ function formatLaunchpadWorkspaceLabel(
     return "New worktree";
   }
 
+  if (isSameWorktreeSubthreadLaunchpad(launchpad.directoryKey)) {
+    return "Same worktree";
+  }
+
   if (directory?.kind === "workspace") {
     return "Workspace";
   }
@@ -5871,6 +5876,10 @@ function buildLaunchpadWorkspaceOptions(
     { ...launchpad, workMode: "local" },
     directory
   );
+  if (isSameWorktreeSubthreadLaunchpad(launchpad.directoryKey)) {
+    return [{ value: "local", label: localLabel ?? "Same worktree" }];
+  }
+
   const canCreateWorktree = Boolean(
     directory?.path &&
       directory.kind === "directory" &&

@@ -4956,6 +4956,45 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Workspace mode")).toHaveTextContent("New worktree");
   });
 
+  it("locks same-worktree sub-thread launchpads to the shared worktree", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:same-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:same-worktree",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "feat/messaging-artifact-delivery",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "Issue 193 Markdown attachments",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeDisabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(workspaceMode).toHaveTextContent("Same worktree");
+    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+  });
+
   it("does not offer worktree launchpad mode for non-git directories", () => {
     render(
       <Composer
