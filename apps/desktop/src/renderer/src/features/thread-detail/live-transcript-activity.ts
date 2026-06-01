@@ -404,15 +404,24 @@ function formatTokenCount(value: number): string {
 }
 
 function formatUsd(value: number): string {
-  if (value > 0 && value < 0.01) {
-    return "<$0.01";
+  if (value > 0 && value < 0.001) {
+    return "<$0.001";
   }
+  if (value < 0.1) {
+    return new Intl.NumberFormat(undefined, {
+      currency: "USD",
+      maximumFractionDigits: 3,
+      minimumFractionDigits: 3,
+      style: "currency",
+    }).format(Math.ceil(value * 1_000) / 1_000);
+  }
+
   return new Intl.NumberFormat(undefined, {
     currency: "USD",
-    maximumFractionDigits: value < 1 ? 4 : 2,
-    minimumFractionDigits: value < 1 ? 2 : 2,
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
     style: "currency",
-  }).format(value);
+  }).format(Math.ceil(value * 100) / 100);
 }
 
 function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
