@@ -6561,10 +6561,20 @@ textarea,
   position: relative;
   margin: 0;
   min-height: 28px;
+  max-height: 31em;
   padding-right: 38px;
   padding-left: 12px;
   border-left: 2px solid var(--border-subtle);
   color: var(--text-secondary);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.transcript-message__blockquote:focus-visible,
+.transcript-message__pre:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .transcript-message__code {
@@ -6613,10 +6623,13 @@ textarea,
 }
 
 .transcript-message__pre {
+  max-height: calc(32em + 24px);
   padding: 12px 44px 12px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-app);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

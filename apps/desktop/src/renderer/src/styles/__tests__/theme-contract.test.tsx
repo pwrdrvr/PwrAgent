@@ -687,6 +687,28 @@ describe("Tangerine Terminal theme contract", () => {
     expect(preCodeRule).not.toContain("white-space: pre;");
   });
 
+  it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
+    const preRule = extractRuleBody(css, ".transcript-message__pre");
+    expect(preRule).toContain("max-height:");
+    expect(preRule).toContain("overflow-y: auto;");
+    expect(preRule).toContain("scrollbar-gutter: stable;");
+
+    const quoteRule = extractRuleBody(css, ".transcript-message__blockquote");
+    expect(quoteRule).toContain("max-height:");
+    expect(quoteRule).toContain("overflow-y: auto;");
+    expect(quoteRule).toContain("overflow-x: hidden;");
+    expect(quoteRule).toContain("scrollbar-gutter: stable;");
+
+    const focusRule = extractRuleBody(
+      css,
+      ".transcript-message__blockquote:focus-visible,\n.transcript-message__pre:focus-visible"
+    );
+    expect(focusRule).toContain("outline: 2px solid var(--focus-ring);");
+    expect(focusRule).toContain("outline-offset: 2px;");
+
+    expect(css).not.toContain("transcript-message__collapse-toggle");
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");

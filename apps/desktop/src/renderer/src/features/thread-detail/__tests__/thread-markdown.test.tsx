@@ -265,6 +265,21 @@ describe("ThreadMarkdown", () => {
     });
   });
 
+  it("renders long fenced code blocks without expand controls", () => {
+    const lines = Array.from({ length: 21 }, (_, index) => `line ${index + 1}`);
+
+    const { container } = render(
+      <ThreadMarkdown text={`\`\`\`txt\n${lines.join("\n")}\n\`\`\``} />
+    );
+
+    const codeBlock = container.querySelector("pre.transcript-message__pre");
+    expect(codeBlock).toBeInTheDocument();
+    expect(codeBlock).toHaveAttribute("aria-label", "Code block");
+    expect(codeBlock).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByRole("button", { name: /Show full code/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Collapse code/ })).not.toBeInTheDocument();
+  });
+
   it("copies blockquotes without quote markers", async () => {
     const copyText = vi.fn(async () => undefined);
 
@@ -280,6 +295,22 @@ describe("ThreadMarkdown", () => {
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith("Replay this prompt\nexactly as written");
     });
+  });
+
+  it("renders long blockquotes without expand controls", () => {
+    const quote = Array.from(
+      { length: 21 },
+      (_, index) => `> quoted line ${index + 1}`
+    ).join("\n");
+
+    const { container } = render(<ThreadMarkdown text={quote} />);
+
+    const blockquote = container.querySelector("blockquote.transcript-message__blockquote");
+    expect(blockquote).toBeInTheDocument();
+    expect(blockquote).toHaveAttribute("aria-label", "Quoted text");
+    expect(blockquote).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByRole("button", { name: /Show full quote/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
   });
 
   it("renders markdown image syntax as literal text instead of an image", () => {
