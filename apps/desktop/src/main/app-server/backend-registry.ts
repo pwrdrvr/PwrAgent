@@ -743,10 +743,20 @@ type WorktreeRestoreCandidate = {
 function linkedDirectoryWorktreePath(
   directory: LinkedDirectorySummary,
 ): string | undefined {
-  return directory.worktreePath ??
-    (directory.kind === "worktree" || directory.kind === "local"
-      ? directory.path
-      : undefined);
+  const explicitWorktreePath = directory.worktreePath?.trim();
+  if (explicitWorktreePath) {
+    return explicitWorktreePath;
+  }
+
+  if (directory.kind === "worktree") {
+    return directory.path;
+  }
+
+  if (directory.kind === "local" && isLikelyToolManagedWorktreePath(directory.path)) {
+    return directory.path;
+  }
+
+  return undefined;
 }
 
 function normalizeWorktreePathForComparison(worktreePath: string): string {
@@ -8552,8 +8562,7 @@ export class DesktopBackendRegistry {
   }): Promise<ArchiveThreadCleanupResult[]> {
     const candidates: WorktreeArchiveCandidate[] =
       params.thread.linkedDirectories.flatMap((directory) => {
-        const worktreePath =
-          directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+        const worktreePath = linkedDirectoryWorktreePath(directory);
         if (!worktreePath?.trim()) {
           return [];
         }

@@ -2616,6 +2616,8 @@ describe("useThreadNavigation", () => {
       model: "gpt-5.5",
       serviceTier: "fast",
       fastMode: true,
+      gitBranch: "feature/parent",
+      observedGitBranch: "feature/parent",
       messagingBindings: [
         {
           bindingId: "binding-parent",
@@ -2699,6 +2701,7 @@ describe("useThreadNavigation", () => {
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app",
+      branchName: "feature/parent",
       workMode: "worktree",
       model: "gpt-5.5",
       reasoningEffort: undefined,
@@ -2933,6 +2936,7 @@ describe("useThreadNavigation", () => {
       patch: expect.objectContaining({
         workMode: "worktree",
         directoryPath: "/repo/app",
+        branchName: "feature/parent",
         parentThreadId: "thread-parent",
       }),
     });

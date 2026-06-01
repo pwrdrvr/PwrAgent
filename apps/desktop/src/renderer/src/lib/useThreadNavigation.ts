@@ -98,6 +98,7 @@ function selectThreadWorkspace(
   if (mode === "new-worktree") {
     const repository = preferred?.path ?? thread.projectKey;
     return {
+      branchName: thread.observedGitBranch ?? thread.gitBranch,
       directoryKind: repository ? "directory" : "workspace",
       directoryLabel: preferred?.label ?? thread.title,
       directoryPath: repository,
@@ -3067,6 +3068,7 @@ export function useThreadNavigation(
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
+          ...(directory.branchName ? { branchName: directory.branchName } : {}),
           workMode: directory.workMode,
           model: parent.model,
           reasoningEffort: parent.reasoningEffort,

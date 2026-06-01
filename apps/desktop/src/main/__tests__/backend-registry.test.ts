@@ -10353,6 +10353,94 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("removes a local same-worktree child worktree when no active threads still use it", async () => {
+    const childThread: AppServerThreadSummary = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/Users/test/.codex/worktrees/shared/PwrAgnt",
+          label: "PwrAgnt",
+          path: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/shared",
+      updatedAt: 2,
+    };
+    const archivedParentThread: AppServerThreadSummary = {
+      id: "thread-parent",
+      title: "Already archived parent",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/PwrAgnt",
+          label: "PwrAgnt",
+          path: "/repo/PwrAgnt",
+          kind: "worktree",
+          worktreePath: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/shared",
+      updatedAt: 1,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      archivedThreads: [archivedParentThread],
+      threads: [childThread],
+    });
+    const archiveWorktree = vi.fn(async () => ({
+      id: "snapshot-1",
+      backend: "codex" as const,
+      threadId: "thread-child",
+      worktreePath: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+      repositoryPath: "/repo/PwrAgnt",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      snapshotCommit: "abc123",
+      sourceBranch: "codex/shared",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived" as const,
+      ignoredFilesExcluded: true,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-child",
+    });
+
+    expect(archiveWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-child",
+      worktreePath: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+      repositoryPath: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+    });
+    expect(response.cleanup).toEqual([
+      {
+        worktreePath: "/Users/test/.codex/worktrees/shared/PwrAgnt",
+        branch: "codex/shared",
+        removedWorktree: true,
+        deletedBranch: false,
+      },
+    ]);
+
+    await registry.close();
+  });
+
   it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
