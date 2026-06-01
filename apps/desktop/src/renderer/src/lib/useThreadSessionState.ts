@@ -3103,9 +3103,7 @@ export function useThreadSessionState(params: {
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
               optimisticEntries: current.optimisticEntries.filter(
-                (entry) =>
-                  entry.type !== "review" ||
-                  !reviewEntriesMatch(reviewEntry, entry)
+                (entry) => entry.type !== "review"
               ),
               response: nextResponse,
             };
