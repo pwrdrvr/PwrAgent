@@ -2837,6 +2837,113 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("opens new-worktree sub-thread launchpads with stable worktree mode", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Worktree parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/app/.worktrees/parent/app",
+          kind: "worktree" as const,
+        },
+      ],
+      gitBranch: "feature/parent",
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "subthread:codex:thread-parent:new-worktree",
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        workMode: "local" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "subthread:codex:thread-parent:new-worktree",
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        workMode: "worktree" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.createSubthread(parentThread, "new-worktree");
+    });
+
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "subthread:codex:thread-parent:new-worktree",
+      patch: expect.objectContaining({
+        workMode: "worktree",
+        directoryPath: "/repo/app",
+        parentThreadId: "thread-parent",
+      }),
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: "subthread:codex:thread-parent:new-worktree",
+      workMode: "worktree",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Worktree parent",
+    });
+  });
+
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationCallCount = 0;

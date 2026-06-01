@@ -3787,6 +3787,9 @@ export function Composer(props: ComposerProps) {
     launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
       ? props.launchpad.workMode
       : "local";
+  const launchpadBranchOptions = props.launchpad
+    ? buildLaunchpadBranchOptions(props.launchpad, props.directory)
+    : [];
   const launchpadCodexEnvironmentOptions =
     props.launchpad?.codexEnvironmentOptions ?? [];
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
@@ -5183,7 +5186,7 @@ export function Composer(props: ComposerProps) {
 
           {props.launchpad &&
           launchpadWorkspaceValue === "worktree" &&
-          (props.directory?.gitStatus?.branches?.length ?? 0) > 0 ? (
+          launchpadBranchOptions.length > 0 ? (
             <ComposerDropdown
               ariaLabel="Base branch"
               id="launchpad-branch"
@@ -5195,7 +5198,7 @@ export function Composer(props: ComposerProps) {
                 props.directory?.gitStatus?.currentBranch ??
                 ""
               }
-              options={(props.directory?.gitStatus?.branches ?? []).map((branch) => ({
+              options={launchpadBranchOptions.map((branch) => ({
                 label: branch,
                 value: branch,
               }))}
@@ -5872,7 +5875,9 @@ function buildLaunchpadWorkspaceOptions(
     directory?.path &&
       directory.kind === "directory" &&
       (directory.gitStatus?.currentBranch ||
-        (directory.gitStatus?.branches?.length ?? 0) > 0)
+        (directory.gitStatus?.branches?.length ?? 0) > 0 ||
+        (launchpad.workMode === "worktree" &&
+          Boolean(launchpad.parentThreadId)))
   );
   const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
     { value: "local", label: localLabel ?? "Local" },
@@ -5883,6 +5888,25 @@ function buildLaunchpadWorkspaceOptions(
   }
 
   return options;
+}
+
+function buildLaunchpadBranchOptions(
+  launchpad: NavigationLaunchpadDraft,
+  directory?: NavigationDirectorySummary,
+): string[] {
+  const candidates = [
+    launchpad.branchName,
+    directory?.gitStatus?.currentBranch,
+    ...(directory?.gitStatus?.branches ?? []),
+  ];
+  const options = new Set<string>();
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (value) {
+      options.add(value);
+    }
+  }
+  return [...options];
 }
 
 function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {
