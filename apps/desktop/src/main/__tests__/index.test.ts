@@ -869,6 +869,30 @@ describe("bootstrapApp", () => {
     });
   });
 
+  it("does not re-enter quit when the confirmation window closes after cancellation", async () => {
+    let resolveQuit!: (didQuit: boolean) => void;
+    requestQuitMock.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveQuit = resolve;
+      }),
+    );
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("window-all-closed")?.();
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(requestQuitMock).toHaveBeenCalledTimes(1);
+
+    resolveQuit(false);
+    await flushMicrotasks();
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(2);
+  });
+
   it("initializes app state in active-profile mode when boot decision is open", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 

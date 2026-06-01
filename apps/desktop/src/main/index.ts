@@ -605,6 +605,10 @@ export function bootstrapApp(): void {
   });
 
   app.on("window-all-closed", () => {
+    if (quitInProgress) {
+      mainLog.info("ignoring window-all-closed during shutdown");
+      return;
+    }
     beginQuitInProgress("window-all-closed");
     void requestQuit({ source: "window-all-closed" }).then((didQuit) => {
       if (!didQuit) {
