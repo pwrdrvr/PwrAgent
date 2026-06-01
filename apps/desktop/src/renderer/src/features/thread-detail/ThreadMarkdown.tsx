@@ -115,7 +115,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
 
         return (
-          <blockquote className="transcript-message__blockquote">
+          <blockquote
+            className="transcript-message__blockquote"
+            aria-label="Quoted text"
+            tabIndex={0}
+          >
             {copyText ? (
               <TranscriptCopyButton
                 className="transcript-copy-button--section"
@@ -194,7 +198,13 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
                 text={copyText}
               />
             ) : null}
-            <pre className="transcript-message__pre">{preProps.children}</pre>
+            <pre
+              className="transcript-message__pre"
+              aria-label="Code block"
+              tabIndex={0}
+            >
+              {preProps.children}
+            </pre>
           </div>
         );
       },
