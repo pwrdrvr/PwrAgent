@@ -58,6 +58,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      hotCpuProfilingEnabled: {
+        value: false,
+        source: "default",
+      },
       notificationsEnabled: {
         value: false,
         source: "default",
@@ -371,6 +375,9 @@ describe("SettingsScreen", () => {
       "false",
     );
     expect(
+      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads are in progress",
       }),
@@ -393,6 +400,17 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           developerMode: true,
+        },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingEnabled: true,
         },
       });
     });

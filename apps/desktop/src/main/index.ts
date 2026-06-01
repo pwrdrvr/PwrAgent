@@ -94,7 +94,7 @@ import {
   isAppStateInitialized,
   recordBootDecision,
 } from "./state/app-state";
-import { createMainWindow } from "./window";
+import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
@@ -531,8 +531,12 @@ export function bootstrapApp(): void {
     });
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
-        if (patch.general?.developerMode !== undefined) {
+        if (
+          patch.general?.developerMode !== undefined ||
+          patch.general?.hotCpuProfilingEnabled !== undefined
+        ) {
           installApplicationMenu();
+          syncHotCpuProfilersFromSettings("settings-changed");
         }
       },
     });

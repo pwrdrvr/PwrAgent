@@ -102,6 +102,7 @@ export function GeneralSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDeveloperModeChange: (value: boolean) => Promise<void>;
+  onHotCpuProfilingEnabledChange: (value: boolean) => Promise<void>;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
@@ -116,6 +117,8 @@ export function GeneralSettings(props: {
   const confirmQuitWithInProgressThreads =
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const developerMode = props.snapshot.general.developerMode;
+  const hotCpuProfilingEnabled =
+    props.snapshot.general.hotCpuProfilingEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const messagingAcknowledgment =
@@ -286,6 +289,21 @@ export function GeneralSettings(props: {
                 label="Developer Mode"
                 onChange={(next) => {
                   void props.onDeveloperModeChange(next);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Hot renderer CPU profiling"
+            sub="Capture a short Chrome CPU profile when the renderer stays hot."
+            source={sourceBadge(hotCpuProfilingEnabled)}
+            control={
+              <SettingsSwitch
+                checked={hotCpuProfilingEnabled.value}
+                disabled={props.saving}
+                label="Hot renderer CPU profiling"
+                onChange={(next) => {
+                  void props.onHotCpuProfilingEnabledChange(next);
                 }}
               />
             }

@@ -168,6 +168,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+  syncHotCpuProfilersFromSettings: vi.fn(),
 }));
 
 vi.mock("../window-open-settings", () => ({

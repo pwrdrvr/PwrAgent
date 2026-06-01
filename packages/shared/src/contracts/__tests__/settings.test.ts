@@ -27,6 +27,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        hotCpuProfilingEnabled: {
+          value: false,
+          source: "default",
+        },
         notificationsEnabled: {
           value: false,
           source: "default",
