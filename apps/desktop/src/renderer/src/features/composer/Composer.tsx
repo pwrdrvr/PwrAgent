@@ -404,6 +404,10 @@ function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined
     : undefined;
 }
 
+function getThreadComposerScopeKey(backend: string, threadId: string): string {
+  return `thread:${backend}:${threadId}`;
+}
+
 function createReviewConfig(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
@@ -1462,12 +1466,21 @@ export function Composer(props: ComposerProps) {
     savedInitialQueuedTurns ?? []
   );
   const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
-  const serverQueuedTurnEntryIdRef = useRef<string | undefined>(undefined);
+  const serverQueuedTurnEntryIdsRef = useRef(new Map<string, string>());
   const [serverQueuedTurnEntryId, setServerQueuedTurnEntryIdState] =
     useState<string>();
-  const updateServerQueuedTurnEntryId = (nextEntryId?: string): void => {
-    serverQueuedTurnEntryIdRef.current = nextEntryId;
-    setServerQueuedTurnEntryIdState(nextEntryId);
+  const updateServerQueuedTurnEntryId = (
+    nextEntryId?: string,
+    scopeKey = composerScopeKey,
+  ): void => {
+    if (nextEntryId) {
+      serverQueuedTurnEntryIdsRef.current.set(scopeKey, nextEntryId);
+    } else {
+      serverQueuedTurnEntryIdsRef.current.delete(scopeKey);
+    }
+    if (scopeKey === composerScopeKey) {
+      setServerQueuedTurnEntryIdState(nextEntryId);
+    }
   };
   const [pendingSteer, setPendingSteerState] = useState<
     PendingSteerDraft | undefined
@@ -2189,6 +2202,10 @@ export function Composer(props: ComposerProps) {
       skillTokens,
     };
     flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
+    if (!props.thread && previousScopeKey.startsWith("thread:")) {
+      serverQueuedTurnEntryIdsRef.current.delete(previousScopeKey);
+      globalQueuedTurnReleaseScopeKeys.delete(previousScopeKey);
+    }
 
     activeComposerScopeKeyRef.current = composerScopeKey;
     const current = pasteScopeRef.current;
@@ -2216,7 +2233,9 @@ export function Composer(props: ComposerProps) {
     updateSending(false);
     setInterrupting(false);
     setSteering(false);
-    updateServerQueuedTurnEntryId(undefined);
+    setServerQueuedTurnEntryIdState(
+      serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)
+    );
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
@@ -2349,7 +2368,7 @@ export function Composer(props: ComposerProps) {
     updateSending(false);
     setInterrupting(false);
     setSteering(false);
-    updateServerQueuedTurnEntryId(undefined);
+    setServerQueuedTurnEntryIdState(undefined);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
@@ -2421,21 +2440,29 @@ export function Composer(props: ComposerProps) {
         typeof event.notification.params === "object" &&
         event.notification.params !== null
           ? (event.notification.params as {
+              errorMessage?: unknown;
               queueEntryId?: unknown;
               status?: unknown;
               turnId?: unknown;
             })
           : undefined;
 
-      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
-        return;
-      }
-
       if (
+        notificationThreadId &&
         typeof turnQueueRecord?.queueEntryId === "string" &&
-        turnQueueRecord.queueEntryId === serverQueuedTurnEntryIdRef.current
+        turnQueueRecord.queueEntryId ===
+          serverQueuedTurnEntryIdsRef.current.get(
+            getThreadComposerScopeKey(event.backend, notificationThreadId)
+          )
       ) {
+        const queueScopeKey = getThreadComposerScopeKey(
+          event.backend,
+          notificationThreadId,
+        );
+        const queueEventIsCurrentThread =
+          event.backend === thread.source && notificationThreadId === thread.id;
         if (
+          queueEventIsCurrentThread &&
           turnQueueRecord.status === "started" &&
           typeof turnQueueRecord.turnId === "string"
         ) {
@@ -2448,9 +2475,35 @@ export function Composer(props: ComposerProps) {
           turnQueueRecord.status === "failed" ||
           turnQueueRecord.status === "cancelled"
         ) {
-          globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
-          updateServerQueuedTurnEntryId(undefined);
+          globalQueuedTurnReleaseScopeKeys.delete(queueScopeKey);
+          updateServerQueuedTurnEntryId(undefined, queueScopeKey);
+          if (
+            queueEventIsCurrentThread &&
+            !activeTurnIdRef.current &&
+            (turnQueueRecord.status === "failed" ||
+              turnQueueRecord.status === "cancelled")
+          ) {
+            if (activeOptimisticMessageId) {
+              props.removeOptimisticMessage?.(activeOptimisticMessageId);
+            }
+            props.onPendingStatusChange?.(undefined);
+            updateSending(false);
+            setInterrupting(false);
+            setSteering(false);
+            setActiveOptimisticMessageId(undefined);
+            setSendError(
+              typeof turnQueueRecord.errorMessage === "string"
+                ? turnQueueRecord.errorMessage
+                : turnQueueRecord.status === "cancelled"
+                  ? "Queued turn was cancelled before it started."
+                  : "Queued turn failed before it started."
+            );
+          }
         }
+      }
+
+      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
+        return;
       }
 
       if (
@@ -3080,7 +3133,7 @@ export function Composer(props: ComposerProps) {
     !props.launchpad &&
     (Boolean(props.threadBusy) ||
       Boolean(activeTurnIdRef.current) ||
-      Boolean(serverQueuedTurnEntryIdRef.current) ||
+      Boolean(serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)) ||
       sendingRef.current);
 
   const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
