@@ -52,6 +52,7 @@ import type {
   SandboxPolicy as CodexSandboxPolicy,
   ReviewStartParams as CodexReviewStartParams,
   SkillsListParams as CodexSkillsListParams,
+  ThreadForkParams as CodexThreadForkParams,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadResumeParams as CodexThreadResumeParams,
@@ -4168,6 +4169,53 @@ function buildThreadStartPayload(params: {
   return base;
 }
 
+function buildThreadForkPayload(params: {
+  threadId: string;
+  cwd?: string;
+  model?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+}): CodexThreadForkParams {
+  const base: CodexThreadForkParams = {
+    threadId: params.threadId,
+    excludeTurns: true,
+    persistExtendedHistory: false,
+    threadSource: "user",
+  };
+
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
+  }
+
+  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
+  if (serviceTier) {
+    base.serviceTier = serviceTier;
+  }
+
+  if (typeof params.fastMode === "boolean") {
+    base.config = {
+      fast_mode: params.fastMode,
+    };
+  }
+
+  return base;
+}
+
 function buildThreadResumePayloads(params: {
   threadId: string;
   cwd?: string;
@@ -5145,6 +5193,37 @@ export class CodexAppServerClient {
     const threadId = extractThreadIdFromValue(result);
     if (!threadId) {
       throw new Error("codex app server thread/start did not return threadId");
+    }
+
+    this.pendingFirstTurnThreadResults.set(threadId, result);
+    await this.recordThreadNameWithCodex(result);
+
+    return {
+      threadId,
+    };
+  }
+
+  async forkThread(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/fork"],
+      payloads: [buildThreadForkPayload(params)],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    if (!threadId) {
+      throw new Error("codex app server thread/fork did not return threadId");
     }
 
     this.pendingFirstTurnThreadResults.set(threadId, result);

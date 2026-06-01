@@ -4945,6 +4945,148 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps a new-worktree launchpad selected before git status loads", () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:new-worktree",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "main",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "Issue 193 Markdown attachments",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toHaveValue("worktree");
+    expect(workspaceMode).toHaveTextContent("New worktree");
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+  });
+
+  it("does not flip a new-worktree launchpad to local when review draft toggles", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad = {
+      directoryKey: "subthread:codex:thread-parent:new-worktree",
+      directoryKind: "directory" as const,
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      branchName: "main",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpad}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    const input = screen.getByLabelText("New thread");
+    fireEvent.change(input, { target: { value: "/review" } });
+    await clickButton("Start thread");
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{ ...launchpad, prompt: "/review", updatedAt: 2 }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    expect(screen.getByLabelText("Workspace mode")).toHaveTextContent("New worktree");
+  });
+
+  it("locks same-worktree sub-thread launchpads to the shared worktree", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:same-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:same-worktree",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "feat/messaging-artifact-delivery",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "Issue 193 Markdown attachments",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeDisabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(workspaceMode).toHaveTextContent("Same worktree");
+    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+  });
+
   it("does not offer worktree launchpad mode for non-git directories", () => {
     render(
       <Composer

@@ -8,6 +8,8 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  ForkThreadRequest,
+  ForkThreadResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
@@ -48,6 +50,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
@@ -290,6 +293,17 @@ export function registerAgentIpcHandlers(): void {
       request: StartThreadRequest
     ): Promise<StartThreadResponse> => {
       return await registry.startThread(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);
+  ipcMain.handle(
+    AGENT_FORK_THREAD_CHANNEL,
+    async (
+      _event,
+      request: ForkThreadRequest,
+    ): Promise<ForkThreadResponse> => {
+      return await registry.forkThread(request);
     },
   );
 
@@ -631,6 +645,7 @@ export function disposeAgentIpcHandlers(): void {
   unsubscribeRegistryEvents = undefined;
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);

@@ -37,7 +37,10 @@ type ThreadRowProps = {
   draggable?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
+  nested?: boolean;
   selectedThreadKey?: string;
+  subthreadCount?: number;
+  subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
   thread: NavigationThreadSummary;
   onOpenContextMenu: (
@@ -60,6 +63,7 @@ type ThreadRowProps = {
     binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onToggleSubthreads?: () => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
@@ -135,6 +139,8 @@ export function ThreadRow(props: ThreadRowProps) {
     <div
       className={`thread-row-shell${props.draggable ? " is-draggable" : ""}${
         props.dropIndicator ? ` is-drop-target-${props.dropIndicator}` : ""
+      }${props.nested ? " thread-row-shell--nested" : ""}${
+        props.subthreadCount ? " has-subthreads" : ""
       }`}
       draggable={props.draggable}
       role="listitem"
@@ -156,6 +162,20 @@ export function ThreadRow(props: ThreadRowProps) {
         });
       }}
     >
+      {props.subthreadCount ? (
+        <button
+          aria-expanded={!props.subthreadsCollapsed}
+          aria-label={`${props.subthreadsCollapsed ? "Expand" : "Collapse"} sub-threads for ${props.thread.title}`}
+          className={`thread-row__subthread-toggle${
+            props.subthreadsCollapsed ? "" : " is-open"
+          }`}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onToggleSubthreads?.();
+          }}
+        />
+      ) : null}
       <button
         aria-label={props.thread.title}
         aria-pressed={selected}
@@ -215,7 +235,7 @@ export function ThreadRow(props: ThreadRowProps) {
             thread={props.thread}
           />
 
-          {props.thread.pinnedRank ? (
+          {props.thread.pinnedRank && !props.thread.parentThreadId ? (
             <span className="thread-row__chip thread-row__chip--pin">
               Pinned
             </span>

@@ -98,4 +98,45 @@ describe("SqliteOverlayStore — thread pins", () => {
     }>;
     expect(rows.map((row) => row.thread_id)).toEqual(["acp%3Agemini:thread-1"]);
   });
+
+  it("persists sub-thread parent, order, and collapsed state", async () => {
+    await store.setThreadParent({
+      backend: "codex",
+      threadId: "review-thread",
+      parentThreadId: "parent-thread",
+    });
+    await store.updateSubthreadOrder({
+      backend: "codex",
+      parentThreadId: "parent-thread",
+      threadIds: ["review-thread", "scratch-thread"],
+    });
+    await store.setSubthreadsCollapsed({
+      backend: "codex",
+      parentThreadId: "parent-thread",
+      collapsed: true,
+    });
+
+    stateDb.close();
+
+    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedStore = new SqliteOverlayStore(reopenedDb);
+    await expect(
+      reopenedStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "review-thread",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "parent-thread",
+    });
+    await expect(
+      reopenedStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "parent-thread",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["review-thread", "scratch-thread"],
+      subthreadsCollapsed: true,
+    });
+    reopenedDb.close();
+  });
 });

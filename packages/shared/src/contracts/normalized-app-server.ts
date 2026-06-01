@@ -1095,6 +1095,33 @@ export type AppServerNotification =
         pinnedRanks: Record<string, string>;
       };
     }
+  | {
+      method: "thread/parent/set";
+      params: {
+        threadId: string;
+        parentThreadId: string;
+      };
+    }
+  | {
+      method: "thread/parent/cleared";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/subthreadOrder/updated";
+      params: {
+        parentThreadId: string;
+        threadIds: string[];
+      };
+    }
+  | {
+      method: "thread/subthreadsCollapsed/updated";
+      params: {
+        parentThreadId: string;
+        collapsed: boolean;
+      };
+    }
   /**
    * Directory pin lifecycle — mirror of `thread/pin/*` minus the
    * implicit per-backend dimension (directories are

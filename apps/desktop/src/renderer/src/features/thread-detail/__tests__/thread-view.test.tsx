@@ -381,6 +381,114 @@ describe("ThreadView", () => {
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
+  it("describes sub-thread launchpads as grouped children with empty history", () => {
+    const selectedDirectory = {
+      key: "subthread:codex:thread-parent:new-worktree",
+      kind: "directory",
+      label: "PwrAgnt",
+      path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      branchName: "main",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "worktree",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(screen.getByText("Grouped under")).toBeInTheDocument();
+    expect(screen.getByText("Issue 193 Markdown attachments")).toBeInTheDocument();
+    expect(screen.getByText("History")).toBeInTheDocument();
+    expect(screen.getByText("Starts empty")).toBeInTheDocument();
+    expect(screen.getByText("Base branch")).toBeInTheDocument();
+    expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
+  });
+
+  it("describes same-worktree sub-thread launchpads as shared worktrees", () => {
+    const selectedDirectory = {
+      key: "subthread:codex:thread-parent:same-worktree",
+      kind: "directory",
+      label: "PwrAgnt",
+      path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      branchName: "feat/messaging-artifact-delivery",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      parentThreadId: "thread-parent",
+      parentThreadTitle: "Issue 193 Markdown attachments",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(screen.getByText("Workspace").nextElementSibling).toHaveTextContent(
+      "Same worktree",
+    );
+    expect(screen.getByText("Current branch").nextElementSibling).toHaveTextContent(
+      "feat/messaging-artifact-delivery",
+    );
+    expect(screen.getByText("Status").nextElementSibling).toHaveTextContent(
+      "Git worktree",
+    );
+    expect(screen.queryByText("Local checkout")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
+  });
+
   it("keeps launchpad drafts editable until a known backend reports unavailable", async () => {
     const selectedDirectory = {
       key: "workspace:new-thread",

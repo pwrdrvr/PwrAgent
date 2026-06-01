@@ -112,6 +112,20 @@ const sharedThread = {
   ],
 };
 
+const localThread = {
+  ...sharedThread,
+  id: "thread-local",
+  title: "Local checkout cleanup",
+  linkedDirectories: [
+    {
+      id: "dir-local",
+      label: "PwrAgent",
+      path: "/Users/huntharo/pwrdrvr/PwrAgent",
+      kind: "local" as const,
+    },
+  ],
+};
+
 const updatedSinceSeenThread = {
   ...sharedThread,
   id: "thread-updated",
@@ -200,6 +214,194 @@ describe("Sidebar", () => {
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
+  });
+
+  it("groups sub-threads under their parent and persists collapse clicks", () => {
+    const childThread = {
+      ...sharedThread,
+      id: "thread-review",
+      title: "Adversarial review",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />,
+    );
+
+    expect(container.querySelector(".subthread-list")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cross-project cleanup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adversarial review" })).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Collapse sub-threads for Cross-project cleanup",
+      }),
+    );
+    expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
+  });
+
+  it("opens worktree sub-thread launchpads from the thread context menu", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    expect(screen.queryByRole("menuitem", { name: "Sub-thread in Local" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
+
+    expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
+  });
+
+  it("opens a local sub-thread launchpad only for local parent threads", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        selectedItemKey="codex:thread-local"
+        threads={[localThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    expect(screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Sub-thread in New Worktree" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Local" }));
+
+    expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "local");
+  });
+
+  it("forks a Codex thread from the thread context menu", () => {
+    const onForkThread = vi.fn(async () => undefined);
+    const forkBackends: BackendSummary[] = [
+      {
+        ...backends[0]!,
+        capabilities: {
+          ...backends[0]!.capabilities,
+          forkThread: true,
+        },
+      },
+    ];
+    render(
+      <Sidebar
+        backends={forkBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+
+    expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
+  });
+
+  it("forks local parent threads in Local instead of Same Worktree", () => {
+    const onForkThread = vi.fn(async () => undefined);
+    const forkBackends: BackendSummary[] = [
+      {
+        ...backends[0]!,
+        capabilities: {
+          ...backends[0]!.capabilities,
+          forkThread: true,
+        },
+      },
+    ];
+    render(
+      <Sidebar
+        backends={forkBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        selectedItemKey="codex:thread-local"
+        threads={[localThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork in Local" }));
+
+    expect(onForkThread).toHaveBeenCalledWith(localThread, "local");
+  });
+
+  it("hides fork actions when the backend does not advertise fork support", () => {
+    const onForkThread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+
+    expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Fork in Local" })).toBeNull();
   });
 
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
@@ -822,6 +1024,106 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("splits parent archive actions between ungrouping children and archiving the group", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child thread",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread, childThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, childThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+    );
+
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread Only. Ungroup 1 sub-thread",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread and Sub-Threads. Archive 2 threads",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread Only. Ungroup 1 sub-thread",
+      }),
+    );
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+      includeSubthreads: false,
+    });
+  });
+
+  it("archives the whole group from the parent row menu", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child thread",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread, childThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, childThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread and Sub-Threads. Archive 2 threads",
+      }),
+    );
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+      includeSubthreads: true,
+    });
   });
 
   it("pins from the row menu and renders pinned threads above recents", () => {

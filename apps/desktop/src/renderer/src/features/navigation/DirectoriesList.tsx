@@ -1,5 +1,6 @@
 import {
   useEffect,
+  Fragment,
   useMemo,
   useRef,
   useState,
@@ -52,6 +53,14 @@ type DirectoriesListProps = {
   onReorderThreadPins?: (
     backend: AppServerBackendKind,
     threadIds: string[],
+  ) => Promise<void>;
+  onUpdateSubthreadOrder?: (
+    parent: NavigationThreadSummary,
+    threadIds: string[],
+  ) => Promise<void>;
+  onSetSubthreadsCollapsed?: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
   ) => Promise<void>;
   /**
    * Directory pinning (plan 2026-05-09-002, Unit K). When both
@@ -421,10 +430,71 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const visibleThreads = directory.threadKeys
       .map((threadKey) => threadsByKey.get(threadKey))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-    const directoryPinnedThreads = visibleThreads
+    const visibleThreadKeys = new Set(
+      visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+    );
+    const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
+    for (const thread of visibleThreads) {
+      if (!thread.parentThreadId) continue;
+      const parentKey = buildThreadIdentityKey(thread.source, thread.parentThreadId);
+      if (!visibleThreadKeys.has(parentKey)) continue;
+      const children = childThreadsByParentKey.get(parentKey) ?? [];
+      children.push(thread);
+      childThreadsByParentKey.set(parentKey, children);
+    }
+    const topLevelVisibleThreads = visibleThreads.filter((thread) => {
+      if (!thread.parentThreadId) return true;
+      return !visibleThreadKeys.has(buildThreadIdentityKey(thread.source, thread.parentThreadId));
+    });
+    const sortSubthreads = (
+      parent: NavigationThreadSummary,
+      children: NavigationThreadSummary[],
+    ): NavigationThreadSummary[] => {
+      const order = new Map(
+        (parent.subthreadOrder ?? []).map((threadId, index) => [threadId, index]),
+      );
+      return [...children].sort((left, right) => {
+        const leftRank = order.get(left.id);
+        const rightRank = order.get(right.id);
+        if (leftRank !== undefined || rightRank !== undefined) {
+          return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
+        }
+        return (right.createdAt ?? 0) - (left.createdAt ?? 0);
+      });
+    };
+    const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
+      const parentKey = buildThreadIdentityKey(parent.source, parent.id);
+      const children = sortSubthreads(parent, childThreadsByParentKey.get(parentKey) ?? []);
+      if (children.length === 0 || parent.subthreadsCollapsed) {
+        return null;
+      }
+      return (
+        <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
+          {children.map((child) => (
+            <ThreadRow
+              key={`${directory.key}:${buildThreadIdentityKey(child.source, child.id)}`}
+              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              compact
+              includeLinkedDirectories
+              linkedDirectoryMode="kind"
+              nested
+              selectedThreadKey={props.selectedItemKey}
+              thinkingThreadKeys={props.thinkingThreadKeys}
+              thread={child}
+              onOpenContextMenu={props.onOpenThreadContextMenu}
+              onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onSelectThread={props.onSelectThread}
+              onSetReaction={props.onSetReaction}
+              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+            />
+          ))}
+        </div>
+      );
+    };
+    const directoryPinnedThreads = topLevelVisibleThreads
       .filter(isPinnedThread)
       .sort(comparePinnedThreads);
-    const directoryUnpinnedThreads = visibleThreads.filter(
+    const directoryUnpinnedThreads = topLevelVisibleThreads.filter(
       (thread) => !isPinnedThread(thread),
     );
 
@@ -681,11 +751,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {directoryPinnedThreads.map((thread) => {
-                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-                      const rowDropKey = `${directory.key}:${threadKey}`;
-                      return (
-                        <ThreadRow
-                          key={`${directory.key}:${threadKey}`}
+	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+	                      const rowDropKey = `${directory.key}:${threadKey}`;
+                          const subthreadCount =
+                            childThreadsByParentKey.get(threadKey)?.length ?? 0;
+	                      return (
+                            <Fragment key={`${directory.key}:${threadKey}`}>
+	                        <ThreadRow
+	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                           compact
                           dropIndicator={
@@ -696,9 +769,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode="kind"
-                          selectedThreadKey={props.selectedItemKey}
-                          thinkingThreadKeys={props.thinkingThreadKeys}
-                          thread={thread}
+	                          selectedThreadKey={props.selectedItemKey}
+                              subthreadCount={subthreadCount}
+                              subthreadsCollapsed={thread.subthreadsCollapsed === true}
+	                          thinkingThreadKeys={props.thinkingThreadKeys}
+	                          thread={thread}
+                              onToggleSubthreads={
+                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                                  ? () =>
+                                      void props.onSetSubthreadsCollapsed!(
+                                        thread,
+                                        thread.subthreadsCollapsed !== true,
+                                      )
+                                  : undefined
+                              }
                           onDragOverThread={(event) => {
                             event.preventDefault();
                             const draggedThread = draggedThreadKey
@@ -763,9 +847,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
-                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-                        />
-                      );
+	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+	                        />
+                              {renderStaticSubthreads(thread)}
+                            </Fragment>
+	                      );
                     })}
 
                     {directoryPinnedThreads.length > 0 &&
@@ -812,19 +898,33 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-                    {directoryUnpinnedThreads.map((thread) => {
-                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-                      return (
-                        <ThreadRow
-                          key={`${directory.key}:${threadKey}`}
+	                    {directoryUnpinnedThreads.map((thread) => {
+	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+                          const subthreadCount =
+                            childThreadsByParentKey.get(threadKey)?.length ?? 0;
+	                      return (
+                            <Fragment key={`${directory.key}:${threadKey}`}>
+	                        <ThreadRow
+	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                           compact
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
-                          linkedDirectoryMode="kind"
-                          selectedThreadKey={props.selectedItemKey}
-                          thinkingThreadKeys={props.thinkingThreadKeys}
-                          thread={thread}
+	                          linkedDirectoryMode="kind"
+	                          selectedThreadKey={props.selectedItemKey}
+                              subthreadCount={subthreadCount}
+                              subthreadsCollapsed={thread.subthreadsCollapsed === true}
+	                          thinkingThreadKeys={props.thinkingThreadKeys}
+	                          thread={thread}
+                              onToggleSubthreads={
+                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                                  ? () =>
+                                      void props.onSetSubthreadsCollapsed!(
+                                        thread,
+                                        thread.subthreadsCollapsed !== true,
+                                      )
+                                  : undefined
+                              }
                           onDragStartThread={(event) => {
                             setDraggedThreadKey(threadKey);
                             event.dataTransfer.effectAllowed = "move";
@@ -839,9 +939,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
-                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-                        />
-                      );
+	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+	                        />
+                              {renderStaticSubthreads(thread)}
+                            </Fragment>
+	                      );
                     })}
                   </div>
                 ) : (
