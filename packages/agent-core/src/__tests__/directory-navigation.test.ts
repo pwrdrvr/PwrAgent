@@ -400,6 +400,76 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("groups Codex Desktop no-directory chats under Codex Chats", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "019e8142-230d-78d1-928c-8b4ba1f20d92",
+          createdAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/Documents/Codex/2026-05-31/testing-another-chat",
+              label: "testing-another-chat",
+              path: "/Users/huntharo/Documents/Codex/2026-05-31/testing-another-chat",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "019e8142-078b-7cd0-9417-3206124d762e",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/Documents/Codex/2026-05-31/testing-a-chat",
+              label: "testing-a-chat",
+              path: "/Users/huntharo/Documents/Codex/2026-05-31/testing-a-chat",
+              kind: "local",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/Documents/Codex",
+        kind: "directory",
+        label: "Codex Chats",
+        path: "/Users/huntharo/Documents/Codex",
+        threadKeys: [
+          "codex:019e8142-230d-78d1-928c-8b4ba1f20d92",
+          "codex:019e8142-078b-7cd0-9417-3206124d762e",
+        ],
+      }),
+    ]);
+  });
+
+  it("does not treat arbitrary Documents/Codex children as Codex Chats", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/Documents/Codex/MyProject",
+              label: "MyProject",
+              path: "/Users/huntharo/Documents/Codex/MyProject",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/Documents/Codex/MyProject",
+        label: "MyProject",
+        path: "/Users/huntharo/Documents/Codex/MyProject",
+      }),
+    ]);
+  });
+
   it("filters profile-scoped workspace roots outside the active profile", () => {
     const defaultProjectsRoot = "/Users/huntharo/.pwragent/profiles/default/projects";
     const preProfileProjectsRoot = "/Users/huntharo/.pwragent/projects";
