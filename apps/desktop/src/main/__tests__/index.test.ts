@@ -893,6 +893,27 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledTimes(2);
   });
 
+  it("completes quit when all windows close after before-quit approves shutdown", async () => {
+    const event = { preventDefault: vi.fn() };
+    isQuitAllowedMock.mockReturnValue(false);
+    requestQuitMock.mockImplementation(async () => {
+      isQuitAllowedMock.mockReturnValue(true);
+      return true;
+    });
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+    appEventHandlers.get("window-all-closed")?.();
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(requestQuitMock).toHaveBeenCalledWith({ source: "before-quit" });
+    expect(quitMock).toHaveBeenCalledTimes(1);
+  });
+
   it("initializes app state in active-profile mode when boot decision is open", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 

@@ -606,6 +606,11 @@ export function bootstrapApp(): void {
 
   app.on("window-all-closed", () => {
     if (quitInProgress) {
+      if (appQuitManager.isQuitAllowed()) {
+        mainLog.info("quitting after windows closed during shutdown");
+        app.quit();
+        return;
+      }
       mainLog.info("ignoring window-all-closed during shutdown");
       return;
     }
