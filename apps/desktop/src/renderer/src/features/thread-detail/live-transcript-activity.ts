@@ -217,6 +217,13 @@ type TokenUsageBreakdown = {
   totalTokens?: number;
 };
 
+type TokenUsageScope = "latest-request" | "total";
+
+type NormalizedTokenUsage = {
+  scope: TokenUsageScope;
+  tokens: TokenUsageBreakdown;
+};
+
 type PricingCatalogEntry = {
   cachedInputUsdPerMillion: number;
   inputUsdPerMillion: number;
@@ -251,11 +258,12 @@ export function buildTokenUsageActivityEntry(params: {
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
 }): AppServerThreadActivityEntry | undefined {
-  const tokens = normalizeTokenUsage(params.tokenUsage);
-  if (!tokens) {
+  const normalized = normalizeTokenUsage(params.tokenUsage);
+  if (!normalized) {
     return undefined;
   }
 
+  const { scope, tokens } = normalized;
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
@@ -275,6 +283,7 @@ export function buildTokenUsageActivityEntry(params: {
       : `${formatTokenCount(outputTokens)} out`,
     cost ? `${formatUsd(cost.totalUsd)} list price` : undefined,
   ].filter((part): part is string => Boolean(part));
+  const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
 
   const details: AppServerThreadActivityDetail[] = [
     {
@@ -316,14 +325,14 @@ export function buildTokenUsageActivityEntry(params: {
     type: "activity",
     id: params.id,
     createdAt: Date.now(),
-    summary: `Usage: ${summaryParts.join(" · ")}`,
+    summary: `${summaryPrefix}: ${summaryParts.join(" · ")}`,
     status: "completed",
     details,
     ...(params.turn ? { turn: params.turn } : {}),
   };
 }
 
-function normalizeTokenUsage(tokenUsage: unknown): TokenUsageBreakdown | undefined {
+function normalizeTokenUsage(tokenUsage: unknown): NormalizedTokenUsage | undefined {
   const root =
     readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
     readRecord(tokenUsage);
@@ -331,16 +340,24 @@ function normalizeTokenUsage(tokenUsage: unknown): TokenUsageBreakdown | undefin
     return undefined;
   }
 
-  const currentUsageRecord =
+  const latestUsageRecord =
     readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
     readRecord(root.last) ??
-    readRecord(root.last_token_usage) ??
+    readRecord(root.last_token_usage);
+  const totalUsageRecord =
     readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
     readRecord(root.total) ??
-    readRecord(root.total_token_usage) ??
-    root;
+    readRecord(root.total_token_usage);
+  const currentUsageRecord = latestUsageRecord ?? totalUsageRecord ?? root;
+  const tokens = readTokenBreakdown(currentUsageRecord);
+  if (!tokens) {
+    return undefined;
+  }
 
-  return readTokenBreakdown(currentUsageRecord);
+  return {
+    scope: latestUsageRecord ? "latest-request" : "total",
+    tokens,
+  };
 }
 
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {

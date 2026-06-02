@@ -189,7 +189,9 @@ function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
 function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "activity" &&
-    (entry.id.startsWith("live-token-usage-") || entry.summary.startsWith("Usage:"))
+    (entry.id.startsWith("live-token-usage-") ||
+      entry.summary.startsWith("Usage:") ||
+      entry.summary.startsWith("Latest request usage:"))
   );
 }
 

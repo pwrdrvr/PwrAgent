@@ -3427,7 +3427,7 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Done.",
-      "activity:Usage: 1,000 uncached in · 200 cached · 50 out (10 reasoning)",
+      "activity:Latest request usage: 1,000 uncached in · 200 cached · 50 out (10 reasoning)",
     ]);
     expect(result.current.entries.at(-1)).toMatchObject({
       id: "live-token-usage-turn-1",
@@ -3549,7 +3549,7 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:Done.",
-        "activity:Usage: 1,000 uncached in · 200 cached · 50 out",
+        "activity:Latest request usage: 1,000 uncached in · 200 cached · 50 out",
         "message:Take another look",
       ]);
     });

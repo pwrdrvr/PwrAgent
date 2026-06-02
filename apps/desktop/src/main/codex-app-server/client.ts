@@ -2493,6 +2493,13 @@ type TokenUsageBreakdown = {
   totalTokens?: number;
 };
 
+type TokenUsageScope = "latest-request" | "total";
+
+type NormalizedTokenUsage = {
+  scope: TokenUsageScope;
+  tokens: TokenUsageBreakdown;
+};
+
 function readTokenUsageBreakdown(
   record: Record<string, unknown>
 ): TokenUsageBreakdown | undefined {
@@ -2532,20 +2539,28 @@ function readTokenUsageBreakdown(
 
 function normalizeTokenUsagePayload(
   record: Record<string, unknown>
-): TokenUsageBreakdown | undefined {
+): NormalizedTokenUsage | undefined {
   const root =
     asRecord(record.tokenUsage) ??
     asRecord(record.token_usage) ??
     asRecord(record.info) ??
     record;
-  const currentUsage =
+  const latestUsage =
     asRecord(root.last) ??
-    asRecord(root.last_token_usage) ??
+    asRecord(root.last_token_usage);
+  const totalUsage =
     asRecord(root.total) ??
-    asRecord(root.total_token_usage) ??
-    root;
+    asRecord(root.total_token_usage);
+  const currentUsage = latestUsage ?? totalUsage ?? root;
+  const tokens = readTokenUsageBreakdown(currentUsage);
+  if (!tokens) {
+    return undefined;
+  }
 
-  return readTokenUsageBreakdown(currentUsage);
+  return {
+    scope: latestUsage ? "latest-request" : "total",
+    tokens,
+  };
 }
 
 function formatTokenCount(value: number): string {
@@ -2562,11 +2577,12 @@ function summarizeTokenUsageActivity(
     return undefined;
   }
 
-  const tokens = normalizeTokenUsagePayload(record);
-  if (!tokens) {
+  const normalized = normalizeTokenUsagePayload(record);
+  if (!normalized) {
     return undefined;
   }
 
+  const { scope, tokens } = normalized;
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
@@ -2580,12 +2596,13 @@ function summarizeTokenUsageActivity(
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
       : `${formatTokenCount(outputTokens)} out`,
   ];
+  const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
 
   return {
     type: "activity",
     id: `live-token-usage-${turn?.id ?? idSuffix}`,
     createdAt,
-    summary: `Usage: ${summaryParts.join(" · ")}`,
+    summary: `${summaryPrefix}: ${summaryParts.join(" · ")}`,
     status: "completed",
     details: [
       {
