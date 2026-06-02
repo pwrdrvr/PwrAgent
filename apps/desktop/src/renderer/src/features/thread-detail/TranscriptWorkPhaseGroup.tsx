@@ -82,7 +82,13 @@ function renderEntry(params: {
 }) {
   const entry = params.entry;
   return entry.type === "activity" ? (
-    <TranscriptActivity key={entry.id} desktopApi={params.desktopApi} entry={entry} />
+    <TranscriptActivity
+      key={entry.id}
+      applications={params.applications}
+      desktopApi={params.desktopApi}
+      entry={entry}
+      skills={params.skills}
+    />
   ) : entry.type === "plan" ? (
     <TranscriptPlan
       key={entry.id}
