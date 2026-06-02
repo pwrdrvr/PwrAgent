@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAutomationCardActivityEntries } from "../automation-card-entries";
 import { TranscriptList } from "../TranscriptList";
 
 const compactMarkdownTable = `| Key | Value |
@@ -232,6 +233,46 @@ describe("TranscriptList", () => {
     expect(
       screen.queryByRole("button", { name: "Jump to latest message" })
     ).not.toBeInTheDocument();
+  });
+
+  it("renders automation card details as markdown in the transcript", () => {
+    const automationMarkdown = `| Priority | Service | Next step |
+|---|---|---|
+| P1 | \`transcoding-worker\` | Triage failing traces. |`;
+    const { container } = render(
+      <TranscriptList
+        entries={buildAutomationCardActivityEntries([
+          {
+            id: "automation-card:run-1",
+            backend: "codex",
+            threadId: "thread-1",
+            automationId: "automation-1",
+            automationName: "Daily health",
+            runId: "run-1",
+            status: "completed",
+            summary: "Daily health: found actionable outliers",
+            details: automationMarkdown,
+            occurredAt: 1_000,
+          },
+        ])}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Automation - Daily health: found actionable outliers/i,
+      })
+    );
+
+    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
+    expect(screen.getByText("transcoding-worker")).toHaveClass(
+      "transcript-message__code"
+    );
+    expect(screen.queryByText(automationMarkdown)).not.toBeInTheDocument();
   });
 
   it("renders skill mentions as chips when present alongside markdown text", () => {

@@ -29,6 +29,7 @@ export function buildAutomationCardActivityEntries(
               id: `${card.runId}:details`,
               kind: "read" as const,
               label: card.details.trim(),
+              markdown: card.details.trim(),
             },
           ]
         : []),
