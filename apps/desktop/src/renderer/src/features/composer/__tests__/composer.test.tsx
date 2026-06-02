@@ -4242,6 +4242,44 @@ describe("Composer", () => {
     }
   });
 
+  it("reopens slash autocomplete for a previously dismissed query after editing away", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/re" } });
+    fireEvent.keyDown(textarea, { key: "Escape", code: "Escape" });
+    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/r" } });
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/re" } });
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+  });
+
   it("keeps duplicate local and provider slash commands labeled by source", async () => {
     render(
       <Composer
