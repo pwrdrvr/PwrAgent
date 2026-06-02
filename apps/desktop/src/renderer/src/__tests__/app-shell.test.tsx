@@ -1582,6 +1582,98 @@ describe("App", () => {
     });
   });
 
+  it("routes the new-thread menu push into the existing launchpad flow", async () => {
+    let openNewThreadListener: (() => void) | undefined;
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+        onOpenNewThreadRequested: (listener: () => void) => {
+          openNewThreadListener = listener;
+          return () => {
+            openNewThreadListener = undefined;
+          };
+        },
+      },
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Select a thread" }))
+      .toBeInTheDocument();
+
+    await act(async () => {
+      openNewThreadListener?.();
+      await Promise.resolve();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      preferredBackend: undefined,
+    });
+    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+  });
+
   it("releases a queued review for a thread after navigating away", async () => {
     const agentEventListeners = new Set<
       (event: {

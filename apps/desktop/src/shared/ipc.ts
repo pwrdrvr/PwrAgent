@@ -195,6 +195,13 @@ export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
 export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
 /**
+ * Main → renderer push: fired when the user invokes File → New Thread
+ * or presses the native `CmdOrCtrl+N` accelerator. The renderer's
+ * `App` shell listens on this channel and routes into the existing
+ * `navigation.createThread()` launchpad flow.
+ */
+export const WINDOW_OPEN_NEW_THREAD_CHANNEL = "window:open-new-thread";
+/**
  * Main → renderer push: fired when the user invokes the app's
  * "Settings…" menu item (PwrAgent → Settings… on macOS, Help → ...
  * on Linux/Windows). The renderer's `App` shell listens on this

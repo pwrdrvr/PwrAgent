@@ -6,6 +6,7 @@ export type ApplicationMenuActions = {
   focusWindow: (windowId: number) => void;
   openDocumentation: () => void | Promise<void>;
   openIssueReporter: () => void | Promise<void>;
+  openNewThread: () => void;
   openProfile: (profile: string) => void | Promise<void>;
   openProfilesSettings: () => void;
   openSettings: () => void;
@@ -93,6 +94,12 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
   return {
     label: "File",
     submenu: [
+      {
+        label: "New Thread",
+        accelerator: "CmdOrCtrl+N",
+        click: options.actions.openNewThread,
+      },
+      { type: "separator" },
       { role: "close" },
       ...(options.isMac
         ? []

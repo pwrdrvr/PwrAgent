@@ -324,6 +324,7 @@ import {
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
+  WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
   WINDOW_REPLAY_ONBOARDING_CHANNEL,
@@ -842,6 +843,14 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    };
+  },
+  onOpenNewThreadRequested: (callback: () => void): (() => void) => {
+    // Main → renderer push from File → New Thread / CmdOrCtrl+N.
+    const listener = () => callback();
+    ipcRenderer.on(WINDOW_OPEN_NEW_THREAD_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_OPEN_NEW_THREAD_CHANNEL, listener);
     };
   },
   onReplayOnboardingRequested: (callback: () => void): (() => void) => {

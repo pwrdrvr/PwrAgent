@@ -7,6 +7,7 @@ function buildTemplate(
   developerMode: boolean,
   options?: {
     isMac?: boolean;
+    openNewThread?: () => void;
     openProfile?: (profile: string) => void;
     openProfilesSettings?: () => void;
     openSettings?: () => void;
@@ -36,6 +37,7 @@ function buildTemplate(
       focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
       openIssueReporter: vi.fn(),
+      openNewThread: options?.openNewThread ?? vi.fn(),
       openProfile: options?.openProfile ?? vi.fn(),
       openProfilesSettings: options?.openProfilesSettings ?? vi.fn(),
       openSettings: options?.openSettings ?? vi.fn(),
@@ -185,6 +187,40 @@ describe("buildApplicationMenuTemplate", () => {
     expect(roles).toContain("forceReload");
     expect(roles).toContain("toggleDevTools");
     expect(roles.filter((role) => role === "togglefullscreen")).toHaveLength(1);
+  });
+
+  describe("New Thread menu item", () => {
+    it("places New Thread at the top of File with CmdOrCtrl+N", () => {
+      const items = submenuItems(buildTemplate(false), "File");
+
+      expect(items[0]?.label).toBe("New Thread");
+      expect(items[0]?.accelerator).toBe("CmdOrCtrl+N");
+      expect(items[1]?.type).toBe("separator");
+      expect(items[2]?.role).toBe("close");
+    });
+
+    it("invokes the openNewThread action on click", () => {
+      const openNewThread = vi.fn();
+      const items = submenuItems(buildTemplate(false, { openNewThread }), "File");
+
+      (items.find((item) => item.label === "New Thread")?.click as
+        | (() => void)
+        | undefined)?.();
+
+      expect(openNewThread).toHaveBeenCalledOnce();
+    });
+
+    it("keeps Quit available on non-Mac platforms after inserting New Thread", () => {
+      const items = submenuItems(buildTemplate(false, { isMac: false }), "File");
+
+      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+        "New Thread",
+        "separator",
+        "close",
+        "separator",
+        "Quit",
+      ]);
+    });
   });
 
   describe("Settings menu item placement", () => {
