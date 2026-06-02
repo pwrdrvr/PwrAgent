@@ -2465,6 +2465,278 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("creates a new thread in the selected thread's project directory", async () => {
+    const directoryKey = "directory:/Users/test/PwrAgent";
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "PwrAgent",
+        directoryPath: "/Users/test/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Project thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [
+            {
+              id: "linked-dir-1",
+              label: "PwrAgent",
+              path: "/Users/test/PwrAgent",
+              kind: "local" as const,
+            },
+          ],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/test/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/test/PwrAgent",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+    expect(result.current.selectedDirectory?.key).toBe(directoryKey);
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+  });
+
+  it("reuses the selected directory launchpad context for new threads", async () => {
+    const directoryKey = "directory:/Users/test/PwrAgent";
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "PwrAgent",
+        directoryPath: "/Users/test/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 3,
+        updatedAt: 4,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/test/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/test/PwrAgent",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "Existing draft",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories).toHaveLength(2);
+    });
+
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      await result.current.createThread();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/test/PwrAgent",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+  });
+
+  it("falls back to the workspace launchpad when the selected thread has no concrete project directory", async () => {
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:/Users/test/.pwragent/projects",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragent/projects",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Unlinked thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:/Users/test/.pwragent/projects",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/test/.pwragent/projects",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+      "workspace:/Users/test/.pwragent/projects"
+    );
+  });
+
   it("removes server-backed launchpads when a refreshed snapshot omits them", async () => {
     const directoryKey = "directory:/Users/test/PwrAgent";
     const snapshotWithLaunchpad: NavigationSnapshot = {
