@@ -2273,6 +2273,16 @@ export function Composer(props: ComposerProps) {
   }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
+    if (!dismissedAutocompleteKey) {
+      return;
+    }
+
+    if (!autocompleteKey || autocompleteKey !== dismissedAutocompleteKey) {
+      setDismissedAutocompleteKey(undefined);
+    }
+  }, [autocompleteKey, dismissedAutocompleteKey]);
+
+  useEffect(() => {
     deletedSkillTokenHistoryRef.current = [];
     if (skillTokens.length === 0 && draft.includes("](")) {
       const hydrated = hydrateComposerDraft(draft, props.skills);
