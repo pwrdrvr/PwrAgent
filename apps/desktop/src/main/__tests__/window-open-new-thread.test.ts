@@ -1,3 +1,4 @@
+import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestOpenNewThread } from "../window-open-new-thread";
 import { subscribersForChannel } from "../window-channels";
@@ -28,10 +29,11 @@ describe("requestOpenNewThread", () => {
 
   it("sends to the focused subscribed main window", () => {
     const send = vi.fn();
+    const focusedWebContents = { send } as unknown as WebContents;
     const focusedWindow = {
       isDestroyed: () => false,
       show: vi.fn(),
-      webContents: { send },
+      webContents: focusedWebContents,
     };
 
     getFocusedWindowMock.mockReturnValue(focusedWindow);
@@ -45,13 +47,14 @@ describe("requestOpenNewThread", () => {
   });
 
   it("falls back to another subscriber when a secondary window is focused", () => {
+    const focusedWebContents = { send: vi.fn() } as unknown as WebContents;
     const focusedWindow = {
       isDestroyed: () => false,
       show: vi.fn(),
-      webContents: { send: vi.fn() },
+      webContents: focusedWebContents,
     };
     const fallbackSend = vi.fn();
-    const fallbackContents = { send: fallbackSend };
+    const fallbackContents = { send: fallbackSend } as unknown as WebContents;
     const fallbackWindow = {
       isDestroyed: () => false,
       show: vi.fn(),

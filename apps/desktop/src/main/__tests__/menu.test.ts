@@ -267,6 +267,7 @@ describe("buildApplicationMenuTemplate", () => {
           focusWindow: vi.fn(),
           openDocumentation: vi.fn(),
           openIssueReporter: vi.fn(),
+          openNewThread: vi.fn(),
           openProfile: vi.fn(),
           openProfilesSettings: vi.fn(),
           openSettings: vi.fn(),
