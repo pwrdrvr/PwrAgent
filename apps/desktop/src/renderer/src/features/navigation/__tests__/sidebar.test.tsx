@@ -216,6 +216,56 @@ describe("Sidebar", () => {
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
+  it("shows masthead action tooltips and preserves button handlers", async () => {
+    const onOpenAutomations = vi.fn();
+    const onOpenSettings = vi.fn();
+    const onCreateThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={onCreateThread}
+        onOpenAutomations={onOpenAutomations}
+        onOpenLaunchpad={async () => undefined}
+        onOpenSettings={onOpenSettings}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const automationsButton = screen.getByRole("button", { name: "Open automations" });
+    fireEvent.mouseEnter(automationsButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Open automations");
+    fireEvent.click(automationsButton);
+    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    const settingsButton = screen.getByRole("button", { name: "Open settings" });
+    fireEvent.focus(settingsButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Open settings");
+    fireEvent.blur(settingsButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.click(settingsButton);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+
+    const newThreadButton = screen.getByRole("button", { name: "New thread" });
+    fireEvent.mouseEnter(newThreadButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
+    fireEvent.mouseLeave(newThreadButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.click(newThreadButton);
+    expect(onCreateThread).toHaveBeenCalledTimes(1);
+  });
+
   it("groups sub-threads under their parent and persists collapse clicks", () => {
     const childThread = {
       ...sharedThread,
