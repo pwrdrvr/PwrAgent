@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
   PointerEvent,
 } from "react";
 import type {
@@ -709,35 +710,32 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
 
         <div className="sidebar__masthead-actions">
-          <button
-            aria-label="Open automations"
-            aria-pressed={props.automationsActive}
+          <MastheadActionButton
+            ariaLabel="Open automations"
+            ariaPressed={props.automationsActive}
             className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
-            type="button"
             onClick={props.onOpenAutomations}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
-          </button>
-          <button
-            aria-label="Open settings"
-            aria-pressed={props.settingsActive}
+          </MastheadActionButton>
+          <MastheadActionButton
+            ariaLabel="Open settings"
+            ariaPressed={props.settingsActive}
             className={`sidebar__icon-button${props.settingsActive ? " is-active" : ""}`}
-            type="button"
             onClick={props.onOpenSettings}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-          </button>
-          <button
-            aria-label="New thread"
+          </MastheadActionButton>
+          <MastheadActionButton
+            ariaLabel="New thread"
             className="sidebar__icon-button"
             disabled={Boolean(props.creatingThread)}
-            type="button"
             onClick={() => {
               void props.onCreateThread();
             }}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-          </button>
+          </MastheadActionButton>
         </div>
       </header>
 
@@ -1439,6 +1437,40 @@ function ProfileIdentityButton(props: {
         onMouseLeave={tooltip.hide}
       >
         <span className="runtime-identity__text">{props.label}</span>
+      </button>
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
+function MastheadActionButton(props: {
+  ariaLabel: string;
+  ariaPressed?: boolean;
+  children: ReactNode;
+  className: string;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+
+  return (
+    <>
+      <button
+        aria-label={props.ariaLabel}
+        aria-pressed={props.ariaPressed}
+        className={props.className}
+        disabled={props.disabled}
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={() => {
+          tooltip.hide();
+          props.onClick?.();
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
+        onMouseLeave={tooltip.hide}
+      >
+        {props.children}
       </button>
       {tooltip.tooltipNode}
     </>
