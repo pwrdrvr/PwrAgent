@@ -11,6 +11,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
+  PrSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -177,6 +178,7 @@ export function Sidebar(props: SidebarProps) {
     | {
         requestedPosition: ThreadContextMenuPosition;
         position?: { x: number; y: number };
+        pullRequest?: PrSummary;
         thread: NavigationThreadSummary;
       }
     | undefined
@@ -417,6 +419,16 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu({ requestedPosition: position, thread });
   };
 
+  const openPullRequestContextMenu = (
+    thread: NavigationThreadSummary,
+    pullRequest: PrSummary,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    setRenameThread(undefined);
+    setDirectoryContextMenu(undefined);
+    setContextMenu({ requestedPosition: position, pullRequest, thread });
+  };
+
   const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     setRenameThread(thread);
@@ -611,6 +623,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuHasWorkspace =
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
+  const contextMenuPullRequest = contextMenu?.pullRequest;
   const contextMenuIsSubthread = Boolean(contextMenu?.thread.parentThreadId);
   const contextMenuCanCreateSubthread = Boolean(
     contextMenu &&
@@ -868,6 +881,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenDirectoryContextMenu={
                 props.onSetDirectoryPin ? openDirectoryContextMenu : undefined
               }
+              onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -882,6 +896,7 @@ export function Sidebar(props: SidebarProps) {
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={visibleThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
+                onOpenPullRequestContextMenu={openPullRequestContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onReorderThreadPins={props.onReorderThreadPins}
                 onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
@@ -1148,6 +1163,15 @@ export function Sidebar(props: SidebarProps) {
             </>
           ) : null}
           <div className="thread-context-menu__section">
+            {contextMenuPullRequest ? (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+              >
+                Copy Pull Request URL
+              </button>
+            ) : null}
             <button
               role="menuitem"
               type="button"

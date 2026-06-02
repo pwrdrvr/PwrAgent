@@ -11,6 +11,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -43,6 +44,11 @@ type DirectoriesListProps = {
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
+  ) => void;
+  onOpenPullRequestContextMenu?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+    position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -482,6 +488,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
               onOpenContextMenu={props.onOpenThreadContextMenu}
+              onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
@@ -844,6 +851,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             );
                           }}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
+                          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
@@ -936,6 +944,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             setDividerDropTarget(undefined);
                           }}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
+                          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}

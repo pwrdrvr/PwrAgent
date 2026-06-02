@@ -6,6 +6,10 @@ type PrChipProps = {
   /** When the thread spans multiple repos, render the org/repo prefix. */
   showRepoPrefix: boolean;
   onOpen: (url: string) => void;
+  onOpenContextMenu?: (
+    pr: PrSummary,
+    position: { x: number; y: number; anchorTop?: number },
+  ) => void;
 };
 
 export function PrChip(props: PrChipProps) {
@@ -34,6 +38,19 @@ export function PrChip(props: PrChipProps) {
       title={tooltip}
       className={`pr-chip pr-chip--${pr.state}`}
       onClick={handleActivate}
+      onContextMenu={(event) => {
+        if (!props.onOpenContextMenu) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        props.onOpenContextMenu(pr, {
+          x: event.clientX,
+          y: event.clientY,
+          anchorTop: rect.top,
+        });
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           handleActivate(event);
