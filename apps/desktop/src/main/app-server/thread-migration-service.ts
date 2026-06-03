@@ -194,25 +194,28 @@ export class ThreadMigrationService {
       if (!sourceThread.rolloutPath) {
         throw new Error("Source CAS did not provide a rollout path for this thread.");
       }
-      if (hasProfileOwnedWorktree(sourceThread)) {
+      const sourceHasProfileOwnedWorktree = hasProfileOwnedWorktree(sourceThread);
+      if (request.operation === "copy" && sourceHasProfileOwnedWorktree) {
         throw new Error(
-          request.operation === "copy"
-            ? "Copy is blocked until branch conflict strategies for profile-owned worktrees are implemented."
-            : "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+          "Copy is disabled for selected managed worktrees. Use Move so the destination worktree is created before the source is archived.",
         );
       }
+      const destinationWorkspace = resolveDestinationWorkspace(sourceThread, {
+        sourceHasProfileOwnedWorktree,
+      });
 
       item.status = "copying";
       const destination = await this.options.destination.forkThread({
         backend: "codex",
         sourceThreadId: sourceThread.threadId,
         sourceThreadPath: sourceThread.rolloutPath,
-        directoryKind: sourceThread.projectKey ? "directory" : "workspace",
-        directoryLabel: sourceThread.projectKey
-          ? path.basename(sourceThread.projectKey)
-          : sourceThread.title,
-        directoryPath: sourceThread.projectKey,
-        workMode: "local",
+        directoryKind: destinationWorkspace.directoryPath ? "directory" : "workspace",
+        directoryLabel: destinationWorkspace.directoryLabel,
+        directoryPath: destinationWorkspace.directoryPath,
+        workMode: destinationWorkspace.workMode,
+        ...(destinationWorkspace.branchName
+          ? { branchName: destinationWorkspace.branchName }
+          : {}),
       });
       item.destinationThreadId = destination.threadId;
 
@@ -464,6 +467,56 @@ function hasProfileOwnedWorktree(
             isToolManagedWorktreePath(directory.path)),
       ),
   );
+}
+
+function resolveDestinationWorkspace(
+  thread: Pick<
+    InternalSourceThread,
+    "gitBranch" | "linkedDirectories" | "projectKey" | "title"
+  >,
+  options: { sourceHasProfileOwnedWorktree: boolean },
+): {
+  branchName?: string;
+  directoryLabel: string;
+  directoryPath?: string;
+  workMode: ForkThreadRequest["workMode"];
+} {
+  const directoryPath = resolveDestinationDirectoryPath(thread);
+  if (options.sourceHasProfileOwnedWorktree && !directoryPath) {
+    throw new Error(
+      "Move is blocked because the source managed worktree did not report its repository path.",
+    );
+  }
+
+  const branchName =
+    options.sourceHasProfileOwnedWorktree && thread.gitBranch !== "HEAD"
+      ? thread.gitBranch
+      : undefined;
+
+  return {
+    directoryLabel: directoryPath ? path.basename(directoryPath) : thread.title,
+    ...(directoryPath ? { directoryPath } : {}),
+    ...(branchName ? { branchName } : {}),
+    workMode: options.sourceHasProfileOwnedWorktree ? "worktree" : "local",
+  };
+}
+
+function resolveDestinationDirectoryPath(
+  thread: Pick<InternalSourceThread, "linkedDirectories" | "projectKey">,
+): string | undefined {
+  for (const directory of thread.linkedDirectories) {
+    const directoryPath = directory.path?.trim();
+    if (directoryPath && !isToolManagedWorktreePath(directoryPath)) {
+      return directoryPath;
+    }
+  }
+
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey && !isToolManagedWorktreePath(projectKey)) {
+    return projectKey;
+  }
+
+  return undefined;
 }
 
 function validateReplay(

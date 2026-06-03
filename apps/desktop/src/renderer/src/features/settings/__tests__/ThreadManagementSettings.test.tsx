@@ -173,4 +173,50 @@ describe("ThreadManagementSettings", () => {
       },
     });
   });
+
+  it("keeps Move available for selected managed worktrees but disables Copy", async () => {
+    const threadsResponse = migrationThreadsResponse("", "Managed worktree thread");
+    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [
+      {
+        id: "worktree:/Users/alice/.codex/worktrees/mpabc/app",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/Users/alice/.codex/worktrees/mpabc/app",
+        kind: "worktree",
+      },
+    ];
+    const desktopApi: DesktopApi = {
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
+      listThreadMigrationSourceThreads: vi.fn(async () => threadsResponse),
+    };
+
+    const { container } = render(
+      <ThreadManagementSettings desktopApi={desktopApi} />,
+    );
+
+    fireEvent.click(
+      (await screen.findAllByRole("checkbox", { name: /System default/ }))[0]!,
+    );
+
+    expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy 1" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Move creates destination worktrees before archiving the source. Copy is disabled for selected managed worktrees.",
+      ),
+    ).toBeInTheDocument();
+
+    const actionbar = container.querySelector(
+      ".settings-thread-management__actionbar",
+    );
+    const projectsList = container.querySelector(
+      ".settings-thread-management__projects-list",
+    );
+    expect(actionbar).not.toBeNull();
+    expect(projectsList).not.toBeNull();
+    expect(
+      actionbar!.compareDocumentPosition(projectsList!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

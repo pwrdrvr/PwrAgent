@@ -182,7 +182,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     [run],
   );
   const selectedCount = selectedThreadIds.size;
-  const selectedHasProfileOwnedWorktree = useMemo(
+  const selectedHasManagedWorktree = useMemo(
     () =>
       threadsState.projects.some((project) =>
         safeProjectThreads(project).some(
@@ -193,12 +193,13 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       ),
     [selectedThreadIds, threadsState.projects],
   );
-  const canStart =
+  const canStartBase =
     Boolean(selectedSource?.available) &&
     selectedCount > 0 &&
-    !selectedHasProfileOwnedWorktree &&
     !startingOperation &&
     !threadsState.loading;
+  const canMove = canStartBase;
+  const canCopy = canStartBase && !selectedHasManagedWorktree;
 
   const toggleThread = (threadId: ThreadIdentifier) => {
     setSelectedThreadIds((current) => {
@@ -362,6 +363,51 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
           </p>
         ) : null}
         <div className="settings-thread-management__selection-shell">
+          <div className="settings-thread-management__actionbar">
+            <div className="settings-thread-management__actioncopy">
+              <p className="settings-thread-management__action-title">
+                Migration action
+              </p>
+              <p className="settings-thread-management__action-description">
+                {selectedCount === 0
+                  ? "Select one or more threads to enable Move or Copy."
+                  : selectedHasManagedWorktree
+                    ? "Move creates destination worktrees before archiving the source. Copy is disabled for selected managed worktrees."
+                    : "Move copies, validates, then archives source last. Copy leaves source threads active."}
+              </p>
+            </div>
+            <div className="settings-thread-management__controls">
+              <button
+                className="button button--primary"
+                disabled={!canMove}
+                type="button"
+                onClick={() => {
+                  void startMigration("move");
+                }}
+              >
+                {startingOperation === "move"
+                  ? `Moving ${selectedCount}`
+                  : `Move ${selectedCount}`}
+              </button>
+              <button
+                className="button button--secondary"
+                disabled={!canCopy}
+                type="button"
+                title={
+                  selectedHasManagedWorktree
+                    ? "Copy is disabled for selected managed worktrees. Use Move."
+                    : undefined
+                }
+                onClick={() => {
+                  void startMigration("copy");
+                }}
+              >
+                {startingOperation === "copy"
+                  ? `Copying ${selectedCount}`
+                  : `Copy ${selectedCount}`}
+              </button>
+            </div>
+          </div>
           <div className="settings-thread-management__projects-list">
             {threadsState.projects.map((project) => {
               const projectThreads = safeProjectThreads(project);
@@ -451,56 +497,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
               );
             })}
           </div>
-          <div className="settings-thread-management__actionbar">
-            <div className="settings-thread-management__actioncopy">
-              <p className="settings-thread-management__action-title">
-                Migration action
-              </p>
-              <p className="settings-thread-management__action-description">
-                {selectedHasProfileOwnedWorktree
-                  ? "Profile-owned worktree migration is blocked until branch and worktree relocation is implemented."
-                  : selectedCount > 0
-                    ? "Move copies, validates, then archives source last. Copy leaves source threads active."
-                    : "Select one or more threads to enable Move or Copy."}
-              </p>
-            </div>
-            <div className="settings-thread-management__controls">
-              <button
-                className="button button--primary"
-                disabled={!canStart}
-                type="button"
-                onClick={() => {
-                  void startMigration("move");
-                }}
-              >
-                {startingOperation === "move"
-                  ? `Moving ${selectedCount}`
-                  : `Move ${selectedCount}`}
-              </button>
-              <button
-                className="button button--secondary"
-                disabled={!canStart}
-                type="button"
-                onClick={() => {
-                  void startMigration("copy");
-                }}
-              >
-                {startingOperation === "copy"
-                  ? `Copying ${selectedCount}`
-                  : `Copy ${selectedCount}`}
-              </button>
-            </div>
-          </div>
         </div>
         {startError ? (
           <p className="settings-row__error settings-thread-management__status" role="alert">
             {startError}
-          </p>
-        ) : null}
-        {selectedHasProfileOwnedWorktree ? (
-          <p className="settings-row__error settings-thread-management__status" role="alert">
-            Selected threads include a profile-owned worktree. This PR blocks
-            that path until branch conflict strategies are implemented.
           </p>
         ) : null}
         {run ? (

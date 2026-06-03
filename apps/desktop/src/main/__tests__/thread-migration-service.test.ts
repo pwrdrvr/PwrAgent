@@ -347,10 +347,12 @@ describe("ThreadMigrationService", () => {
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
   });
 
-  it("blocks Move before fork/archive when a source thread has a profile-owned worktree", async () => {
+  it("moves a profile-owned source worktree into a destination-owned worktree before archiving", async () => {
+    const calls: string[] = [];
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [
         makeSourceThread({
+          gitBranch: "feature/source-work",
           linkedDirectories: [
             {
               id: "worktree:/Users/alice/.codex/profiles/personal/worktrees/repo/app",
@@ -363,13 +365,44 @@ describe("ThreadMigrationService", () => {
           ],
         }),
       ]),
-      readThread: vi.fn(),
-      archiveThread: vi.fn(),
+      readThread: vi.fn(async () => {
+        calls.push("source-read");
+        return makeReplay();
+      }),
+      archiveThread: vi.fn(async () => {
+        calls.push("source-archive");
+        return { threadId: "source-thread" };
+      }),
       close: vi.fn(),
     };
     const destination = {
-      forkThread: vi.fn(),
-      readThread: vi.fn(),
+      forkThread: vi.fn(async (request) => {
+        calls.push("destination-fork");
+        expect(request).toMatchObject({
+          branchName: "feature/source-work",
+          directoryPath: "/repo/app",
+          sourceThreadId: "source-thread",
+          workMode: "worktree",
+        });
+        return {
+          backend: "codex" as const,
+          sourceThreadId: "source-thread",
+          threadId: "destination-thread",
+          executionMode: "default" as const,
+          linkedDirectory: {
+            id: "worktree:/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            label: "app",
+            path: "/repo/app",
+            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            kind: "worktree" as const,
+          },
+          workMode: "worktree" as const,
+        };
+      }),
+      readThread: vi.fn(async () => {
+        calls.push("destination-read");
+        return { replay: makeReplay() };
+      }),
     };
     const service = new ThreadMigrationService({
       destination,
@@ -388,12 +421,15 @@ describe("ThreadMigrationService", () => {
     });
 
     expect(response.items[0]).toMatchObject({
-      status: "failed",
-      error:
-        "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+      destinationThreadId: "destination-thread",
+      status: "completed",
     });
-    expect(destination.forkThread).not.toHaveBeenCalled();
-    expect(sourceClient.archiveThread).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      "destination-fork",
+      "source-read",
+      "destination-read",
+      "source-archive",
+    ]);
   });
 
   it("blocks Copy before fork/archive when a source thread has a profile-owned worktree", async () => {
@@ -439,7 +475,7 @@ describe("ThreadMigrationService", () => {
     expect(response.items[0]).toMatchObject({
       status: "failed",
       error:
-        "Copy is blocked until branch conflict strategies for profile-owned worktrees are implemented.",
+        "Copy is disabled for selected managed worktrees. Use Move so the destination worktree is created before the source is archived.",
     });
     expect(destination.forkThread).not.toHaveBeenCalled();
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
@@ -481,7 +517,7 @@ describe("ThreadMigrationService", () => {
     expect(response.items[0]).toMatchObject({
       status: "failed",
       error:
-        "Move is blocked until this thread's profile-owned worktree can be migrated first.",
+        "Move is blocked because the source managed worktree did not report its repository path.",
     });
     expect(destination.forkThread).not.toHaveBeenCalled();
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
