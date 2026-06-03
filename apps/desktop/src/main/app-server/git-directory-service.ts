@@ -163,6 +163,20 @@ async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
   }
 }
 
+async function removeWorktreeAndPrune(params: {
+  gitEnv?: NodeJS.ProcessEnv;
+  repoRoot: string;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  await params.runGit(
+    params.repoRoot,
+    ["worktree", "remove", "--force", params.worktreePath],
+    params.gitEnv,
+  );
+  await pruneEmptyWorktreeParents(params.worktreePath);
+}
+
 export async function computeWorktreePath(params: {
   backend?: AppServerBackendKind;
   codexHome?: string;
@@ -744,23 +758,35 @@ export class GitDirectoryService {
         storage,
         homeDir: this.homeDir,
       });
-      await mkdir(path.dirname(worktreePath), { recursive: true });
-      await this.runGitCommand(
-        repoRoot,
-        ["worktree", "add", worktreePath, baseBranch],
-        this.gitEnv,
-      );
+      try {
+        await mkdir(path.dirname(worktreePath), { recursive: true });
+        await this.runGitCommand(
+          repoRoot,
+          ["worktree", "add", worktreePath, baseBranch],
+          this.gitEnv,
+        );
+      } catch (error) {
+        if (detachedSourceWorktreePath) {
+          await restoreDetachedWorktreeBranch({
+            branchName: baseBranch,
+            gitEnv: this.gitEnv,
+            runGit: this.runGitCommand,
+            worktreePath: detachedSourceWorktreePath,
+          });
+        }
+        throw error;
+      }
 
       return {
         cwd: worktreePath,
         repositoryPath: repoRoot,
         rollback: async () => {
-          await this.runGitCommand(
+          await removeWorktreeAndPrune({
+            gitEnv: this.gitEnv,
             repoRoot,
-            ["worktree", "remove", "--force", worktreePath],
-            this.gitEnv,
-          );
-          await pruneEmptyWorktreeParents(worktreePath);
+            runGit: this.runGitCommand,
+            worktreePath,
+          });
           if (detachedSourceWorktreePath) {
             await restoreDetachedWorktreeBranch({
               branchName: baseBranch,
@@ -792,6 +818,14 @@ export class GitDirectoryService {
     return {
       cwd: worktreePath,
       repositoryPath: repoRoot,
+      rollback: async () => {
+        await removeWorktreeAndPrune({
+          gitEnv: this.gitEnv,
+          repoRoot,
+          runGit: this.runGitCommand,
+          worktreePath,
+        });
+      },
       workMode: "worktree",
     };
   }

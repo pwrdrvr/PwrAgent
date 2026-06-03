@@ -400,6 +400,69 @@ describe("GitDirectoryService", () => {
     await expect(stat(workspace.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("restores an excluded source branch when destination worktree creation fails", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-failed-transfer-source-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", sourceWorktree, "release"]);
+    const runGitWithFailedAdd = vi.fn(
+      async (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => {
+        if (args[0] === "worktree" && args[1] === "add") {
+          throw new Error("simulated worktree add failure");
+        }
+        return execFileSync("git", ["-C", cwd, ...args], {
+          encoding: "utf8",
+          env: { ...process.env, ...env },
+        }).trim();
+      },
+    );
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: runGitWithFailedAdd,
+    });
+
+    await expect(
+      service.prepareLaunchpadWorkspace({
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        excludedWorktreePaths: [sourceWorktree],
+        workMode: "worktree",
+        branchName: "release",
+        worktreeBranchMode: "attached",
+      }),
+    ).rejects.toThrow("simulated worktree add failure");
+
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+  });
+
+  it("rolls back a detached destination worktree", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "release",
+    });
+
+    expect(workspace.rollback).toEqual(expect.any(Function));
+    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("");
+
+    await workspace.rollback?.();
+
+    await expect(stat(workspace.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("blocks branch transfer when the excluded source worktree is dirty", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

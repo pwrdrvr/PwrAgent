@@ -75,10 +75,7 @@ export type ForkThreadResponse = {
 
 export type ThreadMigrationOperation = "move" | "copy";
 
-export type ThreadMigrationCopyStrategy =
-  | "source-branch-suffix"
-  | "destination-branch-suffix"
-  | "detached-destination";
+export type ThreadMigrationCopyStrategy = "detached-destination";
 
 export type ThreadMigrationRunStatus =
   | "pending"
