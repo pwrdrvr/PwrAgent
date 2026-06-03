@@ -20,8 +20,22 @@ import type {
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
+const originalScrollTo = window.scrollTo;
+
 afterEach(() => {
   cleanup();
+  Object.defineProperty(window, "scrollX", {
+    configurable: true,
+    value: 0,
+  });
+  Object.defineProperty(window, "scrollY", {
+    configurable: true,
+    value: 0,
+  });
+  Object.defineProperty(window, "scrollTo", {
+    configurable: true,
+    value: originalScrollTo,
+  });
   Object.defineProperty(window, "pwragent", {
     configurable: true,
     value: undefined,
@@ -342,6 +356,45 @@ function createArchivedSnapshot(
 }
 
 describe("SettingsScreen", () => {
+  it("clamps accidental document scroll while mounted", async () => {
+    Object.defineProperty(window, "scrollX", {
+      configurable: true,
+      value: 0,
+    });
+    Object.defineProperty(window, "scrollY", {
+      configurable: true,
+      value: 1481,
+    });
+    const scrollTo = vi.fn();
+    Object.defineProperty(window, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    const desktopApi = {
+      logRendererDiagnostic: vi.fn(async () => undefined),
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 0));
+    expect(desktopApi.logRendererDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: "Settings document scroll clamped.",
+        details: expect.objectContaining({
+          scrollX: 0,
+          scrollY: 1481,
+        }),
+      }),
+    );
+  });
+
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     const desktopApi = {

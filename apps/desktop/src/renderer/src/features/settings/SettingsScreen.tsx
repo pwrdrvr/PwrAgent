@@ -28,7 +28,7 @@ import {
   buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "./settings-patch-delta";
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 export type SettingsSection =
   | "general"
@@ -112,6 +112,44 @@ export function SettingsScreen(props: {
   useEffect(() => {
     if (props.initialSection) setSection(props.initialSection);
   }, [props.initialSection]);
+  const scrollClampFrameRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const clampDocumentScroll = () => {
+      if (window.scrollX === 0 && window.scrollY === 0) {
+        return;
+      }
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      window.scrollTo(0, 0);
+      void props.desktopApi?.logRendererDiagnostic?.({
+        level: "warn",
+        message: "Settings document scroll clamped.",
+        details: {
+          section,
+          scrollX,
+          scrollY,
+        },
+      })?.catch(() => undefined);
+    };
+    const scheduleClamp = () => {
+      if (scrollClampFrameRef.current !== undefined) {
+        return;
+      }
+      scrollClampFrameRef.current = window.requestAnimationFrame(() => {
+        scrollClampFrameRef.current = undefined;
+        clampDocumentScroll();
+      });
+    };
+    clampDocumentScroll();
+    window.addEventListener("scroll", scheduleClamp, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", scheduleClamp);
+      if (scrollClampFrameRef.current !== undefined) {
+        window.cancelAnimationFrame(scrollClampFrameRef.current);
+        scrollClampFrameRef.current = undefined;
+      }
+    };
+  }, [props.desktopApi, section]);
   const snapshot = props.settings.snapshot;
   const activeSectionLabel =
     SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";

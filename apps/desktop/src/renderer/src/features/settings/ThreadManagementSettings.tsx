@@ -231,11 +231,11 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     }
     setSelectedThreadIds((current) => {
       const next = new Set(current);
-      const allSelected = projectThreads.every((thread) =>
+      const currentAllSelected = projectThreads.every((thread) =>
         next.has(thread.threadId),
       );
       for (const thread of projectThreads) {
-        if (allSelected) {
+        if (currentAllSelected) {
           next.delete(thread.threadId);
         } else {
           next.add(thread.threadId);
