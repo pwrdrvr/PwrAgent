@@ -322,7 +322,11 @@ describe("GitDirectoryService", () => {
       worktreeBranchMode: "attached",
     });
 
-    expect(reused).toEqual(workspace);
+    expect(reused).toMatchObject({
+      cwd: workspace.cwd,
+      repositoryPath: workspace.repositoryPath,
+      workMode: workspace.workMode,
+    });
   });
 
   it("does not reuse an excluded source worktree when creating an attached branch worktree", async () => {
@@ -361,6 +365,39 @@ describe("GitDirectoryService", () => {
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("");
     expect(runGit(sourceWorktree, ["rev-parse", "HEAD"])).toBe(releaseRevision);
     expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("release");
+  });
+
+  it("rolls back an attached branch transfer to an excluded source worktree", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-rollback-source-worktree-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", sourceWorktree, "release"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      excludedWorktreePaths: [sourceWorktree],
+      workMode: "worktree",
+      branchName: "release",
+      worktreeBranchMode: "attached",
+    });
+
+    expect(workspace.rollback).toEqual(expect.any(Function));
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("");
+    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("release");
+
+    await workspace.rollback?.();
+
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+    await expect(stat(workspace.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("blocks branch transfer when the excluded source worktree is dirty", async () => {

@@ -22,6 +22,13 @@ type GitCommandRunner = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
+export type PreparedLaunchpadWorkspace = {
+  cwd?: string;
+  repositoryPath?: string;
+  rollback?: () => Promise<void>;
+  workMode: LaunchpadWorkMode;
+};
+
 async function defaultRunGit(
   cwd: string,
   args: string[],
@@ -375,6 +382,19 @@ async function detachCleanWorktreeBranch(params: {
   );
 }
 
+async function restoreDetachedWorktreeBranch(params: {
+  branchName: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  await params.runGit(
+    params.worktreePath,
+    ["switch", params.branchName],
+    params.gitEnv,
+  );
+}
+
 type CachedDirectoryStatus = {
   expiresAt: number;
   inFlight?: Promise<NavigationDirectoryGitStatus | undefined>;
@@ -622,7 +642,7 @@ export class GitDirectoryService {
         excludedWorktreePaths?: string[];
         worktreeBranchMode?: "attached" | "detached";
       },
-  ): Promise<{ cwd?: string; repositoryPath?: string; workMode: LaunchpadWorkMode }> {
+  ): Promise<PreparedLaunchpadWorkspace> {
     if (launchpad.directoryKind === "workspace") {
       return {
         cwd: undefined,
@@ -671,6 +691,7 @@ export class GitDirectoryService {
     }
 
     if (launchpad.worktreeBranchMode === "attached") {
+      let detachedSourceWorktreePath: string | undefined;
       const excludedWorktreePaths = new Set(
         await Promise.all(
           (launchpad.excludedWorktreePaths ?? [])
@@ -698,6 +719,7 @@ export class GitDirectoryService {
             workMode: "worktree",
           };
         }
+        detachedSourceWorktreePath = existing.path;
         await detachCleanWorktreeBranch({
           branchName: baseBranch,
           gitEnv: this.gitEnv,
@@ -705,6 +727,7 @@ export class GitDirectoryService {
           worktreePath: existing.path,
         });
       } else if (existingIsRepoRoot) {
+        detachedSourceWorktreePath = repoRoot;
         await detachCleanWorktreeBranch({
           branchName: baseBranch,
           gitEnv: this.gitEnv,
@@ -731,6 +754,22 @@ export class GitDirectoryService {
       return {
         cwd: worktreePath,
         repositoryPath: repoRoot,
+        rollback: async () => {
+          await this.runGitCommand(
+            repoRoot,
+            ["worktree", "remove", "--force", worktreePath],
+            this.gitEnv,
+          );
+          await pruneEmptyWorktreeParents(worktreePath);
+          if (detachedSourceWorktreePath) {
+            await restoreDetachedWorktreeBranch({
+              branchName: baseBranch,
+              gitEnv: this.gitEnv,
+              runGit: this.runGitCommand,
+              worktreePath: detachedSourceWorktreePath,
+            });
+          }
+        },
         workMode: "worktree",
       };
     }

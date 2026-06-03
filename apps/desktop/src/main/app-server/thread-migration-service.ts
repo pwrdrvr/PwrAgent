@@ -51,7 +51,10 @@ type SourceMigrationClient = Pick<
 
 type DestinationMigrationBackend = {
   forkThread(
-    request: ForkThreadRequest & { sourceThreadPath?: string },
+    request: ForkThreadRequest & {
+      onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+      sourceThreadPath?: string;
+    },
   ): Promise<ForkThreadResponse>;
   readThread(request: {
     backend?: "codex";
@@ -235,7 +238,11 @@ export class ThreadMigrationService {
       sourceThreadId: request.threadId,
     });
 
-    await this.restoreSourceForRetry({ item, runId: run.runId, sourceProfile });
+    const retrySourceState = await this.restoreSourceForRetry({
+      item,
+      runId: run.runId,
+      sourceProfile,
+    });
     if (item.status !== "failed") {
       await this.migrateOne({
         item,
@@ -248,6 +255,12 @@ export class ThreadMigrationService {
         runId: run.runId,
         sourceProfile,
       });
+    }
+    if (
+      retrySourceState.wasArchived &&
+      item.diagnostics?.archivedSource !== true
+    ) {
+      await this.rearchiveSourceAfterRetry({ item, runId: run.runId, sourceProfile });
     }
 
     migrationLog.info("thread migration retry finished", {
@@ -276,6 +289,7 @@ export class ThreadMigrationService {
     sourceProfile: string;
   }): Promise<void> {
     const { item, request, runId, sourceProfile } = params;
+    let rollbackPreparedWorkspace: (() => Promise<void>) | undefined;
     try {
       const sourceThread = await this.resolveSourceThread(
         sourceProfile,
@@ -335,6 +349,9 @@ export class ThreadMigrationService {
         backend: "codex",
         sourceThreadId: sourceThread.threadId,
         sourceThreadPath: sourceThread.rolloutPath,
+        onPreparedWorkspaceRollback: (rollback) => {
+          rollbackPreparedWorkspace = rollback;
+        },
         directoryKind: destinationWorkspace.directoryPath ? "directory" : "workspace",
         directoryLabel: destinationWorkspace.directoryLabel,
         directoryPath: destinationWorkspace.directoryPath,
@@ -423,6 +440,7 @@ export class ThreadMigrationService {
       }
 
       item.status = "completed";
+      rollbackPreparedWorkspace = undefined;
       const logPayload = {
         ...item.diagnostics,
         destinationThreadId: item.destinationThreadId,
@@ -439,6 +457,35 @@ export class ThreadMigrationService {
         migrationLog.info("thread migration item completed", logPayload);
       }
     } catch (error) {
+      if (rollbackPreparedWorkspace) {
+        try {
+          await rollbackPreparedWorkspace();
+          migrationLog.info("thread migration workspace rollback completed", {
+            ...item.diagnostics,
+            destinationThreadId: item.destinationThreadId,
+            runId,
+            sourceProfile,
+            sourceThreadId: item.sourceThreadId,
+          });
+        } catch (rollbackError) {
+          appendWarnings(item, [
+            `Workspace rollback failed: ${
+              rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+            }`,
+          ]);
+          migrationLog.warn("thread migration workspace rollback failed", {
+            ...item.diagnostics,
+            destinationThreadId: item.destinationThreadId,
+            error:
+              rollbackError instanceof Error
+                ? rollbackError.message
+                : String(rollbackError),
+            runId,
+            sourceProfile,
+            sourceThreadId: item.sourceThreadId,
+          });
+        }
+      }
       item.status = "failed";
       item.error = error instanceof Error ? error.message : String(error);
       migrationLog.warn("thread migration item failed", {
@@ -476,8 +523,25 @@ export class ThreadMigrationService {
     item: ThreadMigrationRunItem;
     runId: string;
     sourceProfile: string;
-  }): Promise<void> {
+  }): Promise<{ wasArchived: boolean }> {
     const { item, runId, sourceProfile } = params;
+    let wasArchived = false;
+    try {
+      wasArchived = (
+        await this.findSourceThreadState(sourceProfile, item.sourceThreadId)
+      ).archived;
+    } catch (error) {
+      item.status = "failed";
+      item.error = error instanceof Error ? error.message : String(error);
+      migrationLog.warn("thread migration source retry lookup failed", {
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        error: item.error,
+      });
+      return { wasArchived: false };
+    }
+
     item.status = "restoring-source";
     migrationLog.info("thread migration source restore requested", {
       runId,
@@ -504,6 +568,7 @@ export class ThreadMigrationService {
         warnings: item.warnings,
       });
       item.status = "pending";
+      return { wasArchived };
     } catch (error) {
       item.status = "failed";
       item.error = error instanceof Error ? error.message : String(error);
@@ -513,7 +578,68 @@ export class ThreadMigrationService {
         sourceThreadId: item.sourceThreadId,
         error: item.error,
       });
+      return { wasArchived };
     }
+  }
+
+  private async rearchiveSourceAfterRetry(params: {
+    item: ThreadMigrationRunItem;
+    runId: string;
+    sourceProfile: string;
+  }): Promise<void> {
+    const { item, runId, sourceProfile } = params;
+    try {
+      const sourceClient = await this.getSourceClient(sourceProfile);
+      migrationLog.info("thread migration retry source rearchive requested", {
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        status: item.status,
+      });
+      await sourceClient.archiveThread({ threadId: item.sourceThreadId });
+      item.diagnostics = {
+        ...item.diagnostics,
+        archivedSource: true,
+      };
+      migrationLog.info("thread migration retry source rearchived", {
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        status: item.status,
+      });
+    } catch (error) {
+      appendWarnings(item, [
+        `Retry source rearchive failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ]);
+      migrationLog.warn("thread migration retry source rearchive failed", {
+        error: error instanceof Error ? error.message : String(error),
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        status: item.status,
+      });
+    }
+  }
+
+  private async findSourceThreadState(
+    sourceProfile: string,
+    threadId: ThreadIdentifier,
+  ): Promise<{ archived: boolean; thread: InternalSourceThread }> {
+    await this.listSourceThreads({ sourceProfile });
+    const active = this.sourceThreadCache.get(sourceProfile)?.get(threadId);
+    if (active) {
+      return { archived: false, thread: active };
+    }
+
+    await this.listSourceThreads({ sourceProfile, archived: true });
+    const archived = this.sourceThreadCache.get(sourceProfile)?.get(threadId);
+    if (archived) {
+      return { archived: true, thread: archived };
+    }
+
+    throw new Error(`Source thread not found for retry: ${threadId}`);
   }
 
   private async refreshSourceThread(
@@ -760,7 +886,7 @@ function resolveDestinationWorkspace(
   }
   const needsDestinationWorktree =
     Boolean(directoryPath && branchName) &&
-    (request.operation === "move" ||
+    ((request.operation === "move" && sourceHasProfileOwnedWorktree) ||
       request.copyStrategy === "detached-destination");
 
   return {
