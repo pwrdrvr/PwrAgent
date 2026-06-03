@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEventHandler,
+} from "react";
 import {
   isToolManagedWorktreePath,
   type ListThreadMigrationSourcesResponse,
@@ -86,6 +93,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const [startError, setStartError] = useState<string>();
   const [startingOperation, setStartingOperation] =
     useState<ThreadMigrationOperation>();
+  const [retryingThreadId, setRetryingThreadId] = useState<ThreadIdentifier>();
   const [copyStrategy, setCopyStrategy] =
     useState<ThreadMigrationCopyStrategy>("detached-destination");
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -280,6 +288,43 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       setStartError(error instanceof Error ? error.message : String(error));
     } finally {
       setStartingOperation(undefined);
+    }
+  };
+
+  const retryMigration = async (threadId: ThreadIdentifier) => {
+    const retryThreadMigration = props.desktopApi?.retryThreadMigration;
+    if (!retryThreadMigration || !selectedSource || !run) {
+      setStartError("Desktop bridge is missing retryThreadMigration().");
+      return;
+    }
+    setRetryingThreadId(threadId);
+    setStartError(undefined);
+    try {
+      const response = await retryThreadMigration({
+        sourceProfile: selectedSource.profile,
+        operation: run.operation,
+        ...(run.operation === "copy" ? { copyStrategy } : {}),
+        threadId,
+      });
+      const retryItem = response.items[0];
+      if (!retryItem) {
+        return;
+      }
+      setRun((current) => {
+        if (!current) {
+          return response;
+        }
+        return {
+          ...current,
+          items: current.items.map((item) =>
+            item.sourceThreadId === retryItem.sourceThreadId ? retryItem : item,
+          ),
+        };
+      });
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRetryingThreadId(undefined);
     }
   };
 
@@ -529,6 +574,15 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                         </span>
                         <span className="settings-archive-row__side">
                           <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
+                          <RetryMigrationButton
+                            item={runItemsByThreadId.get(thread.threadId)}
+                            retrying={retryingThreadId === thread.threadId}
+                            onRetry={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void retryMigration(thread.threadId);
+                            }}
+                          />
                         </span>
                       </label>
                     ))}
@@ -627,6 +681,26 @@ function RunStatus(props: { item?: ThreadMigrationRunItem }) {
     >
       {completedWithWarnings ? "completed with warning" : props.item.status}
     </span>
+  );
+}
+
+function RetryMigrationButton(props: {
+  item?: ThreadMigrationRunItem;
+  retrying: boolean;
+  onRetry: MouseEventHandler<HTMLButtonElement>;
+}) {
+  if (!props.item || props.item.status !== "failed") {
+    return null;
+  }
+  return (
+    <button
+      className="button button--secondary settings-thread-management__retry"
+      disabled={props.retrying}
+      type="button"
+      onClick={props.onRetry}
+    >
+      {props.retrying ? "Trying" : "Try harder"}
+    </button>
   );
 }
 

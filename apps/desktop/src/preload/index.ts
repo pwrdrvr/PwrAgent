@@ -92,6 +92,7 @@ import type {
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   MessagingPairingEntry,
@@ -330,6 +331,7 @@ import {
   SETTINGS_WRITE_CONFIG_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+  THREAD_MIGRATION_RETRY_CHANNEL,
   THREAD_MIGRATION_START_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
@@ -611,6 +613,10 @@ const desktopApi = Object.freeze({
     request: StartThreadMigrationRequest,
   ): Promise<StartThreadMigrationResponse> =>
     await ipcRenderer.invoke(THREAD_MIGRATION_START_CHANNEL, request),
+  retryThreadMigration: async (
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> =>
+    await ipcRenderer.invoke(THREAD_MIGRATION_RETRY_CHANNEL, request),
   archiveWorktree: async (
     request: ArchiveWorktreeRequest,
   ): Promise<ArchiveWorktreeResponse> =>

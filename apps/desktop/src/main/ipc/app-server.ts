@@ -60,6 +60,7 @@ import type {
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
   StartThreadMigrationRequest,
   StartThreadMigrationResponse,
   ResetDirectoryLaunchpadRequest,
@@ -96,6 +97,7 @@ import {
   APP_SERVER_READ_THREAD_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+  THREAD_MIGRATION_RETRY_CHANNEL,
   THREAD_MIGRATION_START_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -494,6 +496,12 @@ class DesktopAppServerService {
     request: StartThreadMigrationRequest,
   ): Promise<StartThreadMigrationResponse> {
     return await this.getThreadMigrationService().startMigration(request);
+  }
+
+  async retryThreadMigration(
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    return await this.getThreadMigrationService().retryMigration(request);
   }
 
   async archiveWorktree(
@@ -1599,6 +1607,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.startThreadMigration(request);
     },
   );
+  ipcMain.removeHandler(THREAD_MIGRATION_RETRY_CHANNEL);
+  ipcMain.handle(
+    THREAD_MIGRATION_RETRY_CHANNEL,
+    async (
+      _event,
+      request: RetryThreadMigrationRequest,
+    ): Promise<StartThreadMigrationResponse> => {
+      return await appServerService.retryThreadMigration(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
   ipcMain.handle(
     APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
@@ -1850,6 +1868,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCES_CHANNEL);
   ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL);
   ipcMain.removeHandler(THREAD_MIGRATION_START_CHANNEL);
+  ipcMain.removeHandler(THREAD_MIGRATION_RETRY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);

@@ -82,6 +82,7 @@ export type ThreadMigrationCopyStrategy =
 
 export type ThreadMigrationRunStatus =
   | "pending"
+  | "restoring-source"
   | "copying"
   | "validating"
   | "worktree"
@@ -145,6 +146,13 @@ export type StartThreadMigrationRequest = {
   operation: ThreadMigrationOperation;
   copyStrategy?: ThreadMigrationCopyStrategy;
   threadIds: ThreadIdentifier[];
+};
+
+export type RetryThreadMigrationRequest = {
+  sourceProfile: string;
+  operation: ThreadMigrationOperation;
+  copyStrategy?: ThreadMigrationCopyStrategy;
+  threadId: ThreadIdentifier;
 };
 
 export type ThreadMigrationRunItem = {

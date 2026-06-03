@@ -12,6 +12,7 @@ import {
   type ForkThreadResponse,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
+  type RetryThreadMigrationRequest,
   type ListThreadMigrationSourcesResponse,
   type StartThreadMigrationRequest,
   type StartThreadMigrationResponse,
@@ -41,7 +42,11 @@ const execFileAsync = promisify(execFile);
 
 type SourceMigrationClient = Pick<
   CodexAppServerClient,
-  "archiveThread" | "close" | "listThreadsForMigration" | "readThread"
+  | "archiveThread"
+  | "close"
+  | "listThreadsForMigration"
+  | "readThread"
+  | "restoreThread"
 >;
 
 type DestinationMigrationBackend = {
@@ -197,6 +202,61 @@ export class ThreadMigrationService {
         (count, item) => count + (item.warnings?.length ?? 0),
         0,
       ),
+    });
+
+    return run;
+  }
+
+  async retryMigration(
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    const sourceProfile = normalizeSourceProfile(request.sourceProfile);
+    await this.assertProfileSelectable(sourceProfile);
+
+    const run: StartThreadMigrationResponse = {
+      runId: this.createRunId(),
+      operation: request.operation,
+      startedAt: this.now(),
+      items: [
+        {
+          sourceProfile,
+          sourceThreadId: request.threadId,
+          status: "pending",
+        },
+      ],
+    };
+    const item = run.items[0]!;
+
+    migrationLog.info("thread migration retry started", {
+      copyStrategy: request.copyStrategy,
+      operation: request.operation,
+      runId: run.runId,
+      sourceProfile,
+      sourceThreadId: request.threadId,
+    });
+
+    await this.restoreSourceForRetry({ item, runId: run.runId, sourceProfile });
+    if (item.status !== "failed") {
+      await this.migrateOne({
+        item,
+        request: {
+          copyStrategy: request.copyStrategy,
+          operation: request.operation,
+          sourceProfile,
+          threadIds: [request.threadId],
+        },
+        runId: run.runId,
+        sourceProfile,
+      });
+    }
+
+    migrationLog.info("thread migration retry finished", {
+      operation: request.operation,
+      runId: run.runId,
+      sourceProfile,
+      sourceThreadId: request.threadId,
+      status: item.status,
+      warningCount: item.warnings?.length ?? 0,
     });
 
     return run;
@@ -410,6 +470,68 @@ export class ThreadMigrationService {
       throw new Error(`Source thread not found: ${threadId}`);
     }
     return refreshed;
+  }
+
+  private async restoreSourceForRetry(params: {
+    item: ThreadMigrationRunItem;
+    runId: string;
+    sourceProfile: string;
+  }): Promise<void> {
+    const { item, runId, sourceProfile } = params;
+    item.status = "restoring-source";
+    migrationLog.info("thread migration source restore requested", {
+      runId,
+      sourceProfile,
+      sourceThreadId: item.sourceThreadId,
+    });
+    try {
+      const sourceClient = await this.getSourceClient(sourceProfile);
+      await sourceClient.restoreThread({ threadId: item.sourceThreadId });
+      this.sourceThreadCache.delete(sourceProfile);
+      const refreshed = await this.refreshSourceThread(
+        sourceProfile,
+        item.sourceThreadId,
+      );
+      const sourceFacts = await inspectSourceThread(refreshed);
+      item.diagnostics = sourceFacts.diagnostics;
+      item.warnings = sourceFacts.warnings;
+      migrationLog.info("thread migration source restore completed", {
+        ...item.diagnostics,
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        warningCount: item.warnings.length,
+        warnings: item.warnings,
+      });
+      item.status = "pending";
+    } catch (error) {
+      item.status = "failed";
+      item.error = error instanceof Error ? error.message : String(error);
+      migrationLog.warn("thread migration source restore failed", {
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        error: item.error,
+      });
+    }
+  }
+
+  private async refreshSourceThread(
+    sourceProfile: string,
+    threadId: ThreadIdentifier,
+  ): Promise<InternalSourceThread> {
+    await this.listSourceThreads({ sourceProfile });
+    const active = this.sourceThreadCache.get(sourceProfile)?.get(threadId);
+    if (active) {
+      return active;
+    }
+
+    await this.listSourceThreads({ sourceProfile, archived: true });
+    const archived = this.sourceThreadCache.get(sourceProfile)?.get(threadId);
+    if (!archived) {
+      throw new Error(`Source thread not found after restore: ${threadId}`);
+    }
+    return archived;
   }
 
   private async assertProfileSelectable(sourceProfile: string): Promise<void> {

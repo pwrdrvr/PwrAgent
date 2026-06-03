@@ -13,6 +13,7 @@ export const THREAD_MIGRATION_LIST_SOURCES_CHANNEL =
 export const THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL =
   "thread-migration:list-source-threads";
 export const THREAD_MIGRATION_START_CHANNEL = "thread-migration:start";
+export const THREAD_MIGRATION_RETRY_CHANNEL = "thread-migration:retry";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";

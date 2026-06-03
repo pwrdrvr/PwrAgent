@@ -306,4 +306,79 @@ describe("ThreadManagementSettings", () => {
     expect(screen.getByText("Run run-1: 1 of 1 completed, 1 with a warning."))
       .toBeInTheDocument();
   });
+
+  it("offers try harder on failed migrations and merges the retried result", async () => {
+    const threadsResponse = migrationThreadsResponse("", "web-app thread");
+    const failedResponse: StartThreadMigrationResponse = {
+      runId: "run-1",
+      operation: "move",
+      startedAt: 1234,
+      items: [
+        {
+          sourceProfile: "",
+          sourceThreadId: "default-thread",
+          status: "failed",
+          diagnostics: {
+            sourceProjectKey: "/Users/alice/.codex/worktrees/0cb4/web-app",
+            sourceWorktreePath: "/Users/alice/.codex/worktrees/0cb4/web-app",
+            sourceWorktreeExists: false,
+          },
+          error:
+            "Migration is blocked because the source managed worktree did not report an attached branch.",
+          warnings: [
+            "Source worktree was not found: /Users/alice/.codex/worktrees/0cb4/web-app",
+          ],
+        },
+      ],
+    };
+    const retriedResponse: StartThreadMigrationResponse = {
+      runId: "retry-1",
+      operation: "move",
+      startedAt: 2345,
+      items: [
+        {
+          sourceProfile: "",
+          sourceThreadId: "default-thread",
+          destinationThreadId: "destination-thread",
+          status: "completed",
+          diagnostics: {
+            destinationWorktreePath:
+              "/Users/alice/.codex/profiles/work/worktrees/web-app",
+          },
+        },
+      ],
+    };
+    const retryThreadMigration = vi.fn(async () => retriedResponse);
+    const desktopApi: DesktopApi = {
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
+      listThreadMigrationSourceThreads: vi.fn(async () => threadsResponse),
+      startThreadMigration: vi.fn(async () => failedResponse),
+      retryThreadMigration,
+    };
+
+    render(<ThreadManagementSettings desktopApi={desktopApi} />);
+
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /web-app thread/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+
+    expect(await screen.findByText("failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try harder" }));
+
+    await waitFor(() => {
+      expect(retryThreadMigration).toHaveBeenCalledWith({
+        sourceProfile: "",
+        operation: "move",
+        threadId: "default-thread",
+      });
+    });
+    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Destination worktree /Users/alice/.codex/profiles/work/worktrees/web-app",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Try harder")).not.toBeInTheDocument();
+  });
 });

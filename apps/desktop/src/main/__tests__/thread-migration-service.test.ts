@@ -124,6 +124,7 @@ describe("ThreadMigrationService", () => {
       listThreadsForMigration: vi.fn(async () => [makeSourceThread()]),
       readThread: vi.fn(),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const service = new ThreadMigrationService({
@@ -201,6 +202,7 @@ describe("ThreadMigrationService", () => {
       ]),
       readThread: vi.fn(),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const service = new ThreadMigrationService({
@@ -239,6 +241,7 @@ describe("ThreadMigrationService", () => {
         calls.push("source-archive");
         return { threadId: "source-thread" };
       }),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
@@ -310,6 +313,7 @@ describe("ThreadMigrationService", () => {
       listThreadsForMigration: vi.fn(async () => [makeSourceThread()]),
       readThread: vi.fn(async () => makeReplay()),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
@@ -377,6 +381,7 @@ describe("ThreadMigrationService", () => {
         calls.push("source-archive");
         return { threadId: "source-thread" };
       }),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
@@ -449,6 +454,7 @@ describe("ThreadMigrationService", () => {
       ]),
       readThread: vi.fn(async () => makeReplay()),
       archiveThread: vi.fn(async () => ({ threadId: "source-thread" })),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
@@ -530,6 +536,7 @@ describe("ThreadMigrationService", () => {
       ]),
       readThread: vi.fn(async () => makeReplay()),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
@@ -585,6 +592,146 @@ describe("ThreadMigrationService", () => {
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
   });
 
+  it("restores source workspace metadata before retrying a failed migration", async () => {
+    const calls: string[] = [];
+    const staleThread = makeSourceThread({
+      projectKey: "/Users/alice/.codex/worktrees/0cb4/web-app",
+      linkedDirectories: [
+        {
+          id: "worktree:/Users/alice/.codex/worktrees/0cb4/web-app",
+          label: "web-app",
+          path: "/repo/web-app",
+          worktreePath: "/Users/alice/.codex/worktrees/0cb4/web-app",
+          kind: "worktree",
+        },
+      ],
+    });
+    const restoredThread = makeSourceThread({
+      gitBranch: "codex/chunk-file-errors",
+      projectKey: "/Users/alice/.codex/worktrees/0cb4/web-app",
+      linkedDirectories: [
+        {
+          id: "worktree:/Users/alice/.codex/worktrees/0cb4/web-app",
+          label: "web-app",
+          path: "/repo/web-app",
+          worktreePath: "/Users/alice/.codex/worktrees/0cb4/web-app",
+          kind: "worktree",
+        },
+      ],
+    });
+    const sourceClient = {
+      listThreadsForMigration: vi
+        .fn()
+        .mockResolvedValueOnce([staleThread])
+        .mockResolvedValue([restoredThread]),
+      readThread: vi.fn(async () => {
+        calls.push("source-read");
+        return makeReplay();
+      }),
+      archiveThread: vi.fn(async () => {
+        calls.push("source-archive");
+        return { threadId: "source-thread" };
+      }),
+      restoreThread: vi.fn(async () => {
+        calls.push("source-restore");
+        return { threadId: "source-thread" };
+      }),
+      close: vi.fn(),
+    };
+    const destination = {
+      forkThread: vi.fn(async (request) => {
+        calls.push("destination-fork");
+        expect(request).toMatchObject({
+          branchName: "codex/chunk-file-errors",
+          directoryPath: "/repo/web-app",
+          excludedWorktreePaths: [
+            "/Users/alice/.codex/worktrees/0cb4/web-app",
+          ],
+          sourceThreadId: "source-thread",
+          workMode: "worktree",
+          worktreeBranchMode: "attached",
+        });
+        return {
+          backend: "codex" as const,
+          sourceThreadId: "source-thread",
+          threadId: "destination-thread",
+          executionMode: "default" as const,
+          linkedDirectory: {
+            id: "worktree:/Users/alice/.codex/profiles/work/worktrees/web-app",
+            label: "web-app",
+            path: "/repo/web-app",
+            worktreePath:
+              "/Users/alice/.codex/profiles/work/worktrees/web-app",
+            kind: "worktree" as const,
+          },
+          workMode: "worktree" as const,
+        };
+      }),
+      readThread: vi.fn(async () => {
+        calls.push("destination-read");
+        return { replay: makeReplay() };
+      }),
+    };
+    const service = new ThreadMigrationService({
+      destination,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+      idFactory: () => "run-1",
+    });
+
+    const failed = await service.startMigration({
+      sourceProfile: "",
+      operation: "move",
+      threadIds: ["source-thread"],
+    });
+
+    expect(failed.items[0]).toMatchObject({
+      status: "failed",
+      error:
+        "Migration is blocked because the source managed worktree did not report an attached branch.",
+    });
+    expect(destination.forkThread).not.toHaveBeenCalled();
+    expect(sourceClient.archiveThread).not.toHaveBeenCalled();
+
+    const retried = await service.retryMigration({
+      sourceProfile: "",
+      operation: "move",
+      threadId: "source-thread",
+    });
+
+    expect(retried.items[0]).toMatchObject({
+      destinationThreadId: "destination-thread",
+      diagnostics: {
+        requestedBranchName: "codex/chunk-file-errors",
+        requestedDirectoryPath: "/repo/web-app",
+        requestedWorkMode: "worktree",
+        requestedWorktreeBranchMode: "attached",
+        destinationWorktreePath:
+          "/Users/alice/.codex/profiles/work/worktrees/web-app",
+        archivedSource: true,
+      },
+      status: "completed",
+    });
+    expect(sourceClient.restoreThread).toHaveBeenCalledWith({
+      threadId: "source-thread",
+    });
+    expect(sourceClient.listThreadsForMigration).toHaveBeenNthCalledWith(2, {
+      archived: false,
+      filter: undefined,
+    });
+    expect(calls).toEqual([
+      "source-restore",
+      "destination-fork",
+      "source-read",
+      "destination-read",
+      "source-archive",
+    ]);
+  });
+
   it("blocks Move before fork/archive when projectKey is a profile-owned worktree", async () => {
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [
@@ -596,6 +743,7 @@ describe("ThreadMigrationService", () => {
       ]),
       readThread: vi.fn(),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {

@@ -5194,6 +5194,12 @@ textarea,
   color: var(--danger-text);
 }
 
+.settings-thread-management__retry {
+  min-height: 28px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
 .settings-thread-management__checkbox-input {
   position: relative;
   z-index: 1;

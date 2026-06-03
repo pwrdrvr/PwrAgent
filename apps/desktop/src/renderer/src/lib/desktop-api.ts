@@ -81,6 +81,7 @@ import type {
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
   MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -334,6 +335,9 @@ export type DesktopApi = {
   ) => Promise<ListThreadMigrationSourceThreadsResponse>;
   startThreadMigration?: (
     request: StartThreadMigrationRequest,
+  ) => Promise<StartThreadMigrationResponse>;
+  retryThreadMigration?: (
+    request: RetryThreadMigrationRequest,
   ) => Promise<StartThreadMigrationResponse>;
   archiveWorktree?: (
     request: ArchiveWorktreeRequest
