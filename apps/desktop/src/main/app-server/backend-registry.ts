@@ -9525,16 +9525,19 @@ export class DesktopBackendRegistry {
       ? "waiting for your response"
       : "waiting for your approval";
     const body = threadTitle ? `${threadTitle} · ${baseBody}.` : `A turn ${baseBody}.`;
+    const approvalRequest = this.isApprovalAttentionNotification(event.notification)
+      ? event.notification
+      : undefined;
     getDesktopNotificationService().notifyAttention({
       enabled: this.notificationsEnabled(),
       key: `${event.backend}:${threadId}:${requestId}`,
       title,
       body,
-      onApprove: this.isApprovalAttentionNotification(event.notification)
+      onApprove: approvalRequest
         ? () => {
             void this.resolvePendingServerRequestFromNotification({
               backend: event.backend,
-              request: event.notification,
+              request: approvalRequest,
             });
           }
         : undefined,

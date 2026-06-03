@@ -97,11 +97,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-type NotificationServiceWithPrivateHooks = DesktopNotificationService & {
-  liveNotifications: Set<unknown>;
-  supportsActionButtons: () => boolean;
-};
-
 describe("DesktopNotificationService", () => {
   beforeEach(() => {
     shownNotifications.length = 0;
@@ -159,8 +154,11 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
+    const serviceWithActionButtons = service as unknown as {
+      supportsActionButtons: () => boolean;
+    };
     vi.spyOn(
-      service as NotificationServiceWithPrivateHooks,
+      serviceWithActionButtons,
       "supportsActionButtons",
     ).mockReturnValue(true);
 
@@ -181,13 +179,18 @@ describe("DesktopNotificationService", () => {
   });
 
   it("retains live notifications until the native notification resolves", () => {
-    const service =
-      new DesktopNotificationService() as NotificationServiceWithPrivateHooks;
+    const service = new DesktopNotificationService();
     const onApprove = vi.fn();
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
-    vi.spyOn(service, "supportsActionButtons").mockReturnValue(true);
+    const serviceWithActionButtons = service as unknown as {
+      supportsActionButtons: () => boolean;
+    };
+    const serviceWithLiveNotifications = service as unknown as {
+      liveNotifications: Set<unknown>;
+    };
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(true);
 
     service.notifyAttention({
       enabled: true,
@@ -197,10 +200,10 @@ describe("DesktopNotificationService", () => {
       onApprove,
     });
 
-    expect(service.liveNotifications.size).toBe(1);
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
 
     shownNotifications[0]?.instance.emitAction(0);
-    expect(service.liveNotifications.size).toBe(0);
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
 
     service.notifyAttention({
       enabled: true,
@@ -210,9 +213,9 @@ describe("DesktopNotificationService", () => {
       onApprove,
     });
 
-    expect(service.liveNotifications.size).toBe(1);
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
     shownNotifications[1]?.instance.emitClick();
-    expect(service.liveNotifications.size).toBe(0);
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
   });
 
   it("falls back to a passive notification when action buttons are unsupported", () => {
@@ -221,8 +224,11 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
+    const serviceWithActionButtons = service as unknown as {
+      supportsActionButtons: () => boolean;
+    };
     vi.spyOn(
-      service as NotificationServiceWithPrivateHooks,
+      serviceWithActionButtons,
       "supportsActionButtons",
     ).mockReturnValue(false);
 
