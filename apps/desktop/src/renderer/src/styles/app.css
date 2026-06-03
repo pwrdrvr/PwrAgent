@@ -3278,7 +3278,9 @@ textarea,
 .app-shell__settings-layer {
   display: flex;
   position: absolute;
-  z-index: 30;
+  /* Above thread chrome including the context rail/tooltips. Settings is
+     a full-window surface, not a sibling panel in the thread layout. */
+  z-index: 120;
   inset: 0;
   min-width: 0;
   min-height: 0;
@@ -5099,11 +5101,13 @@ textarea,
 .settings-thread-management__selection-shell {
   display: flex;
   min-height: 0;
+  max-height: clamp(360px, 64vh, 760px);
   flex-direction: column;
 }
 
 .settings-thread-management__projects-list {
-  max-height: clamp(280px, 52vh, 680px);
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
 }
 
@@ -5224,17 +5228,14 @@ textarea,
 }
 
 .settings-thread-management__actionbar {
-  position: sticky;
-  z-index: 2;
-  bottom: 0;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 12px 18px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
-  box-shadow: 0 -10px 18px var(--shadow-tint-faint);
 }
 
 .settings-thread-management__actioncopy {
