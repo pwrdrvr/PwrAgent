@@ -266,7 +266,8 @@ describe("ThreadManagementSettings", () => {
         "Destination returned local even though migration requested a worktree.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Run run-1: 1 of 1 completed, 1 warning."))
+    expect(screen.getByText("completed with warning")).toBeInTheDocument();
+    expect(screen.getByText("Run run-1: 1 of 1 completed, 1 with a warning."))
       .toBeInTheDocument();
   });
 });

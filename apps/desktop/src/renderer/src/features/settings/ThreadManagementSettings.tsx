@@ -187,6 +187,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const runWarningCount =
     run?.items.reduce((count, item) => count + (item.warnings?.length ?? 0), 0) ??
     0;
+  const runCompletedWithWarningsCount =
+    run?.items.filter(
+      (item) => item.status === "completed" && (item.warnings?.length ?? 0) > 0,
+    ).length ?? 0;
   const selectedCount = selectedThreadIds.size;
   const selectedHasManagedWorktree = useMemo(
     () =>
@@ -530,7 +534,9 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
             Run {run.runId}: {run.items.filter((item) => item.status === "completed").length} of{" "}
             {run.items.length} completed
             {runWarningCount > 0
-              ? `, ${runWarningCount} ${runWarningCount === 1 ? "warning" : "warnings"}`
+              ? `, ${runCompletedWithWarningsCount} with ${
+                  runWarningCount === 1 ? "a warning" : "warnings"
+                }`
               : ""}
             .
           </p>
@@ -588,18 +594,24 @@ function RunStatus(props: { item?: ThreadMigrationRunItem }) {
   if (!props.item) {
     return null;
   }
+  const completedWithWarnings =
+    props.item.status === "completed" && (props.item.warnings?.length ?? 0) > 0;
   return (
     <span
       className={`settings-pathrow__chip ${
-        props.item.status === "completed"
+        completedWithWarnings
+          ? "settings-pathrow__chip--warn"
+          : props.item.status === "completed"
           ? "settings-pathrow__chip--ok"
           : props.item.status === "failed"
             ? "settings-pathrow__chip--err"
             : "settings-pathrow__chip--warn"
       }`}
-      title={props.item.error}
+      title={[props.item.error, ...(props.item.warnings ?? [])]
+        .filter(Boolean)
+        .join("\n")}
     >
-      {props.item.status}
+      {completedWithWarnings ? "completed with warning" : props.item.status}
     </span>
   );
 }

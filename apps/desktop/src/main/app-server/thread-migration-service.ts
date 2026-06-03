@@ -187,6 +187,9 @@ export class ThreadMigrationService {
 
     migrationLog.info("thread migration run finished", {
       completedCount: run.items.filter((item) => item.status === "completed").length,
+      completedWithWarningsCount: run.items.filter(
+        (item) => item.status === "completed" && (item.warnings?.length ?? 0) > 0,
+      ).length,
       failedCount: run.items.filter((item) => item.status === "failed").length,
       operation: request.operation,
       runId: run.runId,
