@@ -3,6 +3,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  parseCodexTurnErrorMessage,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
 } from "@pwragent/shared";
@@ -841,6 +842,15 @@ export class MessagingController {
       } else if (isTerminalTurnLifecycle(activeTurn)) {
         await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
         await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
+      }
+
+      // Automation turns surface their own terminal output (incl. errors) via
+      // handleAutomationTurnTerminal, so skip them here to avoid a double post.
+      if (!automationTurnEvent && activeTurn?.status === "failed") {
+        const turnFailureText = errorTextForBackendEvent(event);
+        if (turnFailureText) {
+          await this.deliverTurnFailureMessage(turnFailureText, event, binding);
+        }
       }
 
       if (isThreadNameUpdatedEvent(event)) {
@@ -2677,6 +2687,36 @@ export class MessagingController {
           },
         ],
       },
+      binding,
+    );
+  }
+
+  /**
+   * Surface a failed turn's error in the bound conversation. Previously a Codex
+   * turn failure (e.g. a provider 400) left the chat silent — the turn just
+   * stopped. We post it as a recoverable error notice so the operator can see
+   * what went wrong and retry. Deduped on (event, binding, text) so a re-emitted
+   * terminal turn does not double-post.
+   */
+  private async deliverTurnFailureMessage(
+    text: string,
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (!this.markAssistantMessageDelivered(event, binding, `turn-failed:${text}`)) {
+      return;
+    }
+    this.logger.debug?.(
+      `messaging turn-failure deliver thread=${binding.threadId} binding=${binding.id} preview="${compactLogPreview(text)}"`,
+    );
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("turn-failed"),
+        createdAt: this.now(),
+        title: "Turn failed",
+        body: text,
+        recoverable: true,
+      }),
       binding,
     );
   }
@@ -10745,6 +10785,28 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The user-facing error text for a failed terminal turn, or undefined when the
+ * event is not a turn failure. Codex turn failures are normalized to
+ * `turn/failed` at the adapter boundary, so keying on that single method covers
+ * both Codex and synthetic (start-failure / ACP) failures. The message is run
+ * through {@link parseCodexTurnErrorMessage} to unwrap provider JSON envelopes;
+ * the parse is idempotent for already-clean messages.
+ */
+function errorTextForBackendEvent(event: AgentEvent): string | undefined {
+  if (event.notification.method !== "turn/failed") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    turn?: { error?: { message?: unknown } };
+  };
+  const message = params.turn?.error?.message;
+  if (typeof message !== "string" || !message.trim()) {
+    return undefined;
+  }
+  return parseCodexTurnErrorMessage(message);
 }
 
 function assistantDeltaForBackendEvent(
