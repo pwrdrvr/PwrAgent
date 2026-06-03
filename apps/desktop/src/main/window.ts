@@ -10,9 +10,14 @@ import {
 import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
+import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
+import { createHotCpuProfileSession } from "./diagnostics/hot-cpu-profile-session";
 import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor";
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
+import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
 import { getMainLogger } from "./log";
+import { resolveActiveProfilePath } from "./profile";
+import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { attachWindowFocusSync } from "./window-focus-sync";
 import {
   WINDOW_KIND_MAIN,
@@ -38,7 +43,9 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
+const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
+const hotCpuProfilerSyncHandlers = new Map<number, (reason: string) => void>();
 
 function serializeError(error: unknown): string {
   if (error instanceof Error) {
@@ -265,6 +272,18 @@ function resolveRepoRoot(): string {
   return resolve(app.getAppPath(), "../..");
 }
 
+function resolveHotCpuProfileOutputRoot(): string {
+  return resolveActiveProfilePath(join("state", "diagnostics"));
+}
+
+export function syncHotCpuProfilersFromSettings(
+  reason = "settings-changed",
+): void {
+  for (const sync of hotCpuProfilerSyncHandlers.values()) {
+    sync(reason);
+  }
+}
+
 export function createMainWindow(options?: {
   startupCpuProfiler?: {
     attachWindow: (window: BrowserWindow) => void;
@@ -352,6 +371,107 @@ export function createMainWindow(options?: {
 
   const { webContents } = window;
   attachWindowFocusSync(window);
+  let rendererLoaded = false;
+  let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;
+  let hotCpuProfilerGeneration = 0;
+
+  const createHotCpuProfiler = async (
+    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+  ): Promise<RendererHotCpuProfiler | null> => {
+    const created = await createHotCpuProfileSession({
+      config: hotCpuConfig,
+      versions: {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron ?? "unknown",
+        chromeVersion: process.versions.chrome ?? "unknown",
+        nodeVersion: process.versions.node,
+      },
+    });
+
+    if (!created.ok) {
+      hotCpuLog.error("failed to initialize hot CPU diagnostics", {
+        message: created.message,
+      });
+      return null;
+    }
+
+    hotCpuLog.info("session directory", {
+      sessionDirectory: created.session.directoryPath,
+    });
+
+    return new RendererHotCpuProfiler({
+      config: hotCpuConfig,
+      getAppMetrics: () => app.getAppMetrics(),
+      session: created.session,
+      target: webContents,
+    });
+  };
+
+  const stopHotCpuProfiler = (reason: string) => {
+    hotCpuProfilerGeneration += 1;
+    const profilerPromise = hotCpuProfilerPromise;
+    hotCpuProfilerPromise = null;
+    if (!profilerPromise) {
+      return;
+    }
+
+    void profilerPromise
+      .then(async (profiler) => {
+        await profiler?.stop(reason);
+      })
+      .catch((error: unknown) => {
+        hotCpuLog.warn("failed to stop hot CPU diagnostics", {
+          reason,
+          error: serializeError(error),
+        });
+      });
+  };
+
+  const syncHotCpuProfiler = (reason: string) => {
+    void (async () => {
+      if (!rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
+        return;
+      }
+
+      const settingsService = getDesktopSettingsService();
+      const hotCpuConfig = resolveHotCpuProfileConfig({
+        enabled: settingsService.resolveHotCpuProfilingEnabled(),
+        outputRoot: resolveHotCpuProfileOutputRoot(),
+        repoRoot: resolveRepoRoot(),
+      });
+
+      if (!hotCpuConfig.enabled) {
+        stopHotCpuProfiler(reason);
+        return;
+      }
+
+      if (hotCpuProfilerPromise) {
+        return;
+      }
+
+      const generation = hotCpuProfilerGeneration;
+      hotCpuProfilerPromise = createHotCpuProfiler(hotCpuConfig);
+      const profiler = await hotCpuProfilerPromise;
+      if (generation !== hotCpuProfilerGeneration) {
+        await profiler?.stop("settings-changed");
+        return;
+      }
+
+      if (!profiler) {
+        hotCpuProfilerPromise = null;
+        return;
+      }
+
+      await profiler.start();
+    })().catch((error: unknown) => {
+      hotCpuLog.warn("failed to sync hot CPU diagnostics", {
+        reason,
+        error: serializeError(error),
+      });
+    });
+  };
+  hotCpuProfilerSyncHandlers.set(window.id, syncHotCpuProfiler);
+
   const heapMonitorPromise = (async () => {
     const heapConfig = resolveHeapMonitorConfig({
       repoRoot: resolveRepoRoot(),
@@ -431,12 +551,15 @@ export function createMainWindow(options?: {
 
     webContents.on("render-process-gone", (_event, details) => {
       stopHeapMonitor("render-process-gone");
+      stopHotCpuProfiler("render-process-gone");
       mainLog.error("renderer process gone", details);
     });
 
     if (typeof webContents.once === "function") {
       webContents.once("did-finish-load", () => {
+        rendererLoaded = true;
         void heapMonitorPromise.then((monitors) => monitors?.rendererMonitor.start());
+        syncHotCpuProfiler("did-finish-load");
       });
     }
   }
@@ -487,7 +610,9 @@ export function createMainWindow(options?: {
   ]);
 
   window.on("closed", () => {
+    hotCpuProfilerSyncHandlers.delete(window.id);
     stopHeapMonitor("window-closed");
+    stopHotCpuProfiler("window-closed");
   });
 
   return window;

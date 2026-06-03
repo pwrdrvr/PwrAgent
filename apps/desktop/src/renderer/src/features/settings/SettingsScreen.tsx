@@ -278,6 +278,13 @@ function SettingsSectionBody(props: {
             general: { developerMode },
           });
         }}
+        onHotCpuProfilingEnabledChange={async (
+          hotCpuProfilingEnabled: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingEnabled },
+          });
+        }}
         onConfirmQuitWithInProgressThreadsChange={async (
           confirmQuitWithInProgressThreads: boolean,
         ) => {

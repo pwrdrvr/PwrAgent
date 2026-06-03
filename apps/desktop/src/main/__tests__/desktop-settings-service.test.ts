@@ -269,6 +269,38 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveDeveloperMode()).toBe(true);
   });
 
+  it("defaults hot CPU profiling to disabled and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.general.hotCpuProfilingEnabled).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveHotCpuProfilingEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      general: {
+        hotCpuProfilingEnabled: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
+    expect(saved).toContain("hot_cpu_profiling_enabled = true");
+    expect((await service.readSettings()).general.hotCpuProfilingEnabled).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(service.resolveHotCpuProfilingEnabled()).toBe(true);
+  });
+
   it("defaults notifications to disabled and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

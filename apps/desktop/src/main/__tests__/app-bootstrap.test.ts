@@ -189,6 +189,12 @@ vi.mock("../diagnostics/main-process-heap-monitor", () => ({
   MainProcessHeapMonitor: MainProcessHeapMonitorMock
 }));
 
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    resolveHotCpuProfilingEnabled: () => false,
+  }),
+}));
+
 describe("createMainWindow", () => {
   beforeEach(() => {
     vi.resetModules();

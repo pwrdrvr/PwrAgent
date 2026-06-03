@@ -341,6 +341,10 @@ export class DesktopSettingsService {
           config.general?.developerMode,
           this.defaultDeveloperMode(),
         ),
+        hotCpuProfilingEnabled: this.resolveConfigBoolean(
+          config.general?.hotCpuProfilingEnabled,
+          false,
+        ),
         notificationsEnabled: this.resolveConfigBoolean(
           config.general?.notificationsEnabled,
           false,
@@ -711,6 +715,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.developerMode,
       this.defaultDeveloperMode(),
+    ).value;
+  }
+
+  resolveHotCpuProfilingEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.hotCpuProfilingEnabled,
+      false,
     ).value;
   }
 

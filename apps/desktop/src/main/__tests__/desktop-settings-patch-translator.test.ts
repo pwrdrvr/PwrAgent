@@ -19,6 +19,22 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes hot CPU profiling", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        hotCpuProfilingEnabled: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_enabled"],
+        value: true,
+      },
+    ]);
+  });
+
   it("writes quit confirmation preference", () => {
     const edits = desktopSettingsPatchToEdits({
       general: {

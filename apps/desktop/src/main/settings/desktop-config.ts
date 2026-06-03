@@ -66,6 +66,7 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
+    hotCpuProfilingEnabled?: boolean;
     notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
@@ -443,6 +444,12 @@ export function desktopSettingsPatchToEdits(
   // write new values.
   if (patch.general?.developerMode !== undefined) {
     set(["general", "developer_mode"], patch.general.developerMode);
+  }
+  if (patch.general?.hotCpuProfilingEnabled !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_enabled"],
+      patch.general.hotCpuProfilingEnabled,
+    );
   }
   if (patch.general?.confirmQuitWithInProgressThreads !== undefined) {
     set(
@@ -945,6 +952,7 @@ function normalizeDesktopConfig(
         general?.confirm_quit_with_in_progress_threads,
       ),
       developerMode: readBoolean(general?.developer_mode),
+      hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
@@ -1149,6 +1157,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const pruned: DesktopSettingsConfig = {};
 
   const developerMode = config.general?.developerMode;
+  const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const notificationsEnabled = config.general?.notificationsEnabled;
@@ -1158,6 +1167,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const messagingAcknowledgment = config.general?.messagingAcknowledgment;
   if (
     developerMode !== undefined ||
+    hotCpuProfilingEnabled !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
@@ -1167,6 +1177,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.general = {};
     if (developerMode !== undefined) {
       pruned.general.developerMode = developerMode;
+    }
+    if (hotCpuProfilingEnabled !== undefined) {
+      pruned.general.hotCpuProfilingEnabled = hotCpuProfilingEnabled;
     }
     if (confirmQuitWithInProgressThreads !== undefined) {
       pruned.general.confirmQuitWithInProgressThreads =
