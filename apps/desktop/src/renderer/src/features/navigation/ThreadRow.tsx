@@ -47,6 +47,11 @@ type ThreadRowProps = {
     thread: NavigationThreadSummary,
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
+  onOpenPullRequestContextMenu?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+    position: { x: number; y: number; anchorTop?: number }
+  ) => void;
   /**
    * Fired after a 750ms hover over a non-merged PR chip. The parent
    * decides whether to actually issue an IPC fetch (e.g. dedupe by
@@ -247,6 +252,16 @@ export function ThreadRow(props: ThreadRowProps) {
               pr={pr}
               showRepoPrefix={showRepoPrefix}
               onOpen={openPr}
+              onOpenContextMenu={
+                props.onOpenPullRequestContextMenu
+                  ? (targetPr, position) =>
+                      props.onOpenPullRequestContextMenu!(
+                        props.thread,
+                        targetPr,
+                        position,
+                      )
+                  : undefined
+              }
             />
           ))}
 

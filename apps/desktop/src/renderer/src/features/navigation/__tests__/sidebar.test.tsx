@@ -9,7 +9,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, NavigationDirectorySummary } from "@pwragent/shared";
+import type {
+  BackendSummary,
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { Sidebar } from "../Sidebar";
 
 async function clickElement(element: HTMLElement): Promise<void> {
@@ -108,6 +112,19 @@ const sharedThread = {
       path: "/Users/huntharo/pwrdrvr/PwrAgent",
       worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
       kind: "worktree" as const,
+    },
+  ],
+};
+
+const pullRequestThread: NavigationThreadSummary = {
+  ...sharedThread,
+  prs: [
+    {
+      number: 202,
+      org: "Giphy",
+      repo: "GifGrabber",
+      state: "passing",
+      url: "https://github.com/Giphy/GifGrabber/pull/202",
     },
   ],
 };
@@ -2164,6 +2181,49 @@ describe("Sidebar", () => {
     expect(
       screen.queryByText("Line up the desktop shell with the app server")
     ).not.toBeInTheDocument();
+  });
+
+  it("copies a pull request URL from the PR chip context menu", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const onSelectThread = vi.fn();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[pullRequestThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[pullRequestThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+      />
+    );
+
+    const prChip = screen.getByRole("button", {
+      name: "Open Giphy/GifGrabber#202 (passing) in browser",
+    });
+    fireEvent.contextMenu(prChip, { clientX: 48, clientY: 64 });
+    await clickElement(
+      screen.getByRole("menuitem", { name: "Copy Pull Request URL" }),
+    );
+
+    expect(copyText).toHaveBeenCalledWith(
+      "https://github.com/Giphy/GifGrabber/pull/202",
+    );
+    expect(onSelectThread).not.toHaveBeenCalled();
   });
 
   it("shows compact runtime identity chips that copy full values", async () => {

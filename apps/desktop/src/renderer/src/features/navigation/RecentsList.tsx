@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -26,6 +27,11 @@ type RecentsListProps = {
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
+  ) => void;
+  onOpenPullRequestContextMenu?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+    position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onReorderThreadPins?: (
@@ -228,6 +234,7 @@ export function RecentsList(props: RecentsListProps) {
                 );
               }}
               onOpenContextMenu={props.onOpenThreadContextMenu}
+              onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
@@ -340,6 +347,7 @@ export function RecentsList(props: RecentsListProps) {
           }
           onMovePinnedThread={pinned ? movePinnedThreadByKeyboard : undefined}
           onOpenContextMenu={props.onOpenThreadContextMenu}
+          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onSelectThread={props.onSelectThread}
           onSetReaction={props.onSetReaction}
