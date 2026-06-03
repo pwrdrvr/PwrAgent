@@ -390,6 +390,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        hotCpuProfilingEnabled: {
+          value: false,
+          source: "default",
+        },
         notificationsEnabled: {
           value: false,
           source: "default",
