@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { buildDirectorySummaries } from "@pwragent/agent-core";
 import {
   buildThreadIdentityKey,
@@ -34,6 +37,7 @@ import {
 import { buildCodexClientArgs } from "./backend-registry";
 
 const migrationLog = getMainLogger("pwragent:thread-migration");
+const execFileAsync = promisify(execFile);
 
 type SourceMigrationClient = Pick<
   CodexAppServerClient,
@@ -71,6 +75,8 @@ type ThreadMigrationServiceOptions = {
 type InternalSourceThread = ThreadMigrationSourceThreadSummary & {
   rolloutPath?: string;
 };
+
+type MigrationDiagnostics = NonNullable<ThreadMigrationRunItem["diagnostics"]>;
 
 export class ThreadMigrationService {
   private readonly sourceClients = new Map<string, SourceMigrationClient>();
@@ -166,9 +172,29 @@ export class ThreadMigrationService {
       })),
     };
 
+    migrationLog.info("thread migration run started", {
+      copyStrategy: request.copyStrategy,
+      operation: request.operation,
+      runId: run.runId,
+      sourceProfile,
+      threadCount: request.threadIds.length,
+      threadIds: request.threadIds,
+    });
+
     for (const item of run.items) {
-      await this.migrateOne({ item, request, sourceProfile });
+      await this.migrateOne({ item, request, runId: run.runId, sourceProfile });
     }
+
+    migrationLog.info("thread migration run finished", {
+      completedCount: run.items.filter((item) => item.status === "completed").length,
+      failedCount: run.items.filter((item) => item.status === "failed").length,
+      operation: request.operation,
+      runId: run.runId,
+      warningCount: run.items.reduce(
+        (count, item) => count + (item.warnings?.length ?? 0),
+        0,
+      ),
+    });
 
     return run;
   }
@@ -183,14 +209,27 @@ export class ThreadMigrationService {
   private async migrateOne(params: {
     item: ThreadMigrationRunItem;
     request: StartThreadMigrationRequest;
+    runId: string;
     sourceProfile: string;
   }): Promise<void> {
-    const { item, request, sourceProfile } = params;
+    const { item, request, runId, sourceProfile } = params;
     try {
       const sourceThread = await this.resolveSourceThread(
         sourceProfile,
         item.sourceThreadId,
       );
+      const sourceFacts = await inspectSourceThread(sourceThread);
+      item.diagnostics = sourceFacts.diagnostics;
+      item.warnings = sourceFacts.warnings;
+      migrationLog.info("thread migration item starting", {
+        ...item.diagnostics,
+        operation: request.operation,
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        warningCount: item.warnings.length,
+        warnings: item.warnings,
+      });
       if (!sourceThread.rolloutPath) {
         throw new Error("Source CAS did not provide a rollout path for this thread.");
       }
@@ -204,8 +243,31 @@ export class ThreadMigrationService {
         );
       }
       const destinationWorkspace = resolveDestinationWorkspace(sourceThread, request);
+      item.diagnostics = {
+        ...item.diagnostics,
+        ...(destinationWorkspace.directoryPath
+          ? { requestedDirectoryPath: destinationWorkspace.directoryPath }
+          : {}),
+        ...(destinationWorkspace.branchName
+          ? { requestedBranchName: destinationWorkspace.branchName }
+          : {}),
+        ...(destinationWorkspace.worktreeBranchMode
+          ? {
+              requestedWorktreeBranchMode:
+                destinationWorkspace.worktreeBranchMode,
+            }
+          : {}),
+        requestedWorkMode: destinationWorkspace.workMode,
+      };
 
       item.status = "copying";
+      migrationLog.info("thread migration fork requested", {
+        ...item.diagnostics,
+        operation: request.operation,
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+      });
       const destination = await this.options.destination.forkThread({
         backend: "codex",
         sourceThreadId: sourceThread.threadId,
@@ -222,6 +284,27 @@ export class ThreadMigrationService {
           : {}),
       });
       item.destinationThreadId = destination.threadId;
+      item.diagnostics = {
+        ...item.diagnostics,
+        ...(destination.linkedDirectory?.path
+          ? { destinationDirectoryPath: destination.linkedDirectory.path }
+          : {}),
+        ...(destination.linkedDirectory?.worktreePath
+          ? { destinationWorktreePath: destination.linkedDirectory.worktreePath }
+          : {}),
+        destinationWorkMode: destination.workMode,
+      };
+      appendWarnings(item, validateDestinationWorkspaceResult(destinationWorkspace, destination));
+      migrationLog.info("thread migration fork completed", {
+        ...item.diagnostics,
+        destinationThreadId: destination.threadId,
+        operation: request.operation,
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        warningCount: item.warnings?.length ?? 0,
+        warnings: item.warnings ?? [],
+      });
 
       item.status = "validating";
       const sourceClient = await this.getSourceClient(sourceProfile);
@@ -240,23 +323,68 @@ export class ThreadMigrationService {
       if (!validation.matched) {
         throw new Error("Destination replay did not match source replay.");
       }
+      migrationLog.info("thread migration validation completed", {
+        destinationThreadId: destination.threadId,
+        matched: validation.matched,
+        operation: request.operation,
+        runId,
+        sourceMessageCount: validation.sourceMessageCount,
+        destinationMessageCount: validation.destinationMessageCount,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+      });
 
       item.status = "worktree";
       if (request.operation === "move") {
         item.status = "archiving-source";
+        migrationLog.info("thread migration source archive requested", {
+          destinationThreadId: destination.threadId,
+          runId,
+          sourceProfile,
+          sourceThreadId: sourceThread.threadId,
+        });
         await sourceClient.archiveThread({ threadId: sourceThread.threadId });
+        item.diagnostics = {
+          ...item.diagnostics,
+          archivedSource: true,
+        };
+        migrationLog.info("thread migration source archived", {
+          destinationThreadId: destination.threadId,
+          runId,
+          sourceProfile,
+          sourceThreadId: sourceThread.threadId,
+        });
       }
 
       item.status = "completed";
+      const logPayload = {
+        ...item.diagnostics,
+        destinationThreadId: item.destinationThreadId,
+        operation: request.operation,
+        runId,
+        sourceProfile,
+        sourceThreadId: item.sourceThreadId,
+        warningCount: item.warnings?.length ?? 0,
+        warnings: item.warnings ?? [],
+      };
+      if (item.warnings?.length) {
+        migrationLog.warn("thread migration item completed with warnings", logPayload);
+      } else {
+        migrationLog.info("thread migration item completed", logPayload);
+      }
     } catch (error) {
       item.status = "failed";
       item.error = error instanceof Error ? error.message : String(error);
       migrationLog.warn("thread migration item failed", {
+        ...item.diagnostics,
         sourceProfile,
         sourceThreadId: item.sourceThreadId,
         destinationThreadId: item.destinationThreadId,
         status: item.status,
         error: item.error,
+        runId,
+        warningCount: item.warnings?.length ?? 0,
+        warnings: item.warnings ?? [],
       });
     }
   }
@@ -495,6 +623,11 @@ function resolveDestinationWorkspace(
   }
   const branchName =
     thread.gitBranch && thread.gitBranch !== "HEAD" ? thread.gitBranch : undefined;
+  if (sourceHasProfileOwnedWorktree && !branchName) {
+    throw new Error(
+      "Migration is blocked because the source managed worktree did not report an attached branch.",
+    );
+  }
   const needsDestinationWorktree =
     Boolean(directoryPath && branchName) &&
     (request.operation === "move" ||
@@ -530,6 +663,126 @@ function resolveDestinationDirectoryPath(
   }
 
   return undefined;
+}
+
+async function inspectSourceThread(thread: InternalSourceThread): Promise<{
+  diagnostics: MigrationDiagnostics;
+  warnings: string[];
+}> {
+  const sourceDirectoryPath = resolveDestinationDirectoryPath(thread);
+  const sourceWorktreePath = resolveSourceWorktreePath(thread);
+  const sourceGitBranch =
+    thread.gitBranch && thread.gitBranch !== "HEAD" ? thread.gitBranch : undefined;
+  const [sourceDirectoryExists, sourceWorktreeExists, sourceBranchExists] =
+    await Promise.all([
+      pathExists(sourceDirectoryPath),
+      pathExists(sourceWorktreePath),
+      gitBranchExists(sourceDirectoryPath, sourceGitBranch),
+    ]);
+  const diagnostics: MigrationDiagnostics = {
+    sourceTitle: thread.title,
+    ...(thread.archivedAt ? { sourceArchivedAt: thread.archivedAt } : {}),
+    ...(thread.projectKey ? { sourceProjectKey: thread.projectKey } : {}),
+    ...(sourceDirectoryPath ? { sourceDirectoryPath } : {}),
+    ...(sourceDirectoryExists === undefined ? {} : { sourceDirectoryExists }),
+    ...(sourceWorktreePath ? { sourceWorktreePath } : {}),
+    ...(sourceGitBranch ? { sourceGitBranch } : {}),
+    ...(sourceWorktreeExists === undefined ? {} : { sourceWorktreeExists }),
+    ...(sourceBranchExists === undefined ? {} : { sourceBranchExists }),
+  };
+  const warnings: string[] = [];
+  if (thread.archivedAt) {
+    warnings.push("Source thread was already archived before migration.");
+  }
+  if (sourceDirectoryPath && sourceDirectoryExists === false) {
+    warnings.push(`Source project directory was not found: ${sourceDirectoryPath}`);
+  }
+  if (sourceWorktreePath && sourceWorktreeExists === false) {
+    warnings.push(`Source worktree was not found: ${sourceWorktreePath}`);
+  }
+  if (sourceGitBranch && sourceBranchExists === false) {
+    warnings.push(`Source branch was not found: ${sourceGitBranch}`);
+  }
+  return { diagnostics, warnings };
+}
+
+function resolveSourceWorktreePath(
+  thread: Pick<InternalSourceThread, "linkedDirectories" | "projectKey">,
+): string | undefined {
+  for (const directory of thread.linkedDirectories) {
+    const worktreePath = directory.worktreePath?.trim();
+    if (worktreePath && isToolManagedWorktreePath(worktreePath)) {
+      return worktreePath;
+    }
+    const directoryPath = directory.path?.trim();
+    if (directoryPath && isToolManagedWorktreePath(directoryPath)) {
+      return directoryPath;
+    }
+  }
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey && isToolManagedWorktreePath(projectKey)) {
+    return projectKey;
+  }
+  return undefined;
+}
+
+async function pathExists(filesystemPath: string | undefined): Promise<boolean | undefined> {
+  if (!filesystemPath) {
+    return undefined;
+  }
+  try {
+    await access(filesystemPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function gitBranchExists(
+  repositoryPath: string | undefined,
+  branchName: string | undefined,
+): Promise<boolean | undefined> {
+  if (!repositoryPath || !branchName) {
+    return undefined;
+  }
+  try {
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "rev-parse",
+      "--verify",
+      `${branchName}^{commit}`,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateDestinationWorkspaceResult(
+  requested: ReturnType<typeof resolveDestinationWorkspace>,
+  destination: ForkThreadResponse,
+): string[] {
+  const warnings: string[] = [];
+  if (requested.workMode === "worktree" && destination.workMode !== "worktree") {
+    warnings.push(
+      `Destination returned ${destination.workMode} even though migration requested a worktree.`,
+    );
+  }
+  if (
+    requested.workMode === "worktree" &&
+    !destination.linkedDirectory?.worktreePath
+  ) {
+    warnings.push("Destination did not report a worktree path.");
+  }
+  return warnings;
+}
+
+function appendWarnings(item: ThreadMigrationRunItem, warnings: string[]): void {
+  if (warnings.length === 0) {
+    return;
+  }
+  item.warnings = [...(item.warnings ?? []), ...warnings];
 }
 
 function validateReplay(

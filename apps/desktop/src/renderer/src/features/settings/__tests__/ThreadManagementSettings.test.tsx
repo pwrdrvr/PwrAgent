@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
+  StartThreadMigrationResponse,
   ThreadMigrationSourceProjectGroup,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -221,5 +222,51 @@ describe("ThreadManagementSettings", () => {
       actionbar!.compareDocumentPosition(projectsList!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows migration diagnostics and warnings returned by the run", async () => {
+    const threadsResponse = migrationThreadsResponse("", "GIFusion thread");
+    const migrationResponse: StartThreadMigrationResponse = {
+      runId: "run-1",
+      operation: "move",
+      startedAt: 1234,
+      items: [
+        {
+          sourceProfile: "",
+          sourceThreadId: "default-thread",
+          destinationThreadId: "destination-thread",
+          status: "completed",
+          diagnostics: {
+            requestedWorkMode: "worktree",
+            destinationDirectoryPath: "/repo/default",
+            destinationWorkMode: "local",
+          },
+          warnings: [
+            "Destination returned local even though migration requested a worktree.",
+          ],
+        },
+      ],
+    };
+    const desktopApi: DesktopApi = {
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
+      listThreadMigrationSourceThreads: vi.fn(async () => threadsResponse),
+      startThreadMigration: vi.fn(async () => migrationResponse),
+    };
+
+    render(<ThreadManagementSettings desktopApi={desktopApi} />);
+
+    fireEvent.click((await screen.findAllByRole("checkbox"))[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
+
+    expect(
+      await screen.findByText("Destination local /repo/default"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Destination returned local even though migration requested a worktree.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Run run-1: 1 of 1 completed, 1 warning."))
+      .toBeInTheDocument();
   });
 });

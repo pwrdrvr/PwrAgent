@@ -184,6 +184,9 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       ),
     [run],
   );
+  const runWarningCount =
+    run?.items.reduce((count, item) => count + (item.warnings?.length ?? 0), 0) ??
+    0;
   const selectedCount = selectedThreadIds.size;
   const selectedHasManagedWorktree = useMemo(
     () =>
@@ -502,6 +505,9 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                               </span>
                             ) : null}
                           </span>
+                          <RunDiagnostics
+                            item={runItemsByThreadId.get(thread.threadId)}
+                          />
                         </span>
                         <span className="settings-archive-row__side">
                           <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
@@ -522,7 +528,11 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         {run ? (
           <p className="settings-thread-management__status" role="status">
             Run {run.runId}: {run.items.filter((item) => item.status === "completed").length} of{" "}
-            {run.items.length} completed.
+            {run.items.length} completed
+            {runWarningCount > 0
+              ? `, ${runWarningCount} ${runWarningCount === 1 ? "warning" : "warnings"}`
+              : ""}
+            .
           </p>
         ) : null}
       </SettingsSection>
@@ -592,4 +602,49 @@ function RunStatus(props: { item?: ThreadMigrationRunItem }) {
       {props.item.status}
     </span>
   );
+}
+
+function RunDiagnostics(props: { item?: ThreadMigrationRunItem }) {
+  const item = props.item;
+  if (!item) {
+    return null;
+  }
+  const detail = describeRunDetail(item);
+  return (
+    <span className="settings-thread-management__run-details">
+      {detail ? (
+        <span className="settings-thread-management__run-detail">{detail}</span>
+      ) : null}
+      {item.warnings?.map((warning) => (
+        <span
+          className="settings-thread-management__run-warning"
+          key={warning}
+        >
+          {warning}
+        </span>
+      ))}
+      {item.error ? (
+        <span className="settings-thread-management__run-warning">
+          {item.error}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function describeRunDetail(item: ThreadMigrationRunItem): string | undefined {
+  const diagnostics = item.diagnostics;
+  if (!diagnostics) {
+    return undefined;
+  }
+  if (diagnostics.destinationWorktreePath) {
+    return `Destination worktree ${diagnostics.destinationWorktreePath}`;
+  }
+  if (diagnostics.destinationDirectoryPath) {
+    return `Destination ${diagnostics.destinationWorkMode ?? "local"} ${diagnostics.destinationDirectoryPath}`;
+  }
+  if (diagnostics.requestedWorkMode) {
+    return `Requested ${diagnostics.requestedWorkMode}`;
+  }
+  return undefined;
 }

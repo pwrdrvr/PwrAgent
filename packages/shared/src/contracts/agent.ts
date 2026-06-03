@@ -151,6 +151,26 @@ export type ThreadMigrationRunItem = {
   destinationThreadId?: ThreadIdentifier;
   status: ThreadMigrationRunStatus;
   error?: string;
+  warnings?: string[];
+  diagnostics?: {
+    sourceTitle?: string;
+    sourceArchivedAt?: number;
+    sourceProjectKey?: string;
+    sourceDirectoryPath?: string;
+    sourceDirectoryExists?: boolean;
+    sourceWorktreePath?: string;
+    sourceGitBranch?: string;
+    sourceWorktreeExists?: boolean;
+    sourceBranchExists?: boolean;
+    requestedDirectoryPath?: string;
+    requestedWorkMode?: LaunchpadWorkMode;
+    requestedWorktreeBranchMode?: "attached" | "detached";
+    requestedBranchName?: string;
+    destinationDirectoryPath?: string;
+    destinationWorktreePath?: string;
+    destinationWorkMode?: LaunchpadWorkMode;
+    archivedSource?: boolean;
+  };
   validation?: {
     sourceMessageCount: number;
     destinationMessageCount: number;

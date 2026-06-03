@@ -433,6 +433,77 @@ describe("ThreadMigrationService", () => {
     ]);
   });
 
+  it("surfaces diagnostics when a requested destination worktree falls back to local", async () => {
+    const sourceClient = {
+      listThreadsForMigration: vi.fn(async () => [
+        makeSourceThread({
+          gitBranch: "feature/source-work",
+        }),
+      ]),
+      readThread: vi.fn(async () => makeReplay()),
+      archiveThread: vi.fn(async () => ({ threadId: "source-thread" })),
+      close: vi.fn(),
+    };
+    const destination = {
+      forkThread: vi.fn(async (request) => {
+        expect(request).toMatchObject({
+          branchName: "feature/source-work",
+          directoryPath: "/repo/app",
+          workMode: "worktree",
+          worktreeBranchMode: "attached",
+        });
+        return {
+          backend: "codex" as const,
+          sourceThreadId: "source-thread",
+          threadId: "destination-thread",
+          executionMode: "default" as const,
+          linkedDirectory: {
+            id: "local:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "local" as const,
+          },
+          workMode: "local" as const,
+        };
+      }),
+      readThread: vi.fn(async () => ({ replay: makeReplay() })),
+    };
+    const service = new ThreadMigrationService({
+      destination,
+      settingsService: {
+        readSettings: async () => makeSettingsSnapshot("work"),
+        resolveCodexCommandPreference: () => "codex",
+        resolveCodexSpawnEnv: () => ({}),
+      },
+      sourceClientFactory: () => sourceClient,
+      idFactory: () => "run-1",
+    });
+
+    const response = await service.startMigration({
+      sourceProfile: "",
+      operation: "move",
+      threadIds: ["source-thread"],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      destinationThreadId: "destination-thread",
+      diagnostics: {
+        requestedBranchName: "feature/source-work",
+        requestedDirectoryPath: "/repo/app",
+        requestedWorkMode: "worktree",
+        requestedWorktreeBranchMode: "attached",
+        destinationDirectoryPath: "/repo/app",
+        destinationWorkMode: "local",
+        archivedSource: true,
+      },
+      status: "completed",
+      warnings: expect.arrayContaining([
+        "Destination returned local even though migration requested a worktree.",
+        "Destination did not report a worktree path.",
+      ]),
+    });
+  });
+
   it("copies a source worktree to a detached destination worktree", async () => {
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [

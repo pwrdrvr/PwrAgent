@@ -5170,6 +5170,27 @@ textarea,
   background: var(--bg-row-active);
 }
 
+.settings-thread-management__run-details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.settings-thread-management__run-detail,
+.settings-thread-management__run-warning {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-thread-management__run-warning {
+  color: var(--danger-text);
+}
+
 .settings-thread-management__checkbox-input {
   position: relative;
   z-index: 1;
