@@ -97,6 +97,11 @@ vi.mock("electron", () => ({
   },
 }));
 
+type NotificationServiceWithPrivateHooks = DesktopNotificationService & {
+  liveNotifications: Set<unknown>;
+  supportsActionButtons: () => boolean;
+};
+
 describe("DesktopNotificationService", () => {
   beforeEach(() => {
     shownNotifications.length = 0;
@@ -154,7 +159,10 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
-    vi.spyOn(service as never, "supportsActionButtons").mockReturnValue(true);
+    vi.spyOn(
+      service as NotificationServiceWithPrivateHooks,
+      "supportsActionButtons",
+    ).mockReturnValue(true);
 
     service.notifyAttention({
       enabled: true,
@@ -173,15 +181,13 @@ describe("DesktopNotificationService", () => {
   });
 
   it("retains live notifications until the native notification resolves", () => {
-    const service = new DesktopNotificationService() as never as {
-      liveNotifications: Set<unknown>;
-      notifyAttention: DesktopNotificationService["notifyAttention"];
-    };
+    const service =
+      new DesktopNotificationService() as NotificationServiceWithPrivateHooks;
     const onApprove = vi.fn();
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
-    vi.spyOn(service as never, "supportsActionButtons").mockReturnValue(true);
+    vi.spyOn(service, "supportsActionButtons").mockReturnValue(true);
 
     service.notifyAttention({
       enabled: true,
@@ -215,7 +221,10 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
     ]);
-    vi.spyOn(service as never, "supportsActionButtons").mockReturnValue(false);
+    vi.spyOn(
+      service as NotificationServiceWithPrivateHooks,
+      "supportsActionButtons",
+    ).mockReturnValue(false);
 
     service.notifyAttention({
       enabled: true,

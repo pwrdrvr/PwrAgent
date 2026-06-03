@@ -9545,8 +9545,13 @@ export class DesktopBackendRegistry {
     notification: AgentEvent["notification"],
   ): notification is AppServerPendingRequestNotification {
     return (
-      notification.method !== "item/tool/requestUserInput" &&
-      notification.method !== "mcpServer/elicitation/request"
+      notification.method === "turn/requestApproval" ||
+      notification.method === "review/requestApproval" ||
+      notification.method === "item/commandExecution/requestApproval" ||
+      notification.method === "item/fileChange/requestApproval" ||
+      notification.method === "item/permissions/requestApproval" ||
+      notification.method === "applyPatchApproval" ||
+      notification.method === "execCommandApproval"
     );
   }
 
