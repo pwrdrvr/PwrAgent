@@ -1585,6 +1585,83 @@ describe("MessagingController", () => {
     });
   });
 
+  it("posts a readable error notice when a turn fails", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "The model 'gpt-image-2' does not exist.",
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        title: "Turn failed",
+        body: "The model 'gpt-image-2' does not exist.",
+      }),
+    );
+  });
+
+  it("does not double-post the error notice for the same failed turn", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const failure: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: { message: "boom" },
+          },
+        },
+      },
+    };
+
+    await harness.controller.handleBackendEvent(failure);
+    await harness.controller.handleBackendEvent(failure);
+
+    const errorNotices = harness.delivered.filter(
+      (intent) => intent.kind === "error" && intent.title === "Turn failed",
+    );
+    expect(errorNotices).toHaveLength(1);
+  });
+
   it("posts a durable start notice for automation turns", async () => {
     const harness = await createHarness();
     await bindThread(harness);

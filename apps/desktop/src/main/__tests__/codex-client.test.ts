@@ -3974,6 +3974,104 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("remaps a failed turn/completed into turn/failed with a readable error", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turn: {
+          id: "turn-failed-1",
+          status: "failed",
+          items: [],
+          error: {
+            message:
+              '{ "type": "error", "error": { "type": "image_generation_user_error", "code": "invalid_value", "message": "The model \'gpt-image-2\' does not exist.", "param": "tools" }, "status": 400 }',
+            codexErrorInfo: "other",
+            additionalDetails: null
+          },
+          startedAt: 1_763_500_300,
+          completedAt: 1_763_500_360,
+          durationMs: 60_000
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifications).toEqual([
+      {
+        method: "turn/failed",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          turnId: "turn-failed-1",
+          turn: expect.objectContaining({
+            id: "turn-failed-1",
+            status: "failed",
+            error: { message: "The model 'gpt-image-2' does not exist." }
+          })
+        })
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("does not log a Codex error notification as an unknown notification", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    codexClientLogWarn.mockClear();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "error",
+      params: {
+        error: { message: "boom", codexErrorInfo: "other", additionalDetails: null },
+        threadId: "thread-2",
+        turnId: "turn-1",
+        willRetry: false
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+      "unknown codex notification",
+      expect.anything()
+    );
+
+    await client.close();
+  });
+
   it("normalizes Codex thread settings service tier notifications", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
