@@ -13750,6 +13750,7 @@ command = "pnpm dev"
       });
       expect(typeof call.body).toBe("string");
       expect(typeof call.enabled).toBe("boolean");
+      expect(typeof call.onApprove).toBe("function");
 
       await registry.close();
     });
@@ -13774,7 +13775,65 @@ command = "pnpm dev"
         key: "codex:thread-q:req-q",
         title: "PwrAgent question waiting",
       });
+      expect(call.onApprove).toBeUndefined();
 
+      await registry.close();
+    });
+
+    it("resolves a pending approval when the notification approve action fires", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+      const events: AgentEvent[] = [];
+      const unsubscribe = registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      const request: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          requestId: "approval-1",
+          command: "npm view dive",
+        },
+      };
+      const responsePromise = codexClient.emitRequest(request);
+      await waitForCondition(
+        () => desktopNotificationServiceMock.notifyAttention.mock.calls.length === 1,
+      );
+
+      const notificationCall =
+        desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
+      expect(typeof notificationCall?.onApprove).toBe("function");
+
+      notificationCall?.onApprove?.();
+
+      await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+      await waitForCondition(() =>
+        events.some((event) => event.notification.method === "serverRequest/resolved"),
+      );
+
+      expect(events.map((event) => event.notification.method)).toEqual([
+        "item/commandExecution/requestApproval",
+        "serverRequest/resolved",
+      ]);
+      expect(desktopNotificationServiceMock.clearAttentionKey).toHaveBeenCalledWith(
+        "codex:thread-1:approval-1",
+      );
+
+      unsubscribe();
       await registry.close();
     });
 

@@ -2,6 +2,7 @@ import { BrowserWindow, Notification } from "electron";
 import { getMainLogger } from "../log";
 
 const notificationLog = getMainLogger("pwragent:notifications");
+const APPROVE_ACTION_INDEX = 0;
 
 /**
  * Native attention/terminal notifications for unattended turns.
@@ -17,6 +18,7 @@ const notificationLog = getMainLogger("pwragent:notifications");
  */
 export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
+  private readonly liveNotifications = new Set<Notification>();
 
   clearAttentionKey(key: string): void {
     this.attentionKeys.delete(key);
@@ -27,6 +29,7 @@ export class DesktopNotificationService {
     key: string;
     title: string;
     body: string;
+    onApprove?: () => void;
   }): void {
     if (!params.enabled || this.attentionKeys.has(params.key)) {
       return;
@@ -38,7 +41,11 @@ export class DesktopNotificationService {
       return;
     }
     this.attentionKeys.add(params.key);
-    this.show(params.title, params.body);
+    this.show({
+      title: params.title,
+      body: params.body,
+      onApprove: params.onApprove,
+    });
   }
 
   notifyTerminal(params: {
@@ -55,7 +62,14 @@ export class DesktopNotificationService {
     if (!Notification.isSupported()) {
       return;
     }
-    this.show(params.title, params.body);
+    this.show({
+      title: params.title,
+      body: params.body,
+    });
+  }
+
+  private supportsActionButtons(): boolean {
+    return process.platform === "darwin" || process.platform === "win32";
   }
 
   private isAppInactive(): boolean {
@@ -66,12 +80,39 @@ export class DesktopNotificationService {
     return windows.every((window) => window.isMinimized() || !window.isFocused());
   }
 
-  private show(title: string, body: string): void {
+  private show(params: {
+    title: string;
+    body: string;
+    onApprove?: () => void;
+  }): void {
     try {
-      new Notification({
-        title,
-        body,
-      }).show();
+      const notification = new Notification({
+        title: params.title,
+        body: params.body,
+        ...(params.onApprove && this.supportsActionButtons()
+          ? {
+              actions: [{ type: "button", text: "Approve" }],
+            }
+          : {}),
+      });
+      this.liveNotifications.add(notification);
+      const cleanup = () => {
+        this.liveNotifications.delete(notification);
+      };
+      notification.on("click", cleanup);
+      notification.on("close", cleanup);
+      if (params.onApprove && this.supportsActionButtons()) {
+        let handled = false;
+        notification.on("action", (_event, actionIndex) => {
+          cleanup();
+          if (handled || actionIndex !== APPROVE_ACTION_INDEX) {
+            return;
+          }
+          handled = true;
+          params.onApprove?.();
+        });
+      }
+      notification.show();
     } catch (error) {
       notificationLog.warn("failed to display native notification", {
         error: error instanceof Error ? error.message : String(error),

@@ -108,6 +108,7 @@ import {
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
+  buildPendingRequestResponse,
   buildThreadIdentityKey,
   isAcpBackendId,
   readCodexEnvironmentActionRuns,
@@ -9529,6 +9530,52 @@ export class DesktopBackendRegistry {
       key: `${event.backend}:${threadId}:${requestId}`,
       title,
       body,
+      onApprove: this.isApprovalAttentionNotification(event.notification)
+        ? () => {
+            void this.resolvePendingServerRequestFromNotification({
+              backend: event.backend,
+              request: event.notification,
+            });
+          }
+        : undefined,
+    });
+  }
+
+  private isApprovalAttentionNotification(
+    notification: AgentEvent["notification"],
+  ): notification is AppServerPendingRequestNotification {
+    return (
+      notification.method !== "item/tool/requestUserInput" &&
+      notification.method !== "mcpServer/elicitation/request"
+    );
+  }
+
+  private async resolvePendingServerRequestFromNotification(params: {
+    backend: AppServerBackendKind;
+    request: AppServerPendingRequestNotification;
+  }): Promise<void> {
+    const key = buildPendingRequestKey({
+      backend: params.backend,
+      threadId: params.request.params.threadId,
+      requestId: params.request.params.requestId,
+    });
+    const pending = this.pendingServerRequests.get(key);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingServerRequests.delete(key);
+    pending.resolve(buildPendingRequestResponse(params.request, "approve"));
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: params.request.params.threadId,
+          turnId: params.request.params.turnId,
+          requestId: params.request.params.requestId,
+        },
+      },
     });
   }
 
