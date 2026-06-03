@@ -137,7 +137,7 @@ export class ThreadMigrationService {
 
     const client = await this.getSourceClient(sourceProfile);
     const metadata = await client.listThreadsForMigration({
-      archived: request.archived,
+      archived: request.archived === true,
       filter: request.filter,
     });
     const sourceThreads = metadata.map((thread) =>

@@ -5267,6 +5267,22 @@ textarea,
   font-weight: 600;
 }
 
+.settings-thread-management__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-thread-management__toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .settings-thread-management__copy-strategy select {
   min-height: 32px;
   padding: 0 28px 0 10px;

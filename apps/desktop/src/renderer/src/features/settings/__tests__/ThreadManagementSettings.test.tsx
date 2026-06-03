@@ -110,6 +110,7 @@ describe("ThreadManagementSettings", () => {
 
     await waitFor(() => {
       expect(listThreadMigrationSourceThreads).toHaveBeenCalledWith({
+        archived: false,
         sourceProfile: "",
       });
     });
@@ -118,6 +119,7 @@ describe("ThreadManagementSettings", () => {
 
     await waitFor(() => {
       expect(listThreadMigrationSourceThreads).toHaveBeenCalledWith({
+        archived: false,
         sourceProfile: "personal",
       });
     });
@@ -172,6 +174,38 @@ describe("ThreadManagementSettings", () => {
         projectLabel: "GIFusion",
         threadCount: 1,
       },
+    });
+  });
+
+  it("hides archived source threads by default and reloads when enabled", async () => {
+    const listThreadMigrationSourceThreads = vi.fn<
+      NonNullable<DesktopApi["listThreadMigrationSourceThreads"]>
+    >(async (request) =>
+      migrationThreadsResponse(
+        request.sourceProfile,
+        request.archived ? "Archived thread" : "Active thread",
+      ),
+    );
+    const desktopApi: DesktopApi = {
+      listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
+      listThreadMigrationSourceThreads,
+    };
+
+    render(<ThreadManagementSettings desktopApi={desktopApi} />);
+
+    expect(await screen.findByText("Active thread")).toBeInTheDocument();
+    expect(screen.queryByText("Archived thread")).not.toBeInTheDocument();
+    expect(listThreadMigrationSourceThreads).toHaveBeenLastCalledWith({
+      archived: false,
+      sourceProfile: "",
+    });
+
+    fireEvent.click(screen.getByLabelText("Show archived"));
+
+    expect(await screen.findByText("Archived thread")).toBeInTheDocument();
+    expect(listThreadMigrationSourceThreads).toHaveBeenLastCalledWith({
+      archived: true,
+      sourceProfile: "",
     });
   });
 
@@ -255,7 +289,9 @@ describe("ThreadManagementSettings", () => {
 
     render(<ThreadManagementSettings desktopApi={desktopApi} />);
 
-    fireEvent.click((await screen.findAllByRole("checkbox"))[1]!);
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: /GIFusion thread/ }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Move 1" }));
 
     expect(

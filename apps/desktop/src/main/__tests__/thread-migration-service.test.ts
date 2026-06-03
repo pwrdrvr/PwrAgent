@@ -160,6 +160,10 @@ describe("ThreadMigrationService", () => {
       title: "Source thread",
     });
     expect(response.projects[0]!.threads[0]).not.toHaveProperty("rolloutPath");
+    expect(sourceClient.listThreadsForMigration).toHaveBeenCalledWith({
+      archived: false,
+      filter: undefined,
+    });
   });
 
   it("groups source worktrees with their repository project like navigation", async () => {

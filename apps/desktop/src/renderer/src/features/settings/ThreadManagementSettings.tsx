@@ -88,6 +88,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     useState<ThreadMigrationOperation>();
   const [copyStrategy, setCopyStrategy] =
     useState<ThreadMigrationCopyStrategy>("detached-destination");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const sourceThreadsRequestIdRef = useRef(0);
 
   const loadSources = useCallback(async () => {
@@ -117,7 +118,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   }, [props.desktopApi]);
 
   const loadSourceThreads = useCallback(
-    async (profile: string | undefined) => {
+    async (profile: string | undefined, archived: boolean) => {
       const requestId = sourceThreadsRequestIdRef.current + 1;
       sourceThreadsRequestIdRef.current = requestId;
       if (profile === undefined) {
@@ -143,7 +144,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       setSelectedThreadIds(new Set());
       setRun(undefined);
       try {
-        const response = await listThreads({ sourceProfile: profile });
+        const response = await listThreads({
+          sourceProfile: profile,
+          archived,
+        });
         if (sourceThreadsRequestIdRef.current !== requestId) {
           return;
         }
@@ -171,8 +175,8 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   }, [loadSources]);
 
   useEffect(() => {
-    void loadSourceThreads(selectedProfile);
-  }, [loadSourceThreads, selectedProfile]);
+    void loadSourceThreads(selectedProfile, includeArchived);
+  }, [includeArchived, loadSourceThreads, selectedProfile]);
 
   const selectedSource = sources?.profiles.find(
     (profile) => profile.profile === selectedProfile,
@@ -388,6 +392,16 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
               </p>
             </div>
             <div className="settings-thread-management__controls">
+              <label className="settings-thread-management__toggle">
+                <input
+                  checked={includeArchived}
+                  type="checkbox"
+                  onChange={(event) => {
+                    setIncludeArchived(event.target.checked);
+                  }}
+                />
+                <span>Show archived</span>
+              </label>
               {selectedHasManagedWorktree ? (
                 <label className="settings-thread-management__copy-strategy">
                   <span>Copy strategy</span>
