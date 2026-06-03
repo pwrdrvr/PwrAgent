@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   isToolManagedWorktreePath,
+  parseCodexTurnErrorMessage,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -177,6 +178,7 @@ type CodexClientRequestMethod = CodexClientRequest["method"];
 type CodexServerRequestMethod = CodexServerRequest["method"];
 
 const KNOWN_NOTIFICATION_METHODS = new Set<string>([
+  "error",
   "thread/started",
   "turn/started",
   "turn/completed",
@@ -210,6 +212,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "mcpServer/startupStatus/updated",
 ]);
 const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
+  "error",
   "warning",
   "configWarning",
   "thread/started",
@@ -592,6 +595,61 @@ function normalizePendingRequestNotification(
   };
 }
 
+/**
+ * Codex signals a failed turn through `turn/completed` with `turn.status` set
+ * to "failed". Translate that into the normalized `turn/failed` notification the
+ * rest of the app already understands, carrying a human-readable error message.
+ * Returns undefined when the notification is not a failed `turn/completed`, in
+ * which case the caller falls through to the generic passthrough normalizer.
+ */
+function normalizeFailedTurnCompletedNotification(
+  method: string,
+  record: Record<string, unknown>,
+  metadata: { threadId?: string; turnId?: string },
+): AppServerNotification | undefined {
+  if (method !== "turn/completed") {
+    return undefined;
+  }
+  const turn = asRecord(record.turn);
+  if (!turn || pickString(turn, ["status"]) !== "failed") {
+    return undefined;
+  }
+
+  const turnId = pickString(turn, ["id", "turnId", "turn_id"]) ?? metadata.turnId;
+  const threadId =
+    metadata.threadId ?? pickString(record, ["threadId", "thread_id"]);
+  if (!turnId || !threadId) {
+    return undefined;
+  }
+
+  const message = parseCodexTurnErrorMessage(
+    pickStringAllowEmpty(asRecord(turn.error), ["message"]),
+  );
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["startedAt", "started_at"]),
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["completedAt", "completed_at"]),
+  );
+  const durationMs = pickFiniteNumber(turn, ["durationMs", "duration_ms"]);
+
+  return {
+    method: "turn/failed",
+    params: {
+      threadId,
+      turnId,
+      turn: {
+        id: turnId,
+        status: "failed",
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(completedAt !== undefined ? { completedAt } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        error: { message },
+      },
+    },
+  };
+}
+
 function normalizeServerNotification(
   method: string,
   params: unknown,
@@ -602,6 +660,23 @@ function normalizeServerNotification(
 
   const record = asRecord(params) ?? {};
   const metadata = extractRequestMetadata(params);
+
+  // Codex reports a failed turn as `turn/completed` whose `turn.status` is
+  // "failed" (with the provider error in `turn.error`), not as a distinct
+  // `turn/failed` method. Re-map it here, at the adapter boundary, so the rest
+  // of the app sees a single, uniform `turn/failed` notification — the renderer
+  // session-error banner, messaging delivery, and headless-automation error
+  // extraction all already key on `turn/failed`. Doing the alias here keeps the
+  // Codex-specific shape out of every downstream consumer.
+  const failedTurn = normalizeFailedTurnCompletedNotification(
+    method,
+    record,
+    metadata,
+  );
+  if (failedTurn) {
+    return failedTurn;
+  }
+
   const itemRecord = asRecord(record.item);
   const normalizedItem =
     itemRecord && (method === "item/started" || method === "item/completed")
