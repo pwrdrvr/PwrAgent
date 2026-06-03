@@ -282,6 +282,9 @@ export class ThreadMigrationService {
         ...(destinationWorkspace.branchName
           ? { branchName: destinationWorkspace.branchName }
           : {}),
+        ...(item.diagnostics?.sourceWorktreePath
+          ? { excludedWorktreePaths: [item.diagnostics.sourceWorktreePath] }
+          : {}),
       });
       item.destinationThreadId = destination.threadId;
       item.diagnostics = {

@@ -381,6 +381,9 @@ describe("ThreadMigrationService", () => {
         expect(request).toMatchObject({
           branchName: "feature/source-work",
           directoryPath: "/repo/app",
+          excludedWorktreePaths: [
+            "/Users/alice/.codex/profiles/personal/worktrees/repo/app",
+          ],
           sourceThreadId: "source-thread",
           worktreeBranchMode: "attached",
           workMode: "worktree",
@@ -530,6 +533,9 @@ describe("ThreadMigrationService", () => {
         expect(request).toMatchObject({
           branchName: "feature/source-work",
           directoryPath: "/repo/app",
+          excludedWorktreePaths: [
+            "/Users/alice/.codex/profiles/personal/worktrees/repo/app",
+          ],
           sourceThreadId: "source-thread",
           worktreeBranchMode: "detached",
           workMode: "worktree",

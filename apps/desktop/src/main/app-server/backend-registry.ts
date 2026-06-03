@@ -4560,6 +4560,9 @@ export class DesktopBackendRegistry {
       directoryKind,
       directoryLabel,
       directoryPath: request.directoryPath,
+      ...(request.excludedWorktreePaths
+        ? { excludedWorktreePaths: request.excludedWorktreePaths }
+        : {}),
       worktreeBranchMode: request.worktreeBranchMode,
       workMode: request.workMode ?? "local",
     });

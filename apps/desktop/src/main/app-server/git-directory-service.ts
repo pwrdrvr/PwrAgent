@@ -1,4 +1,4 @@
-import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -138,6 +138,10 @@ async function pathExists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function normalizeFilesystemPath(target: string): Promise<string> {
+  return realpath(target).catch(() => path.resolve(target));
 }
 
 async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
@@ -339,6 +343,36 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   }
 
   return undefined;
+}
+
+async function detachCleanWorktreeBranch(params: {
+  branchName: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  const status = await params
+    .runGit(
+      params.worktreePath,
+      ["status", "--porcelain", "--untracked-files=normal"],
+      params.gitEnv,
+    )
+    .catch(() => "");
+  if (status.trim()) {
+    throw new Error(
+      `Cannot move branch ${params.branchName} to a destination worktree because ${params.worktreePath} has uncommitted changes.`,
+    );
+  }
+  const baseCommit = await params.runGit(
+    params.worktreePath,
+    ["rev-parse", "--verify", `${params.branchName}^{commit}`],
+    params.gitEnv,
+  );
+  await params.runGit(
+    params.worktreePath,
+    ["switch", "--detach", baseCommit.trim()],
+    params.gitEnv,
+  );
 }
 
 type CachedDirectoryStatus = {
@@ -585,6 +619,7 @@ export class GitDirectoryService {
       "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
     > &
       Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
+        excludedWorktreePaths?: string[];
         worktreeBranchMode?: "attached" | "detached";
       },
   ): Promise<{ cwd?: string; repositoryPath?: string; workMode: LaunchpadWorkMode }> {
@@ -636,6 +671,14 @@ export class GitDirectoryService {
     }
 
     if (launchpad.worktreeBranchMode === "attached") {
+      const excludedWorktreePaths = new Set(
+        await Promise.all(
+          (launchpad.excludedWorktreePaths ?? [])
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((entry) => normalizeFilesystemPath(entry)),
+        ),
+      );
       const worktreeList = await this.runGitCommand(
         repoRoot,
         ["worktree", "list", "--porcelain"],
@@ -644,34 +687,30 @@ export class GitDirectoryService {
       const existing = parseGitWorktreeEntries(worktreeList).find(
         (entry) => entry.branch === baseBranch,
       );
-      if (existing && path.resolve(existing.path) !== path.resolve(repoRoot)) {
-        return {
-          cwd: existing.path,
-          repositoryPath: repoRoot,
-          workMode: "worktree",
-        };
-      }
-      if (existing) {
-        const status = await this.runGitCommand(
-          repoRoot,
-          ["status", "--porcelain", "--untracked-files=normal"],
-          this.gitEnv,
-        ).catch(() => "");
-        if (status.trim()) {
-          throw new Error(
-            `Cannot move branch ${baseBranch} to a worktree because the local checkout has uncommitted changes.`,
-          );
+      const existingIsRepoRoot =
+        existing && path.resolve(existing.path) === path.resolve(repoRoot);
+      if (existing && !existingIsRepoRoot) {
+        const existingPath = await normalizeFilesystemPath(existing.path);
+        if (!excludedWorktreePaths.has(existingPath)) {
+          return {
+            cwd: existing.path,
+            repositoryPath: repoRoot,
+            workMode: "worktree",
+          };
         }
-        const baseCommit = await this.runGitCommand(
-          repoRoot,
-          ["rev-parse", "--verify", `${baseBranch}^{commit}`],
-          this.gitEnv,
-        );
-        await this.runGitCommand(
-          repoRoot,
-          ["switch", "--detach", baseCommit.trim()],
-          this.gitEnv,
-        );
+        await detachCleanWorktreeBranch({
+          branchName: baseBranch,
+          gitEnv: this.gitEnv,
+          runGit: this.runGitCommand,
+          worktreePath: existing.path,
+        });
+      } else if (existingIsRepoRoot) {
+        await detachCleanWorktreeBranch({
+          branchName: baseBranch,
+          gitEnv: this.gitEnv,
+          runGit: this.runGitCommand,
+          worktreePath: repoRoot,
+        });
       }
 
       const storage = await this.resolveStorage();
