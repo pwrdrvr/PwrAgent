@@ -10,6 +10,7 @@ updates:
       time: "09:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 5
+    labels: []
     versioning-strategy: "increase-if-necessary"
     commit-message:
       prefix: "chore"
@@ -127,6 +128,7 @@ updates:
       time: "09:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 3
+    labels: []
     commit-message:
       prefix: "chore"
       include: "scope"
