@@ -513,6 +513,7 @@ function normalizeSourceThread(
     ...(thread.updatedAt ? { updatedAt: thread.updatedAt } : {}),
     ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
+    ...(thread.gitOriginUrl ? { gitOriginUrl: thread.gitOriginUrl } : {}),
     linkedDirectories: thread.linkedDirectories ?? [],
     ...(thread.rolloutPath ? { rolloutPath: thread.rolloutPath } : {}),
   };
@@ -582,6 +583,7 @@ function toNavigationThreadSummary(
     ...(thread.updatedAt ? { updatedAt: thread.updatedAt } : {}),
     ...(thread.archivedAt ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
+    ...(thread.gitOriginUrl ? { gitOriginUrl: thread.gitOriginUrl } : {}),
   };
 }
 

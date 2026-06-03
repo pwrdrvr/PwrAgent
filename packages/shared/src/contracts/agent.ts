@@ -117,6 +117,7 @@ export type ThreadMigrationSourceThreadSummary = {
   updatedAt?: number;
   archivedAt?: number;
   gitBranch?: string;
+  gitOriginUrl?: string;
   linkedDirectories: LinkedDirectorySummary[];
 };
 
