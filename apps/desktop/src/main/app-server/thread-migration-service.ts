@@ -458,8 +458,10 @@ function hasProfileOwnedWorktree(
     (thread.projectKey && isToolManagedWorktreePath(thread.projectKey)) ||
       thread.linkedDirectories.some(
         (directory) =>
-          isToolManagedWorktreePath(directory.worktreePath) ||
-          isToolManagedWorktreePath(directory.path),
+          Boolean(directory) &&
+          typeof directory === "object" &&
+          (isToolManagedWorktreePath(directory.worktreePath) ||
+            isToolManagedWorktreePath(directory.path)),
       ),
   );
 }

@@ -7,6 +7,7 @@ import {
   type ThreadMigrationOperation,
   type ThreadMigrationRunItem,
   type ThreadMigrationSourceProjectGroup,
+  type ThreadMigrationSourceThreadSummary,
   type ThreadMigrationSourceProfileSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -29,6 +30,44 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
+
+function safeProjectThreads(
+  project: ThreadMigrationSourceProjectGroup,
+): ThreadMigrationSourceThreadSummary[] {
+  return Array.isArray(project.threads)
+    ? project.threads.filter((thread): thread is ThreadMigrationSourceThreadSummary =>
+        Boolean(thread),
+      )
+    : [];
+}
+
+function hasMalformedLinkedDirectories(
+  thread: ThreadMigrationSourceThreadSummary,
+): boolean {
+  return (
+    !Array.isArray(thread.linkedDirectories) ||
+    thread.linkedDirectories.some(
+      (directory) => !directory || typeof directory !== "object",
+    )
+  );
+}
+
+function hasProfileOwnedWorktree(
+  thread: ThreadMigrationSourceThreadSummary,
+): boolean {
+  return (
+    isToolManagedWorktreePath(thread.projectKey) ||
+    (Array.isArray(thread.linkedDirectories)
+      ? thread.linkedDirectories.some(
+          (directory) =>
+            Boolean(directory) &&
+            typeof directory === "object" &&
+            (isToolManagedWorktreePath(directory.worktreePath) ||
+              isToolManagedWorktreePath(directory.path)),
+        )
+      : false)
+  );
+}
 
 export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const [sources, setSources] = useState<ListThreadMigrationSourcesResponse>();
@@ -146,15 +185,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const selectedHasProfileOwnedWorktree = useMemo(
     () =>
       threadsState.projects.some((project) =>
-        project.threads.some(
+        safeProjectThreads(project).some(
           (thread) =>
             selectedThreadIds.has(thread.threadId) &&
-            (isToolManagedWorktreePath(thread.projectKey) ||
-              (thread.linkedDirectories ?? []).some(
-                (directory) =>
-                  isToolManagedWorktreePath(directory.worktreePath) ||
-                  isToolManagedWorktreePath(directory.path),
-              )),
+            hasProfileOwnedWorktree(thread),
         ),
       ),
     [selectedThreadIds, threadsState.projects],
@@ -179,12 +213,28 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   };
 
   const selectProject = (project: ThreadMigrationSourceProjectGroup) => {
+    const projectThreads = safeProjectThreads(project);
+    const malformedThreadCount = projectThreads.filter(
+      hasMalformedLinkedDirectories,
+    ).length;
+    if (malformedThreadCount > 0) {
+      void props.desktopApi?.logRendererDiagnostic?.({
+        level: "warn",
+        message: "Thread migration source project has malformed linked directories.",
+        details: {
+          malformedThreadCount,
+          projectKey: project.key,
+          projectLabel: project.label,
+          threadCount: projectThreads.length,
+        },
+      })?.catch(() => undefined);
+    }
     setSelectedThreadIds((current) => {
       const next = new Set(current);
-      const allSelected = project.threads.every((thread) =>
+      const allSelected = projectThreads.every((thread) =>
         next.has(thread.threadId),
       );
-      for (const thread of project.threads) {
+      for (const thread of projectThreads) {
         if (allSelected) {
           next.delete(thread.threadId);
         } else {
@@ -313,85 +363,93 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         ) : null}
         <div className="settings-thread-management__selection-shell">
           <div className="settings-thread-management__projects-list">
-            {threadsState.projects.map((project) => (
-              <div className="settings-thread-management__project" key={project.key}>
-                <label className="settings-thread-management__project-head">
-                  <input
-                    checked={project.threads.every((thread) =>
-                      selectedThreadIds.has(thread.threadId),
-                    )}
-                    className="settings-thread-management__checkbox-input"
-                    type="checkbox"
-                    onChange={() => selectProject(project)}
-                  />
-                  <span
-                    aria-hidden="true"
-                    className={`settings-thread-management__checkbox settings-thread-management__checkbox--project${
-                      project.threads.every((thread) =>
-                        selectedThreadIds.has(thread.threadId),
-                      )
-                        ? " is-checked"
-                        : ""
-                    }`}
-                  />
-                  <div>
-                    <p className="settings-thread-management__project-title">
-                      {project.label}
-                    </p>
-                    {project.path ? (
-                      <p className="settings-thread-management__project-path">
-                        {project.path}
-                      </p>
-                    ) : null}
-                  </div>
-                </label>
-                <div>
-                  {project.threads.map((thread) => (
-                    <label
-                      key={thread.threadId}
-                      className={`settings-thread-management__thread${
-                        selectedThreadIds.has(thread.threadId) ? " is-selected" : ""
+            {threadsState.projects.map((project) => {
+              const projectThreads = safeProjectThreads(project);
+              const projectSelected =
+                projectThreads.length > 0 &&
+                projectThreads.every((thread) =>
+                  selectedThreadIds.has(thread.threadId),
+                );
+              return (
+                <div className="settings-thread-management__project" key={project.key}>
+                  <label className="settings-thread-management__project-head">
+                    <input
+                      checked={projectSelected}
+                      className="settings-thread-management__checkbox-input"
+                      type="checkbox"
+                      onChange={() => selectProject(project)}
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={`settings-thread-management__checkbox settings-thread-management__checkbox--project${
+                        projectSelected ? " is-checked" : ""
                       }`}
-                    >
-                      <input
-                        checked={selectedThreadIds.has(thread.threadId)}
-                        className="settings-thread-management__checkbox-input"
-                        type="checkbox"
-                        onChange={() => toggleThread(thread.threadId)}
-                      />
-                      <span
-                        aria-hidden="true"
-                        className={`settings-thread-management__checkbox${
+                    />
+                    <div>
+                      <p className="settings-thread-management__project-title">
+                        {project.label}
+                      </p>
+                      {project.path ? (
+                        <p className="settings-thread-management__project-path">
+                          {project.path}
+                        </p>
+                      ) : null}
+                    </div>
+                  </label>
+                  <div>
+                    {projectThreads.map((thread) => (
+                      <label
+                        key={thread.threadId}
+                        className={`settings-thread-management__thread${
                           selectedThreadIds.has(thread.threadId)
-                            ? " is-checked"
+                            ? " is-selected"
                             : ""
                         }`}
-                      />
-                      <span className="settings-archive-row__body">
-                        <span className="settings-archive-row__title">
-                          {thread.title}
-                        </span>
-                        {thread.summary ? (
-                          <span className="settings-archive-row__summary">
-                            {thread.summary}
+                      >
+                        <input
+                          checked={selectedThreadIds.has(thread.threadId)}
+                          className="settings-thread-management__checkbox-input"
+                          type="checkbox"
+                          onChange={() => toggleThread(thread.threadId)}
+                        />
+                        <span
+                          aria-hidden="true"
+                          className={`settings-thread-management__checkbox${
+                            selectedThreadIds.has(thread.threadId)
+                              ? " is-checked"
+                              : ""
+                          }`}
+                        />
+                        <span className="settings-archive-row__body">
+                          <span className="settings-archive-row__title">
+                            {thread.title}
                           </span>
-                        ) : null}
-                        <span className="settings-archive-row__meta">
-                          <span>{thread.threadId}</span>
-                          {thread.gitBranch ? <span>{thread.gitBranch}</span> : null}
-                          {thread.updatedAt ? (
-                            <span>Updated {dateFormatter.format(thread.updatedAt)}</span>
+                          {thread.summary ? (
+                            <span className="settings-archive-row__summary">
+                              {thread.summary}
+                            </span>
                           ) : null}
+                          <span className="settings-archive-row__meta">
+                            <span>{thread.threadId}</span>
+                            {thread.gitBranch ? (
+                              <span>{thread.gitBranch}</span>
+                            ) : null}
+                            {thread.updatedAt ? (
+                              <span>
+                                Updated {dateFormatter.format(thread.updatedAt)}
+                              </span>
+                            ) : null}
+                          </span>
                         </span>
-                      </span>
-                      <span className="settings-archive-row__side">
-                        <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
-                      </span>
-                    </label>
-                  ))}
+                        <span className="settings-archive-row__side">
+                          <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="settings-thread-management__actionbar">
             <div className="settings-thread-management__actioncopy">

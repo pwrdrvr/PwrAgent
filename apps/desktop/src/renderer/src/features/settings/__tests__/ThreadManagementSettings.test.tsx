@@ -140,11 +140,15 @@ describe("ThreadManagementSettings", () => {
   });
 
   it("uses direct action buttons and tolerates threads without linked directories", async () => {
-    const threadsResponse = migrationThreadsResponse("", "Thread without dirs");
-    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = undefined as never;
+    const threadsResponse = migrationThreadsResponse("", "GIFusion thread");
+    threadsResponse.projects[0]!.label = "GIFusion";
+    threadsResponse.projects[0]!.path = "/Users/alice/GIPHY/GIFusion";
+    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [null] as never;
+    const logRendererDiagnostic = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
       listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
       listThreadMigrationSourceThreads: vi.fn(async () => threadsResponse),
+      logRendererDiagnostic,
     };
 
     render(<ThreadManagementSettings desktopApi={desktopApi} />);
@@ -154,9 +158,19 @@ describe("ThreadManagementSettings", () => {
     expect(screen.queryByRole("button", { name: "Move" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("checkbox", { name: /System default/ }));
+    fireEvent.click((await screen.findAllByRole("checkbox", { name: /GIFusion/ }))[0]!);
 
     expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Copy 1" })).toBeEnabled();
+    expect(logRendererDiagnostic).toHaveBeenCalledWith({
+      level: "warn",
+      message: "Thread migration source project has malformed linked directories.",
+      details: {
+        malformedThreadCount: 1,
+        projectKey: "directory:/repo/default",
+        projectLabel: "GIFusion",
+        threadCount: 1,
+      },
+    });
   });
 });
