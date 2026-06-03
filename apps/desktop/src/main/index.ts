@@ -96,6 +96,7 @@ import {
 } from "./state/app-state";
 import { createMainWindow } from "./window";
 import { subscribersForChannel } from "./window-channels";
+import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
@@ -360,6 +361,9 @@ function installApplicationMenu(): void {
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
+      },
+      openNewThread: () => {
+        requestOpenNewThread();
       },
       openProfile: (profile) => {
         void Promise.resolve(openDesktopPwrAgentProfile({ profile })).finally(
