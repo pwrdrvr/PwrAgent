@@ -615,6 +615,11 @@ export type DesktopApi = {
     callback: (section?: string) => void,
   ) => () => void;
   /**
+   * Main → renderer push: fires when the user invokes File → New Thread
+   * or presses the native `CmdOrCtrl+N` accelerator.
+   */
+  onOpenNewThreadRequested?: (callback: () => void) => () => void;
+  /**
    * Main → renderer push: fires when the user invokes Help →
    * Replay Onboarding…. Re-opens the first-run wizard overlay
    * without flipping the persisted `onboarding.completed` flag.

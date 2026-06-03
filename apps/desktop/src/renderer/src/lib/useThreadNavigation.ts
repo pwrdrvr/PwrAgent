@@ -189,6 +189,54 @@ function directoryKeysForThread(
     .map((directory) => directory.key);
 }
 
+function resolveCreateThreadTargetDirectory(args: {
+  directories: NavigationSnapshot["directories"];
+  selectedDirectory?: NavigationDirectorySummary;
+  selectedThreadKey?: string;
+}): {
+  directoryKey: string;
+  directoryKind: NavigationDirectorySummary["kind"];
+  directoryLabel: string;
+  directoryPath?: string;
+} {
+  const { directories, selectedDirectory, selectedThreadKey } = args;
+
+  if (selectedDirectory?.kind === "directory") {
+    return {
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+    };
+  }
+
+  if (selectedThreadKey) {
+    const threadDirectories = directories.filter(
+      (directory) =>
+        directory.kind === "directory" && directory.threadKeys.includes(selectedThreadKey)
+    );
+    if (threadDirectories.length === 1) {
+      const [threadDirectory] = threadDirectories;
+      if (threadDirectory) {
+        return {
+          directoryKey: threadDirectory.key,
+          directoryKind: threadDirectory.kind,
+          directoryLabel: threadDirectory.label,
+          directoryPath: threadDirectory.path,
+        };
+      }
+    }
+  }
+
+  const workspaceDirectory = directories.find((directory) => directory.kind === "workspace");
+  return {
+    directoryKey: workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+    directoryKind: "workspace",
+    directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
+    directoryPath: workspaceDirectory?.path,
+  };
+}
+
 function formatArchiveCleanupNotice(
   cleanup: ArchiveThreadCleanupResult[]
 ): ArchiveThreadNotice | undefined {
@@ -2898,16 +2946,17 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
 
       try {
-        const workspaceDirectory = directories.find(
-          (directory) => directory.kind === "workspace"
-        );
-        const directoryKey =
-          workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY;
+        const targetDirectory = resolveCreateThreadTargetDirectory({
+          directories,
+          selectedDirectory,
+          selectedThreadKey,
+        });
+        const directoryKey = targetDirectory.directoryKey;
         const response = await desktopApi.ensureDirectoryLaunchpad({
           directoryKey,
-          directoryKind: "workspace",
-          directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
-          directoryPath: workspaceDirectory?.path,
+          directoryKind: targetDirectory.directoryKind,
+          directoryLabel: targetDirectory.directoryLabel,
+          directoryPath: targetDirectory.directoryPath,
           preferredBackend: backend,
         });
         let launchpad = response.launchpad;
@@ -2949,16 +2998,16 @@ export function useThreadNavigation(
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
-        const workspaceDirectory = directories.find(
-          (directory) => directory.kind === "workspace"
-        );
-        pendingPickedLaunchpadRef.current.delete(
-          workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
-        );
+        const targetDirectory = resolveCreateThreadTargetDirectory({
+          directories,
+          selectedDirectory,
+          selectedThreadKey,
+        });
+        pendingPickedLaunchpadRef.current.delete(targetDirectory.directoryKey);
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, directories, refresh]
+    [desktopApi, directories, refresh, selectedDirectory, selectedThreadKey]
   );
 
   const createSubthread = useCallback(

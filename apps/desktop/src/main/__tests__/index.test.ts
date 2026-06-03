@@ -56,6 +56,7 @@ const resolveMainLogProfileNameMock = vi.fn((decision: BootDecisionLike) => {
   }
 });
 const requestOpenSettingsMock = vi.fn();
+const requestOpenNewThreadMock = vi.fn();
 const requestQuitMock = vi.fn(async () => true);
 const allowImmediateQuitMock = vi.fn();
 const isQuitAllowedMock = vi.fn(() => true);
@@ -172,6 +173,10 @@ vi.mock("../window", () => ({
 
 vi.mock("../window-open-settings", () => ({
   requestOpenSettings: requestOpenSettingsMock,
+}));
+
+vi.mock("../window-open-new-thread", () => ({
+  requestOpenNewThread: requestOpenNewThreadMock,
 }));
 
 vi.mock("../quit-manager", () => ({
@@ -421,6 +426,7 @@ describe("bootstrapApp", () => {
     initializeMainLoggerMock.mockReset();
     resolveMainLogProfileNameMock.mockClear();
     requestOpenSettingsMock.mockReset();
+    requestOpenNewThreadMock.mockReset();
     requestQuitMock.mockReset();
     requestQuitMock.mockResolvedValue(true);
     allowImmediateQuitMock.mockReset();
@@ -778,6 +784,27 @@ describe("bootstrapApp", () => {
         error: "codex unavailable",
       }),
     );
+  });
+
+  it("routes File -> New Thread through the shared main-window request helper", async () => {
+    await import("../index");
+    await flushMicrotasks();
+
+    const template = buildFromTemplateMock.mock.calls[0]?.[0] as
+      | Array<{
+          label?: string;
+          submenu?: Array<{
+            label?: string;
+            click?: () => void | Promise<void>;
+          }>;
+        }>
+      | undefined;
+    const fileMenu = template?.find((item) => item.label === "File");
+    const newThread = fileMenu?.submenu?.find((menuItem) => menuItem.label === "New Thread");
+
+    newThread?.click?.();
+
+    expect(requestOpenNewThreadMock).toHaveBeenCalledOnce();
   });
 
   it("logs unexpected background messaging startup failures", async () => {
