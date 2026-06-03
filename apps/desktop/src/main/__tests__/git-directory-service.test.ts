@@ -284,6 +284,39 @@ describe("GitDirectoryService", () => {
     expect(branchesAfter).toEqual(branchesBefore);
   });
 
+  it("creates an attached branch worktree and reuses it for the same branch", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+      worktreeBranchMode: "attached",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    expect(await realpath(workspace.repositoryPath!)).toBe(await realpath(repoDir));
+    expect(runGit(repoDir, ["branch", "--show-current"])).toBe("");
+    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("main");
+
+    const reused = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+      worktreeBranchMode: "attached",
+    });
+
+    expect(reused).toEqual(workspace);
+  });
+
   it("passes the prepared git environment to worktree creation commands", async () => {
     const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-env-"));
     cleanupPaths.push(repoDir);

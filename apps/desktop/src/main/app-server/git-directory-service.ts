@@ -584,7 +584,9 @@ export class GitDirectoryService {
       NavigationLaunchpadDraft,
       "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
     > &
-      Partial<Pick<NavigationLaunchpadDraft, "backend">>,
+      Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
+        worktreeBranchMode?: "attached" | "detached";
+      },
   ): Promise<{ cwd?: string; repositoryPath?: string; workMode: LaunchpadWorkMode }> {
     if (launchpad.directoryKind === "workspace") {
       return {
@@ -630,6 +632,67 @@ export class GitDirectoryService {
       return {
         cwd: directoryPath,
         workMode: "local",
+      };
+    }
+
+    if (launchpad.worktreeBranchMode === "attached") {
+      const worktreeList = await this.runGitCommand(
+        repoRoot,
+        ["worktree", "list", "--porcelain"],
+        this.gitEnv,
+      ).catch(() => "");
+      const existing = parseGitWorktreeEntries(worktreeList).find(
+        (entry) => entry.branch === baseBranch,
+      );
+      if (existing && path.resolve(existing.path) !== path.resolve(repoRoot)) {
+        return {
+          cwd: existing.path,
+          repositoryPath: repoRoot,
+          workMode: "worktree",
+        };
+      }
+      if (existing) {
+        const status = await this.runGitCommand(
+          repoRoot,
+          ["status", "--porcelain", "--untracked-files=normal"],
+          this.gitEnv,
+        ).catch(() => "");
+        if (status.trim()) {
+          throw new Error(
+            `Cannot move branch ${baseBranch} to a worktree because the local checkout has uncommitted changes.`,
+          );
+        }
+        const baseCommit = await this.runGitCommand(
+          repoRoot,
+          ["rev-parse", "--verify", `${baseBranch}^{commit}`],
+          this.gitEnv,
+        );
+        await this.runGitCommand(
+          repoRoot,
+          ["switch", "--detach", baseCommit.trim()],
+          this.gitEnv,
+        );
+      }
+
+      const storage = await this.resolveStorage();
+      const worktreePath = await computeWorktreePath({
+        backend: launchpad.backend,
+        codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
+        repoRoot,
+        storage,
+        homeDir: this.homeDir,
+      });
+      await mkdir(path.dirname(worktreePath), { recursive: true });
+      await this.runGitCommand(
+        repoRoot,
+        ["worktree", "add", worktreePath, baseBranch],
+        this.gitEnv,
+      );
+
+      return {
+        cwd: worktreePath,
+        repositoryPath: repoRoot,
+        workMode: "worktree",
       };
     }
 

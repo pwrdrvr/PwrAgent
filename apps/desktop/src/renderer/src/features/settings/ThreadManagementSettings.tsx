@@ -4,6 +4,7 @@ import {
   type ListThreadMigrationSourcesResponse,
   type StartThreadMigrationResponse,
   type ThreadIdentifier,
+  type ThreadMigrationCopyStrategy,
   type ThreadMigrationOperation,
   type ThreadMigrationRunItem,
   type ThreadMigrationSourceProjectGroup,
@@ -85,6 +86,8 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
   const [startError, setStartError] = useState<string>();
   const [startingOperation, setStartingOperation] =
     useState<ThreadMigrationOperation>();
+  const [copyStrategy, setCopyStrategy] =
+    useState<ThreadMigrationCopyStrategy>("detached-destination");
   const sourceThreadsRequestIdRef = useRef(0);
 
   const loadSources = useCallback(async () => {
@@ -199,7 +202,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     !startingOperation &&
     !threadsState.loading;
   const canMove = canStartBase;
-  const canCopy = canStartBase && !selectedHasManagedWorktree;
+  const canCopy = canStartBase;
 
   const toggleThread = (threadId: ThreadIdentifier) => {
     setSelectedThreadIds((current) => {
@@ -258,6 +261,7 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       const response = await startThreadMigration({
         sourceProfile: selectedSource.profile,
         operation,
+        ...(operation === "copy" ? { copyStrategy } : {}),
         threadIds: [...selectedThreadIds],
       });
       setRun(response);
@@ -372,11 +376,28 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                 {selectedCount === 0
                   ? "Select one or more threads to enable Move or Copy."
                   : selectedHasManagedWorktree
-                    ? "Move creates destination worktrees before archiving the source. Copy is disabled for selected managed worktrees."
+                    ? "Move transfers branches to destination worktrees before archiving the source. Copy leaves source branches active and uses the selected strategy."
                     : "Move copies, validates, then archives source last. Copy leaves source threads active."}
               </p>
             </div>
             <div className="settings-thread-management__controls">
+              {selectedHasManagedWorktree ? (
+                <label className="settings-thread-management__copy-strategy">
+                  <span>Copy strategy</span>
+                  <select
+                    value={copyStrategy}
+                    onChange={(event) =>
+                      setCopyStrategy(
+                        event.target.value as ThreadMigrationCopyStrategy,
+                      )
+                    }
+                  >
+                    <option value="detached-destination">
+                      Detached destination
+                    </option>
+                  </select>
+                </label>
+              ) : null}
               <button
                 className="button button--primary"
                 disabled={!canMove}
@@ -393,11 +414,6 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                 className="button button--secondary"
                 disabled={!canCopy}
                 type="button"
-                title={
-                  selectedHasManagedWorktree
-                    ? "Copy is disabled for selected managed worktrees. Use Move."
-                    : undefined
-                }
                 onClick={() => {
                   void startMigration("copy");
                 }}

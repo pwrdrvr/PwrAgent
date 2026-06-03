@@ -53,6 +53,7 @@ export type ForkThreadRequest = {
   directoryLabel?: string;
   directoryPath?: string;
   workMode?: LaunchpadWorkMode;
+  worktreeBranchMode?: "attached" | "detached";
   branchName?: string;
   model?: string;
   approvalPolicy?: string;

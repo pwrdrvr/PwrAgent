@@ -5234,6 +5234,25 @@ textarea,
   justify-content: flex-end;
 }
 
+.settings-thread-management__copy-strategy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-thread-management__copy-strategy select {
+  min-height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .settings-thread-management__actionbar {
   display: flex;
   flex: 0 0 auto;

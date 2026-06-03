@@ -382,6 +382,7 @@ describe("ThreadMigrationService", () => {
           branchName: "feature/source-work",
           directoryPath: "/repo/app",
           sourceThreadId: "source-thread",
+          worktreeBranchMode: "attached",
           workMode: "worktree",
         });
         return {
@@ -432,10 +433,11 @@ describe("ThreadMigrationService", () => {
     ]);
   });
 
-  it("blocks Copy before fork/archive when a source thread has a profile-owned worktree", async () => {
+  it("copies a source worktree to a detached destination worktree", async () => {
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [
         makeSourceThread({
+          gitBranch: "feature/source-work",
           linkedDirectories: [
             {
               id: "worktree:/Users/alice/.codex/profiles/personal/worktrees/repo/app",
@@ -448,13 +450,35 @@ describe("ThreadMigrationService", () => {
           ],
         }),
       ]),
-      readThread: vi.fn(),
+      readThread: vi.fn(async () => makeReplay()),
       archiveThread: vi.fn(),
       close: vi.fn(),
     };
     const destination = {
-      forkThread: vi.fn(),
-      readThread: vi.fn(),
+      forkThread: vi.fn(async (request) => {
+        expect(request).toMatchObject({
+          branchName: "feature/source-work",
+          directoryPath: "/repo/app",
+          sourceThreadId: "source-thread",
+          worktreeBranchMode: "detached",
+          workMode: "worktree",
+        });
+        return {
+          backend: "codex" as const,
+          sourceThreadId: "source-thread",
+          threadId: "destination-thread",
+          executionMode: "default" as const,
+          linkedDirectory: {
+            id: "worktree:/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            label: "app",
+            path: "/repo/app",
+            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            kind: "worktree" as const,
+          },
+          workMode: "worktree" as const,
+        };
+      }),
+      readThread: vi.fn(async () => ({ replay: makeReplay() })),
     };
     const service = new ThreadMigrationService({
       destination,
@@ -469,15 +493,14 @@ describe("ThreadMigrationService", () => {
     const response = await service.startMigration({
       sourceProfile: "",
       operation: "copy",
+      copyStrategy: "detached-destination",
       threadIds: ["source-thread"],
     });
 
     expect(response.items[0]).toMatchObject({
-      status: "failed",
-      error:
-        "Copy is disabled for selected managed worktrees. Use Move so the destination worktree is created before the source is archived.",
+      destinationThreadId: "destination-thread",
+      status: "completed",
     });
-    expect(destination.forkThread).not.toHaveBeenCalled();
     expect(sourceClient.archiveThread).not.toHaveBeenCalled();
   });
 

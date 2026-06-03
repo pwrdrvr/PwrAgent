@@ -194,15 +194,16 @@ export class ThreadMigrationService {
       if (!sourceThread.rolloutPath) {
         throw new Error("Source CAS did not provide a rollout path for this thread.");
       }
-      const sourceHasProfileOwnedWorktree = hasProfileOwnedWorktree(sourceThread);
-      if (request.operation === "copy" && sourceHasProfileOwnedWorktree) {
+      if (
+        request.operation === "copy" &&
+        request.copyStrategy &&
+        request.copyStrategy !== "detached-destination"
+      ) {
         throw new Error(
-          "Copy is disabled for selected managed worktrees. Use Move so the destination worktree is created before the source is archived.",
+          "Only detached destination Copy is implemented for branch/worktree migration.",
         );
       }
-      const destinationWorkspace = resolveDestinationWorkspace(sourceThread, {
-        sourceHasProfileOwnedWorktree,
-      });
+      const destinationWorkspace = resolveDestinationWorkspace(sourceThread, request);
 
       item.status = "copying";
       const destination = await this.options.destination.forkThread({
@@ -213,6 +214,9 @@ export class ThreadMigrationService {
         directoryLabel: destinationWorkspace.directoryLabel,
         directoryPath: destinationWorkspace.directoryPath,
         workMode: destinationWorkspace.workMode,
+        ...(destinationWorkspace.worktreeBranchMode
+          ? { worktreeBranchMode: destinationWorkspace.worktreeBranchMode }
+          : {}),
         ...(destinationWorkspace.branchName
           ? { branchName: destinationWorkspace.branchName }
           : {}),
@@ -474,30 +478,39 @@ function resolveDestinationWorkspace(
     InternalSourceThread,
     "gitBranch" | "linkedDirectories" | "projectKey" | "title"
   >,
-  options: { sourceHasProfileOwnedWorktree: boolean },
+  request: Pick<StartThreadMigrationRequest, "copyStrategy" | "operation">,
 ): {
   branchName?: string;
   directoryLabel: string;
   directoryPath?: string;
   workMode: ForkThreadRequest["workMode"];
+  worktreeBranchMode?: ForkThreadRequest["worktreeBranchMode"];
 } {
   const directoryPath = resolveDestinationDirectoryPath(thread);
-  if (options.sourceHasProfileOwnedWorktree && !directoryPath) {
+  const sourceHasProfileOwnedWorktree = hasProfileOwnedWorktree(thread);
+  if (sourceHasProfileOwnedWorktree && !directoryPath) {
     throw new Error(
       "Move is blocked because the source managed worktree did not report its repository path.",
     );
   }
-
   const branchName =
-    options.sourceHasProfileOwnedWorktree && thread.gitBranch !== "HEAD"
-      ? thread.gitBranch
-      : undefined;
+    thread.gitBranch && thread.gitBranch !== "HEAD" ? thread.gitBranch : undefined;
+  const needsDestinationWorktree =
+    Boolean(directoryPath && branchName) &&
+    (request.operation === "move" ||
+      request.copyStrategy === "detached-destination");
 
   return {
     directoryLabel: directoryPath ? path.basename(directoryPath) : thread.title,
     ...(directoryPath ? { directoryPath } : {}),
     ...(branchName ? { branchName } : {}),
-    workMode: options.sourceHasProfileOwnedWorktree ? "worktree" : "local",
+    ...(needsDestinationWorktree
+      ? {
+          worktreeBranchMode:
+            request.operation === "move" ? "attached" : "detached",
+        }
+      : {}),
+    workMode: needsDestinationWorktree ? "worktree" : "local",
   };
 }
 

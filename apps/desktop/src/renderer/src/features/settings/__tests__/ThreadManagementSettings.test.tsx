@@ -174,7 +174,7 @@ describe("ThreadManagementSettings", () => {
     });
   });
 
-  it("keeps Move available for selected managed worktrees but disables Copy", async () => {
+  it("keeps Move and detached Copy available for selected managed worktrees", async () => {
     const threadsResponse = migrationThreadsResponse("", "Managed worktree thread");
     threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [
       {
@@ -199,10 +199,13 @@ describe("ThreadManagementSettings", () => {
     );
 
     expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Copy 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy 1" })).toBeEnabled();
+    expect(
+      screen.getByRole("combobox", { name: "Copy strategy" }),
+    ).toHaveValue("detached-destination");
     expect(
       screen.getByText(
-        "Move creates destination worktrees before archiving the source. Copy is disabled for selected managed worktrees.",
+        "Move transfers branches to destination worktrees before archiving the source. Copy leaves source branches active and uses the selected strategy.",
       ),
     ).toBeInTheDocument();
 

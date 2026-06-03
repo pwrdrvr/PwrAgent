@@ -4560,6 +4560,7 @@ export class DesktopBackendRegistry {
       directoryKind,
       directoryLabel,
       directoryPath: request.directoryPath,
+      worktreeBranchMode: request.worktreeBranchMode,
       workMode: request.workMode ?? "local",
     });
     const cwd = preparedWorkspace.cwd;
