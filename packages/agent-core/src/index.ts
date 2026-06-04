@@ -50,6 +50,7 @@ export {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
 } from "./domain/navigation-state.js";
+export { buildDirectorySummaries } from "./domain/directory-navigation.js";
 export {
   GrokRolloutStore,
   type AppServerSessionStore,

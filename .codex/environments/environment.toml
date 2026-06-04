@@ -13,6 +13,15 @@ pnpm install
 script = "rm -rf node_modules"
 
 [[actions]]
+name = "Work"
+icon = "run"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=work pnpm dev
+'''
+
+[[actions]]
 name = "Dev - Messaging"
 icon = "run"
 command = '''

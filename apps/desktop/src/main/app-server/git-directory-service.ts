@@ -1,4 +1,4 @@
-import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -21,6 +21,13 @@ type GitCommandRunner = (
   args: string[],
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
+
+export type PreparedLaunchpadWorkspace = {
+  cwd?: string;
+  repositoryPath?: string;
+  rollback?: () => Promise<void>;
+  workMode: LaunchpadWorkMode;
+};
 
 async function defaultRunGit(
   cwd: string,
@@ -140,6 +147,10 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
+async function normalizeFilesystemPath(target: string): Promise<string> {
+  return realpath(target).catch(() => path.resolve(target));
+}
+
 async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
   const hashParent = path.dirname(worktreePath);
   if (path.basename(hashParent) === ".worktrees" || hashParent === "/") {
@@ -150,6 +161,20 @@ async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
   } catch {
     // Parent is non-empty or already gone; either is fine.
   }
+}
+
+async function removeWorktreeAndPrune(params: {
+  gitEnv?: NodeJS.ProcessEnv;
+  repoRoot: string;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  await params.runGit(
+    params.repoRoot,
+    ["worktree", "remove", "--force", params.worktreePath],
+    params.gitEnv,
+  );
+  await pruneEmptyWorktreeParents(params.worktreePath);
 }
 
 export async function computeWorktreePath(params: {
@@ -339,6 +364,49 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   }
 
   return undefined;
+}
+
+async function detachCleanWorktreeBranch(params: {
+  branchName: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  const status = await params
+    .runGit(
+      params.worktreePath,
+      ["status", "--porcelain", "--untracked-files=normal"],
+      params.gitEnv,
+    )
+    .catch(() => "");
+  if (status.trim()) {
+    throw new Error(
+      `Cannot move branch ${params.branchName} to a destination worktree because ${params.worktreePath} has uncommitted changes.`,
+    );
+  }
+  const baseCommit = await params.runGit(
+    params.worktreePath,
+    ["rev-parse", "--verify", `${params.branchName}^{commit}`],
+    params.gitEnv,
+  );
+  await params.runGit(
+    params.worktreePath,
+    ["switch", "--detach", baseCommit.trim()],
+    params.gitEnv,
+  );
+}
+
+async function restoreDetachedWorktreeBranch(params: {
+  branchName: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit: GitCommandRunner;
+  worktreePath: string;
+}): Promise<void> {
+  await params.runGit(
+    params.worktreePath,
+    ["switch", params.branchName],
+    params.gitEnv,
+  );
 }
 
 type CachedDirectoryStatus = {
@@ -584,8 +652,11 @@ export class GitDirectoryService {
       NavigationLaunchpadDraft,
       "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
     > &
-      Partial<Pick<NavigationLaunchpadDraft, "backend">>,
-  ): Promise<{ cwd?: string; repositoryPath?: string; workMode: LaunchpadWorkMode }> {
+      Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
+        excludedWorktreePaths?: string[];
+        worktreeBranchMode?: "attached" | "detached";
+      },
+  ): Promise<PreparedLaunchpadWorkspace> {
     if (launchpad.directoryKind === "workspace") {
       return {
         cwd: undefined,
@@ -633,6 +704,102 @@ export class GitDirectoryService {
       };
     }
 
+    if (launchpad.worktreeBranchMode === "attached") {
+      let detachedSourceWorktreePath: string | undefined;
+      const excludedWorktreePaths = new Set(
+        await Promise.all(
+          (launchpad.excludedWorktreePaths ?? [])
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((entry) => normalizeFilesystemPath(entry)),
+        ),
+      );
+      const worktreeList = await this.runGitCommand(
+        repoRoot,
+        ["worktree", "list", "--porcelain"],
+        this.gitEnv,
+      ).catch(() => "");
+      const existing = parseGitWorktreeEntries(worktreeList).find(
+        (entry) => entry.branch === baseBranch,
+      );
+      const existingIsRepoRoot =
+        existing && path.resolve(existing.path) === path.resolve(repoRoot);
+      if (existing && !existingIsRepoRoot) {
+        const existingPath = await normalizeFilesystemPath(existing.path);
+        if (!excludedWorktreePaths.has(existingPath)) {
+          return {
+            cwd: existing.path,
+            repositoryPath: repoRoot,
+            workMode: "worktree",
+          };
+        }
+        detachedSourceWorktreePath = existing.path;
+        await detachCleanWorktreeBranch({
+          branchName: baseBranch,
+          gitEnv: this.gitEnv,
+          runGit: this.runGitCommand,
+          worktreePath: existing.path,
+        });
+      } else if (existingIsRepoRoot) {
+        detachedSourceWorktreePath = repoRoot;
+        await detachCleanWorktreeBranch({
+          branchName: baseBranch,
+          gitEnv: this.gitEnv,
+          runGit: this.runGitCommand,
+          worktreePath: repoRoot,
+        });
+      }
+
+      const storage = await this.resolveStorage();
+      const worktreePath = await computeWorktreePath({
+        backend: launchpad.backend,
+        codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
+        repoRoot,
+        storage,
+        homeDir: this.homeDir,
+      });
+      try {
+        await mkdir(path.dirname(worktreePath), { recursive: true });
+        await this.runGitCommand(
+          repoRoot,
+          ["worktree", "add", worktreePath, baseBranch],
+          this.gitEnv,
+        );
+      } catch (error) {
+        if (detachedSourceWorktreePath) {
+          await restoreDetachedWorktreeBranch({
+            branchName: baseBranch,
+            gitEnv: this.gitEnv,
+            runGit: this.runGitCommand,
+            worktreePath: detachedSourceWorktreePath,
+          });
+        }
+        throw error;
+      }
+
+      return {
+        cwd: worktreePath,
+        repositoryPath: repoRoot,
+        rollback: async () => {
+          await removeWorktreeAndPrune({
+            gitEnv: this.gitEnv,
+            repoRoot,
+            runGit: this.runGitCommand,
+            worktreePath,
+          });
+          if (detachedSourceWorktreePath) {
+            await restoreDetachedWorktreeBranch({
+              branchName: baseBranch,
+              gitEnv: this.gitEnv,
+              runGit: this.runGitCommand,
+              worktreePath: detachedSourceWorktreePath,
+            });
+          }
+        },
+        workMode: "worktree",
+      };
+    }
+
     const storage = await this.resolveStorage();
     const worktreePath = await computeWorktreePath({
       backend: launchpad.backend,
@@ -651,6 +818,14 @@ export class GitDirectoryService {
     return {
       cwd: worktreePath,
       repositoryPath: repoRoot,
+      rollback: async () => {
+        await removeWorktreeAndPrune({
+          gitEnv: this.gitEnv,
+          repoRoot,
+          runGit: this.runGitCommand,
+          worktreePath,
+        });
+      },
       workMode: "worktree",
     };
   }

@@ -593,6 +593,7 @@ class MockBackendClient {
   };
   lastForkThreadParams?: {
     threadId: string;
+    path?: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
@@ -862,6 +863,7 @@ class MockBackendClient {
 
   async forkThread(params: {
     threadId: string;
+    path?: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
@@ -7593,6 +7595,45 @@ script = "printf setup-output"
       model: "gpt-5.5",
       serviceTier: "priority",
       fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("passes a CAS-provided source rollout path when forking for migration", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "source-thread",
+      sourceThreadPath: "/Users/example/.codex/sessions/source-thread.jsonl",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local",
+    });
+
+    expect(codexClient.lastForkThreadParams).toMatchObject({
+      threadId: "source-thread",
+      path: "/Users/example/.codex/sessions/source-thread.jsonl",
+      cwd: "/repo/app",
     });
 
     await registry.close();

@@ -57,6 +57,12 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  ListThreadMigrationSourceThreadsRequest,
+  ListThreadMigrationSourceThreadsResponse,
+  ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
+  StartThreadMigrationRequest,
+  StartThreadMigrationResponse,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
@@ -89,6 +95,10 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
+  THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+  THREAD_MIGRATION_RETRY_CHANNEL,
+  THREAD_MIGRATION_START_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -118,6 +128,7 @@ import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { ThreadMigrationService } from "../app-server/thread-migration-service";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -342,6 +353,16 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
+  private threadMigrationService: ThreadMigrationService | null = null;
+
+  private getThreadMigrationService(): ThreadMigrationService {
+    if (!this.threadMigrationService) {
+      this.threadMigrationService = new ThreadMigrationService({
+        destination: getDesktopBackendRegistry(),
+      });
+    }
+    return this.threadMigrationService;
+  }
 
   async listThreads(
     request: AppServerListThreadsRequest = {}
@@ -459,6 +480,28 @@ class DesktopAppServerService {
     });
 
     return response;
+  }
+
+  async listThreadMigrationSources(): Promise<ListThreadMigrationSourcesResponse> {
+    return await this.getThreadMigrationService().listSources();
+  }
+
+  async listThreadMigrationSourceThreads(
+    request: ListThreadMigrationSourceThreadsRequest,
+  ): Promise<ListThreadMigrationSourceThreadsResponse> {
+    return await this.getThreadMigrationService().listSourceThreads(request);
+  }
+
+  async startThreadMigration(
+    request: StartThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    return await this.getThreadMigrationService().startMigration(request);
+  }
+
+  async retryThreadMigration(
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> {
+    return await this.getThreadMigrationService().retryMigration(request);
   }
 
   async archiveWorktree(
@@ -1442,6 +1485,8 @@ class DesktopAppServerService {
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;
     this.lastDirectoriesByKey.clear();
+    await this.threadMigrationService?.dispose();
+    this.threadMigrationService = null;
     await disposeDesktopBackendRegistry();
   }
 
@@ -1533,6 +1578,43 @@ export function registerAppServerIpcHandlers(): void {
       request: RestoreThreadRequest,
     ): Promise<RestoreThreadResponse> => {
       return await appServerService.restoreThread(request);
+    },
+  );
+  ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCES_CHANNEL);
+  ipcMain.handle(
+    THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
+    async (): Promise<ListThreadMigrationSourcesResponse> => {
+      return await appServerService.listThreadMigrationSources();
+    },
+  );
+  ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL);
+  ipcMain.handle(
+    THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+    async (
+      _event,
+      request: ListThreadMigrationSourceThreadsRequest,
+    ): Promise<ListThreadMigrationSourceThreadsResponse> => {
+      return await appServerService.listThreadMigrationSourceThreads(request);
+    },
+  );
+  ipcMain.removeHandler(THREAD_MIGRATION_START_CHANNEL);
+  ipcMain.handle(
+    THREAD_MIGRATION_START_CHANNEL,
+    async (
+      _event,
+      request: StartThreadMigrationRequest,
+    ): Promise<StartThreadMigrationResponse> => {
+      return await appServerService.startThreadMigration(request);
+    },
+  );
+  ipcMain.removeHandler(THREAD_MIGRATION_RETRY_CHANNEL);
+  ipcMain.handle(
+    THREAD_MIGRATION_RETRY_CHANNEL,
+    async (
+      _event,
+      request: RetryThreadMigrationRequest,
+    ): Promise<StartThreadMigrationResponse> => {
+      return await appServerService.retryThreadMigration(request);
     },
   );
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
@@ -1783,6 +1865,10 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCES_CHANNEL);
+  ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL);
+  ipcMain.removeHandler(THREAD_MIGRATION_START_CHANNEL);
+  ipcMain.removeHandler(THREAD_MIGRATION_RETRY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);

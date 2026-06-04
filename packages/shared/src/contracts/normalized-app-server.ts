@@ -244,6 +244,7 @@ export type AppServerThreadSummary = {
   archivedAt?: number;
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
+  gitOriginUrl?: string;
   observedGitBranch?: string;
   source: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
