@@ -178,6 +178,18 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps thread migration project headers sticky inside the project list", () => {
+    const projectHeaderRule = extractRuleBody(
+      css,
+      ".settings-thread-management__project-head",
+    );
+
+    expect(projectHeaderRule).toContain("position: sticky;");
+    expect(projectHeaderRule).toContain("top: 0;");
+    expect(projectHeaderRule).toContain("z-index: 3;");
+    expect(projectHeaderRule).toContain("background: var(--bg-panel-elevated);");
+  });
+
   it("keeps onboarding and warning overlays clickable without losing window drag affordances", () => {
     const overlayRule = extractRuleBody(css, ".onboarding-wizard-overlay");
     const titlebarRule = extractRuleBody(css, ".onboarding-wizard__titlebar");

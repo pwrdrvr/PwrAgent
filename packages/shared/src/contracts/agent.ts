@@ -53,6 +53,8 @@ export type ForkThreadRequest = {
   directoryLabel?: string;
   directoryPath?: string;
   workMode?: LaunchpadWorkMode;
+  worktreeBranchMode?: "attached" | "detached";
+  excludedWorktreePaths?: string[];
   branchName?: string;
   model?: string;
   approvalPolicy?: string;
@@ -69,6 +71,125 @@ export type ForkThreadResponse = {
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
+};
+
+export type ThreadMigrationOperation = "move" | "copy";
+
+export type ThreadMigrationCopyStrategy = "detached-destination";
+
+export type ThreadMigrationRunStatus =
+  | "pending"
+  | "restoring-source"
+  | "copying"
+  | "validating"
+  | "worktree"
+  | "archiving-source"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ThreadMigrationSourceProfileSummary = {
+  profile: string;
+  displayName: string;
+  codexHome: string;
+  source: "default" | "directory" | "config";
+  exists: boolean;
+  selected: boolean;
+  available: boolean;
+  unavailableReason?: string;
+  accountEmail?: string;
+};
+
+export type ListThreadMigrationSourcesResponse = {
+  activeCodexProfile: string;
+  profiles: ThreadMigrationSourceProfileSummary[];
+};
+
+export type ThreadMigrationSourceThreadSummary = {
+  sourceProfile: string;
+  threadId: ThreadIdentifier;
+  title: string;
+  summary?: string;
+  projectKey?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  archivedAt?: number;
+  gitBranch?: string;
+  gitOriginUrl?: string;
+  linkedDirectories: LinkedDirectorySummary[];
+};
+
+export type ThreadMigrationSourceProjectGroup = {
+  key: string;
+  label: string;
+  path?: string;
+  threads: ThreadMigrationSourceThreadSummary[];
+};
+
+export type ListThreadMigrationSourceThreadsRequest = {
+  sourceProfile: string;
+  archived?: boolean;
+  filter?: string;
+};
+
+export type ListThreadMigrationSourceThreadsResponse = {
+  sourceProfile: string;
+  fetchedAt: number;
+  projects: ThreadMigrationSourceProjectGroup[];
+};
+
+export type StartThreadMigrationRequest = {
+  sourceProfile: string;
+  operation: ThreadMigrationOperation;
+  copyStrategy?: ThreadMigrationCopyStrategy;
+  threadIds: ThreadIdentifier[];
+};
+
+export type RetryThreadMigrationRequest = {
+  sourceProfile: string;
+  operation: ThreadMigrationOperation;
+  copyStrategy?: ThreadMigrationCopyStrategy;
+  threadId: ThreadIdentifier;
+};
+
+export type ThreadMigrationRunItem = {
+  sourceProfile: string;
+  sourceThreadId: ThreadIdentifier;
+  destinationThreadId?: ThreadIdentifier;
+  status: ThreadMigrationRunStatus;
+  error?: string;
+  warnings?: string[];
+  diagnostics?: {
+    sourceTitle?: string;
+    sourceArchivedAt?: number;
+    sourceProjectKey?: string;
+    sourceDirectoryPath?: string;
+    sourceDirectoryExists?: boolean;
+    sourceWorktreePath?: string;
+    sourceGitBranch?: string;
+    sourceWorktreeExists?: boolean;
+    sourceBranchExists?: boolean;
+    requestedDirectoryPath?: string;
+    requestedWorkMode?: LaunchpadWorkMode;
+    requestedWorktreeBranchMode?: "attached" | "detached";
+    requestedBranchName?: string;
+    destinationDirectoryPath?: string;
+    destinationWorktreePath?: string;
+    destinationWorkMode?: LaunchpadWorkMode;
+    archivedSource?: boolean;
+  };
+  validation?: {
+    sourceMessageCount: number;
+    destinationMessageCount: number;
+    matched: boolean;
+  };
+};
+
+export type StartThreadMigrationResponse = {
+  runId: string;
+  operation: ThreadMigrationOperation;
+  startedAt: number;
+  items: ThreadMigrationRunItem[];
 };
 
 export type StartTurnRequest = {

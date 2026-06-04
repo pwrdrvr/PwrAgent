@@ -78,6 +78,10 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  ListThreadMigrationSourceThreadsRequest,
+  ListThreadMigrationSourceThreadsResponse,
+  ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
   MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -128,6 +132,8 @@ import type {
   StartThreadResponse,
   StartReviewRequest,
   StartReviewResponse,
+  StartThreadMigrationRequest,
+  StartThreadMigrationResponse,
   StartTurnRequest,
   StartTurnResponse,
   SubmitServerRequestRequest,
@@ -323,6 +329,16 @@ export type DesktopApi = {
   restoreThread?: (
     request: RestoreThreadRequest
   ) => Promise<RestoreThreadResponse>;
+  listThreadMigrationSources?: () => Promise<ListThreadMigrationSourcesResponse>;
+  listThreadMigrationSourceThreads?: (
+    request: ListThreadMigrationSourceThreadsRequest,
+  ) => Promise<ListThreadMigrationSourceThreadsResponse>;
+  startThreadMigration?: (
+    request: StartThreadMigrationRequest,
+  ) => Promise<StartThreadMigrationResponse>;
+  retryThreadMigration?: (
+    request: RetryThreadMigrationRequest,
+  ) => Promise<StartThreadMigrationResponse>;
   archiveWorktree?: (
     request: ArchiveWorktreeRequest
   ) => Promise<ArchiveWorktreeResponse>;

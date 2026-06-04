@@ -17,6 +17,7 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
+import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
@@ -27,7 +28,7 @@ import {
   buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "./settings-patch-delta";
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 export type SettingsSection =
   | "general"
@@ -38,6 +39,7 @@ export type SettingsSection =
   | "profiles"
   | "applications"
   | "worktrees"
+  | "thread-management"
   | "archived"
   | "about";
 
@@ -49,6 +51,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "agents", label: "ACP Agents" },
   { id: "messaging", label: "Messaging" },
   { id: "worktrees", label: "Worktrees" },
+  { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
@@ -72,6 +75,7 @@ const SECTION_LABELS = new Map(
 const ORDERED_SECTION_IDS: SettingsSection[] = [
   ...PRIMARY_SECTIONS,
   "worktrees",
+  "thread-management",
   "archived",
   "experimental",
   "about",
@@ -108,6 +112,44 @@ export function SettingsScreen(props: {
   useEffect(() => {
     if (props.initialSection) setSection(props.initialSection);
   }, [props.initialSection]);
+  const scrollClampFrameRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const clampDocumentScroll = () => {
+      if (window.scrollX === 0 && window.scrollY === 0) {
+        return;
+      }
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      window.scrollTo(0, 0);
+      void props.desktopApi?.logRendererDiagnostic?.({
+        level: "warn",
+        message: "Settings document scroll clamped.",
+        details: {
+          section,
+          scrollX,
+          scrollY,
+        },
+      })?.catch(() => undefined);
+    };
+    const scheduleClamp = () => {
+      if (scrollClampFrameRef.current !== undefined) {
+        return;
+      }
+      scrollClampFrameRef.current = window.requestAnimationFrame(() => {
+        scrollClampFrameRef.current = undefined;
+        clampDocumentScroll();
+      });
+    };
+    clampDocumentScroll();
+    window.addEventListener("scroll", scheduleClamp, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", scheduleClamp);
+      if (scrollClampFrameRef.current !== undefined) {
+        window.cancelAnimationFrame(scrollClampFrameRef.current);
+        scrollClampFrameRef.current = undefined;
+      }
+    };
+  }, [props.desktopApi, section]);
   const snapshot = props.settings.snapshot;
   const activeSectionLabel =
     SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
@@ -478,6 +520,10 @@ function SettingsSectionBody(props: {
 
   if (props.section === "archived") {
     return <ArchivedThreadsSettings desktopApi={props.desktopApi} />;
+  }
+
+  if (props.section === "thread-management") {
+    return <ThreadManagementSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "agents") {
