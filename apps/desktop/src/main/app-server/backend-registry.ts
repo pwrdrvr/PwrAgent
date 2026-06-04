@@ -5,8 +5,10 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwragent/codex-app-server-protocol/v2";
+import type { MessagingApprovalDecision } from "@pwragent/messaging-interface";
 import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
@@ -111,6 +113,7 @@ import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
   isAcpBackendId,
+  type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
@@ -165,6 +168,7 @@ import {
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
+import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import { resolveAgentCoreGrokEnabled } from "../settings/desktop-config";
 import {
   BackendModelCatalog,
@@ -1118,6 +1122,20 @@ function isAcpPermissionRequest(
     request.method === "item/commandExecution/requestApproval" &&
     request.params.acpMethod === "session/request_permission"
   );
+}
+
+function pendingRequestDecisionFromMessagingApproval(
+  decision: MessagingApprovalDecision,
+): PendingRequestDecision {
+  switch (decision) {
+    case "accept":
+    case "accept_for_session":
+      return "approve";
+    case "decline":
+      return "decline";
+    case "cancel":
+      return "cancel";
+  }
 }
 
 function acpRuntimeHasExecutionModeSelection(params: {
@@ -9424,12 +9442,20 @@ export class DesktopBackendRegistry {
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
       this.pendingServerRequests.set(key, { resolve, reject });
 
-      this.emit({
+      void this.emit({
         backend,
         notification: request as AppServerNotification,
       }).catch((error) => {
-        this.pendingServerRequests.delete(key);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        backendRegistryLog.error(
+          "failed to publish pending server request; keeping request pending",
+          {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            requestId: request.params.requestId,
+            threadId: request.params.threadId,
+            turnId: request.params.turnId,
+          },
+        );
       });
     });
   }
@@ -9521,27 +9547,89 @@ export class DesktopBackendRegistry {
     const threadTitle = this.notificationThreadTitles.get(
       `${event.backend}:${threadId}`,
     );
+    const approvalRequest = this.isApprovalAttentionNotification(event.notification)
+      ? event.notification
+      : undefined;
+    const key = `${event.backend}:${threadId}:${requestId}`;
+    if (approvalRequest) {
+      const intent = buildApprovalIntent({
+        createdAt: Date.now(),
+        id: key,
+        request: approvalRequest,
+      });
+      intent.requestContext = {
+        backend: event.backend,
+        method: approvalRequest.method,
+        requestId,
+        threadId,
+        turnId:
+          typeof approvalRequest.params.turnId === "string"
+            ? approvalRequest.params.turnId
+            : undefined,
+      };
+      try {
+        getDesktopNotificationService().notifyApproval({
+          enabled: this.notificationsEnabled(),
+          key,
+          intent,
+          onShow: () => {
+            requestShowThread({
+              backend: event.backend,
+              threadId,
+            });
+          },
+          onDecision: (decision) => {
+            void this.submitServerRequest({
+              backend: event.backend,
+              threadId,
+              turnId:
+                typeof approvalRequest.params.turnId === "string"
+                  ? approvalRequest.params.turnId
+                  : undefined,
+              requestId,
+              response: buildPendingRequestResponse(
+                approvalRequest,
+                pendingRequestDecisionFromMessagingApproval(decision),
+              ),
+            }).catch((error) => {
+              backendRegistryLog.warn("native approval notification decision failed", {
+                backend: event.backend,
+                error: error instanceof Error ? error.message : String(error),
+                requestId,
+                threadId,
+              });
+            });
+          },
+        });
+      } catch (error) {
+        backendRegistryLog.warn("native approval notification failed", {
+          backend: event.backend,
+          error: error instanceof Error ? error.message : String(error),
+          requestId,
+          threadId,
+        });
+      }
+      return;
+    }
     const baseBody = isQuestion
       ? "waiting for your response"
       : "waiting for your approval";
     const body = threadTitle ? `${threadTitle} · ${baseBody}.` : `A turn ${baseBody}.`;
-    const approvalRequest = this.isApprovalAttentionNotification(event.notification)
-      ? event.notification
-      : undefined;
-    getDesktopNotificationService().notifyAttention({
-      enabled: this.notificationsEnabled(),
-      key: `${event.backend}:${threadId}:${requestId}`,
-      title,
-      body,
-      onApprove: approvalRequest
-        ? () => {
-            void this.resolvePendingServerRequestFromNotification({
-              backend: event.backend,
-              request: approvalRequest,
-            });
-          }
-        : undefined,
-    });
+    try {
+      getDesktopNotificationService().notifyAttention({
+        enabled: this.notificationsEnabled(),
+        key,
+        title,
+        body,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("native attention notification failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        requestId,
+        threadId,
+      });
+    }
   }
 
   private isApprovalAttentionNotification(
@@ -9556,35 +9644,6 @@ export class DesktopBackendRegistry {
       notification.method === "applyPatchApproval" ||
       notification.method === "execCommandApproval"
     );
-  }
-
-  private async resolvePendingServerRequestFromNotification(params: {
-    backend: AppServerBackendKind;
-    request: AppServerPendingRequestNotification;
-  }): Promise<void> {
-    const key = buildPendingRequestKey({
-      backend: params.backend,
-      threadId: params.request.params.threadId,
-      requestId: params.request.params.requestId,
-    });
-    const pending = this.pendingServerRequests.get(key);
-    if (!pending) {
-      return;
-    }
-
-    this.pendingServerRequests.delete(key);
-    pending.resolve(buildPendingRequestResponse(params.request, "approve"));
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "serverRequest/resolved",
-        params: {
-          threadId: params.request.params.threadId,
-          turnId: params.request.params.turnId,
-          requestId: params.request.params.requestId,
-        },
-      },
-    });
   }
 
   private notifyForTerminalOutcome(event: AgentEvent): void {
@@ -9610,11 +9669,19 @@ export class DesktopBackendRegistry {
     const body = threadTitle
       ? `${threadTitle} · turn ${status}.`
       : `A turn ${status}.`;
-    getDesktopNotificationService().notifyTerminal({
-      enabled: this.notificationsEnabled(),
-      title: `PwrAgent turn ${status}`,
-      body,
-    });
+    try {
+      getDesktopNotificationService().notifyTerminal({
+        enabled: this.notificationsEnabled(),
+        title: `PwrAgent turn ${status}`,
+        body,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("native terminal notification failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId,
+      });
+    }
   }
 
   private async emit(event: AgentEvent): Promise<void> {
@@ -9838,12 +9905,27 @@ export class DesktopBackendRegistry {
         threadId: event.notification.params.threadId,
         requestId: event.notification.params.requestId,
       });
-      const pending = this.pendingServerRequests.get(key);
-      if (pending) {
-        this.pendingServerRequests.delete(key);
-        pending.resolve({ decision: "cancel" });
+      if (this.pendingServerRequests.has(key)) {
+        backendRegistryLog.warn(
+          "serverRequest/resolved received while request is still pending; ignoring premature resolution",
+          {
+            backend: event.backend,
+            threadId: event.notification.params.threadId,
+            requestId: event.notification.params.requestId,
+          },
+        );
+        return;
       }
-      getDesktopNotificationService().clearAttentionKey(key);
+      try {
+        getDesktopNotificationService().clearAttentionKey(key);
+      } catch (error) {
+        backendRegistryLog.warn("native notification cleanup failed", {
+          backend: event.backend,
+          error: error instanceof Error ? error.message : String(error),
+          requestId: event.notification.params.requestId,
+          threadId: event.notification.params.threadId,
+        });
+      }
     }
 
     this.rememberThreadTitleFromEvent(event);
@@ -9851,7 +9933,27 @@ export class DesktopBackendRegistry {
     this.notifyForTerminalOutcome(event);
 
     for (const listener of this.eventListeners) {
-      await listener(event);
+      try {
+        await listener(event);
+      } catch (error) {
+        backendRegistryLog.error("desktop event listener failed", {
+          backend: event.backend,
+          error: error instanceof Error ? error.message : String(error),
+          method: event.notification.method,
+          requestId:
+            "requestId" in event.notification.params
+              ? event.notification.params.requestId
+              : undefined,
+          threadId:
+            "threadId" in event.notification.params
+              ? event.notification.params.threadId
+              : undefined,
+          turnId:
+            "turnId" in event.notification.params
+              ? event.notification.params.turnId
+              : undefined,
+        });
+      }
     }
   }
 }

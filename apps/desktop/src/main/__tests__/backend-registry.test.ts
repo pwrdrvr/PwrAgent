@@ -49,11 +49,13 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
 
 const desktopNotificationServiceMock = vi.hoisted(() => {
+  const notifyApproval = vi.fn();
   const notifyAttention = vi.fn();
   const notifyTerminal = vi.fn();
   const clearAttentionKey = vi.fn();
-  const service = { notifyAttention, notifyTerminal, clearAttentionKey };
+  const service = { notifyApproval, notifyAttention, notifyTerminal, clearAttentionKey };
   return {
+    notifyApproval,
     notifyAttention,
     notifyTerminal,
     clearAttentionKey,
@@ -64,6 +66,12 @@ const desktopNotificationServiceMock = vi.hoisted(() => {
 vi.mock("../notifications/desktop-notification-service", () => ({
   getDesktopNotificationService:
     desktopNotificationServiceMock.getDesktopNotificationService,
+}));
+
+const requestShowThreadMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../window-show-thread", () => ({
+  requestShowThread: requestShowThreadMock,
 }));
 
 // These tests pre-date the agent-core Grok experimental flag and exercise
@@ -9680,6 +9688,76 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not turn inbound serverRequest/resolved notifications into approval rejection responses", async () => {
+    desktopNotificationServiceMock.clearAttentionKey.mockClear();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const request: AppServerPendingRequestNotification = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "call-1",
+        requestId: "approval-1",
+        command: "npm view eslint",
+      },
+    };
+    const responsePromise = codexClient.emitRequest(request);
+    await waitForCondition(() => events.length === 1);
+
+    let resolvedResponse: unknown;
+    responsePromise.then((response) => {
+      resolvedResponse = response;
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+    await flushAsync();
+
+    expect(resolvedResponse).toBeUndefined();
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "item/commandExecution/requestApproval",
+    ]);
+    expect(desktopNotificationServiceMock.clearAttentionKey).not.toHaveBeenCalledWith(
+      "codex:thread-1:approval-1",
+    );
+
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "accept" },
+    });
+
+    await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("handles automation inspection dynamic tool calls without surfacing pending requests", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -13722,12 +13800,53 @@ command = "pnpm dev"
     }
 
     function resetNotificationMocks(): void {
+      desktopNotificationServiceMock.notifyApproval.mockClear();
       desktopNotificationServiceMock.notifyAttention.mockClear();
       desktopNotificationServiceMock.notifyTerminal.mockClear();
       desktopNotificationServiceMock.clearAttentionKey.mockClear();
+      requestShowThreadMock.mockClear();
     }
 
-    it("calls notifyAttention on turn/requestApproval with a backend:thread:request key", async () => {
+    it("renders approval requests through the native approval intent surface", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "req-1",
+            prompt: "Approve this turn?",
+          },
+        } as AppServerNotification,
+      });
+
+      expect(desktopNotificationServiceMock.notifyAttention).not.toHaveBeenCalled();
+      expect(desktopNotificationServiceMock.notifyApproval).toHaveBeenCalledTimes(1);
+      const call = desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        key: "codex:thread-1:req-1",
+        intent: {
+          kind: "approval",
+          requestContext: {
+            backend: "codex",
+            method: "turn/requestApproval",
+            requestId: "req-1",
+            threadId: "thread-1",
+          },
+          title: "Approval Needed",
+        },
+      });
+      expect(typeof call.enabled).toBe("boolean");
+      expect(typeof call.onDecision).toBe("function");
+      expect(typeof call.onShow).toBe("function");
+
+      await registry.close();
+    });
+
+    it("passes no-detail approval requests to the native approval surface without a direct registry resolver", async () => {
       resetNotificationMocks();
       const registry = makeRegistry();
 
@@ -13742,15 +13861,110 @@ command = "pnpm dev"
         } as AppServerNotification,
       });
 
-      expect(desktopNotificationServiceMock.notifyAttention).toHaveBeenCalledTimes(1);
-      const call = desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
-      expect(call).toMatchObject({
-        key: "codex:thread-1:req-1",
-        title: "PwrAgent approval needed",
+      const call = desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      expect(call?.intent.body).toContain("Approve this action?");
+      expect(typeof call?.onDecision).toBe("function");
+      expect(typeof call?.onShow).toBe("function");
+      expect(desktopNotificationServiceMock.notifyAttention).not.toHaveBeenCalled();
+
+      await registry.close();
+    });
+
+    it("uses the current command approval details instead of the cached thread title", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-1",
+            threadName: "npm view openclaw",
+          },
+        } as AppServerNotification,
       });
-      expect(typeof call.body).toBe("string");
-      expect(typeof call.enabled).toBe("boolean");
-      expect(typeof call.onApprove).toBe("function");
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            itemId: "call-2",
+            requestId: "approval-2",
+            prompt:
+              "Do you want to allow network access so I can query the npm registry for yarn?",
+            command: "npm view yarn",
+          },
+        } as AppServerNotification,
+      });
+
+      const call = desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      expect(call?.intent.body).toContain("npm view yarn");
+      expect(call?.intent.body).not.toContain("openclaw");
+
+      await registry.close();
+    });
+
+    it("notification approval for a later request resolves that request, not the first request on the thread", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      const firstRequest: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          requestId: "approval-1",
+          command: "npm view openclaw",
+        },
+      };
+      const secondRequest: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          itemId: "call-2",
+          requestId: "approval-2",
+          command: "npm view yarn",
+        },
+      };
+      const firstResponsePromise = codexClient.emitRequest(firstRequest);
+      await waitForCondition(
+        () => desktopNotificationServiceMock.notifyApproval.mock.calls.length === 1,
+      );
+      const secondResponsePromise = codexClient.emitRequest(secondRequest);
+      await waitForCondition(
+        () => desktopNotificationServiceMock.notifyApproval.mock.calls.length === 2,
+      );
+
+      let firstResolved = false;
+      firstResponsePromise.then(() => {
+        firstResolved = true;
+      });
+
+      desktopNotificationServiceMock.notifyApproval.mock.calls[1]?.[0]?.onDecision?.("accept");
+
+      await expect(secondResponsePromise).resolves.toEqual({ decision: "accept" });
+      await flushAsync();
+      expect(firstResolved).toBe(false);
+
+      desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0]?.onDecision?.("accept");
+      await expect(firstResponsePromise).resolves.toEqual({ decision: "accept" });
 
       await registry.close();
     });
@@ -13775,7 +13989,7 @@ command = "pnpm dev"
         key: "codex:thread-q:req-q",
         title: "PwrAgent question waiting",
       });
-      expect(call.onApprove).toBeUndefined();
+      expect(call.onDecision).toBeUndefined();
 
       await registry.close();
     });
@@ -13811,14 +14025,14 @@ command = "pnpm dev"
       };
       const responsePromise = codexClient.emitRequest(request);
       await waitForCondition(
-        () => desktopNotificationServiceMock.notifyAttention.mock.calls.length === 1,
+        () => desktopNotificationServiceMock.notifyApproval.mock.calls.length === 1,
       );
 
       const notificationCall =
-        desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
-      expect(typeof notificationCall?.onApprove).toBe("function");
+        desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      expect(typeof notificationCall?.onDecision).toBe("function");
 
-      notificationCall?.onApprove?.();
+      notificationCall?.onDecision?.("accept");
 
       await expect(responsePromise).resolves.toEqual({ decision: "accept" });
       await waitForCondition(() =>
@@ -13834,6 +14048,218 @@ command = "pnpm dev"
       );
 
       unsubscribe();
+      await registry.close();
+    });
+
+    it("translates native approval decisions through the request protocol", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      const request: AppServerPendingRequestNotification = {
+        method: "turn/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+          prompt: "Approve this turn?",
+        },
+      };
+      const responsePromise = codexClient.emitRequest(request);
+      await waitForCondition(
+        () => desktopNotificationServiceMock.notifyApproval.mock.calls.length === 1,
+      );
+
+      const notificationCall =
+        desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      notificationCall?.onDecision?.("accept");
+
+      await expect(responsePromise).resolves.toEqual({ decision: "approve" });
+
+      await registry.close();
+    });
+
+    it("focuses the approval thread when the notification show action fires", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      const request: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          requestId: "approval-1",
+          command: "npm view dive",
+        },
+      };
+      const responsePromise = codexClient.emitRequest(request);
+      await waitForCondition(
+        () => desktopNotificationServiceMock.notifyApproval.mock.calls.length === 1,
+      );
+
+      const notificationCall =
+        desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      notificationCall?.onShow?.();
+
+      expect(requestShowThreadMock).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      let resolved = false;
+      responsePromise.then(() => {
+        resolved = true;
+      });
+      await flushAsync();
+      expect(resolved).toBe(false);
+
+      await registry.submitServerRequest({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        response: { decision: "decline" },
+      });
+      await expect(responsePromise).resolves.toEqual({ decision: "decline" });
+
+      await registry.close();
+    });
+
+    it("still emits pending approvals when native notification rendering throws", async () => {
+      resetNotificationMocks();
+      desktopNotificationServiceMock.notifyApproval.mockImplementationOnce(() => {
+        throw new Error("notification focus API missing");
+      });
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+      const events: AgentEvent[] = [];
+      const unsubscribe = registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      const request: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          requestId: "approval-1",
+          command: "npm view eslint",
+        },
+      };
+      const responsePromise = codexClient.emitRequest(request);
+      await waitForCondition(() => events.length === 1);
+
+      expect(events[0]).toEqual({
+        backend: "codex",
+        notification: request,
+      });
+
+      await registry.submitServerRequest({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        response: { decision: "accept" },
+      });
+
+      await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+
+      unsubscribe();
+      await registry.close();
+    });
+
+    it("keeps approval requests pending when an event listener throws", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+      const events: AgentEvent[] = [];
+      const unsubscribeThrowing = registry.onEvent(() => {
+        throw new Error("renderer bridge crashed");
+      });
+      const unsubscribeCollecting = registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      const request: AppServerPendingRequestNotification = {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          requestId: "approval-1",
+          command: "npm view eslint",
+        },
+      };
+      const responsePromise = codexClient.emitRequest(request);
+
+      await waitForCondition(() => events.length === 1);
+      expect(events[0]).toEqual({
+        backend: "codex",
+        notification: request,
+      });
+
+      let resolved = false;
+      responsePromise.then(() => {
+        resolved = true;
+      });
+      await flushAsync();
+      expect(resolved).toBe(false);
+
+      await registry.submitServerRequest({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        response: { decision: "decline" },
+      });
+
+      await expect(responsePromise).resolves.toEqual({ decision: "decline" });
+
+      unsubscribeThrowing();
+      unsubscribeCollecting();
       await registry.close();
     });
 
@@ -13921,9 +14347,9 @@ command = "pnpm dev"
           },
         } as AppServerNotification,
       });
-      expect(desktopNotificationServiceMock.notifyAttention).toHaveBeenCalledTimes(1);
+      expect(desktopNotificationServiceMock.notifyApproval).toHaveBeenCalledTimes(1);
       expect(
-        desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0]?.key,
+        desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0]?.key,
       ).toBe("codex:thread-legacy:approval-7");
 
       await registry.publishLocalEvent({

@@ -196,6 +196,7 @@ import type {
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
+import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -619,6 +620,13 @@ export type DesktopApi = {
    * or presses the native `CmdOrCtrl+N` accelerator.
    */
   onOpenNewThreadRequested?: (callback: () => void) => () => void;
+  /**
+   * Main -> renderer push: focuses an existing thread from an
+   * out-of-app surface such as a native notification.
+   */
+  onShowThreadRequested?: (
+    callback: (request: WindowShowThreadRequest) => void,
+  ) => () => void;
   /**
    * Main → renderer push: fires when the user invokes Help →
    * Replay Onboarding…. Re-opens the first-run wizard overlay

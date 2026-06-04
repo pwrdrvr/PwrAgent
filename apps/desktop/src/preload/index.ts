@@ -328,9 +328,11 @@ import {
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
   WINDOW_REPLAY_ONBOARDING_CHANNEL,
+  WINDOW_SHOW_THREAD_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../shared/window-pointer";
+import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -851,6 +853,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_OPEN_NEW_THREAD_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_NEW_THREAD_CHANNEL, listener);
+    };
+  },
+  onShowThreadRequested: (
+    callback: (request: WindowShowThreadRequest) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      request: WindowShowThreadRequest,
+    ) => callback(request);
+    ipcRenderer.on(WINDOW_SHOW_THREAD_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_SHOW_THREAD_CHANNEL, listener);
     };
   },
   onReplayOnboardingRequested: (callback: () => void): (() => void) => {
