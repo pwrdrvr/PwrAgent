@@ -32,6 +32,7 @@ import {
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_REPLAY_ONBOARDING_CHANNEL,
+  WINDOW_SHOW_THREAD_CHANNEL,
 } from "../shared/ipc";
 import {
   readBootstrapAppearance,
@@ -607,6 +608,7 @@ export function createMainWindow(options?: {
     WINDOW_OPEN_NEW_THREAD_CHANNEL,
     WINDOW_OPEN_SETTINGS_CHANNEL,
     WINDOW_REPLAY_ONBOARDING_CHANNEL,
+    WINDOW_SHOW_THREAD_CHANNEL,
   ]);
 
   window.on("closed", () => {

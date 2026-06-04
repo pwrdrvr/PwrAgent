@@ -98,6 +98,7 @@ mac:
   helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
+    NSUserNotificationAlertStyle: alert
     LSMinimumSystemVersion: "12.0"
     LSApplicationCategoryType: public.app-category.developer-tools
   target:

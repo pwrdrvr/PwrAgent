@@ -1800,6 +1800,10 @@ export function useThreadNavigation(
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
+  showThread: (params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => Promise<void>;
   archiveThread: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -2928,6 +2932,26 @@ export function useThreadNavigation(
       setRetainedUnreadThread(thread);
     }
   }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
+
+  const showThread = useCallback(
+    async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }): Promise<void> => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const thread = state.response?.threads.find(
+        (candidate) =>
+          candidate.source === params.backend && candidate.id === params.threadId,
+      );
+      if (thread) {
+        selectThread(thread);
+        return;
+      }
+      setSelectedItemKey(threadKey);
+      await refresh(threadKey, undefined, true);
+    },
+    [refresh, selectThread, state.response?.threads],
+  );
 
   const createThread = useCallback(
     async (
@@ -4412,6 +4436,7 @@ export function useThreadNavigation(
     updateDirectoryLaunchpad,
     setBrowseMode,
     selectThread,
+    showThread,
     archiveThread,
     archiveWorktree,
     restoreWorktree,
