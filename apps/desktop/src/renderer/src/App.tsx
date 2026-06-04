@@ -299,6 +299,15 @@ function DesktopAppShell(props: {
     });
   }, [desktopApi, navigation]);
   useEffect(() => {
+    if (!desktopApi?.onShowThreadRequested) {
+      return;
+    }
+    return desktopApi.onShowThreadRequested((request) => {
+      setMainView("thread");
+      void navigation.showThread(request);
+    });
+  }, [desktopApi, navigation]);
+  useEffect(() => {
     // Subscribe to Help → Replay Onboarding push from the menu. Forces
     // the wizard overlay open in "replay" mode — dismissal does NOT
     // touch `onboarding.completed`.

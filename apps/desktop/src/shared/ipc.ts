@@ -208,6 +208,11 @@ export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
  */
 export const WINDOW_OPEN_NEW_THREAD_CHANNEL = "window:open-new-thread";
 /**
+ * Main -> renderer push: fired when an out-of-app surface, such as a
+ * native approval notification, asks the main window to focus a known thread.
+ */
+export const WINDOW_SHOW_THREAD_CHANNEL = "window:show-thread";
+/**
  * Main → renderer push: fired when the user invokes the app's
  * "Settings…" menu item (PwrAgent → Settings… on macOS, Help → ...
  * on Linux/Windows). The renderer's `App` shell listens on this
