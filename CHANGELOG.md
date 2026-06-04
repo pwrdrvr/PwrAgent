@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.0-beta.22 - 2026-06-04
+
+- Fixed native desktop approval notifications so the notification `Approve` action resolves the pending approval through the normal server-request flow, contributed by Serhii Novachenko (@serejja) in #637.
+- Kept unsupported platforms on passive notification behavior while sharing approval decision mapping between renderer and notification approval paths.
+
 ## v1.0.0-beta.21 - 2026-06-03
 
 - Added sub-thread grouping in the sidebar and real Codex thread forks, including same-worktree forks, managed-worktree forks, UI-only sub-thread launchpad creation, collapse state, and child ordering in thread lists.
