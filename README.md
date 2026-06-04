@@ -64,14 +64,14 @@ Codex App Server credentials live in `~/.config/grok-app-server/config.toml` or 
 | Layer | Stack | Where it lives |
 |---|---|---|
 | Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |
-| Codex protocol | Codex App Server protocol contracts | `packages/codex-app-server-protocol/` |
+| Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |
 | Agent core | Provider-agnostic coding-agent runtime (currently Grok / xAI) | `packages/agent-core/` |
 | Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |
 | Messaging providers | Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE | `packages/messaging/providers/*/` |
 | Shared types | Cross-package contracts and helpers | `packages/shared/` |
 | Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/`, `packages/agent-core/src/persistence/` |
 
-The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaves (`shared`, `codex-app-server-protocol`) → mid-tier (`messaging/*`, `agent-core`) → top (`apps/desktop`). The renderer can only import `@pwragent/shared`; everything else crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
+The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`, `agent-core`) → top (`apps/desktop`). The renderer can only import `@pwragent/shared`; everything else crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
 
 Architecture deep-dive: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
