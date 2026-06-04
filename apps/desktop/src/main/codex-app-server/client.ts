@@ -44,7 +44,7 @@ import type {
   InitializeParams as CodexInitializeParams,
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
-} from "@pwragent/codex-app-server-protocol";
+} from "@pwrdrvr/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
   ConfigValueWriteParams as CodexConfigValueWriteParams,
@@ -63,7 +63,7 @@ import type {
   TurnSteerParams as CodexTurnSteerParams,
   DynamicToolSpec as CodexDynamicToolSpec,
   UserInput as CodexUserInput,
-} from "@pwragent/codex-app-server-protocol/v2";
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
   JsonRpcConnection,
@@ -5811,7 +5811,7 @@ export class CodexAppServerClient {
             title: "PwrAgent",
             version: this.options.clientVersion ?? "0.0.0",
           },
-          capabilities: { experimentalApi: true }
+          capabilities: { experimentalApi: true, requestAttestation: false }
         };
         const result = await this.connection.request("initialize", initializeParams);
         this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;

@@ -23,18 +23,6 @@ module.exports = {
       },
     },
     {
-      name: "codex-protocol-is-a-leaf",
-      severity: "error",
-      comment:
-        "packages/codex-app-server-protocol must not import any internal workspace package.",
-      from: {
-        path: "^packages/codex-app-server-protocol/",
-      },
-      to: {
-        path: "^(@pwragent/|apps/|packages/(?!codex-app-server-protocol/))",
-      },
-    },
-    {
       name: "agent-core-only-imports-shared",
       severity: "error",
       comment:
@@ -43,7 +31,7 @@ module.exports = {
         path: "^packages/agent-core/",
       },
       to: {
-        path: "^(@pwragent/(?!shared)|apps/|packages/(?!shared/|agent-core/))",
+        path: "^(@pwragent/(?!shared)|@pwrdrvr/codex-app-server-protocol|apps/|packages/(?!shared/|agent-core/))",
       },
     },
     {
@@ -55,7 +43,7 @@ module.exports = {
         path: "^apps/desktop/src/renderer/",
       },
       to: {
-        path: "^(@pwragent/(?!shared)|packages/(?!shared/))",
+        path: "^(@pwragent/(?!shared)|@pwrdrvr/codex-app-server-protocol|packages/(?!shared/))",
       },
     },
     {
@@ -67,7 +55,7 @@ module.exports = {
         path: "^packages/messaging/interface/",
       },
       to: {
-        path: "^(@pwragent/(agent-core|messaging-provider|codex-app-server-protocol|desktop)|apps/|packages/agent-core/|packages/codex-app-server-protocol/|packages/messaging/providers/)",
+        path: "^(@pwragent/(agent-core|messaging-provider|desktop)|@pwrdrvr/codex-app-server-protocol|apps/|packages/agent-core/|packages/messaging/providers/)",
       },
     },
     {
@@ -79,7 +67,7 @@ module.exports = {
         path: "^packages/messaging/providers/",
       },
       to: {
-        path: "^(@pwragent/(agent-core|codex-app-server-protocol|desktop)|apps/|packages/agent-core/|packages/codex-app-server-protocol/)",
+        path: "^(@pwragent/(agent-core|desktop)|@pwrdrvr/codex-app-server-protocol|apps/|packages/agent-core/)",
       },
     },
     {

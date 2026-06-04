@@ -193,16 +193,15 @@ graph TB
     MsgProviders["packages/messaging/providers/*"]
     MsgInterface["packages/messaging/interface"]
     Shared["packages/shared"]
-    CodexProto["packages/codex-app-server-protocol"]
 
     DesktopApp --> AgentCore
     DesktopApp --> MsgProviders
     DesktopApp --> MsgInterface
     DesktopApp --> Shared
+    DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
     MsgProviders --> MsgInterface
     MsgInterface --> Shared
     AgentCore --> Shared
-    AgentCore --> CodexProto
 ```
 
 The rules in [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs) are
@@ -225,14 +224,15 @@ any violation.
 | `apps/desktop` | Electron app — main process, renderer, IPC bridge |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
 | `packages/agent-core` | Agent runtime, Codex App Server protocol implementation, Grok-backed coding agent |
-| `packages/codex-app-server-protocol` | Protocol types shared with Codex App Server consumers |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |
 | `packages/messaging/providers/discord` | Discord adapter (`discord.js`) |
 | `packages/messaging/providers/mattermost` | Mattermost adapter (`@mattermost/client` + HTTP callback listener) |
 | `packages/messaging/providers/slack` | Slack adapter (`@slack/web-api` + Socket Mode) |
 
-Workspace packages remain marked `private: true` for publishing control,
+Codex App Server protocol bindings are consumed from
+`@pwrdrvr/codex-app-server-protocol` on npm instead of checked into this
+workspace. Workspace packages remain marked `private: true` for publishing control,
 but the source in this repository is MIT-licensed.
 
 ## UI direction

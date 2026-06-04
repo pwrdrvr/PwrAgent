@@ -5,6 +5,7 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  - '@pwrdrvr/codex-app-server-protocol@0.133.0'
   - tmp@0.2.6
 globalPnpmfile: ''
 ignoreScripts: false

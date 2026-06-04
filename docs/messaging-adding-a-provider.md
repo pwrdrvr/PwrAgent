@@ -509,7 +509,7 @@ in your provider's bundling. Edit
  externalizeDepsPlugin({
    exclude: [
      "@pwragent/shared",
-     "@pwragent/codex-app-server-protocol",
+     "@pwrdrvr/codex-app-server-protocol",
      "@pwragent/agent-core",
      "@pwragent/messaging-interface",
      "@pwragent/messaging-provider-discord",

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwragent/codex-app-server-protocol/v2";
+import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { MessagingApprovalDecision } from "@pwragent/messaging-interface";
 import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
