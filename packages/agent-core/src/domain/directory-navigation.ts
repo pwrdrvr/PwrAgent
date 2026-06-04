@@ -32,6 +32,26 @@ function normalizeComparablePath(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeGitOriginUrl(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  const candidate = sshMatch
+    ? `${sshMatch[1]}/${sshMatch[2]}`
+    : trimmed.replace(/^[a-z]+:\/\//i, "");
+  const normalized = candidate
+    .replace(/\.git$/i, "")
+    .replace(/^ssh\//i, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  return normalized || undefined;
+}
+
 function isInternalDirectoryLabel(value?: string): boolean {
   return Boolean(value?.startsWith("directory:") || value?.startsWith("workspace:"));
 }
@@ -171,6 +191,60 @@ function collectStablePathByLabel(
       paths.size === 1 ? [...paths][0] : undefined,
     ]),
   );
+}
+
+function collectManagedWorktreeDescriptorByOrigin(
+  threads: NavigationThreadSummary[],
+): Map<string, DirectoryDescriptor> {
+  const descriptorsByOrigin = new Map<string, DirectoryDescriptor>();
+
+  for (const thread of threads) {
+    const origin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!origin || descriptorsByOrigin.has(origin)) {
+      continue;
+    }
+
+    for (const directory of thread.linkedDirectories) {
+      const descriptor = classifyDirectory(directory);
+      if (!descriptor.path || !isToolManagedWorktreePath(descriptor.path)) {
+        continue;
+      }
+      descriptorsByOrigin.set(origin, descriptor);
+      break;
+    }
+  }
+
+  return descriptorsByOrigin;
+}
+
+function normalizeDirectoryDescriptor(
+  descriptor: DirectoryDescriptor,
+  params: {
+    managedWorktreeOriginDescriptor?: DirectoryDescriptor;
+    stablePath?: string;
+  },
+): DirectoryDescriptor {
+  if (descriptor.path && isToolManagedWorktreePath(descriptor.path)) {
+    if (params.stablePath) {
+      return {
+        ...descriptor,
+        key: `directory:${params.stablePath}`,
+        path: params.stablePath,
+      };
+    }
+
+    return params.managedWorktreeOriginDescriptor ?? descriptor;
+  }
+
+  if (descriptor.path || descriptor.kind !== "directory" || !params.stablePath) {
+    return descriptor;
+  }
+
+  return {
+    ...descriptor,
+    key: `directory:${params.stablePath}`,
+    path: params.stablePath,
+  };
 }
 
 function ensureSummary(
@@ -373,6 +447,8 @@ export function buildDirectorySummaries(params: {
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
   const stablePathByLabel = collectStablePathByLabel(params.threads);
+  const managedWorktreeDescriptorByOrigin =
+    collectManagedWorktreeDescriptorByOrigin(params.threads);
   const allowedWorkspaceRoots = workspaceRootSet(params.workspaceRoots);
 
   for (const thread of params.threads) {
@@ -400,22 +476,15 @@ export function buildDirectorySummaries(params: {
     for (const directory of thread.linkedDirectories) {
       const descriptor = classifyDirectory(directory);
       const stablePath = stablePathByLabel.get(descriptor.label);
-      const normalizedDescriptor =
-        descriptor.path && isToolManagedWorktreePath(descriptor.path) && stablePath
-          ? {
-              ...descriptor,
-              key: `directory:${stablePath}`,
-              path: stablePath,
-            }
-          : descriptor.path || descriptor.kind !== "directory"
-          ? descriptor
-          : stablePath
-            ? {
-                ...descriptor,
-                key: `directory:${stablePath}`,
-                path: stablePath,
-              }
-            : descriptor;
+      const origin = normalizeGitOriginUrl(thread.gitOriginUrl);
+      const managedWorktreeOriginDescriptor =
+        descriptor.path && isToolManagedWorktreePath(descriptor.path) && origin
+          ? managedWorktreeDescriptorByOrigin.get(origin)
+          : undefined;
+      const normalizedDescriptor = normalizeDirectoryDescriptor(descriptor, {
+        managedWorktreeOriginDescriptor,
+        stablePath,
+      });
       if (!isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)) {
         continue;
       }

@@ -323,6 +323,7 @@ type BackendClient = {
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
+    path?: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
@@ -382,6 +383,11 @@ type BackendClient = {
     projectPath: string;
     configPath?: string;
   }): Promise<{ projectPath: string; configPath?: string }>;
+};
+
+type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+  sourceThreadPath?: string;
 };
 
 /**
@@ -1081,7 +1087,7 @@ function mergeCommandSummaries(
   return merged;
 }
 
-function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
+export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   const args = [
     "-c",
     'approval_policy="on-request"',
@@ -4531,7 +4537,9 @@ export class DesktopBackendRegistry {
     };
   }
 
-  async forkThread(request: ForkThreadRequest): Promise<ForkThreadResponse> {
+  async forkThread(
+    request: BackendRegistryForkThreadRequest,
+  ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
     if (backend !== "codex") {
@@ -4553,8 +4561,13 @@ export class DesktopBackendRegistry {
       directoryKind,
       directoryLabel,
       directoryPath: request.directoryPath,
+      ...(request.excludedWorktreePaths
+        ? { excludedWorktreePaths: request.excludedWorktreePaths }
+        : {}),
+      worktreeBranchMode: request.worktreeBranchMode,
       workMode: request.workMode ?? "local",
     });
+    request.onPreparedWorkspaceRollback?.(preparedWorkspace.rollback);
     const cwd = preparedWorkspace.cwd;
     const linkedDirectories =
       preparedWorkspace.workMode === "worktree"
@@ -4566,80 +4579,99 @@ export class DesktopBackendRegistry {
         : buildLocalLinkedDirectory(cwd);
     const client = this.getClient(backend, executionMode);
     if (!client.forkThread) {
+      await preparedWorkspace.rollback?.();
+      request.onPreparedWorkspaceRollback?.(undefined);
       throw new Error("Selected backend does not support thread/fork.");
     }
 
-    const result = await client.forkThread({
-      threadId: request.sourceThreadId,
-      cwd,
-      ...modelSettings,
-      approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-      sandbox: request.sandbox ?? modeSettings.sandbox,
-    });
-    const forkedAt = Date.now();
-    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
-    this.pendingStartedThreads.set(`${backend}:${result.threadId}`, {
-      id: result.threadId,
-      source: backend,
-      title: "Forked thread",
-      titleSource: "fallback",
-      projectKey: cwd,
-      createdAt: forkedAt,
-      updatedAt: forkedAt,
-      executionMode,
-      ...modelSettings,
-      linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
-      gitBranch,
-    });
-
-    if (preparedWorkspace.workMode === "worktree") {
-      await this.recordCodexWorktreeOwnerThread({
-        backend,
-        threadId: result.threadId,
-        worktreePath: cwd,
-      });
-    }
-
-    await this.overlayStore.setThreadExecutionMode({
-      backend,
-      threadId: result.threadId,
-      executionMode,
-    });
-    if (
-      modelSettings.model !== undefined ||
-      modelSettings.reasoningEffort !== undefined ||
-      modelSettings.serviceTier !== undefined ||
-      modelSettings.fastMode !== undefined
-    ) {
-      await this.overlayStore.setThreadModelSettings({
-        backend,
-        threadId: result.threadId,
+    let result: { threadId: string };
+    try {
+      result = await client.forkThread({
+        threadId: request.sourceThreadId,
+        ...(request.sourceThreadPath?.trim()
+          ? { path: request.sourceThreadPath.trim() }
+          : {}),
+        cwd,
         ...modelSettings,
+        approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+        sandbox: request.sandbox ?? modeSettings.sandbox,
       });
+    } catch (error) {
+      await preparedWorkspace.rollback?.();
+      request.onPreparedWorkspaceRollback?.(undefined);
+      throw error;
     }
-    if (request.parentThreadId?.trim()) {
-      await this.overlayStore.setThreadParent?.({
+    try {
+      const forkedAt = Date.now();
+      const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+      this.pendingStartedThreads.set(`${backend}:${result.threadId}`, {
+        id: result.threadId,
+        source: backend,
+        title: "Forked thread",
+        titleSource: "fallback",
+        projectKey: cwd,
+        createdAt: forkedAt,
+        updatedAt: forkedAt,
+        executionMode,
+        ...modelSettings,
+        linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
+        gitBranch,
+      });
+
+      if (preparedWorkspace.workMode === "worktree") {
+        await this.recordCodexWorktreeOwnerThread({
+          backend,
+          threadId: result.threadId,
+          worktreePath: cwd,
+        });
+      }
+
+      await this.overlayStore.setThreadExecutionMode({
         backend,
         threadId: result.threadId,
-        parentThreadId: request.parentThreadId,
+        executionMode,
       });
-      await this.emit({
-        backend,
-        notification: {
-          method: "thread/parent/set",
-          params: {
-            threadId: result.threadId,
-            parentThreadId: request.parentThreadId,
+      if (
+        modelSettings.model !== undefined ||
+        modelSettings.reasoningEffort !== undefined ||
+        modelSettings.serviceTier !== undefined ||
+        modelSettings.fastMode !== undefined
+      ) {
+        await this.overlayStore.setThreadModelSettings({
+          backend,
+          threadId: result.threadId,
+          ...modelSettings,
+        });
+      }
+      if (request.parentThreadId?.trim()) {
+        await this.overlayStore.setThreadParent?.({
+          backend,
+          threadId: result.threadId,
+          parentThreadId: request.parentThreadId,
+        });
+        await this.emit({
+          backend,
+          notification: {
+            method: "thread/parent/set",
+            params: {
+              threadId: result.threadId,
+              parentThreadId: request.parentThreadId,
+            },
           },
-        },
+        });
+      }
+      await this.updateThreadGitBranchMetadata({
+        backend,
+        threadId: result.threadId,
+        branch: gitBranch,
       });
+      this.invalidateThreadListCache(backend);
+    } catch (error) {
+      this.pendingStartedThreads.delete(`${backend}:${result.threadId}`);
+      await preparedWorkspace.rollback?.();
+      request.onPreparedWorkspaceRollback?.(undefined);
+      throw error;
     }
-    await this.updateThreadGitBranchMetadata({
-      backend,
-      threadId: result.threadId,
-      branch: gitBranch,
-    });
-    this.invalidateThreadListCache(backend);
 
     return {
       backend,

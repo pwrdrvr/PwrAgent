@@ -773,6 +773,97 @@ describe("buildDirectorySummaries", () => {
     );
   });
 
+  it("groups stale same-origin Codex worktree rows when no canonical repo path is known", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 2_000,
+          gitOriginUrl: "git@github.com:Giphy/svc-infra.git",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "svc-infra",
+              path: "/Users/huntharo/.codex/worktrees/e926/svc-infra",
+              kind: "worktree",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-2",
+          createdAt: 1_000,
+          gitOriginUrl: "https://github.com/Giphy/svc-infra.git",
+          linkedDirectories: [
+            {
+              id: "dir-2",
+              label: "svc-infra",
+              path: "/Users/huntharo/.codex/worktrees/3364/svc-infra",
+              kind: "worktree",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/.codex/worktrees/e926/svc-infra",
+        label: "svc-infra",
+        path: "/Users/huntharo/.codex/worktrees/e926/svc-infra",
+        threadKeys: ["codex:thread-1", "codex:thread-2"],
+      }),
+    ]);
+  });
+
+  it("keeps same-label managed worktrees separate when their origins differ", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 2_000,
+          gitOriginUrl: "git@github.com:Giphy/svc-infra.git",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "svc-infra",
+              path: "/Users/huntharo/.codex/worktrees/e926/svc-infra",
+              kind: "worktree",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-2",
+          createdAt: 1_000,
+          gitOriginUrl: "git@github.com:OtherOrg/svc-infra.git",
+          linkedDirectories: [
+            {
+              id: "dir-2",
+              label: "svc-infra",
+              path: "/Users/huntharo/.codex/worktrees/3364/svc-infra",
+              kind: "worktree",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(2);
+    expect(directories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "directory:/Users/huntharo/.codex/worktrees/e926/svc-infra",
+          threadKeys: ["codex:thread-1"],
+        }),
+        expect.objectContaining({
+          key: "directory:/Users/huntharo/.codex/worktrees/3364/svc-infra",
+          threadKeys: ["codex:thread-2"],
+        }),
+      ]),
+    );
+  });
+
   it("groups multiple worktrees under the same home repo when thread summaries share the canonical directory path", () => {
     const directories = buildDirectorySummaries({
       threads: [

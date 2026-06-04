@@ -89,6 +89,10 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  ListThreadMigrationSourceThreadsRequest,
+  ListThreadMigrationSourceThreadsResponse,
+  ListThreadMigrationSourcesResponse,
+  RetryThreadMigrationRequest,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   MessagingPairingEntry,
@@ -124,6 +128,8 @@ import type {
   RunAutomationNowResponse,
   StartReviewRequest,
   StartReviewResponse,
+  StartThreadMigrationRequest,
+  StartThreadMigrationResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -323,6 +329,10 @@ import {
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
+  THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
+  THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+  THREAD_MIGRATION_RETRY_CHANNEL,
+  THREAD_MIGRATION_START_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
@@ -593,6 +603,20 @@ const desktopApi = Object.freeze({
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RESTORE_THREAD_CHANNEL, request),
+  listThreadMigrationSources: async (): Promise<ListThreadMigrationSourcesResponse> =>
+    await ipcRenderer.invoke(THREAD_MIGRATION_LIST_SOURCES_CHANNEL),
+  listThreadMigrationSourceThreads: async (
+    request: ListThreadMigrationSourceThreadsRequest,
+  ): Promise<ListThreadMigrationSourceThreadsResponse> =>
+    await ipcRenderer.invoke(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL, request),
+  startThreadMigration: async (
+    request: StartThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> =>
+    await ipcRenderer.invoke(THREAD_MIGRATION_START_CHANNEL, request),
+  retryThreadMigration: async (
+    request: RetryThreadMigrationRequest,
+  ): Promise<StartThreadMigrationResponse> =>
+    await ipcRenderer.invoke(THREAD_MIGRATION_RETRY_CHANNEL, request),
   archiveWorktree: async (
     request: ArchiveWorktreeRequest,
   ): Promise<ArchiveWorktreeResponse> =>
