@@ -13,7 +13,7 @@ import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,
   DynamicToolSpec,
-} from "@pwragent/codex-app-server-protocol/v2";
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import { buildAutomationInspectionToolCatalog } from "./automation-inspection-tool-catalog.js";
 
 export type AutomationInspectionHandler = (

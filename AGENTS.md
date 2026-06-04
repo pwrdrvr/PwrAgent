@@ -139,7 +139,7 @@ This repository enforces a strict layered dependency architecture via
 - If a rule blocks your change, the change is architecturally wrong — redesign it
 
 The dependency hierarchy (bottom to top):
-- **Leaves** (import nothing internal): `packages/shared`, `packages/codex-app-server-protocol`
+- **Leaves** (import nothing internal): `packages/shared`
 - **Mid-tier**: `packages/messaging/interface` (→ shared only), `packages/messaging/providers/*` (→ messaging/interface only), `packages/agent-core` (→ shared only)
 - **Top**: `apps/desktop` (→ any package)
 
