@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.21 - 2026-06-03
+
+- Added sub-thread grouping in the sidebar and real Codex thread forks, including same-worktree forks, managed-worktree forks, UI-only sub-thread launchpad creation, collapse state, and child ordering in thread lists.
+- Added the foundation for Codex thread migration between profiles, with Settings -> Thread Management source selection, Copy/Move starts, replay validation, source archive safeguards, and main-process-only rollout path handling.
+- Added bounded scrolling for long transcript code blocks and blockquotes so large outputs stay readable without stretching the entire transcript.
+- Added a native File -> New Thread command with `CmdOrCtrl+N`, contributed by Serhii Novachenko (@serejja) in #628.
+- Added sidebar masthead tooltips for Automations, Settings, and New Thread icon buttons, contributed by Serhii Novachenko (@serejja) in #627.
+- Added hot renderer CPU diagnostics that can be enabled from Settings in packaged builds and writes profile-scoped `.cpuprofile` artifacts after sustained renderer CPU spikes.
+- Fixed queued and review turn handling so queued blockers persist per thread, stale review Thinking/Stop state clears correctly, and failed or cancelled pre-start queued turns clean up visible pending UI.
+- Fixed Codex terminal turn failures so failed turns surface in the transcript and bound messaging conversations instead of disappearing into logs.
+- Fixed transcript and automation polish including markdown rendering for automation details, slash autocomplete reopening after query edits, copyable pull request URLs from thread-list chips, and dependency/update maintenance.
+
 ## v1.0.0-beta.20 - 2026-06-01
 
 - Added Qwen Code as a first-class ACP backend with local discovery, configurable executable path, model/mode support, launchpad/runtime plumbing, and Qwen-specific permission handling.
