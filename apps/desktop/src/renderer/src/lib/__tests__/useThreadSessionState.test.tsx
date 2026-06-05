@@ -3593,10 +3593,29 @@ describe("useThreadSessionState", () => {
                 },
                 {
                   type: "activity" as const,
+                  id: "command-turn-1",
+                  summary: "Ran shell command",
+                  status: "completed" as const,
+                  createdAt: 10_001,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                  details: [
+                    {
+                      id: "command-turn-1-detail",
+                      kind: "read" as const,
+                      label: "npm test",
+                      status: "completed" as const,
+                    },
+                  ],
+                },
+                {
+                  type: "activity" as const,
                   id: "live-token-usage-turn-1",
                   summary: "Latest request usage: 200 uncached in · 1,800 cached · 30 out (10 reasoning)",
                   status: "completed" as const,
-                  createdAt: 10_001,
+                  createdAt: 10_002,
                   turn: {
                     id: "turn-1",
                     status: "completed" as const,
@@ -3734,6 +3753,7 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:Done.",
+        "activity:Ran shell command",
         "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
       ]);
     });

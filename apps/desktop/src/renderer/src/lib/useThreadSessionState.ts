@@ -253,12 +253,14 @@ function mergeTranscriptEntries(
       .map((entry) => entry.turn?.id as string)
   );
   const merged = responseEntries.filter(
-    (entry) =>
-      !(
-        entry.type === "activity" &&
-        tokenUsageActivityScope(entry) !== "turn" &&
+    (entry) => {
+      const usageScope =
+        entry.type === "activity" ? tokenUsageActivityScope(entry) : undefined;
+      return !(
+        (usageScope === "latest-request" || usageScope === "total") &&
         hasOptimisticTurnUsageForEntry(entry, optimisticTurnUsageIds)
-      )
+      );
+    }
   );
 
   for (const optimisticEntry of optimisticEntries) {
