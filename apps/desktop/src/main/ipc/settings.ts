@@ -895,11 +895,26 @@ export function registerSettingsIpcHandlers(
       const command = await resolveCodexCommandForProfileWorkflow(
         getService(service),
       );
-      return await codexLoginManager.startProfileLogin({
-        codexHome,
-        command,
-        profile,
-      });
+      try {
+        return await codexLoginManager.startProfileLogin({
+          codexHome,
+          command,
+          profile,
+        });
+      } catch (error) {
+        // The codex-discovery CodexLoginManager rejects when `codex login`
+        // exits without emitting a login link (e.g. it printed "Not logged
+        // in"). The renderer catches this rejection to surface the failure
+        // (CodexAuthProfileSelect), but without this catch it ALSO escapes to
+        // Electron's default ipcMain handler logger instead of our structured
+        // logging. Log it here with context, then rethrow so the renderer
+        // still sees the rejection it relies on.
+        settingsIpcLog.warn("codex profile login failed", {
+          profile: profile === "" ? "(default)" : profile,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
   );
 
