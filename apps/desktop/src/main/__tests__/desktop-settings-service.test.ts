@@ -973,6 +973,7 @@ describe("DesktopSettingsService", () => {
       configPath,
       env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({}),
     });
 
     expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(
@@ -992,6 +993,7 @@ describe("DesktopSettingsService", () => {
       configPath,
       env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({}),
     });
 
     await service.writeConfigPatch({
