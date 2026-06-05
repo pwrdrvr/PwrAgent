@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.23 - 2026-06-05
+
+- Fixed Kimi Code ACP discovery so GUI-launched PwrAgent can find the default `~/.kimi-code/bin/kimi` install path and detect ACP support from the `kimi acp --help` exit code instead of brittle help text.
+- Added a durable ACP capability freshness cache so opening Settings no longer launches every discovered ACP agent just to refresh capabilities and model lists.
+- Improved hot renderer CPU diagnostics with per-core CPU percentages, Settings controls, bounded heap snapshot capture, and live profiler reconfiguration without an app restart.
+- Added more preset thread reactions in the thread-list reaction picker.
+- Switched desktop Codex App Server protocol usage to the published `@pwrdrvr/codex-app-server-protocol` package while keeping dependency boundaries intact.
+- Fixed release packaging so the Lark Suite axios-range shim follows the deployed SDK version instead of silently breaking on SDK upgrades.
+
 ## v1.0.0-beta.22 - 2026-06-04
 
 - Fixed native desktop approval notifications so the notification `Approve` action resolves the pending approval through the normal server-request flow, contributed by Serhii Novachenko (@serejja) in #637.
