@@ -871,6 +871,159 @@ describe("settings ipc", () => {
     }
   });
 
+  it("reuses cached ACP capabilities across refreshes and re-probes only when forced", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+      {
+        backendId: "acp:gemini",
+        registryId: "gemini",
+        name: "Gemini CLI",
+        version: "0.42.0",
+        distributionKind: "local",
+        distributionSource: "gemini --acp --skip-trust",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-gemini-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        launchDescriptor: {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--acp", "--skip-trust"],
+          env: {},
+        },
+      },
+    ]);
+    // A recent probe timestamp so the persisted capabilities stay "fresh"
+    // across the subsequent refreshes within this test.
+    const probedAt = Date.now();
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: probedAt,
+        checkedAt: probedAt,
+        source: "session-new",
+        configOptions: [],
+      },
+    });
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      registerSettingsIpcHandlers(service);
+      const probe =
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
+
+      // First refresh: the agent is undiscovered → it must be probed once.
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      // Second refresh: cached capabilities are fresh + version-matched → the
+      // expensive probe must be skipped (no new launch).
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      // Forced refresh ("Discover new"): re-probe regardless of freshness.
+      await handlers
+        .get(ACP_AGENTS_LIST_CHANNEL)
+        ?.({}, { refresh: true, force: true });
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("coalesces concurrent forced ACP refreshes onto one probe pass", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+      {
+        backendId: "acp:gemini",
+        registryId: "gemini",
+        name: "Gemini CLI",
+        version: "0.42.0",
+        distributionKind: "local",
+        distributionSource: "gemini --acp --skip-trust",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-gemini-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        launchDescriptor: {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--acp", "--skip-trust"],
+          env: {},
+        },
+      },
+    ]);
+    const probedAt = Date.now();
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: probedAt,
+        checkedAt: probedAt,
+        source: "session-new",
+        configOptions: [],
+      },
+    });
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      registerSettingsIpcHandlers(service);
+      const probe = acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
+      const handler = handlers.get(ACP_AGENTS_LIST_CHANNEL);
+
+      // Two rapid "Discover new" clicks fire before the first pass resolves.
+      // Both are forced, so freshness can't gate the second — only the
+      // in-flight coalescing keeps them from launching the agent twice in
+      // parallel. The second must ride the first's forced pass: one probe.
+      await Promise.all([
+        handler?.({}, { refresh: true, force: true }),
+        handler?.({}, { refresh: true, force: true }),
+      ]);
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeAppState();
+    }
+  });
+
   // The wizard PR (#491) calls this IPC the moment the operator picks
   // a Codex profile model. The handler must (1) persist the wizard
   // signal idempotently, (2) fire the same thread-list prefetch the

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
@@ -39,7 +39,10 @@ export function AcpAgentsSettings(props: {
     setQwenCliPathDraft(qwenCliPathSnapshot?.value ?? "");
   }, [qwenCliPathSnapshot?.value]);
 
-  async function refresh(refreshRegistry = false): Promise<void> {
+  async function refresh(
+    refreshRegistry = false,
+    force = false,
+  ): Promise<void> {
     if (!props.desktopApi?.listAcpAgents) {
       setError("ACP registry controls are unavailable in this build.");
       setLoading(false);
@@ -53,6 +56,7 @@ export function AcpAgentsSettings(props: {
     try {
       const response = await props.desktopApi.listAcpAgents({
         refresh: refreshRegistry,
+        ...(force ? { force: true } : {}),
       });
       setEntries(response.entries);
       setError(response.error);
@@ -64,7 +68,27 @@ export function AcpAgentsSettings(props: {
     }
   }
 
+  // Run the initial load exactly once. The mount renders cached agents
+  // immediately (refresh(false), a pure cache read — no agent launches), then
+  // does a registry refresh that only probes undiscovered/stale agents. The
+  // ref guards against React StrictMode double-invoking this effect in dev
+  // (the main process also coalesces concurrent refreshes as a backstop).
+  const didInitialLoad = useRef(false);
   useEffect(() => {
+    if (didInitialLoad.current) {
+      return;
+    }
+    // Don't latch until the preload bridge is actually available. useDesktopApi
+    // resolves the API asynchronously (polling undefined → defined), so this
+    // pane can mount before it's ready. If we latched now we'd stick on the
+    // "unavailable" error forever even after the API arrives. Instead surface
+    // that state without latching and let the effect re-run (dep:
+    // props.desktopApi) to do the real load once the API is present.
+    if (!props.desktopApi?.listAcpAgents) {
+      void refresh(false);
+      return;
+    }
+    didInitialLoad.current = true;
     void refresh(false).then(() => refresh(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
@@ -200,7 +224,9 @@ export function AcpAgentsSettings(props: {
             disabled={loading || refreshing}
             type="button"
             onClick={() => {
-              void refresh(true);
+              // Explicit user action: force a re-probe of every agent,
+              // bypassing the freshness cache.
+              void refresh(true, true);
             }}
           >
             {refreshing ? "Discovering..." : "Discover new"}

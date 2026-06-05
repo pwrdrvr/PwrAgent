@@ -246,6 +246,14 @@ export type AcpAgentSettingsEntry = {
 
 export type ListAcpAgentSettingsRequest = {
   refresh?: boolean;
+  /**
+   * Force a re-probe of every discovered agent's runtime capabilities,
+   * bypassing the freshness window. The "Discover new" button sets this so a
+   * user can always re-probe on demand. When omitted, a refresh only launches
+   * the (expensive) capability probe for agents that are undiscovered, stale,
+   * or whose CLI version changed — otherwise cached capabilities are reused.
+   */
+  force?: boolean;
 };
 
 export type ListAcpAgentSettingsResponse = {
