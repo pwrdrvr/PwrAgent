@@ -59,23 +59,56 @@ since it is not a secret.
 
 ---
 
+## Release trains and maintenance branches
+
+`main` carries the active next-version train. Long-lived maintenance branches
+carry patch releases for prior major/minor trains and are named
+`releases/<major>.<minor>`, for example `releases/1.0` or `releases/1.1`.
+Do not include the patch component in the branch name.
+
+Before `main` moves to a new major/minor train, leave behind, or ask whether to
+leave behind, a maintenance branch for the previous train. For example, when
+cutting the first `1.1.0-beta.1` or `1.1.0` release from a current `1.0.*`
+`main`, verify that `origin/releases/1.0` exists. If it does not, create it from
+the current `1.0` release tag before committing the `1.1` version bump.
+
+Patch releases land only on their train branch:
+
+```bash
+# v1.0.1 and v1.0.2 land on releases/1.0.
+git switch releases/1.0
+```
+
+New major/minor releases land on `main`:
+
+```bash
+# v1.1.0-beta.1, v1.1.0, and v1.2.0-beta.1 land on main.
+git switch main
+```
+
+CI runs for pushes to `main` and `releases/**`, and pull requests targeting
+maintenance branches use the same PR workflow as `main`. Release workflow fixes
+are always valid backport candidates for supported maintenance branches so old
+trains do not lose the ability to ship security patches.
+
 ## Cutting a release (CI path — preferred)
 
 ```bash
 # 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
 # Treat apps/desktop/package.json as the release version source.
+RELEASE_BRANCH=main
 RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
 pnpm licenses:generate
 pnpm licenses:check
 
-# 2. Commit the release metadata and land it on main.
+# 2. Commit the release metadata and land it on the release branch.
 # Preferred: direct signed push by a maintainer with branch-protection bypass.
 git add apps/desktop/package.json CHANGELOG.md THIRD_PARTY_LICENSES
 git commit -S -m "chore(release): prepare v1.0.0-alpha.7"
-git push origin HEAD:main
+git push origin HEAD:$RELEASE_BRANCH
 
-# 3. Tag the exact main commit after the metadata is on main.
-git fetch origin main --tags
+# 3. Tag the exact release-branch commit after the metadata lands.
+git fetch origin $RELEASE_BRANCH --tags
 git pull --ff-only
 RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
 git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
@@ -139,9 +172,9 @@ update the release from the successful CI build; afterward, edit the release to
 mark prerelease tags as prereleases and replace the generated/empty notes with
 the matching `CHANGELOG.md` content.
 
-If direct push to `main` is rejected, use the repo-local release skill fallback:
-open a short-lived release PR, wait for checks, squash merge it, then tag the
-merged `main` commit.
+If direct push to the release branch is rejected, use the repo-local release
+skill fallback: open a short-lived release PR against the release branch, wait
+for checks, squash merge it, then tag the merged release-branch commit.
 
 Stable landing-page URL:
 

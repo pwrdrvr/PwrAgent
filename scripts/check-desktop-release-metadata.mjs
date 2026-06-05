@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
 const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml");
+const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
 const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
@@ -77,6 +78,7 @@ if (!headingPattern.test(changelog)) {
 }
 
 const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
+const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
@@ -123,6 +125,14 @@ for (const expected of [
 ]) {
   if (!releaseScript.includes(expected)) {
     fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const expected of [
+  "releases/**",
+]) {
+  if (!ciWorkflow.includes(expected)) {
+    fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
   }
 }
 
