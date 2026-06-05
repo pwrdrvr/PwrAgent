@@ -255,6 +255,7 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
 export function buildTokenUsageActivityEntry(params: {
   id: string;
   model?: string;
+  summaryPrefix?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
 }): AppServerThreadActivityEntry | undefined {
@@ -283,7 +284,9 @@ export function buildTokenUsageActivityEntry(params: {
       : `${formatTokenCount(outputTokens)} out`,
     cost ? `${formatUsd(cost.totalUsd)} list price` : undefined,
   ].filter((part): part is string => Boolean(part));
-  const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
+  const summaryPrefix =
+    params.summaryPrefix ??
+    (scope === "latest-request" ? "Latest request usage" : "Usage");
 
   const details: AppServerThreadActivityDetail[] = [
     {

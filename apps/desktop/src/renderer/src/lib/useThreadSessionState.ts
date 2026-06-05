@@ -106,6 +106,19 @@ export type ThreadContextWindowState = {
   usedPercent: number;
 };
 
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type TurnUsageAccumulator = {
+  baseline?: TokenUsageBreakdown;
+  turnId: string;
+};
+
 type ThreadSessionEntry = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -128,6 +141,7 @@ type ThreadSessionEntry = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
   thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
@@ -1159,14 +1173,6 @@ function findFirstNestedValue(value: unknown, keys: string[]): unknown {
   return undefined;
 }
 
-type TokenUsageBreakdown = {
-  cachedInputTokens?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  reasoningOutputTokens?: number;
-  totalTokens?: number;
-};
-
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
   const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
@@ -1202,9 +1208,13 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
   };
 }
 
-function normalizeThreadContextWindowState(
-  tokenUsage: unknown
-): ThreadContextWindowState | undefined {
+type TokenUsageRecords = {
+  currentUsage?: TokenUsageBreakdown;
+  latestUsage?: TokenUsageBreakdown;
+  totalUsage?: TokenUsageBreakdown;
+};
+
+function readTokenUsageRecords(tokenUsage: unknown): TokenUsageRecords | undefined {
   const root =
     readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
     readRecord(tokenUsage);
@@ -1212,19 +1222,176 @@ function normalizeThreadContextWindowState(
     return undefined;
   }
 
-  const currentUsageRecord =
+  const latestUsageRecord =
     readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
     readRecord(root.last) ??
-    readRecord(root.last_token_usage) ??
-    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
-    readRecord(root.total) ??
-    readRecord(root.total_token_usage);
+    readRecord(root.last_token_usage);
   const totalUsageRecord =
     readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
     readRecord(root.total) ??
     readRecord(root.total_token_usage);
-  const currentUsage = currentUsageRecord ? readTokenBreakdown(currentUsageRecord) : undefined;
+  const latestUsage = latestUsageRecord ? readTokenBreakdown(latestUsageRecord) : undefined;
   const totalUsage = totalUsageRecord ? readTokenBreakdown(totalUsageRecord) : undefined;
+  const currentUsage = latestUsage ?? totalUsage;
+
+  if (!currentUsage && !latestUsage && !totalUsage) {
+    return undefined;
+  }
+
+  return {
+    currentUsage,
+    latestUsage,
+    totalUsage,
+  };
+}
+
+function tokenBreakdownFromContextCumulative(
+  contextWindow: ThreadContextWindowState | undefined
+): TokenUsageBreakdown | undefined {
+  if (typeof contextWindow?.cumulativeTotalTokens !== "number") {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens: contextWindow.cumulativeCachedInputTokens,
+    inputTokens: contextWindow.cumulativeInputTokens,
+    outputTokens: contextWindow.cumulativeOutputTokens,
+    reasoningOutputTokens: contextWindow.cumulativeReasoningOutputTokens,
+    totalTokens: contextWindow.cumulativeTotalTokens,
+  };
+}
+
+function subtractTokenBreakdowns(
+  total: TokenUsageBreakdown,
+  baseline: TokenUsageBreakdown
+): TokenUsageBreakdown | undefined {
+  const result: TokenUsageBreakdown = {
+    cachedInputTokens: subtractTokenField(total.cachedInputTokens, baseline.cachedInputTokens),
+    inputTokens: subtractTokenField(total.inputTokens, baseline.inputTokens),
+    outputTokens: subtractTokenField(total.outputTokens, baseline.outputTokens),
+    reasoningOutputTokens: subtractTokenField(
+      total.reasoningOutputTokens,
+      baseline.reasoningOutputTokens
+    ),
+    totalTokens: subtractTokenField(total.totalTokens, baseline.totalTokens),
+  };
+
+  return hasTokenBreakdownValue(result) ? result : undefined;
+}
+
+function subtractTokenField(
+  total: number | undefined,
+  baseline: number | undefined
+): number | undefined {
+  if (typeof total !== "number" || typeof baseline !== "number") {
+    return undefined;
+  }
+  return Math.max(0, total - baseline);
+}
+
+function hasTokenBreakdownValue(tokens: TokenUsageBreakdown): boolean {
+  return (
+    typeof tokens.cachedInputTokens === "number" ||
+    typeof tokens.inputTokens === "number" ||
+    typeof tokens.outputTokens === "number" ||
+    typeof tokens.reasoningOutputTokens === "number" ||
+    typeof tokens.totalTokens === "number"
+  );
+}
+
+function tokenUsagePayloadFromBreakdown(tokens: TokenUsageBreakdown): {
+  total: Record<string, number>;
+} {
+  const total: Record<string, number> = {};
+  if (typeof tokens.inputTokens === "number") total.inputTokens = tokens.inputTokens;
+  if (typeof tokens.cachedInputTokens === "number") {
+    total.cachedInputTokens = tokens.cachedInputTokens;
+  }
+  if (typeof tokens.outputTokens === "number") total.outputTokens = tokens.outputTokens;
+  if (typeof tokens.reasoningOutputTokens === "number") {
+    total.reasoningOutputTokens = tokens.reasoningOutputTokens;
+  }
+  if (typeof tokens.totalTokens === "number") total.totalTokens = tokens.totalTokens;
+
+  return { total };
+}
+
+function deriveTurnUsageBaseline(params: {
+  contextWindow?: ThreadContextWindowState;
+  latestUsage?: TokenUsageBreakdown;
+  totalUsage: TokenUsageBreakdown;
+}): TokenUsageBreakdown | undefined {
+  const previousCumulative = tokenBreakdownFromContextCumulative(params.contextWindow);
+  if (previousCumulative) {
+    return previousCumulative;
+  }
+
+  return params.latestUsage
+    ? subtractTokenBreakdowns(params.totalUsage, params.latestUsage)
+    : undefined;
+}
+
+function buildPendingTurnUsage(params: {
+  contextWindow?: ThreadContextWindowState;
+  existing?: TurnUsageAccumulator;
+  id: string;
+  model?: string;
+  tokenUsage: unknown;
+  turn?: AppServerThreadTurnMetadata;
+}): {
+  accumulator?: TurnUsageAccumulator;
+  entry?: AppServerThreadActivityEntry;
+} {
+  const turnId = params.turn?.id;
+  const usageRecords = readTokenUsageRecords(params.tokenUsage);
+  const totalUsage = usageRecords?.totalUsage;
+  if (!turnId || !totalUsage) {
+    return {};
+  }
+
+  const existing = params.existing?.turnId === turnId ? params.existing : undefined;
+  const baseline =
+    existing?.baseline ??
+    deriveTurnUsageBaseline({
+      contextWindow: params.contextWindow,
+      latestUsage: usageRecords.latestUsage,
+      totalUsage,
+    });
+  const accumulator: TurnUsageAccumulator = {
+    turnId,
+    ...(baseline ? { baseline } : {}),
+  };
+  const turnUsage = baseline
+    ? subtractTokenBreakdowns(totalUsage, baseline)
+    : usageRecords.latestUsage;
+  const entry = turnUsage
+    ? buildTokenUsageActivityEntry({
+        id: params.id,
+        model: params.model,
+        summaryPrefix: "Turn usage",
+        tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
+        turn: params.turn,
+      })
+    : undefined;
+
+  return {
+    accumulator,
+    ...(entry ? { entry } : {}),
+  };
+}
+
+function normalizeThreadContextWindowState(
+  tokenUsage: unknown
+): ThreadContextWindowState | undefined {
+  const usageRecords = readTokenUsageRecords(tokenUsage);
+  const currentUsage = usageRecords?.currentUsage;
+  const totalUsage = usageRecords?.totalUsage;
+  const root =
+    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
+    readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
   const nestedModelContextWindow = findFirstNestedValue(root, [
     "modelContextWindow",
     "model_context_window",
@@ -2966,6 +3133,7 @@ export function useThreadSessionState(params: {
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
+            pendingTurnUsage: undefined,
           };
         }
 
@@ -3173,6 +3341,9 @@ export function useThreadSessionState(params: {
               pendingRequest: completedTurnMatchesActive
                 ? undefined
                 : current.pendingRequest,
+              pendingTurnUsage: completedTurnMatchesActive
+                ? undefined
+                : current.pendingTurnUsage,
               pendingUserInput: completedTurnMatchesActive
                 ? undefined
                 : current.pendingUserInput,
@@ -3333,6 +3504,9 @@ export function useThreadSessionState(params: {
             pendingUsageActivityEntry: completedTurnMatchesActive
               ? undefined
               : current.pendingUsageActivityEntry,
+            pendingTurnUsage: completedTurnMatchesActive
+              ? undefined
+              : current.pendingTurnUsage,
             pendingUserInput: completedTurnMatchesActive
               ? undefined
               : current.pendingUserInput,
@@ -3372,6 +3546,7 @@ export function useThreadSessionState(params: {
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -3400,6 +3575,7 @@ export function useThreadSessionState(params: {
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -3439,6 +3615,7 @@ export function useThreadSessionState(params: {
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingStatusText: undefined,
             response: undefined,
           };
@@ -3456,15 +3633,36 @@ export function useThreadSessionState(params: {
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
           });
-          const usageEntry = buildTokenUsageActivityEntry({
-            id: `live-token-usage-${turn?.id ?? notificationThreadId}`,
-            model:
-              thread?.source === event.backend && thread.id === notificationThreadId
-                ? thread.model
-                : undefined,
+          const usageEntryId = `live-token-usage-${turn?.id ?? notificationThreadId}`;
+          const model =
+            thread?.source === event.backend && thread.id === notificationThreadId
+              ? thread.model
+              : undefined;
+          let usageEntry = buildTokenUsageActivityEntry({
+            id: usageEntryId,
+            model,
             tokenUsage: event.notification.params.tokenUsage,
             turn,
           });
+          let pendingTurnUsage = current.pendingTurnUsage;
+          const activeTurnUsage = Boolean(
+            usageEntry &&
+              current.activeTurnId &&
+              turn?.id === current.activeTurnId &&
+              turn.status !== "completed"
+          );
+          if (activeTurnUsage) {
+            const turnUsage = buildPendingTurnUsage({
+              contextWindow: current.contextWindow,
+              existing: current.pendingTurnUsage,
+              id: usageEntryId,
+              model,
+              tokenUsage: event.notification.params.tokenUsage,
+              turn,
+            });
+            pendingTurnUsage = turnUsage.accumulator ?? current.pendingTurnUsage;
+            usageEntry = turnUsage.entry ?? usageEntry;
+          }
           if (!contextWindow && !usageEntry) {
             return current;
           }
@@ -3494,6 +3692,9 @@ export function useThreadSessionState(params: {
             pendingUsageActivityEntry: holdUsageUntilTurnCompletes
               ? usageEntry
               : current.pendingUsageActivityEntry,
+            pendingTurnUsage: holdUsageUntilTurnCompletes
+              ? pendingTurnUsage
+              : current.pendingTurnUsage,
           };
         }
 
@@ -3691,6 +3892,7 @@ export function useThreadSessionState(params: {
         expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
         interacted: Boolean(turnId) || current.interacted,
         lastTouchedAt: Date.now(),
+        pendingTurnUsage: undefined,
       }));
     },
     [threadKey, updateSession]
