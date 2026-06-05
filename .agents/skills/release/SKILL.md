@@ -19,8 +19,10 @@ Read these files before changing release metadata:
 
 ## Guardrails
 
-- Release from the repository default branch unless the user explicitly approves
-  another ref.
+- Release from `main` for the active next-version train, or from a long-lived
+  maintenance branch named `releases/<major>.<minor>` for patch releases on a
+  prior train. Do not include the patch component in maintenance branch names:
+  use `releases/1.0`, not `releases/1.0.x` or `releases/1.0.1`.
 - Start from a clean working tree. If tracked files are dirty, stop and ask
   before changing release metadata.
 - Fetch tags before planning:
@@ -34,11 +36,18 @@ Read these files before changing release metadata:
 - Always use a leading-`v` tag such as `v1.0.0-alpha.5`.
 - The tag version, `apps/desktop/package.json` version, and
   `CHANGELOG.md` release heading must match.
+- Before moving `main` to a new major/minor train, verify that the prior train's
+  maintenance branch exists. For example, before preparing `1.1.0-beta.1` from a
+  current `1.0.*` `main`, check for `origin/releases/1.0`. If it is missing,
+  stop and ask whether to create it from the current prior-train release commit
+  before bumping version metadata.
+- Patch releases for an existing train must land on that train's branch. For
+  example, prepare `v1.0.1` on `releases/1.0`, not on `main`.
 - Before pushing a release tag, verify the `apple-signing` GitHub Environment
   exists, requires reviewer approval, is scoped to release tags, and has the
   Apple signing/notarization secrets required by the workflow.
 - Do not create or push the tag until the version and changelog are committed
-  and present on the repository default branch.
+  and present on the intended release branch.
 - Do not create the GitHub Release by hand before the build succeeds. Let
   electron-builder create or update the release from the signed/notarized CI
   build, then replace the generated/empty release notes with the changelog
@@ -48,6 +57,46 @@ Read these files before changing release metadata:
   without explicit user approval.
 - Keep MIT licensing intact: do not change first-party license metadata or
   remove license disclosures without an explicit policy change.
+
+## Release Branch Preflight
+
+For every release, identify `RELEASE_BRANCH` before editing files:
+
+- Active-train beta or stable release: `main`.
+- Prior-train patch release: `releases/<major>.<minor>`.
+
+If the user asks to cut a new major/minor version from `main`, compare the
+current desktop version's major/minor with the requested version's major/minor.
+When they differ, check for the current train's maintenance branch:
+
+```bash
+git ls-remote --heads origin releases/<current-major>.<current-minor>
+```
+
+If it is missing, ask before proceeding:
+
+```text
+We are about to move main from the <old-train> train to the <new-train> train,
+but there is no releases/<old-train> maintenance branch. Guidance is to create
+it before bumping main so future <old-train>.x security patches can be cut
+cleanly. Create releases/<old-train> from the current <old-train> release commit
+now?
+```
+
+Create that branch before the version-bump commit that starts the new train:
+
+```bash
+git switch main
+git fetch origin main --tags
+git pull --ff-only
+git switch -c releases/<old-train> v<old-train>.<patch>
+git push origin releases/<old-train>
+git switch main
+```
+
+Use the exact prior-train release tag as the branch point. For the first stable
+1.0 release, cut and tag `v1.0.0`, create `releases/1.0` at `v1.0.0`, then bump
+`main` to `1.1.0-beta.1`.
 
 ## Prepare Release Metadata
 
@@ -99,42 +148,43 @@ git add apps/desktop/package.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 ```
 
-Preferred fast path: if maintainer direct-push bypass is enabled for `main`,
-push the signed release metadata commit directly. This avoids running PR CI and
-then running the same gates again from the release tag.
+Preferred fast path: if maintainer direct-push bypass is enabled for
+`RELEASE_BRANCH`, push the signed release metadata commit directly. This avoids
+running PR CI and then running the same gates again from the release tag.
 
 ```bash
-git push origin HEAD:main
-git fetch origin main --tags
+git push origin HEAD:<RELEASE_BRANCH>
+git fetch origin <RELEASE_BRANCH> --tags
 git pull --ff-only
 ```
 
-Fallback path: if direct push to `main` is rejected, push the release metadata
-commit to a short-lived release branch, open a PR, wait for required checks,
-then **squash merge** the PR. Do not use rebase merge for release metadata PRs:
-GitHub may rewrite the commit SHA, which makes it too easy to tag the pre-merge
-commit instead of the actual default-branch release commit.
+Fallback path: if direct push to `RELEASE_BRANCH` is rejected, push the release
+metadata commit to a short-lived release branch, open a PR, wait for required
+checks, then **squash merge** the PR. Do not use rebase merge for release
+metadata PRs: GitHub may rewrite the commit SHA, which makes it too easy to tag
+the pre-merge commit instead of the actual release-branch commit.
 
-Remember that a GitHub squash merge creates a GitHub-authored commit on `main`,
-not the original locally signed commit. If the user requires the release
-metadata commit on `main` itself to be locally signed, use the direct-push path
-or ask before using the PR fallback.
+Remember that a GitHub squash merge creates a GitHub-authored commit on
+`RELEASE_BRANCH`, not the original locally signed commit. If the user requires
+the release metadata commit on the release branch itself to be locally signed,
+use the direct-push path or ask before using the PR fallback.
 
 ```bash
 git switch -c release/v<version>
 git push -u origin release/v<version>
-gh pr create --base main --head release/v<version> \
+gh pr create --base <RELEASE_BRANCH> --head release/v<version> \
   --title "chore(release): prepare v<version>" \
   --body-file .local/PR-v<version>.md
 gh pr checks <pr-number> --watch --interval 10
 gh pr merge <pr-number> --squash --delete-branch
-git fetch origin main --tags
-git switch main
+git fetch origin <RELEASE_BRANCH> --tags
+git switch <RELEASE_BRANCH>
 git pull --ff-only
 ```
 
-After the direct push or squash merge, rerun the metadata gate on `main`, then
-create exactly one tag on the actual default-branch commit.
+After the direct push or squash merge, rerun the metadata gate on
+`RELEASE_BRANCH`, then create exactly one tag on the actual release-branch
+commit.
 
 ```bash
 RELEASE_TAG=v<version> pnpm release:check
@@ -155,16 +205,16 @@ git tag v<version>
 
 Do not silently fall back from a failed signed tag to an unsigned tag. Ask the
 user which tag form to use. Before pushing, verify the tag points at
-`origin/main` or the intended default-branch release commit:
+`origin/<RELEASE_BRANCH>` or the intended release-branch commit:
 
 ```bash
 git tag -v v<version>
-git merge-base --is-ancestor v<version> origin/main
+git merge-base --is-ancestor v<version> origin/<RELEASE_BRANCH>
 ```
 
 ## Publish
 
-Push the tag after the release metadata is already on `main`:
+Push the tag after the release metadata is already on `RELEASE_BRANCH`:
 
 ```bash
 git push origin v<version>
@@ -179,7 +229,7 @@ For a manual dispatch, verify the tag already exists on GitHub:
 
 ```bash
 git ls-remote --tags origin v<version>
-gh workflow run release.yml -f tag=v<version>
+gh workflow run release.yml --ref <RELEASE_BRANCH> -f tag=v<version>
 ```
 
 ## Monitor And Verify
