@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
@@ -9,6 +10,23 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+function geminiEntry(): AcpAgentSettingsEntry {
+  return {
+    backendId: "acp:gemini",
+    registryId: "gemini",
+    name: "Gemini CLI",
+    version: "0.42.0",
+    authors: [],
+    distributionKind: "local",
+    distributionSource: "gemini --acp --skip-trust",
+    installable: false,
+    installed: true,
+    installStatus: "installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+  } satisfies AcpAgentSettingsEntry;
+}
 
 describe("AcpAgentsSettings", () => {
   it("keeps cached ACP agents visible while background discovery refreshes", async () => {
@@ -119,5 +137,63 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Apache-2.0")).toBeInTheDocument();
     expect(screen.getByText(/@google\/gemini-cli/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /install/i })).not.toBeInTheDocument();
+  });
+
+  it("loads exactly once under StrictMode's double-invoked mount effect", async () => {
+    const listAcpAgents = vi.fn(
+      async (_request?: { refresh?: boolean; force?: boolean }) => ({
+        fetchedAt: 1000,
+        entries: [geminiEntry()],
+      }),
+    );
+
+    render(
+      <StrictMode>
+        <AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
+    // StrictMode runs the mount effect twice in dev; the did-initial-load ref
+    // must collapse that into a single gated registry refresh (one
+    // refresh: true), not two parallel discovery passes that storm the agents.
+    await waitFor(() => {
+      expect(
+        listAcpAgents.mock.calls.filter((call) => call[0]?.refresh === true),
+      ).toHaveLength(1);
+    });
+  });
+
+  it("loads once the desktop API bridge becomes available after mount", async () => {
+    const listAcpAgents = vi.fn(
+      async (_request?: { refresh?: boolean; force?: boolean }) => ({
+        fetchedAt: 1000,
+        entries: [geminiEntry()],
+      }),
+    );
+
+    // useDesktopApi resolves the bridge asynchronously, so this pane can mount
+    // with `desktopApi` still undefined. It should surface the unavailable
+    // state without latching the initial-load ref.
+    const { rerender } = render(<AcpAgentsSettings desktopApi={undefined} />);
+    expect(
+      await screen.findByText(
+        "ACP registry controls are unavailable in this build.",
+      ),
+    ).toBeInTheDocument();
+    expect(listAcpAgents).not.toHaveBeenCalled();
+
+    // When the bridge arrives the effect must re-run and load — not stay stuck
+    // on the unavailable error (the regression the un-latched guard prevents).
+    rerender(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+    });
+    expect(
+      screen.queryByText(
+        "ACP registry controls are unavailable in this build.",
+      ),
+    ).not.toBeInTheDocument();
   });
 });
