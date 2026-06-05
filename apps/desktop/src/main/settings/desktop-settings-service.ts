@@ -121,7 +121,11 @@ import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
-import { mergeLoginShellEnvIntoEnv } from "../shell-environment";
+// Login-shell PATH hydration is now shared via @pwrdrvr/agent-transport (it was
+// extracted FROM this file). Behavior-identical: same `mergeLoginShellEnvIntoEnv`
+// shape + the `resolveShellEnv` test seam; the kit takes an injected logger
+// (passed below) where the in-tree copy hardcoded `getMainLogger`.
+import { mergeLoginShellEnvIntoEnv } from "@pwrdrvr/agent-transport";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -947,6 +951,9 @@ export class DesktopSettingsService {
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
     const spawnEnv = mergeLoginShellEnvIntoEnv(this.env, {
       resolveShellEnv: this.options.resolveCodexShellEnv,
+      // Preserve the in-tree copy's diagnostic logging (the kit defaults to
+      // no-op when no logger is injected).
+      logger: getMainLogger("pwragent:shell-environment"),
     });
     if (!this.startupCodexHome) return spawnEnv;
     return {

@@ -6,6 +6,11 @@ packages:
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - '@pwrdrvr/codex-app-server-protocol@0.133.0'
+  - '@pwrdrvr/agent-core'
+  - '@pwrdrvr/agent-transport'
+  - '@pwrdrvr/codex-discovery'
+  - '@pwrdrvr/agent-acp'
+  - '@pwrdrvr/agent-client'
   - tmp@0.2.6
 globalPnpmfile: ''
 ignoreScripts: false
