@@ -1,5 +1,4 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -69,6 +68,8 @@ import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { validateGhCommand } from "../settings/gh-discovery";
 import {
+  CodexLoginManager,
+  collectCodexStatus,
   createCodexAuthProfile,
   readCodexAuthInfo,
   resolveCodexHomeForProfile,
@@ -94,10 +95,15 @@ import { getAppStateDb } from "../state/app-state";
 import { normalizeProfileName, resolveActiveProfileDir } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
-const activeCodexLoginProcesses = new Map<
-  string,
-  ChildProcess
->();
+// Codex profile login now runs through @pwrdrvr/codex-discovery's
+// CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
+// instance so the Electron seam — `shell.openExternal` — is injected and the
+// in-flight login children are killed on dispose (mirrors the old
+// `activeCodexLoginProcesses` map).
+const codexLoginManager = new CodexLoginManager({
+  openExternal: (url: string) => shell.openExternal(url),
+  logger: getMainLogger("pwragent:codex-login"),
+});
 
 function getService(service?: DesktopSettingsService): DesktopSettingsService {
   return service ?? getDesktopSettingsService();
@@ -454,35 +460,6 @@ function resolveRequiredCodexProfileHome(profile: string): string {
   return codexHome;
 }
 
-function collectCodexStatus(command: string, codexHome: string): Promise<{
-  code: number | null;
-  detail: string;
-}> {
-  return new Promise((resolve) => {
-    const child = spawn(command, ["login", "status"], {
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      output += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
-    child.on("error", (error) => {
-      resolve({ code: null, detail: error.message });
-    });
-    child.on("close", (code) => {
-      resolve({ code, detail: output.trim() });
-    });
-  });
-}
 
 async function checkCodexProfileAuthStatus(
   service: DesktopSettingsService,
@@ -520,121 +497,7 @@ async function checkCodexProfileAuthStatus(
   };
 }
 
-function parseCodexLoginPrompt(output: string): {
-  loginUrl?: string;
-} {
-  return {
-    loginUrl: output.match(/https:\/\/auth\.openai\.com\/oauth\/authorize\S+/)?.[0],
-  };
-}
 
-async function startCodexProfileLoginProcess(params: {
-  codexHome: string;
-  command: string;
-  profile: string;
-}): Promise<StartDesktopCodexAuthProfileLoginResponse> {
-  activeCodexLoginProcesses.get(params.profile)?.kill();
-  return new Promise((resolve, reject) => {
-    const child = spawn(params.command, ["login"], {
-      env: {
-        ...process.env,
-        CODEX_HOME: params.codexHome,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeCodexLoginProcesses.set(params.profile, child);
-
-    let output = "";
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      const prompt = parseCodexLoginPrompt(output);
-      settingsIpcLog.warn("codex login prompt did not appear before timeout", {
-        profile: params.profile,
-        pid: child.pid,
-      });
-      resolve({
-        profile: params.profile,
-        codexHome: params.codexHome,
-        started: true,
-        pid: child.pid,
-        ...prompt,
-        ...(output.trim() ? { detail: output.trim() } : {}),
-      });
-    }, 8_000);
-
-    const maybeResolve = () => {
-      if (settled) return;
-      const prompt = parseCodexLoginPrompt(output);
-      if (!prompt.loginUrl) return;
-      settled = true;
-      clearTimeout(timeout);
-      void shell.openExternal(prompt.loginUrl).catch((error) => {
-        settingsIpcLog.warn("failed to open codex login URL", {
-          error: error instanceof Error ? error.message : String(error),
-          profile: params.profile,
-        });
-      });
-      resolve({
-        profile: params.profile,
-        codexHome: params.codexHome,
-        started: true,
-        pid: child.pid,
-        ...prompt,
-        detail: output.trim(),
-      });
-    };
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      output += chunk;
-      maybeResolve();
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk;
-      maybeResolve();
-    });
-    child.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        reject(error);
-      }
-    });
-    child.on("close", (code) => {
-      if (activeCodexLoginProcesses.get(params.profile) === child) {
-        activeCodexLoginProcesses.delete(params.profile);
-      }
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        void (async () => {
-          const status = await collectCodexStatus(params.command, params.codexHome);
-          if (status.code === 0) {
-            resolve({
-              profile: params.profile,
-              codexHome: params.codexHome,
-              started: false,
-              pid: child.pid,
-              authenticated: true,
-              ...(status.detail ? { detail: status.detail } : {}),
-            });
-            return;
-          }
-          reject(
-            new Error(
-              output.trim()
-                || status.detail
-                || `Codex login exited before emitting a login link (code ${code ?? "unknown"}).`,
-            ),
-          );
-        })();
-      }
-    });
-  });
-}
 
 function messagingPatchTouchesRuntime(
   patch: DesktopSettingsConfigPatch | undefined,
@@ -1032,7 +895,7 @@ export function registerSettingsIpcHandlers(
       const command = await resolveCodexCommandForProfileWorkflow(
         getService(service),
       );
-      return await startCodexProfileLoginProcess({
+      return await codexLoginManager.startProfileLogin({
         codexHome,
         command,
         profile,
@@ -1178,10 +1041,7 @@ export function registerSettingsIpcHandlers(
 }
 
 export function disposeSettingsIpcHandlers(): void {
-  for (const child of activeCodexLoginProcesses.values()) {
-    child.kill();
-  }
-  activeCodexLoginProcesses.clear();
+  codexLoginManager.dispose();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
