@@ -12,7 +12,7 @@ import {
   type JsonRpcId,
   type JsonRpcObserver,
   type JsonRpcTransport,
-} from "../codex-app-server/json-rpc.js";
+} from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
@@ -63,7 +63,10 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       this.lineTransport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.observer,
-      { logContext: { backend: options.launchDescriptor.backendId } },
+      {
+        logContext: { backend: options.launchDescriptor.backendId },
+        logger: getMainLogger("pwragent:json-rpc"),
+      },
     );
     this.connection.setNotificationHandler((method, params) => {
       const normalizedParams = asRecord(params) ?? {};

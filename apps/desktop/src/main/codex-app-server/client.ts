@@ -70,7 +70,7 @@ import {
   type JsonRpcId,
   type JsonRpcObserver,
   type JsonRpcObserverDiagnostics,
-} from "./json-rpc";
+} from "@pwrdrvr/agent-transport";
 import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
@@ -4699,7 +4699,7 @@ export class CodexAppServerClient {
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.connectionObserver,
-      { logContext: { backend: "codex" } },
+      { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
     );
     const directoryResolver = options.directoryResolver;
     this.threadDirectoryEnricher =

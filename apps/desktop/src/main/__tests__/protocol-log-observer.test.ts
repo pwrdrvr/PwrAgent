@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { JsonRpcObserverEvent } from "../codex-app-server/json-rpc";
+import type { JsonRpcObserverEvent } from "@pwrdrvr/agent-transport";
 import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserver,
