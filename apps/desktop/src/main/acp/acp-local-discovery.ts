@@ -118,10 +118,14 @@ async function discoverLocalKimi(
       continue;
     }
 
-    const acpHelpText = resultText(acpHelpResult);
-    if (!/\bACP server\b/i.test(acpHelpText)) {
-      continue;
-    }
+    // The capability signal is simply that `kimi acp --help` ran with a zero
+    // exit code (probeCommand returns undefined on non-zero / spawn failure,
+    // handled above). kimi's commander-style CLI exits non-zero for an unknown
+    // subcommand, so a clean `acp --help` proves the `acp` subcommand exists.
+    // We deliberately do NOT parse the help prose — it changed across kimi
+    // versions (0.11.0 prints "Agent Client Protocol (ACP) server", earlier
+    // builds printed "...ACP server"), and a fragile string match made an
+    // installed, working kimi undiscoverable.
 
     const now = options?.now?.() ?? Date.now();
     const backendId = "acp:kimi" as AcpBackendId;
