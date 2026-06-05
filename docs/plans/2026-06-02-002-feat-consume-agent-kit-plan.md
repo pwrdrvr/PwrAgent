@@ -238,6 +238,16 @@ is the hardest consumer; re-adopting its own crown-jewel normalizer must not los
 - **Test scenarios:** replay PwrAgnt's recorded `session/update` transcripts through the package and assert no
   information loss vs. PwrAgnt's current `AppServerThreadReplay` rendering; full scenarios authored at scheduling time.
 - **Verification:** PwrAgnt ACP chat for all four agents is unchanged user-side; `isAcpBackendId` branching is gone.
+- **Local-discovery parity check before adopting (don't regress Kimi):** U6 deletes PwrAgnt's in-tree
+  `acp-local-discovery.ts` in favor of the kit's discovery. PwrAgnt's in-tree version carries two Kimi fixes the
+  kit must also have, or adopting `@pwrdrvr/agent-acp` will reintroduce the "installed kimi is invisible" bug:
+  (1) probe the installer default path `~/.kimi-code/bin/kimi` (not just `$PATH`) — PwrAgnt #641; and
+  (2) detect kimi by the **exit code** of `kimi acp --help`, **not** by string-matching its help prose — PwrAgnt #645.
+  Help wording already drifted once (kimi 0.11.0 prints "Agent Client Protocol (ACP) server", which a bare
+  `/\bACP server\b/` regex misses). `@pwrdrvr/agent-acp@0.3.1` reportedly fixes Kimi discovery — before consuming it,
+  confirm it uses the exit-code signal (or the equivalent), since a broadened-regex fix would still be fragile to the
+  next wording change. Until U6, the in-tree fixes (#641 + #645) are what reach users; a kit bump does nothing because
+  PwrAgnt does not depend on or import `@pwrdrvr/agent-acp` yet.
 
 ---
 
