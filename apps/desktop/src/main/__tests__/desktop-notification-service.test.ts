@@ -226,6 +226,60 @@ describe("DesktopNotificationService", () => {
     expect(shownNotifications).toEqual([]);
   });
 
+  it("renders terminal notifications with show action and auto-closes them", () => {
+    vi.useFakeTimers();
+    try {
+      const service = new DesktopNotificationService();
+      const onShow = vi.fn();
+      getAllWindows.mockReturnValue([
+        { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      ]);
+      const serviceWithActionButtons = service as unknown as {
+        supportsActionButtons: () => boolean;
+      };
+      const serviceWithLiveNotifications = service as unknown as {
+        liveNotifications: Set<unknown>;
+      };
+      vi.spyOn(
+        serviceWithActionButtons,
+        "supportsActionButtons",
+      ).mockReturnValue(true);
+
+      service.notifyTerminal({
+        enabled: true,
+        key: "codex:thread-1:turn-terminal",
+        title: "PwrAgent turn completed",
+        body: "PwrAgent > npm view eslint · turn completed.",
+        onShow,
+      });
+
+      expect(shownNotifications[0]?.actions).toEqual([
+        { type: "button", text: "Show" },
+      ]);
+      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
+
+      shownNotifications[0]?.instance.emitAction(0);
+
+      expect(onShow).toHaveBeenCalledTimes(1);
+      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+
+      service.notifyTerminal({
+        closeAfterMs: 5000,
+        enabled: true,
+        key: "codex:thread-1:turn-terminal",
+        title: "PwrAgent turn completed",
+        body: "PwrAgent > npm view eslint · turn completed.",
+        onShow,
+      });
+
+      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
+      vi.advanceTimersByTime(5000);
+      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders approval intents with native show, approve, and decline actions", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
