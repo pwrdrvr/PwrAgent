@@ -7,7 +7,10 @@ export type HotCpuProfileSample = {
   capturedAt: string;
   pid: number;
   cpuPercent: number;
+  electronCpuPercent?: number;
+  cumulativeCpuDeltaSeconds?: number;
   cumulativeCpuSeconds?: number;
+  wallDeltaSeconds?: number;
   idleWakeupsPerSecond?: number;
   workingSetSize?: number;
   peakWorkingSetSize?: number;

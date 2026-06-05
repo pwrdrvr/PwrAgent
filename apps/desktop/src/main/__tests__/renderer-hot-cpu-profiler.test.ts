@@ -28,7 +28,10 @@ function createEnabledConfig(repoRoot: string) {
   return config;
 }
 
-function createMetric(percentCPUUsage: number): ProcessMetric {
+function createMetric(
+  percentCPUUsage: number,
+  cumulativeCPUUsage = 42,
+): ProcessMetric {
   return {
     pid: 1234,
     type: "Tab",
@@ -36,7 +39,7 @@ function createMetric(percentCPUUsage: number): ProcessMetric {
     name: "PwrAgent Renderer",
     cpu: {
       percentCPUUsage,
-      cumulativeCPUUsage: 42,
+      cumulativeCPUUsage,
       idleWakeupsPerSecond: 3,
     },
     creationTime: 1_780_000_000_000,
@@ -117,7 +120,12 @@ describe("RendererHotCpuProfiler", () => {
     if (!sessionResult.ok) return;
 
     const { target, debuggerApi } = createTarget();
-    const metrics = [createMetric(0), createMetric(72), createMetric(89)];
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.5),
+      createMetric(4, 103),
+    ];
     const profiler = new RendererHotCpuProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
@@ -128,7 +136,7 @@ describe("RendererHotCpuProfiler", () => {
         warn: vi.fn(),
         error: vi.fn(),
       },
-      now: () => new Date(),
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
     });
 
     await profiler.start();
@@ -166,10 +174,24 @@ describe("RendererHotCpuProfiler", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
+    const samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "profile-started" }),
         expect.objectContaining({ type: "profile-written" }),
+      ]),
+    );
+    expect(samples).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cpuPercent: 75,
+          electronCpuPercent: 4,
+          cumulativeCpuDeltaSeconds: 1.5,
+          wallDeltaSeconds: 2,
+        }),
       ]),
     );
   });
@@ -195,9 +217,15 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target, debuggerApi } = createTarget();
     debuggerApi.isAttached.mockReturnValue(true);
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.5),
+      createMetric(4, 103),
+    ];
     const profiler = new RendererHotCpuProfiler({
       config,
-      getAppMetrics: () => [createMetric(95)],
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
       target,
       logger: {
@@ -205,6 +233,7 @@ describe("RendererHotCpuProfiler", () => {
         warn: vi.fn(),
         error: vi.fn(),
       },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
     });
 
     await profiler.start();

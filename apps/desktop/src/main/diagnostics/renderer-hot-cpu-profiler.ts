@@ -25,6 +25,13 @@ type RendererHotCpuTarget = {
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
 };
 
+type CpuUsageReading = {
+  cpuPercent: number;
+  electronCpuPercent: number;
+  cumulativeCpuDeltaSeconds?: number;
+  wallDeltaSeconds?: number;
+};
+
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -58,6 +65,8 @@ export class RendererHotCpuProfiler {
   private debuggerAttached = false;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
+  private previousCumulativeCpuSeconds: number | null = null;
+  private previousSampleAtMs: number | null = null;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private profiling = false;
@@ -141,7 +150,9 @@ export class RendererHotCpuProfiler {
       return;
     }
 
-    const capturedAt = this.now().toISOString();
+    const capturedAtDate = this.now();
+    const capturedAt = capturedAtDate.toISOString();
+    const capturedAtMs = capturedAtDate.getTime();
     try {
       const pid = this.target.getOSProcessId();
       const metric = this.getAppMetrics().find((candidate) => candidate.pid === pid);
@@ -155,7 +166,13 @@ export class RendererHotCpuProfiler {
         return;
       }
 
-      const cpuPercent = metric.cpu.percentCPUUsage;
+      const cumulativeCpuSeconds = metric.cpu.cumulativeCPUUsage;
+      const cpuUsage = this.calculateCpuUsage({
+        capturedAtMs,
+        cumulativeCpuSeconds,
+        electronCpuPercent: metric.cpu.percentCPUUsage,
+      });
+      const cpuPercent = cpuUsage.cpuPercent;
       this.consecutiveHotSamples =
         cpuPercent >= this.config.thresholdPercent
           ? this.consecutiveHotSamples + 1
@@ -165,7 +182,16 @@ export class RendererHotCpuProfiler {
         capturedAt,
         pid,
         cpuPercent,
-        cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage,
+        electronCpuPercent: cpuUsage.electronCpuPercent,
+        ...(cpuUsage.cumulativeCpuDeltaSeconds !== undefined
+          ? { cumulativeCpuDeltaSeconds: cpuUsage.cumulativeCpuDeltaSeconds }
+          : {}),
+        ...(cumulativeCpuSeconds !== undefined
+          ? { cumulativeCpuSeconds }
+          : {}),
+        ...(cpuUsage.wallDeltaSeconds !== undefined
+          ? { wallDeltaSeconds: cpuUsage.wallDeltaSeconds }
+          : {}),
         idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
         workingSetSize: metric.memory.workingSetSize,
         peakWorkingSetSize: metric.memory.peakWorkingSetSize,
@@ -189,6 +215,50 @@ export class RendererHotCpuProfiler {
     } finally {
       this.scheduleNextSample();
     }
+  }
+
+  private calculateCpuUsage(options: {
+    capturedAtMs: number;
+    cumulativeCpuSeconds?: number;
+    electronCpuPercent: number;
+  }): CpuUsageReading {
+    if (options.cumulativeCpuSeconds === undefined) {
+      this.previousCumulativeCpuSeconds = null;
+      this.previousSampleAtMs = null;
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    const previousCumulativeCpuSeconds = this.previousCumulativeCpuSeconds;
+    const previousSampleAtMs = this.previousSampleAtMs;
+    this.previousCumulativeCpuSeconds = options.cumulativeCpuSeconds;
+    this.previousSampleAtMs = options.capturedAtMs;
+
+    if (previousCumulativeCpuSeconds === null || previousSampleAtMs === null) {
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    const cumulativeCpuDeltaSeconds =
+      options.cumulativeCpuSeconds - previousCumulativeCpuSeconds;
+    const wallDeltaSeconds = (options.capturedAtMs - previousSampleAtMs) / 1_000;
+    if (cumulativeCpuDeltaSeconds < 0 || wallDeltaSeconds <= 0) {
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    return {
+      cpuPercent: (cumulativeCpuDeltaSeconds / wallDeltaSeconds) * 100,
+      electronCpuPercent: options.electronCpuPercent,
+      cumulativeCpuDeltaSeconds,
+      wallDeltaSeconds,
+    };
   }
 
   private shouldStartProfile(cpuPercent: number, capturedAt: string): boolean {
