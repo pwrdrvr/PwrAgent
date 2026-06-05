@@ -79,6 +79,7 @@ import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
+import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
 import { AcpRegistryService } from "../acp/acp-registry-service";
@@ -114,7 +115,33 @@ async function refreshModelBackendsIfNeeded(params: {
   }
 }
 
+// Coalesces concurrent ACP refreshes. A refresh runs cheap local discovery and
+// may launch agents to probe capabilities; React StrictMode double-fires the
+// settings-pane mount effect (dev) and users can double-click "Discover new",
+// so without this two passes would launch the same agents in parallel. Pure
+// cache reads (refresh === false) never launch and are not coalesced. A forced
+// refresh always runs its own pass so "Discover new" is never a no-op.
+let inFlightAcpRefresh: Promise<ListAcpAgentSettingsResponse> | undefined;
+
 async function listAcpAgentSettings(
+  request: ListAcpAgentSettingsRequest = {},
+): Promise<ListAcpAgentSettingsResponse> {
+  if (request.refresh === false) {
+    return await listAcpAgentSettingsImpl(request);
+  }
+  if (request.force !== true && inFlightAcpRefresh) {
+    return await inFlightAcpRefresh;
+  }
+  const run = listAcpAgentSettingsImpl(request).finally(() => {
+    if (inFlightAcpRefresh === run) {
+      inFlightAcpRefresh = undefined;
+    }
+  });
+  inFlightAcpRefresh = run;
+  return await run;
+}
+
+async function listAcpAgentSettingsImpl(
   request: ListAcpAgentSettingsRequest = {},
 ): Promise<ListAcpAgentSettingsResponse> {
   const store = new AcpAgentStore(getAppStateDb());
@@ -134,6 +161,7 @@ async function listAcpAgentSettings(
   snapshot ??= store.readRegistrySnapshot();
   const installed = await listInstalledAndLocalAcpAgents(store, {
     refreshLocal: request.refresh === true,
+    ...(request.force === true ? { force: true } : {}),
   });
   const entries = snapshot
     ? registryService
@@ -164,7 +192,7 @@ async function listAcpAgentSettings(
 
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
-  options?: { refreshLocal?: boolean },
+  options?: { refreshLocal?: boolean; force?: boolean },
 ): Promise<AcpInstalledAgentRecord[]> {
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
@@ -182,6 +210,7 @@ async function listInstalledAndLocalAcpAgents(
             : undefined,
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
+      const now = Date.now();
       for (const record of discovered) {
         const current = store.getInstalledAgent(record.backendId);
         const nextRecord = {
@@ -192,9 +221,23 @@ async function listInstalledAndLocalAcpAgents(
           installedAt: current?.installedAt ?? record.installedAt,
           updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
         } satisfies AcpInstalledAgentRecord;
-        store.upsertInstalledAgent(
-          await refreshAcpRuntimeCapabilities(nextRecord, discoveryCwd),
-        );
+        // Cheap local discovery (above) always runs to find newly-installed
+        // agents and refresh version metadata. The EXPENSIVE runtime-capability
+        // probe launches the agent over ACP, so gate it: only re-probe agents
+        // that are undiscovered, stale, or version-changed (or when forced).
+        // Otherwise persist the merged record carrying the cached capabilities
+        // without launching anything.
+        if (
+          shouldReprobeAcpCapabilities(current, record.version, now, {
+            ...(options.force === true ? { force: true } : {}),
+          })
+        ) {
+          store.upsertInstalledAgent(
+            await refreshAcpRuntimeCapabilities(nextRecord, discoveryCwd),
+          );
+        } else {
+          store.upsertInstalledAgent(nextRecord);
+        }
       }
     } catch (error) {
       settingsIpcLog.debug("local_acp_discovery_failed", {
