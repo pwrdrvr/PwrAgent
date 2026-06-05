@@ -376,6 +376,7 @@ export function createMainWindow(options?: {
   let hotCpuProfilerConfigKey: string | null = null;
   let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;
   let hotCpuProfilerGeneration = 0;
+  let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
   const createHotCpuProfiler = async (
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
@@ -450,8 +451,8 @@ export function createMainWindow(options?: {
     });
   };
 
-  const syncHotCpuProfiler = (reason: string) => {
-    void (async () => {
+  const runHotCpuProfilerSync = async (reason: string): Promise<void> => {
+    try {
       if (!rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
         return;
       }
@@ -499,12 +500,20 @@ export function createMainWindow(options?: {
       }
 
       await profiler.start();
-    })().catch((error: unknown) => {
+    } catch (error: unknown) {
       hotCpuLog.warn("failed to sync hot CPU diagnostics", {
         reason,
         error: serializeError(error),
       });
-    });
+    }
+  };
+
+  const syncHotCpuProfiler = (reason: string) => {
+    hotCpuProfilerSyncQueue = hotCpuProfilerSyncQueue.then(
+      () => runHotCpuProfilerSync(reason),
+      () => runHotCpuProfilerSync(reason),
+    );
+    void hotCpuProfilerSyncQueue;
   };
   hotCpuProfilerSyncHandlers.set(window.id, syncHotCpuProfiler);
 

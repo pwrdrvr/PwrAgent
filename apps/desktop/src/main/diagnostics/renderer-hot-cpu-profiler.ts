@@ -336,9 +336,15 @@ export class RendererHotCpuProfiler {
 
       if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
         await this.captureHeapSnapshot(index, "start");
+        if (this.stopped || !this.profiling) {
+          return;
+        }
         this.scheduleMidProfileHeapSnapshot(index);
       }
 
+      if (this.stopped || !this.profiling) {
+        return;
+      }
       this.profileDurationTimer = setTimeout(
         () => this.stopProfile("duration-elapsed"),
         this.config.profileDurationMs,
@@ -385,7 +391,11 @@ export class RendererHotCpuProfiler {
         },
       });
 
-      if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
+      if (
+        !this.stopped &&
+        this.config.captureHeapSnapshot &&
+        this.target.takeHeapSnapshot
+      ) {
         await this.captureHeapSnapshot(index, "stop");
       }
     } catch (error) {

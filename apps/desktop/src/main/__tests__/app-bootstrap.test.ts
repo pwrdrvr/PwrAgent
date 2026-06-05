@@ -191,7 +191,9 @@ vi.mock("../diagnostics/main-process-heap-monitor", () => ({
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
+    resolveHotCpuProfilingCaptureHeapSnapshot: () => false,
     resolveHotCpuProfilingEnabled: () => false,
+    resolveHotCpuProfilingHeapSnapshotLimit: () => 2,
   }),
 }));
 

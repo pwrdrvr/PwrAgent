@@ -96,6 +96,17 @@ function createTarget() {
   };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
+
 describe("RendererHotCpuProfiler", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -284,6 +295,71 @@ describe("RendererHotCpuProfiler", () => {
         expect.objectContaining({ type: "heap-snapshot-limit-reached" }),
       ]),
     );
+  });
+
+  it("does not schedule heap or duration timers after being stopped during the start heap snapshot", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "100",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT: "1",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT_LIMIT: "3",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const startSnapshot = deferred();
+    const { target, debuggerApi } = createTarget();
+    target.takeHeapSnapshot.mockImplementation(async () => {
+      await startSnapshot.promise;
+    });
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.5),
+      createMetric(4, 103),
+    ];
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+    });
+
+    await profiler.start();
+    await vi.waitFor(() => {
+      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    await profiler.stop("settings-disabled");
+    startSnapshot.resolve();
+    await new Promise((resolve) =>
+      setTimeout(resolve, config.profileDurationMs * 2),
+    );
+
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    expect(
+      debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop"),
+    ).toHaveLength(1);
   });
 
   it("skips profiling when a debugger is already attached", async () => {
