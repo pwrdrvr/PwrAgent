@@ -118,7 +118,8 @@ for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
   "patchStageDependencyManifests",
-  "@larksuiteoapi+node-sdk@1.63.1",
+  "^@larksuiteoapi\\+node-sdk@",
+  "deployedAxios",
 ]) {
   if (!releaseScript.includes(expected)) {
     fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)}`);
