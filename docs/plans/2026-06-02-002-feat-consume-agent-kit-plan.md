@@ -22,6 +22,43 @@ first-cut packages and re-adopting them must be lossless.
 
 ---
 
+## Shipping Status
+
+**Wave 1 is complete** (branch `claude/consume-agent-kit-wave1`, PR #639;
+U1 landed earlier as PR #638):
+
+- **U1 — protocol:** consumed `@pwrdrvr/codex-app-server-protocol` (PR #638).
+- **U2 — transport:** consumed `@pwrdrvr/agent-transport@^0.1.4`. Shell
+  hydration (`mergeLoginShellEnvIntoEnv`) + the JSON-RPC core both come from
+  the package; PwrAgnt's logger is injected at each call site. The in-tree
+  `shell-environment.ts` and `codex-app-server/json-rpc.ts` (and their tests)
+  are deleted. PwrAgnt's Codex + ACP stdio transports stay in-tree as
+  app-specific spawn impls of the package's `JsonRpcTransport`.
+- **U3 — discovery/profiles/login:** consumed
+  `@pwrdrvr/codex-discovery@^0.1.2`. Discovery, auth-profile enumeration, and
+  the `CodexLoginManager` login/relogin flow run on the package
+  (`shell.openExternal` + logger injected). In-tree
+  `settings/codex-discovery.ts` and `settings/codex-profiles.ts` (and tests)
+  are deleted; `checkCodexProfileAuthStatus` stays in-tree.
+- **U4 — cleanup:** folded into U2/U3 — the duplicated copies were deleted as
+  each consumer was repointed, so no separate deletion pass was needed. Note
+  the plan anticipated `file:` → `@next` dep ranges; execution went straight
+  to **published semver pins** (further along than `@next`). Grep confirms no
+  imports of the deleted modules and no in-tree redefinitions of the moved
+  symbols; AGENTS.md/CLAUDE.md carry no references to the removed substrate.
+
+One test-infra note worth carrying forward: the kit's bundled dist imports
+**unprefixed** `child_process`, so tests that mock spawn must
+`vi.mock("child_process")` (not just `node:child_process`) **and** the kit
+package must be inlined into the relevant vitest project
+(`server.deps.inline`) so vitest transforms it — otherwise Node loads the
+bundled import raw and bypasses the mock. Applied to the `desktop-main`
+project for `@pwrdrvr/codex-discovery`.
+
+**Wave 2 (U5 agent-client, U6 agent-acp) remains staged** per KTD-P3.
+
+---
+
 ## Summary
 
 Adopt the `@pwrdrvr/*` packages in PwrAgnt in two waves:
