@@ -3557,6 +3557,186 @@ describe("useThreadSessionState", () => {
       "message:Done.",
       "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
     ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    });
+  });
+
+  it("keeps aggregate turn usage when hydration includes per-request usage", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(async ({ backend, threadId }) => {
+      readCount += 1;
+      const hydratedCompletedTurn = readCount > 1;
+      return {
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: hydratedCompletedTurn
+            ? [
+                {
+                  type: "message" as const,
+                  id: "assistant-turn-1",
+                  role: "assistant" as const,
+                  phase: "final" as const,
+                  text: "Done.",
+                  createdAt: 10_000,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                },
+                {
+                  type: "activity" as const,
+                  id: "live-token-usage-turn-1",
+                  summary: "Latest request usage: 200 uncached in · 1,800 cached · 30 out (10 reasoning)",
+                  status: "completed" as const,
+                  createdAt: 10_001,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                  details: [
+                    {
+                      id: "live-token-usage-turn-1-input",
+                      kind: "read" as const,
+                      label: "Input: 2,000 tokens (200 uncached, 1,800 cached)",
+                      status: "completed" as const,
+                    },
+                    {
+                      id: "live-token-usage-turn-1-output",
+                      kind: "read" as const,
+                      label: "Output: 30 tokens, including 10 reasoning",
+                      status: "completed" as const,
+                    },
+                  ],
+                },
+              ]
+            : [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+              total_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 2_000,
+                cached_input_tokens: 1_800,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 2_040,
+              },
+              total_token_usage: {
+                input_tokens: 3_000,
+                cached_input_tokens: 1_900,
+                output_tokens: 50,
+                reasoning_output_tokens: 15,
+                total_tokens: 3_065,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Done.",
+        "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
+      ]);
+    });
   });
 
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {

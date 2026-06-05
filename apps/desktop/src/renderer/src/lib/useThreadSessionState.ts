@@ -206,16 +206,60 @@ function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "activity" &&
     (entry.id.startsWith("live-token-usage-") ||
+      entry.id.startsWith("live-turn-usage-") ||
+      entry.summary.startsWith("Turn usage:") ||
       entry.summary.startsWith("Usage:") ||
       entry.summary.startsWith("Latest request usage:"))
   );
+}
+
+function tokenUsageActivityScope(
+  entry: AppServerThreadActivityEntry
+): "latest-request" | "total" | "turn" | undefined {
+  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
+    return "turn";
+  }
+  if (entry.summary.startsWith("Latest request usage:")) {
+    return "latest-request";
+  }
+  if (entry.summary.startsWith("Usage:")) {
+    return "total";
+  }
+  if (entry.id.startsWith("live-token-usage-")) {
+    return "latest-request";
+  }
+  return undefined;
+}
+
+function hasOptimisticTurnUsageForEntry(
+  entry: AppServerThreadEntry,
+  optimisticTurnUsageIds: ReadonlySet<string>
+): boolean {
+  return Boolean(entry.turn?.id && optimisticTurnUsageIds.has(entry.turn.id));
 }
 
 function mergeTranscriptEntries(
   responseEntries: AppServerThreadEntry[],
   optimisticEntries: AppServerThreadEntry[]
 ): AppServerThreadEntry[] {
-  const merged = [...responseEntries];
+  const optimisticTurnUsageIds = new Set(
+    optimisticEntries
+      .filter(
+        (entry): entry is AppServerThreadActivityEntry =>
+          entry.type === "activity" &&
+          tokenUsageActivityScope(entry) === "turn" &&
+          Boolean(entry.turn?.id)
+      )
+      .map((entry) => entry.turn?.id as string)
+  );
+  const merged = responseEntries.filter(
+    (entry) =>
+      !(
+        entry.type === "activity" &&
+        tokenUsageActivityScope(entry) !== "turn" &&
+        hasOptimisticTurnUsageForEntry(entry, optimisticTurnUsageIds)
+      )
+  );
 
   for (const optimisticEntry of optimisticEntries) {
     const existingIndex = merged.findIndex((entry) => entry.id === optimisticEntry.id);
@@ -667,6 +711,15 @@ function activityEntriesMatch(
   candidate: AppServerThreadActivityEntry,
   optimisticEntry: AppServerThreadActivityEntry
 ): boolean {
+  const tokenUsageMatch =
+    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
+  if (
+    tokenUsageMatch &&
+    tokenUsageActivityScope(candidate) !== tokenUsageActivityScope(optimisticEntry)
+  ) {
+    return false;
+  }
+
   if (candidate.id === optimisticEntry.id) {
     return true;
   }
@@ -675,8 +728,6 @@ function activityEntriesMatch(
     return false;
   }
 
-  const tokenUsageMatch =
-    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
   return optimisticEntry.details.every((detail) =>
     candidate.details.some((candidateDetail) => {
       if (candidateDetail.id === detail.id) {
@@ -1334,7 +1385,6 @@ function deriveTurnUsageBaseline(params: {
 function buildPendingTurnUsage(params: {
   contextWindow?: ThreadContextWindowState;
   existing?: TurnUsageAccumulator;
-  id: string;
   model?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
@@ -1366,7 +1416,7 @@ function buildPendingTurnUsage(params: {
     : usageRecords.latestUsage;
   const entry = turnUsage
     ? buildTokenUsageActivityEntry({
-        id: params.id,
+        id: `live-turn-usage-${turnId}`,
         model: params.model,
         summaryPrefix: "Turn usage",
         tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
@@ -3655,7 +3705,6 @@ export function useThreadSessionState(params: {
             const turnUsage = buildPendingTurnUsage({
               contextWindow: current.contextWindow,
               existing: current.pendingTurnUsage,
-              id: usageEntryId,
               model,
               tokenUsage: event.notification.params.tokenUsage,
               turn,
