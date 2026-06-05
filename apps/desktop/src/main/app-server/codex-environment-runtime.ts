@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, statSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type {
   CodexEnvironmentActionRun,
@@ -13,6 +21,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
@@ -103,6 +112,7 @@ export type CodexEnvironmentCommandParams = {
   env?: NodeJS.ProcessEnv;
   mode: "wait" | "detach";
   timeoutMs?: number;
+  captureShellEnvironment?: boolean;
   onProgress?: (
     event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
   ) => void;
@@ -145,6 +155,12 @@ export type CodexEnvironmentCommandResult = {
   exitCode?: number;
   output?: string;
   pid?: number;
+  shellEnvironment?: Record<string, string>;
+};
+
+type ShellEnvironmentCaptureTarget = {
+  dirPath: string;
+  filePath: string;
 };
 
 export type CodexEnvironmentCommandRunner = (
@@ -162,6 +178,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   onActionDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
   /** Optional caller-generated runId for the auto-action; falls back to a fresh UUID. */
   actionRunId?: string;
+  hydrationStore?: CodexEnvironmentHydrationStoreLike;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
@@ -180,6 +197,9 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       setupStatus: selection.setupEnabled ? "skipped" : undefined,
       setupCommand: selection.environment.setupScript,
       actions: selection.environment.actions,
+      selectedActionIdByEnvironmentId: selection.action
+        ? { [selection.environment.id]: selection.action.id }
+        : undefined,
       actionId: selection.action?.id,
       actionName: selection.action?.name,
       actionCommand: selection.action?.command,
@@ -195,8 +215,18 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     setupEnabled: selection.setupEnabled,
     setupCommand: selection.environment.setupScript,
     actions: selection.environment.actions,
+    selectedActionIdByEnvironmentId: selection.action
+      ? { [selection.environment.id]: selection.action.id }
+      : undefined,
     sourcePath: selection.environment.sourcePath,
   };
+  const cachedShellEnvironment =
+    params.hydrationStore?.get({
+      environmentId: selection.environment.id,
+      sourcePath: selection.environment.sourcePath,
+      cwd,
+      setupScript: selection.environment.setupScript,
+    })?.shellEnvironment;
 
   if (selection.setupEnabled && selection.environment.setupScript) {
     const emitSetupProgress = (
@@ -224,6 +254,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         command: selection.environment.setupScript,
         env: params.env,
         mode: "wait",
+        captureShellEnvironment: true,
         timeoutMs:
           params.setupTimeoutMs ??
           readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
@@ -235,6 +266,16 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       runtime.setupOutput = result.output;
       runtime.setupExitCode = result.exitCode;
       runtime.setupDurationMs = result.durationMs;
+      runtime.shellEnvironment = result.shellEnvironment ?? cachedShellEnvironment;
+      if (result.shellEnvironment) {
+        params.hydrationStore?.set({
+          environmentId: selection.environment.id,
+          sourcePath: selection.environment.sourcePath,
+          cwd,
+          setupScript: selection.environment.setupScript,
+          shellEnvironment: result.shellEnvironment,
+        });
+      }
       emitSetupProgress({
         phase: "completed",
         output: result.output,
@@ -280,6 +321,13 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   } else if (selection.setupEnabled) {
     runtime.setupStatus = "skipped";
   }
+  if (!runtime.shellEnvironment && cachedShellEnvironment) {
+    runtime.shellEnvironment = cachedShellEnvironment;
+  }
+
+  const actionEnv = runtime.shellEnvironment
+    ? { ...(params.env ?? process.env), ...runtime.shellEnvironment }
+    : params.env;
 
   if (selection.action) {
     const runId = params.actionRunId ?? randomUUID();
@@ -296,7 +344,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.action.command,
-        env: params.env,
+        env: actionEnv,
         mode: "detach",
         onDetachedExit: params.onActionDetachedExit,
         onDetachedOutput: params.onActionDetachedOutput,
@@ -368,10 +416,13 @@ export async function startLocalCodexEnvironmentAction(params: {
   const existingRuns = readCodexEnvironmentActionRuns(params.runtime);
 
   try {
+    const actionEnv = params.runtime.shellEnvironment
+      ? { ...(params.env ?? process.env), ...params.runtime.shellEnvironment }
+      : params.env;
     const result = await (params.commandRunner ?? runShellCommand)({
       cwd: params.runtime.cwd,
       command: action.command,
-      env: params.env,
+      env: actionEnv,
       mode: "detach",
       onDetachedExit: params.onDetachedExit,
       onDetachedOutput: params.onDetachedOutput,
@@ -432,18 +483,25 @@ function runShellCommand(
     shell,
     pathPreview: truncateForLog(commandEnv.PATH),
   });
+  const capture = params.captureShellEnvironment
+    ? createShellEnvironmentCaptureTarget()
+    : undefined;
 
   return new Promise((resolve, reject) => {
-    const child = spawn(shell, ["-lc", wrapShellCommand(shell, params.command)], {
-      cwd: params.cwd,
-      detached: params.mode === "detach" || Boolean(params.timeoutMs),
-      env: commandEnv,
-      // Pipe output even in detach mode so we can drain to a ring buffer,
-      // stream to the renderer's anchored output UI, and log non-zero exits.
-      // Caller still resolves on spawn for detach mode; we keep listening so
-      // long-running children (e.g., `pnpm dev`) report failures.
-      stdio: "pipe",
-    });
+    const child = spawn(
+      shell,
+      ["-lc", wrapShellCommand(shell, params.command, capture?.filePath)],
+      {
+        cwd: params.cwd,
+        detached: params.mode === "detach" || Boolean(params.timeoutMs),
+        env: commandEnv,
+        // Pipe output even in detach mode so we can drain to a ring buffer,
+        // stream to the renderer's anchored output UI, and log non-zero exits.
+        // Caller still resolves on spawn for detach mode; we keep listening so
+        // long-running children (e.g., `pnpm dev`) report failures.
+        stdio: "pipe",
+      },
+    );
 
     let combinedOutput = "";
     let settled = false;
@@ -488,6 +546,7 @@ function runShellCommand(
         clearTimeout(killHandle);
         killHandle = undefined;
       }
+      cleanupShellEnvironmentCaptureTarget(capture);
       callback();
     };
 
@@ -694,11 +753,17 @@ function runShellCommand(
         return;
       }
       if (code === 0) {
+        const shellEnvironment = capture
+          ? readCapturedShellEnvironment(capture.filePath)
+          : undefined;
         environmentRuntimeLog.info("codex-environment-command-exit", {
           processId,
           code,
           signal,
           durationMs,
+          capturedEnvKeys: shellEnvironment
+            ? Object.keys(shellEnvironment).sort()
+            : undefined,
         });
         settle(() => {
           resolve({
@@ -706,6 +771,7 @@ function runShellCommand(
             exitCode: code,
             output,
             pid: child.pid,
+            shellEnvironment,
           });
         });
         return;
@@ -746,6 +812,137 @@ function sanitizeLocalEnvironmentCommandEnv(
     }
   }
   return sanitized;
+}
+
+function createShellEnvironmentCaptureTarget():
+  | ShellEnvironmentCaptureTarget
+  | undefined {
+  try {
+    const dirPath = mkdtempSync(path.join(os.tmpdir(), "pwragent-codex-env-"));
+    return {
+      dirPath,
+      filePath: path.join(dirPath, "env"),
+    };
+  } catch (error) {
+    environmentRuntimeLog.warn("codex-environment-capture-target-failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function cleanupShellEnvironmentCaptureTarget(
+  capture: ShellEnvironmentCaptureTarget | undefined,
+): void {
+  if (!capture) {
+    return;
+  }
+  try {
+    rmSync(capture.dirPath, { recursive: true, force: true });
+  } catch (error) {
+    environmentRuntimeLog.warn("codex-environment-capture-cleanup-failed", {
+      dirPath: capture.dirPath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function readCapturedShellEnvironment(
+  filePath: string,
+): Record<string, string> | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch (error) {
+    environmentRuntimeLog.warn("codex-environment-capture-read-failed", {
+      filePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+
+  const parsed: Record<string, string> = {};
+  for (const line of raw.split("\n")) {
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separatorIndex);
+    const value = line.slice(separatorIndex + 1);
+    if (shouldPersistCapturedShellEnvironmentKey(key, value)) {
+      parsed[key] = value;
+    }
+  }
+  return Object.keys(parsed).length ? parsed : undefined;
+}
+
+function shouldPersistCapturedShellEnvironmentKey(
+  key: string,
+  value: string,
+): boolean {
+  if (!key || value.includes("\0") || key.includes("=")) {
+    return false;
+  }
+  if (containsUrlUserInfo(value)) {
+    return false;
+  }
+  const upperKey = key.toUpperCase();
+  if (
+    upperKey.includes("TOKEN") ||
+    upperKey.includes("SECRET") ||
+    upperKey.includes("PASSWORD") ||
+    upperKey.includes("PASSWD") ||
+    upperKey.includes("AUTH") ||
+    upperKey.includes("CREDENTIAL") ||
+    upperKey.includes("COOKIE") ||
+    upperKey.includes("KEY")
+  ) {
+    return false;
+  }
+  if (
+    upperKey === "PATH" ||
+    upperKey === "MANPATH" ||
+    upperKey === "INFOPATH" ||
+    upperKey === "JAVA_HOME" ||
+    upperKey === "MAVEN_HOME" ||
+    upperKey === "GRADLE_HOME" ||
+    upperKey === "GOROOT" ||
+    upperKey === "GOPATH" ||
+    upperKey === "GOBIN" ||
+    upperKey === "CARGO_HOME" ||
+    upperKey === "RUSTUP_HOME" ||
+    upperKey === "GEM_HOME" ||
+    upperKey === "GEM_PATH" ||
+    upperKey === "VIRTUAL_ENV" ||
+    upperKey === "CONDA_PREFIX"
+  ) {
+    return true;
+  }
+  return [
+    "NVM_",
+    "NODE_",
+    "npm_",
+    "NPM_",
+    "PNPM_",
+    "COREPACK_",
+    "YARN_",
+    "VOLTA_",
+    "ASDF_",
+    "MISE_",
+    "PYENV_",
+    "POETRY_",
+    "PIPX_",
+    "RBENV_",
+    "CHRUBY_",
+    "RVM_",
+    "BUN_",
+    "DENO_",
+    "SDKMAN_",
+  ].some((prefix) => key.startsWith(prefix));
+}
+
+function containsUrlUserInfo(value: string): boolean {
+  return /(?:^|[\s,;])(?:[a-z][a-z0-9+.-]*):\/\/[^/\s?#@]+@/i.test(value);
 }
 
 function isParentElectronRuntimeEnvKey(key: string): boolean {
@@ -893,14 +1090,25 @@ function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
   return Math.round(parsed);
 }
 
-function wrapShellCommand(shell: string, command: string): string {
+function wrapShellCommand(
+  shell: string,
+  command: string,
+  captureEnvPath?: string,
+): string {
   return [
     ...shellStartupCommands(shell),
     '[ -n "${NVM_DIR:-}" ] && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"',
     '[ -z "${NVM_DIR:-}" ] && [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"',
     "set -e",
     command,
+    ...(captureEnvPath
+      ? [`{ /usr/bin/env || /bin/env || env; } > ${quoteShellArg(captureEnvPath)} || true`]
+      : []),
   ].join("\n");
+}
+
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function shellStartupCommands(shell: string): string[] {

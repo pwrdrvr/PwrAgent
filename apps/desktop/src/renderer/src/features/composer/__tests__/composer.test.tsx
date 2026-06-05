@@ -631,8 +631,160 @@ describe("Composer", () => {
         backend: "codex",
         threadId: "thread-1",
         environmentId: undefined,
+        actionId: undefined,
       });
     });
+  });
+
+  it("restores thread environment command selections from the per-env sticky map", () => {
+    const buildThread = (
+      id: string,
+      actionId: string,
+    ): NavigationThreadSummary => ({
+      id,
+      title: id,
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local",
+        selectedActionIdByEnvironmentId: {
+          environment: actionId,
+        },
+      },
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          actions: [
+            {
+              id: "dev",
+              name: "Dev",
+              command: "pnpm dev",
+            },
+            {
+              id: "test",
+              name: "Test",
+              command: "pnpm test",
+            },
+          ],
+        },
+      ],
+    });
+
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={buildThread("thread-a", "test")}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={buildThread("thread-b", "dev")}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Dev");
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={buildThread("thread-a", "test")}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+  });
+
+  it("persists thread environment command changes without running the action", async () => {
+    const setCodexThreadEnvironment = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local" as const,
+        selectedActionIdByEnvironmentId: {
+          environment: "test",
+        },
+      },
+    }));
+    const runCodexEnvironmentAction = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction, setCodexThreadEnvironment }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Environment commands",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            selectedActionIdByEnvironmentId: {
+              environment: "dev",
+            },
+          },
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              actions: [
+                {
+                  id: "dev",
+                  name: "Dev",
+                  command: "pnpm dev",
+                },
+                {
+                  id: "test",
+                  name: "Test",
+                  command: "pnpm test",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    chooseDropdownOption("Environment command", "Test");
+
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: "environment",
+        actionId: "test",
+      });
+    });
+    expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
   });
 
   it("shows an explicit empty state when a selected environment has no commands", () => {
@@ -762,7 +914,7 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
-    expect(screen.getByText("Run setup")).toBeInTheDocument();
+    expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
@@ -814,6 +966,81 @@ describe("Composer", () => {
         codexEnvironmentId: "environment",
         codexEnvironmentExecutionTarget: "local",
         codexEnvironmentSetupEnabled: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("does not show launchpad environment commands", () => {
+    const updateLaunchpad = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentId: "lunch",
+          codexEnvironmentOptions: [
+            {
+              id: "lunch",
+              name: "Lunch",
+              sourcePath: "/repo/.codex/environments/lunch.toml",
+              actions: [
+                {
+                  id: "sandwich",
+                  name: "Sandwich",
+                  command: "make sandwich",
+                },
+                {
+                  id: "dessert",
+                  name: "Dessert",
+                  command: "make dessert",
+                },
+              ],
+            },
+            {
+              id: "dinner",
+              name: "Dinner",
+              sourcePath: "/repo/.codex/environments/dinner.toml",
+              actions: [
+                {
+                  id: "pasta",
+                  name: "Pasta",
+                  command: "make pasta",
+                },
+                {
+                  id: "wine",
+                  name: "Wine",
+                  command: "open wine",
+                },
+              ],
+            },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={updateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("Lunch");
+    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+
+    chooseDropdownOption("Environment", "Dinner");
+
+    expect(updateLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo/PwrAgent",
+      expect.objectContaining({
+        codexEnvironmentId: "dinner",
+        codexEnvironmentActionId: undefined,
       }),
       expect.any(Object),
     );

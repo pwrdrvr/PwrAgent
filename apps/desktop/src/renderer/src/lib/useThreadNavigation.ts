@@ -3207,6 +3207,7 @@ export function useThreadNavigation(
           fastMode: parent.fastMode,
           gitBranch: parent.gitBranch,
           observedGitBranch: parent.observedGitBranch,
+          codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
           parentThreadId: parent.id,
         };

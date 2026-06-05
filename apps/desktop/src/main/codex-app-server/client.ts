@@ -4231,8 +4231,12 @@ function buildThreadStartPayload(params: {
   if (params.ephemeral !== undefined) {
     base.ephemeral = params.ephemeral;
   }
-  if (params.config) {
-    base.config = params.config;
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    params.config,
+    params.codexEnvironmentRuntime,
+  );
+  if (config) {
+    base.config = config;
   }
   if (params.dynamicTools) {
     base.dynamicTools = params.dynamicTools;
@@ -4253,6 +4257,44 @@ function buildThreadStartPayload(params: {
   return base;
 }
 
+function mergeCodexShellEnvironmentPolicyConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+  runtime: CodexThreadEnvironmentRuntime | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (runtime?.executionTarget !== "local" || !runtime.shellEnvironment) {
+    return config;
+  }
+  const shellEnvironment = Object.fromEntries(
+    Object.entries(runtime.shellEnvironment).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === "string" &&
+        entry[0].length > 0 &&
+        typeof entry[1] === "string",
+    ),
+  );
+  if (!Object.keys(shellEnvironment).length) {
+    return config;
+  }
+  const baseConfig = isPlainRecord(config) ? config : {};
+  return Object.entries(shellEnvironment).reduce<Record<string, unknown>>(
+    (nextConfig, [key, value]) => {
+      if (isShellEnvironmentVariableName(key)) {
+        nextConfig[`shell_environment_policy.set.${key}`] = value;
+      }
+      return nextConfig;
+    },
+    { ...baseConfig },
+  ) as CodexThreadStartParams["config"];
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isShellEnvironmentVariableName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
 function buildThreadForkPayload(params: {
   threadId: string;
   path?: string;
@@ -4262,6 +4304,7 @@ function buildThreadForkPayload(params: {
   sandbox?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 }): CodexThreadForkParams {
   const base: CodexThreadForkParams = {
     threadId: params.threadId,
@@ -4300,6 +4343,13 @@ function buildThreadForkPayload(params: {
       fast_mode: params.fastMode,
     };
   }
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    base.config,
+    params.codexEnvironmentRuntime,
+  );
+  if (config) {
+    base.config = config;
+  }
 
   return base;
 }
@@ -4313,6 +4363,7 @@ function buildThreadResumePayloads(params: {
   serviceTier?: string | null;
   reasoningEffort?: string;
   fastMode?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 }): CodexThreadResumeParams[] {
   const base: CodexThreadResumeParams = {
     threadId: params.threadId,
@@ -4345,6 +4396,13 @@ function buildThreadResumePayloads(params: {
     base.config = {
       fast_mode: params.fastMode,
     };
+  }
+  const config = mergeCodexShellEnvironmentPolicyConfig(
+    base.config,
+    params.codexEnvironmentRuntime,
+  );
+  if (config) {
+    base.config = config;
   }
 
   return [base];
@@ -5329,6 +5387,7 @@ export class CodexAppServerClient {
     sandbox?: string;
     serviceTier?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -5363,6 +5422,7 @@ export class CodexAppServerClient {
     serviceTier?: string | null;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -5387,7 +5447,8 @@ export class CodexAppServerClient {
           model: params.model,
           serviceTier: params.serviceTier,
           reasoningEffort: params.reasoningEffort,
-          fastMode: params.fastMode
+          fastMode: params.fastMode,
+          codexEnvironmentRuntime: params.codexEnvironmentRuntime,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       }).catch((error: unknown) => {
@@ -5529,6 +5590,8 @@ export class CodexAppServerClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: AppServerReviewDelivery;
+    cwd?: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
@@ -5538,6 +5601,8 @@ export class CodexAppServerClient {
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads({
           threadId: params.threadId,
+          cwd: params.cwd,
+          codexEnvironmentRuntime: params.codexEnvironmentRuntime,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch(() => undefined);

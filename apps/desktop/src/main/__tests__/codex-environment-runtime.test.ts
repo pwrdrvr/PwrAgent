@@ -397,6 +397,169 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("captures the successful setup shell environment without leaking it into setup output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-"));
+    const toolPath = path.join(root, "node-bin");
+
+    try {
+      await mkdir(toolPath, { recursive: true });
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          SHELL: "/bin/sh",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: [
+              `export PATH=${JSON.stringify(toolPath)}:$PATH`,
+              `export NVM_DIR=${JSON.stringify(path.join(root, ".nvm"))}`,
+              "export PWRAGENT_SHOULD_NOT_PERSIST=1",
+              "export GITHUB_TOKEN=secret",
+              "printf setup-output",
+            ].join("\n"),
+            actions: [],
+          },
+          executionTarget: "local",
+          setupEnabled: true,
+        },
+      });
+
+      expect(runtime?.setupOutput).toBe("setup-output");
+      expect(runtime?.shellEnvironment).toMatchObject({
+        NVM_DIR: path.join(root, ".nvm"),
+      });
+      expect(runtime?.shellEnvironment?.PATH).toContain(toolPath);
+      expect(runtime?.shellEnvironment).not.toHaveProperty("GITHUB_TOKEN");
+      expect(runtime?.shellEnvironment).not.toHaveProperty(
+        "PWRAGENT_SHOULD_NOT_PERSIST",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist allow-listed env values that contain URL credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-secret-"));
+    const pnpmHome = path.join(root, "pnpm-home");
+
+    try {
+      await mkdir(pnpmHome, { recursive: true });
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          SHELL: "/bin/sh",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: [
+              `export PNPM_HOME=${JSON.stringify(pnpmHome)}`,
+              "export NPM_CONFIG_PROXY=http://user:pass@proxy.example.test",
+              "export npm_config_registry=https://token@registry.example.test/npm/",
+              "printf setup-output",
+            ].join("\n"),
+            actions: [],
+          },
+          executionTarget: "local",
+          setupEnabled: true,
+        },
+      });
+
+      expect(runtime?.shellEnvironment).toMatchObject({
+        PNPM_HOME: pnpmHome,
+      });
+      expect(runtime?.shellEnvironment).not.toHaveProperty("NPM_CONFIG_PROXY");
+      expect(runtime?.shellEnvironment).not.toHaveProperty("npm_config_registry");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail setup when PATH no longer contains env", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-path-"));
+    const toolPath = path.join(root, "toolchain-bin");
+
+    try {
+      await mkdir(toolPath, { recursive: true });
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          SHELL: "/bin/sh",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: [
+              `export PATH=${JSON.stringify(toolPath)}`,
+              "printf setup-output",
+            ].join("\n"),
+            actions: [],
+          },
+          executionTarget: "local",
+          setupEnabled: true,
+        },
+      });
+
+      expect(runtime).toMatchObject({
+        setupStatus: "completed",
+        setupOutput: "setup-output",
+      });
+      expect(runtime?.shellEnvironment?.PATH).toBe(toolPath);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses cached shell hydration when setup is disabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-cache-"));
+    try {
+      const cachedEnvironment = {
+        PATH: "/cached/node/bin:/usr/bin",
+        NVM_DIR: path.join(root, ".nvm"),
+      };
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        hydrationStore: {
+          get: () => ({
+            key: "cache-key",
+            environmentId: "env",
+            setupScriptHash: "hash",
+            shellEnvironment: cachedEnvironment,
+            updatedAt: Date.now(),
+          }),
+          set: () => {
+            throw new Error("setup-disabled environment should not update cache");
+          },
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: "printf setup",
+            actions: [],
+          },
+          executionTarget: "local",
+          setupEnabled: false,
+        },
+      });
+
+      expect(runtime?.shellEnvironment).toEqual(cachedEnvironment);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails setup immediately when an earlier script command exits non-zero", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-strict-"));
     const shellPath = path.join(root, "test-shell.sh");
