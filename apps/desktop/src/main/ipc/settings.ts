@@ -73,7 +73,7 @@ import {
   readCodexAuthInfo,
   resolveCodexHomeForProfile,
   resolveDefaultCodexHome,
-} from "../settings/codex-profiles";
+} from "@pwrdrvr/codex-discovery";
 import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";

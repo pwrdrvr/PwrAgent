@@ -112,11 +112,11 @@ import {
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
-import { discoverCodexCommands } from "./codex-discovery";
+import { discoverCodexCommands } from "@pwrdrvr/codex-discovery";
 import {
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
-} from "./codex-profiles";
+} from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";

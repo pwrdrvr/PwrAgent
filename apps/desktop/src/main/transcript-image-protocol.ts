@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePwragentRoot } from "./profile";
-import { resolveDefaultCodexHome } from "./settings/codex-profiles";
+import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
 

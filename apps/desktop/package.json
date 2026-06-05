@@ -44,6 +44,7 @@
   "dependencies": {
     "@pwragent/agent-core": "workspace:*",
     "@pwrdrvr/agent-transport": "^0.1.4",
+    "@pwrdrvr/codex-discovery": "^0.1.2",
     "@pwrdrvr/codex-app-server-protocol": "0.133.0",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",

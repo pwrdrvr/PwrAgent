@@ -8,7 +8,7 @@ import { getMainLogger } from "../log";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
-} from "../settings/codex-discovery";
+} from "@pwrdrvr/codex-discovery";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 

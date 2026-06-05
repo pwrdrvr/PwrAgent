@@ -30,7 +30,7 @@ import {
   discoverCodexAuthProfiles,
   resolveDefaultCodexHome,
   resolveCodexHomeForProfile,
-} from "../settings/codex-profiles";
+} from "@pwrdrvr/codex-discovery";
 import {
   CodexAppServerClient,
   type CodexThreadMigrationMetadata,

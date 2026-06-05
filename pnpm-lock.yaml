@@ -67,6 +67,9 @@ importers:
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.133.0
         version: 0.133.0
+      '@pwrdrvr/codex-discovery':
+        specifier: ^0.1.2
+        version: 0.1.2
       '@shutterstock/p-map-iterable':
         specifier: ^1.1.2
         version: 1.1.2(aggregate-error@3.1.0)
@@ -1150,6 +1153,9 @@ packages:
   '@pwrdrvr/codex-app-server-protocol@0.133.0':
     resolution: {integrity: sha512-mt+geA0RZEz5A3kEK8poDE3wYDrteWGb2syfXS4/kzzgWEe26DUbQlbdQyFYoa7Zs/Z6L64gNGIfFHgemfzj8g==}
     engines: {node: '>=20'}
+
+  '@pwrdrvr/codex-discovery@0.1.2':
+    resolution: {integrity: sha512-9jt+tdNcos6q22ObiRqDf94jCO6l/Z7RsELVXRssY3WXPJPAUXpuSpPFj9K1PkFUAXsDIRwr169iGbUBbeKmJw==}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.15':
     resolution: {integrity: sha512-YYe6aWruPZDtHNpwu7+qAHEMbQ/yRl6atqb/AhznLTnD3UY99Q1jE7ihLSahNWkF4EqRPVC4SiR4O0UkLK02tA==}
@@ -4756,6 +4762,10 @@ snapshots:
       '@pwrdrvr/agent-core': 0.1.2
 
   '@pwrdrvr/codex-app-server-protocol@0.133.0': {}
+
+  '@pwrdrvr/codex-discovery@0.1.2':
+    dependencies:
+      '@pwrdrvr/agent-core': 0.1.2
 
   '@rolldown/binding-android-arm64@1.0.0-rc.15':
     optional: true
