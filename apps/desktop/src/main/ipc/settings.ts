@@ -119,9 +119,18 @@ async function refreshModelBackendsIfNeeded(params: {
 // may launch agents to probe capabilities; React StrictMode double-fires the
 // settings-pane mount effect (dev) and users can double-click "Discover new",
 // so without this two passes would launch the same agents in parallel. Pure
-// cache reads (refresh === false) never launch and are not coalesced. A forced
-// refresh always runs its own pass so "Discover new" is never a no-op.
+// cache reads (refresh === false) never launch and are not coalesced.
+//
+// We track whether the in-flight pass was forced so a caller only rides a pass
+// that satisfies it: a non-forced caller can ride any in-flight pass, but a
+// forced caller ("Discover new") only rides an in-flight *forced* pass —
+// otherwise it would silently inherit a freshness-gated pass that skipped the
+// re-probe it asked for. This is what stops two rapid "Discover new" clicks
+// from launching every agent twice in parallel. A forced caller that arrives
+// while only a non-forced pass is in flight still starts its own pass, so
+// "Discover new" is never a no-op.
 let inFlightAcpRefresh: Promise<ListAcpAgentSettingsResponse> | undefined;
+let inFlightAcpRefreshForced = false;
 
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
@@ -129,15 +138,18 @@ async function listAcpAgentSettings(
   if (request.refresh === false) {
     return await listAcpAgentSettingsImpl(request);
   }
-  if (request.force !== true && inFlightAcpRefresh) {
+  const wantsForce = request.force === true;
+  if (inFlightAcpRefresh && (!wantsForce || inFlightAcpRefreshForced)) {
     return await inFlightAcpRefresh;
   }
   const run = listAcpAgentSettingsImpl(request).finally(() => {
     if (inFlightAcpRefresh === run) {
       inFlightAcpRefresh = undefined;
+      inFlightAcpRefreshForced = false;
     }
   });
   inFlightAcpRefresh = run;
+  inFlightAcpRefreshForced = wantsForce;
   return await run;
 }
 
@@ -229,7 +241,7 @@ async function listInstalledAndLocalAcpAgents(
         // without launching anything.
         if (
           shouldReprobeAcpCapabilities(current, record.version, now, {
-            ...(options.force === true ? { force: true } : {}),
+            ...(options?.force === true ? { force: true } : {}),
           })
         ) {
           store.upsertInstalledAgent(

@@ -78,6 +78,16 @@ export function AcpAgentsSettings(props: {
     if (didInitialLoad.current) {
       return;
     }
+    // Don't latch until the preload bridge is actually available. useDesktopApi
+    // resolves the API asynchronously (polling undefined → defined), so this
+    // pane can mount before it's ready. If we latched now we'd stick on the
+    // "unavailable" error forever even after the API arrives. Instead surface
+    // that state without latching and let the effect re-run (dep:
+    // props.desktopApi) to do the real load once the API is present.
+    if (!props.desktopApi?.listAcpAgents) {
+      void refresh(false);
+      return;
+    }
     didInitialLoad.current = true;
     void refresh(false).then(() => refresh(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps

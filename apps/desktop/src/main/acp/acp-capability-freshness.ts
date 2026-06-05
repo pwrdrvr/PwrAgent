@@ -17,7 +17,10 @@ export const ACP_CAPABILITY_MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
  * result. A re-probe is warranted when:
  *
  *  - `force` is requested (the "Discover new" button), OR
- *  - the agent has never been probed (no persisted capabilities / timestamp), OR
+ *  - the agent has never been probed (no persisted timestamp), OR
+ *  - a prior probe completed but produced no capabilities — treated as a
+ *    degraded/transient result on purpose, so the agent self-heals on the next
+ *    refresh instead of caching an empty capability set for `maxAgeMs`, OR
  *  - the installed CLI version changed since the last probe (capabilities may
  *    have changed), OR
  *  - the persisted probe is older than `maxAgeMs`.
@@ -35,7 +38,10 @@ export function shouldReprobeAcpCapabilities(
   if (options?.force === true) {
     return true;
   }
-  // Never probed, or a prior probe produced no capabilities.
+  // Never probed, or a probe that completed but yielded no capabilities. The
+  // latter is re-probed on purpose (degraded/transient self-heal) rather than
+  // cached — see the doc comment above. Probe *errors* don't set
+  // `lastDiscoveredAt`, so they fall under "never probed" and also re-probe.
   if (
     cached === undefined ||
     cached.runtimeCapabilities === undefined ||
