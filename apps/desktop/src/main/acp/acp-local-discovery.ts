@@ -29,6 +29,7 @@ export type LocalAcpDiscoveryOptions = {
   overrides?: {
     grok?: string;
     qwen?: string;
+    kimi?: string;
   };
 };
 
@@ -103,61 +104,64 @@ async function discoverLocalGemini(options?: {
   };
 }
 
-async function discoverLocalKimi(options?: {
-  probe?: LocalAcpAgentProbe;
-  now?: () => number;
-}): Promise<AcpInstalledAgentRecord | undefined> {
+async function discoverLocalKimi(
+  options?: LocalAcpDiscoveryOptions,
+): Promise<AcpInstalledAgentRecord | undefined> {
   const probe = options?.probe ?? defaultProbe;
-  const [versionResult, acpHelpResult] = await Promise.all([
-    probeCommand(probe, "kimi", ["--version"]),
-    probeCommand(probe, "kimi", ["acp", "--help"]),
-  ]);
-  if (!versionResult || !acpHelpResult) {
-    return undefined;
-  }
+  const candidates = kimiCandidatePaths(options?.overrides?.kimi);
+  for (const command of candidates) {
+    const [versionResult, acpHelpResult] = await Promise.all([
+      probeCommand(probe, command, ["--version"]),
+      probeCommand(probe, command, ["acp", "--help"]),
+    ]);
+    if (!versionResult || !acpHelpResult) {
+      continue;
+    }
 
-  const acpHelpText = resultText(acpHelpResult);
-  if (!/\bACP server\b/i.test(acpHelpText)) {
-    return undefined;
-  }
+    const acpHelpText = resultText(acpHelpResult);
+    if (!/\bACP server\b/i.test(acpHelpText)) {
+      continue;
+    }
 
-  const now = options?.now?.() ?? Date.now();
-  const backendId = "acp:kimi" as AcpBackendId;
-  const version = parseCliVersion(resultText(versionResult));
-  return {
-    backendId,
-    registryId: "kimi",
-    name: "Kimi Code CLI",
-    version,
-    distributionKind: "local",
-    distributionSource: "kimi acp",
-    installStatus: "installed",
-    authStatus: "not-required",
-    verificationStatus: "not-applicable",
-    allowlistRuleId: "local-kimi-cli",
-    installedAt: now,
-    updatedAt: now,
-    capabilities: acpAgentCapabilitiesForRegistryId("kimi"),
-    launchDescriptor: normalizeAcpLaunchDescriptor({
+    const now = options?.now?.() ?? Date.now();
+    const backendId = "acp:kimi" as AcpBackendId;
+    const version = parseCliVersion(resultText(versionResult));
+    return {
       backendId,
       registryId: "kimi",
-      distributionKind: "local",
-      command: "kimi",
-      args: ["acp"],
-      env: {},
-    }),
-    registryAgent: {
-      id: "kimi",
-      backendId,
       name: "Kimi Code CLI",
       version,
-      authors: ["Moonshot AI"],
-      distributions: [],
-      distributionKinds: ["local"],
-      auth: { required: false, methods: ["agent-managed"] },
-      raw: { source: "local-cli" },
-    },
-  };
+      distributionKind: "local",
+      distributionSource: `${command} acp`,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-kimi-cli",
+      installedAt: now,
+      updatedAt: now,
+      capabilities: acpAgentCapabilitiesForRegistryId("kimi"),
+      launchDescriptor: normalizeAcpLaunchDescriptor({
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command,
+        args: ["acp"],
+        env: {},
+      }),
+      registryAgent: {
+        id: "kimi",
+        backendId,
+        name: "Kimi Code CLI",
+        version,
+        authors: ["Moonshot AI"],
+        distributions: [],
+        distributionKinds: ["local"],
+        auth: { required: false, methods: ["agent-managed"] },
+        raw: { source: "local-cli" },
+      },
+    };
+  }
+  return undefined;
 }
 
 async function discoverLocalGrok(
@@ -318,6 +322,29 @@ function qwenCandidatePaths(override?: string): string[] {
   candidates.push(path.join(homedir(), ".qwen", "bin", "qwen"));
   candidates.push("/opt/homebrew/bin/qwen");
   candidates.push("/usr/local/bin/qwen");
+  return Array.from(new Set(candidates));
+}
+
+/**
+ * Build the ordered list of Kimi Code CLI candidate paths to probe.
+ *
+ * Kimi Code's official installer drops the binary at
+ * `~/.kimi-code/bin/kimi` and appends that directory to the user's shell
+ * PATH. GUI-launched apps don't always inherit that interactive PATH, so —
+ * mirroring {@link grokCandidatePaths} / {@link qwenCandidatePaths} — we
+ * probe the bare `kimi` command first (fast path when it IS on PATH), then
+ * the installer's default location, then the standard Homebrew prefixes.
+ * The same trust model documented on {@link grokCandidatePaths} applies.
+ */
+function kimiCandidatePaths(override?: string): string[] {
+  const candidates: string[] = [];
+  if (override && override.trim().length > 0) {
+    candidates.push(override.trim());
+  }
+  candidates.push("kimi");
+  candidates.push(path.join(homedir(), ".kimi-code", "bin", "kimi"));
+  candidates.push("/opt/homebrew/bin/kimi");
+  candidates.push("/usr/local/bin/kimi");
   return Array.from(new Set(candidates));
 }
 
