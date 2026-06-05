@@ -5779,6 +5779,13 @@ function buildContextWindowTooltip(
     if (cumulativeCachedInput) {
       lines.push(`Cumulative cached input: ${cumulativeCachedInput}`);
     }
+    const cumulativeOutput = formatCumulativeOutputSummary(
+      contextWindow.cumulativeOutputTokens,
+      contextWindow.cumulativeReasoningOutputTokens
+    );
+    if (cumulativeOutput) {
+      lines.push(`Cumulative output: ${cumulativeOutput}`);
+    }
   }
 
   return lines.join("\n");
@@ -5798,6 +5805,18 @@ function formatCachedTokenDetail(
 
   const percent = formatCachedInputPercent(cachedInputTokens, inputTokens);
   return `${formatCompactNumber(cachedInputTokens)} cached${percent ? ` (${percent})` : ""}`;
+}
+
+function formatCumulativeOutputSummary(
+  outputTokens: number | undefined,
+  reasoningOutputTokens: number | undefined
+): string | undefined {
+  const details = [
+    formatOptionalTokenDetail("output", outputTokens),
+    formatOptionalTokenDetail("reasoning", reasoningOutputTokens),
+  ].filter((detail): detail is string => Boolean(detail));
+
+  return details.length > 0 ? details.join(", ") : undefined;
 }
 
 function formatCachedInputSummary(

@@ -92,6 +92,8 @@ export type ThreadContextWindowState = {
   cachedInputTokens?: number;
   cumulativeCachedInputTokens?: number;
   cumulativeInputTokens?: number;
+  cumulativeOutputTokens?: number;
+  cumulativeReasoningOutputTokens?: number;
   cumulativeTotalTokens?: number;
   inputTokens?: number;
   modelContextWindow: number;
@@ -1254,6 +1256,12 @@ function normalizeThreadContextWindowState(
       ? totalUsage.cachedInputTokens
       : undefined,
     cumulativeInputTokens: hasDistinctCumulativeUsage ? totalUsage.inputTokens : undefined,
+    cumulativeOutputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.outputTokens
+      : undefined,
+    cumulativeReasoningOutputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.reasoningOutputTokens
+      : undefined,
     cumulativeTotalTokens: hasDistinctCumulativeUsage ? totalUsage.totalTokens : undefined,
     inputTokens: currentUsage.inputTokens,
     modelContextWindow,
