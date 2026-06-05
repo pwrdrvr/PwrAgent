@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { discoverLocalAcpAgents, type LocalAcpAgentProbe } from "../acp/acp-local-discovery";
 
@@ -91,6 +92,80 @@ describe("discoverLocalAcpAgents", () => {
         }),
       }),
     ]);
+  });
+
+  it("discovers Kimi at its default install path when not on $PATH", async () => {
+    const kimiInstallPath = `${homedir()}/.kimi-code/bin/kimi`;
+    const seen: string[] = [];
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      seen.push(command);
+      // Simulate the GUI-launch case: bare `kimi` is NOT on PATH, but the
+      // installer's default location exists.
+      if (command !== kimiInstallPath) {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "kimi, version 1.44.0\n" };
+      }
+      if (args[0] === "acp" && args[1] === "--help") {
+        return { stdout: "Usage: kimi acp [OPTIONS]\nRun Kimi Code CLI ACP server.\n" };
+      }
+      throw new Error("unexpected probe");
+    });
+
+    const result = await discoverLocalAcpAgents({ probe, now: () => 4242 });
+    expect(result).toEqual([
+      expect.objectContaining({
+        backendId: "acp:kimi",
+        registryId: "kimi",
+        distributionSource: `${kimiInstallPath} acp`,
+        launchDescriptor: expect.objectContaining({
+          command: kimiInstallPath,
+          args: ["acp"],
+        }),
+      }),
+    ]);
+    // Bare `kimi` is probed first (fast path), then the installer location.
+    const kimiProbes = seen.filter((command) =>
+      command === "kimi" || command.endsWith("/kimi"),
+    );
+    expect(kimiProbes[0]).toBe("kimi");
+    expect(kimiProbes).toContain(kimiInstallPath);
+  });
+
+  it("honors a Kimi CLI path override before probing $PATH", async () => {
+    const seen: string[] = [];
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      seen.push(command);
+      if (command !== "/custom/kimi") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "kimi, version 1.44.0\n" };
+      }
+      if (args[0] === "acp" && args[1] === "--help") {
+        return { stdout: "Usage: kimi acp [OPTIONS]\nRun Kimi Code CLI ACP server.\n" };
+      }
+      throw new Error("unexpected probe");
+    });
+
+    const result = await discoverLocalAcpAgents({
+      probe,
+      now: () => 1,
+      overrides: { kimi: "/custom/kimi" },
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        backendId: "acp:kimi",
+        launchDescriptor: expect.objectContaining({
+          command: "/custom/kimi",
+        }),
+      }),
+    ]);
+    const kimiProbes = seen.filter((command) =>
+      command === "/custom/kimi" || command === "kimi" || command.endsWith("/kimi"),
+    );
+    expect(kimiProbes[0]).toBe("/custom/kimi");
   });
 
   it("ignores missing local commands", async () => {
