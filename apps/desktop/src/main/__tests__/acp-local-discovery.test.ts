@@ -56,7 +56,10 @@ describe("discoverLocalAcpAgents", () => {
         return { stdout: "kimi, version 1.44.0\n" };
       }
       if (args[0] === "acp" && args[1] === "--help") {
-        return { stdout: "Usage: kimi acp [OPTIONS]\nRun Kimi Code CLI ACP server.\n" };
+        return {
+          stdout:
+            "Usage: kimi acp [options]\n\nRun kimi-code as an Agent Client Protocol (ACP) server over stdio.\n",
+        };
       }
       throw new Error("unexpected probe");
     });
@@ -108,7 +111,10 @@ describe("discoverLocalAcpAgents", () => {
         return { stdout: "kimi, version 1.44.0\n" };
       }
       if (args[0] === "acp" && args[1] === "--help") {
-        return { stdout: "Usage: kimi acp [OPTIONS]\nRun Kimi Code CLI ACP server.\n" };
+        return {
+          stdout:
+            "Usage: kimi acp [options]\n\nRun kimi-code as an Agent Client Protocol (ACP) server over stdio.\n",
+        };
       }
       throw new Error("unexpected probe");
     });
@@ -144,7 +150,10 @@ describe("discoverLocalAcpAgents", () => {
         return { stdout: "kimi, version 1.44.0\n" };
       }
       if (args[0] === "acp" && args[1] === "--help") {
-        return { stdout: "Usage: kimi acp [OPTIONS]\nRun Kimi Code CLI ACP server.\n" };
+        return {
+          stdout:
+            "Usage: kimi acp [options]\n\nRun kimi-code as an Agent Client Protocol (ACP) server over stdio.\n",
+        };
       }
       throw new Error("unexpected probe");
     });
@@ -177,7 +186,10 @@ describe("discoverLocalAcpAgents", () => {
   });
 
   it("ignores Gemini CLI versions that do not advertise ACP mode", async () => {
-    const probe = vi.fn<LocalAcpAgentProbe>(async (_command, args) => {
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      if (command !== "gemini") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
       if (args[0] === "--version") {
         return { stdout: "0.41.0\n" };
       }
@@ -379,7 +391,7 @@ describe("discoverLocalAcpAgents", () => {
     await expect(discoverLocalAcpAgents({ probe })).resolves.toEqual([]);
   });
 
-  it("ignores Kimi CLI versions that do not advertise ACP mode", async () => {
+  it("ignores Kimi CLI versions without an `acp` subcommand", async () => {
     const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
       if (command !== "kimi") {
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
@@ -387,7 +399,10 @@ describe("discoverLocalAcpAgents", () => {
       if (args[0] === "--version") {
         return { stdout: "kimi, version 1.40.0\n" };
       }
-      return { stdout: "Usage: kimi [OPTIONS] COMMAND [ARGS]...\n" };
+      // A kimi build without ACP support exits non-zero for `acp --help`
+      // (commander: "error: unknown command 'acp'"), which surfaces as a
+      // rejected probe — the capability signal we rely on.
+      throw Object.assign(new Error("unknown command 'acp'"), { code: 1 });
     });
 
     await expect(discoverLocalAcpAgents({ probe })).resolves.toEqual([]);
