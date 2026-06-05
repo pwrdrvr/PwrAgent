@@ -76,6 +76,14 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      hotCpuProfilingCaptureHeapSnapshot: {
+        value: false,
+        source: "default",
+      },
+      hotCpuProfilingHeapSnapshotLimit: {
+        value: 2,
+        source: "default",
+      },
       notificationsEnabled: {
         value: false,
         source: "default",
@@ -469,6 +477,24 @@ describe("SettingsScreen", () => {
     });
 
     expect(
+      screen.getByRole("switch", { name: "Smart heap snapshots" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("radio", { name: /2 snapshots/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: /3 snapshots/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch", { name: "Smart heap snapshots" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingCaptureHeapSnapshot: true,
+          hotCpuProfilingEnabled: true,
+        },
+      });
+    });
+
+    expect(
       screen.getByRole("switch", { name: "Desktop notifications" }),
     ).toHaveAttribute("aria-checked", "false");
     fireEvent.click(screen.getByRole("switch", { name: "Desktop notifications" }));
@@ -681,6 +707,38 @@ describe("SettingsScreen", () => {
       "page",
     );
   }, 15_000);
+
+  it("saves the hot CPU heap snapshot limit when heap capture is armed", async () => {
+    const baseSnapshot = createSnapshot();
+    const settings = createSettingsState(
+      createSnapshot({
+        general: {
+          ...baseSnapshot.general,
+          hotCpuProfilingEnabled: { value: true, source: "config" },
+          hotCpuProfilingCaptureHeapSnapshot: {
+            value: true,
+            source: "config",
+          },
+          hotCpuProfilingHeapSnapshotLimit: {
+            value: 2,
+            source: "config",
+          },
+        },
+      }),
+    );
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    expect(screen.getByRole("radio", { name: /3 snapshots/ })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /3 snapshots/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingHeapSnapshotLimit: 3,
+        },
+      });
+    });
+  });
 
   it("defaults live transcript event filtering off for stale snapshots", async () => {
     const snapshot = createSnapshot() as any;

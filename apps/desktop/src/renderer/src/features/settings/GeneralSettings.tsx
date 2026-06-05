@@ -83,6 +83,15 @@ const UPDATE_CHANNEL_OPTIONS: Array<{
   { label: "Prerelease", value: "prerelease" },
 ];
 
+const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: number;
+}> = [
+  { label: "2 snapshots", meta: "Start + stop", value: 2 },
+  { label: "3 snapshots", meta: "Extra sample", value: 3 },
+];
+
 function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
   return release?.version ?? "Unavailable";
 }
@@ -103,6 +112,8 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onDeveloperModeChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingEnabledChange: (value: boolean) => Promise<void>;
+  onHotCpuProfilingCaptureHeapSnapshotChange: (value: boolean) => Promise<void>;
+  onHotCpuProfilingHeapSnapshotLimitChange: (value: number) => Promise<void>;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
@@ -119,6 +130,10 @@ export function GeneralSettings(props: {
   const developerMode = props.snapshot.general.developerMode;
   const hotCpuProfilingEnabled =
     props.snapshot.general.hotCpuProfilingEnabled;
+  const hotCpuProfilingCaptureHeapSnapshot =
+    props.snapshot.general.hotCpuProfilingCaptureHeapSnapshot;
+  const hotCpuProfilingHeapSnapshotLimit =
+    props.snapshot.general.hotCpuProfilingHeapSnapshotLimit;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const messagingAcknowledgment =
@@ -306,6 +321,63 @@ export function GeneralSettings(props: {
                   void props.onHotCpuProfilingEnabledChange(next);
                 }}
               />
+            }
+          />
+          <SettingsField
+            label="Smart heap snapshots"
+            sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
+            help="This also enables hot renderer CPU profiling so it can arm immediately while the current instance keeps running."
+            source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
+            control={
+              <SettingsSwitch
+                checked={hotCpuProfilingCaptureHeapSnapshot.value}
+                disabled={props.saving}
+                label="Smart heap snapshots"
+                onChange={(next) => {
+                  void props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Heap snapshot limit"
+            sub="Keep emergency heap capture small enough to avoid filling disk or stalling the app repeatedly."
+            source={sourceBadge(hotCpuProfilingHeapSnapshotLimit)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Heap snapshot limit"
+              >
+                {HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={
+                      hotCpuProfilingHeapSnapshotLimit.value === option.value
+                    }
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      hotCpuProfilingHeapSnapshotLimit.value === option.value
+                        ? " is-active"
+                        : ""
+                    }`}
+                    disabled={
+                      props.saving || !hotCpuProfilingCaptureHeapSnapshot.value
+                    }
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onHotCpuProfilingHeapSnapshotLimitChange(
+                        option.value,
+                      );
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {option.meta}
+                    </span>
+                  </button>
+                ))}
+              </div>
             }
           />
         </div>

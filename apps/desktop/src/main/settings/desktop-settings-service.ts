@@ -154,6 +154,9 @@ type ConfigReadResult = {
 
 const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
+const DEFAULT_HOT_CPU_HEAP_SNAPSHOT_LIMIT = 2;
+const MIN_HOT_CPU_HEAP_SNAPSHOT_LIMIT = 2;
+const MAX_HOT_CPU_HEAP_SNAPSHOT_LIMIT = 3;
 
 /**
  * Feature gate for the deferred Codex `listThreads` probe.
@@ -344,6 +347,13 @@ export class DesktopSettingsService {
         hotCpuProfilingEnabled: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingEnabled,
           false,
+        ),
+        hotCpuProfilingCaptureHeapSnapshot: this.resolveConfigBoolean(
+          config.general?.hotCpuProfilingCaptureHeapSnapshot,
+          false,
+        ),
+        hotCpuProfilingHeapSnapshotLimit: this.resolveHotCpuHeapSnapshotLimit(
+          config.general?.hotCpuProfilingHeapSnapshotLimit,
         ),
         notificationsEnabled: this.resolveConfigBoolean(
           config.general?.notificationsEnabled,
@@ -722,6 +732,19 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.hotCpuProfilingEnabled,
       false,
+    ).value;
+  }
+
+  resolveHotCpuProfilingCaptureHeapSnapshot(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.hotCpuProfilingCaptureHeapSnapshot,
+      false,
+    ).value;
+  }
+
+  resolveHotCpuProfilingHeapSnapshotLimit(): number {
+    return this.resolveHotCpuHeapSnapshotLimit(
+      this.readConfig().config.general?.hotCpuProfilingHeapSnapshotLimit,
     ).value;
   }
 
@@ -1169,6 +1192,22 @@ export class DesktopSettingsService {
       value: clampInteger(configValue ?? defaultValue, maxValue),
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
+    };
+  }
+
+  private resolveHotCpuHeapSnapshotLimit(
+    configValue: number | undefined,
+  ): DesktopSettingsValue<number> {
+    const rounded =
+      configValue === undefined
+        ? DEFAULT_HOT_CPU_HEAP_SNAPSHOT_LIMIT
+        : Math.round(configValue);
+    return {
+      value: Math.min(
+        Math.max(rounded, MIN_HOT_CPU_HEAP_SNAPSHOT_LIMIT),
+        MAX_HOT_CPU_HEAP_SNAPSHOT_LIMIT,
+      ),
+      source: configValue === undefined ? "default" : "config",
     };
   }
 

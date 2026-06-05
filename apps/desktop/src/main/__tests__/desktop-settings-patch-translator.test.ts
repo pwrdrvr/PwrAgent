@@ -35,6 +35,28 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes hot CPU heap snapshot settings", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        hotCpuProfilingCaptureHeapSnapshot: true,
+        hotCpuProfilingHeapSnapshotLimit: 3,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_capture_heap_snapshot"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_heap_snapshot_limit"],
+        value: 3,
+      },
+    ]);
+  });
+
   it("writes quit confirmation preference", () => {
     const edits = desktopSettingsPatchToEdits({
       general: {
