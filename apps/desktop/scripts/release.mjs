@@ -177,29 +177,50 @@ function publishLinuxArtifacts(distDir) {
 
 function patchStageDependencyManifests() {
   // pnpm overrides can intentionally install a newer dependency than a
-  // package's own manifest range. electron-builder's Linux dependency walker
-  // validates the deployed manifests before packaging, so keep the disposable
-  // release-stage metadata aligned with the tree pnpm deployed.
-  const feishuSdkPackage = join(
-    stageDir,
-    "node_modules",
-    ".pnpm",
-    "@larksuiteoapi+node-sdk@1.63.1",
-    "node_modules",
-    "@larksuiteoapi",
-    "node-sdk",
-    "package.json",
-  );
-  if (!existsSync(feishuSdkPackage)) {
+  // package's own manifest range (here: axios, pinned newer than
+  // @larksuiteoapi/node-sdk's tilde range). electron-builder's dependency
+  // walker validates the deployed manifests before packaging, so keep the
+  // disposable release-stage metadata aligned with the tree pnpm deployed.
+  //
+  // Version-agnostic on purpose: this used to hardcode
+  // `@larksuiteoapi+node-sdk@<version>`, which silently skipped the patch
+  // every time the SDK bumped (the dir no longer existed), reintroducing the
+  // "Production dependency axios not found" packaging failure. Glob the SDK
+  // dir and align its axios range to whatever pnpm actually deployed.
+  const pnpmDir = join(stageDir, "node_modules", ".pnpm");
+  if (!existsSync(pnpmDir)) {
     return;
   }
-  const packageJson = JSON.parse(readFileSync(feishuSdkPackage, "utf8"));
-  if (packageJson.dependencies?.axios !== "~1.13.3") {
+  const entries = readdirSync(pnpmDir);
+  const axiosDir = entries.find((name) => /^axios@\d/.test(name));
+  const deployedAxios = axiosDir ? axiosDir.slice("axios@".length) : undefined;
+  if (!deployedAxios) {
     return;
   }
-  packageJson.dependencies.axios = "^1.16.0";
-  writeFileSync(feishuSdkPackage, `${JSON.stringify(packageJson, null, 2)}\n`);
-  console.log("  patched @larksuiteoapi/node-sdk axios range for release-stage dependency collection");
+  const desiredAxiosRange = `^${deployedAxios}`;
+  for (const sdkDir of entries.filter((name) => /^@larksuiteoapi\+node-sdk@/.test(name))) {
+    const manifestPath = join(
+      pnpmDir,
+      sdkDir,
+      "node_modules",
+      "@larksuiteoapi",
+      "node-sdk",
+      "package.json",
+    );
+    if (!existsSync(manifestPath)) {
+      continue;
+    }
+    const packageJson = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const currentRange = packageJson.dependencies?.axios;
+    if (!currentRange || currentRange === desiredAxiosRange) {
+      continue;
+    }
+    packageJson.dependencies.axios = desiredAxiosRange;
+    writeFileSync(manifestPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    console.log(
+      `  patched ${sdkDir} axios range ${currentRange} -> ${desiredAxiosRange} for release-stage dependency collection`,
+    );
+  }
 }
 
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
