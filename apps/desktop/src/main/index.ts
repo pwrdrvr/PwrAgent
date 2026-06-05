@@ -537,7 +537,9 @@ export function bootstrapApp(): void {
       onConfigPatchWritten: async (patch) => {
         if (
           patch.general?.developerMode !== undefined ||
-          patch.general?.hotCpuProfilingEnabled !== undefined
+          patch.general?.hotCpuProfilingEnabled !== undefined ||
+          patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined ||
+          patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
         ) {
           installApplicationMenu();
           syncHotCpuProfilersFromSettings("settings-changed");

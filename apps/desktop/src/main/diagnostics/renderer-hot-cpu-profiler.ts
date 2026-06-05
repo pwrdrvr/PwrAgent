@@ -25,6 +25,13 @@ type RendererHotCpuTarget = {
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
 };
 
+type CpuUsageReading = {
+  cpuPercent: number;
+  electronCpuPercent: number;
+  cumulativeCpuDeltaSeconds?: number;
+  wallDeltaSeconds?: number;
+};
+
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -51,13 +58,19 @@ export class RendererHotCpuProfiler {
   private readonly getAppMetrics: () => ProcessMetric[];
   private readonly logger: Logger;
   private readonly now: () => Date;
+  private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
   private readonly session: HotCpuProfileSession;
   private readonly target: RendererHotCpuTarget;
 
   private consecutiveHotSamples = 0;
   private debuggerAttached = false;
+  private heapSnapshotLimitReached = false;
+  private heapSnapshotsCaptured = 0;
+  private heapSnapshotMidTimer: ReturnType<typeof setTimeout> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
+  private previousCumulativeCpuSeconds: number | null = null;
+  private previousSampleAtMs: number | null = null;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private profiling = false;
@@ -70,11 +83,13 @@ export class RendererHotCpuProfiler {
     target: RendererHotCpuTarget;
     logger?: Logger;
     now?: () => Date;
+    onHeapSnapshotLimitReached?: () => void | Promise<void>;
   }) {
     this.config = options.config;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
+    this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
     this.session = options.session;
     this.target = options.target;
   }
@@ -92,6 +107,8 @@ export class RendererHotCpuProfiler {
         thresholdPercent: this.config.thresholdPercent,
         consecutiveSamples: this.config.consecutiveSamples,
         profileDurationMs: this.config.profileDurationMs,
+        captureHeapSnapshot: this.config.captureHeapSnapshot,
+        heapSnapshotLimit: this.config.heapSnapshotLimit,
       },
     });
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
@@ -113,6 +130,7 @@ export class RendererHotCpuProfiler {
       this.intervalTimer = null;
     }
     this.clearProfileDurationTimer();
+    this.clearHeapSnapshotMidTimer();
 
     if (this.profiling) {
       await this.stopProfile(reason);
@@ -141,7 +159,9 @@ export class RendererHotCpuProfiler {
       return;
     }
 
-    const capturedAt = this.now().toISOString();
+    const capturedAtDate = this.now();
+    const capturedAt = capturedAtDate.toISOString();
+    const capturedAtMs = capturedAtDate.getTime();
     try {
       const pid = this.target.getOSProcessId();
       const metric = this.getAppMetrics().find((candidate) => candidate.pid === pid);
@@ -155,7 +175,13 @@ export class RendererHotCpuProfiler {
         return;
       }
 
-      const cpuPercent = metric.cpu.percentCPUUsage;
+      const cumulativeCpuSeconds = metric.cpu.cumulativeCPUUsage;
+      const cpuUsage = this.calculateCpuUsage({
+        capturedAtMs,
+        cumulativeCpuSeconds,
+        electronCpuPercent: metric.cpu.percentCPUUsage,
+      });
+      const cpuPercent = cpuUsage.cpuPercent;
       this.consecutiveHotSamples =
         cpuPercent >= this.config.thresholdPercent
           ? this.consecutiveHotSamples + 1
@@ -165,7 +191,16 @@ export class RendererHotCpuProfiler {
         capturedAt,
         pid,
         cpuPercent,
-        cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage,
+        electronCpuPercent: cpuUsage.electronCpuPercent,
+        ...(cpuUsage.cumulativeCpuDeltaSeconds !== undefined
+          ? { cumulativeCpuDeltaSeconds: cpuUsage.cumulativeCpuDeltaSeconds }
+          : {}),
+        ...(cumulativeCpuSeconds !== undefined
+          ? { cumulativeCpuSeconds }
+          : {}),
+        ...(cpuUsage.wallDeltaSeconds !== undefined
+          ? { wallDeltaSeconds: cpuUsage.wallDeltaSeconds }
+          : {}),
         idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
         workingSetSize: metric.memory.workingSetSize,
         peakWorkingSetSize: metric.memory.peakWorkingSetSize,
@@ -189,6 +224,50 @@ export class RendererHotCpuProfiler {
     } finally {
       this.scheduleNextSample();
     }
+  }
+
+  private calculateCpuUsage(options: {
+    capturedAtMs: number;
+    cumulativeCpuSeconds?: number;
+    electronCpuPercent: number;
+  }): CpuUsageReading {
+    if (options.cumulativeCpuSeconds === undefined) {
+      this.previousCumulativeCpuSeconds = null;
+      this.previousSampleAtMs = null;
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    const previousCumulativeCpuSeconds = this.previousCumulativeCpuSeconds;
+    const previousSampleAtMs = this.previousSampleAtMs;
+    this.previousCumulativeCpuSeconds = options.cumulativeCpuSeconds;
+    this.previousSampleAtMs = options.capturedAtMs;
+
+    if (previousCumulativeCpuSeconds === null || previousSampleAtMs === null) {
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    const cumulativeCpuDeltaSeconds =
+      options.cumulativeCpuSeconds - previousCumulativeCpuSeconds;
+    const wallDeltaSeconds = (options.capturedAtMs - previousSampleAtMs) / 1_000;
+    if (cumulativeCpuDeltaSeconds < 0 || wallDeltaSeconds <= 0) {
+      return {
+        cpuPercent: options.electronCpuPercent,
+        electronCpuPercent: options.electronCpuPercent,
+      };
+    }
+
+    return {
+      cpuPercent: (cumulativeCpuDeltaSeconds / wallDeltaSeconds) * 100,
+      electronCpuPercent: options.electronCpuPercent,
+      cumulativeCpuDeltaSeconds,
+      wallDeltaSeconds,
+    };
   }
 
   private shouldStartProfile(cpuPercent: number, capturedAt: string): boolean {
@@ -237,12 +316,13 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
       this.profileCount += 1;
+      const index = this.profileCount;
       this.lastProfileAtMs = Date.parse(options.capturedAt);
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
         type: "profile-started",
         detail: {
-          index: this.profileCount,
+          index,
           cpuPercent: options.cpuPercent,
           pid: options.pid,
           durationMs: this.config.profileDurationMs,
@@ -254,6 +334,17 @@ export class RendererHotCpuProfiler {
         sessionDirectory: this.session.directoryPath,
       });
 
+      if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
+        await this.captureHeapSnapshot(index, "start");
+        if (this.stopped || !this.profiling) {
+          return;
+        }
+        this.scheduleMidProfileHeapSnapshot(index);
+      }
+
+      if (this.stopped || !this.profiling) {
+        return;
+      }
       this.profileDurationTimer = setTimeout(
         () => this.stopProfile("duration-elapsed"),
         this.config.profileDurationMs,
@@ -276,6 +367,7 @@ export class RendererHotCpuProfiler {
 
     this.profiling = false;
     this.clearProfileDurationTimer();
+    this.clearHeapSnapshotMidTimer();
     const index = this.profileCount;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
@@ -299,8 +391,12 @@ export class RendererHotCpuProfiler {
         },
       });
 
-      if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
-        await this.captureHeapSnapshot(index);
+      if (
+        !this.stopped &&
+        this.config.captureHeapSnapshot &&
+        this.target.takeHeapSnapshot
+      ) {
+        await this.captureHeapSnapshot(index, "stop");
       }
     } catch (error) {
       await this.session.appendEvent({
@@ -318,12 +414,29 @@ export class RendererHotCpuProfiler {
     }
   }
 
-  private async captureHeapSnapshot(index: number): Promise<void> {
+  private async captureHeapSnapshot(index: number, phase: string): Promise<void> {
     if (!this.target.takeHeapSnapshot) {
       return;
     }
 
-    const snapshotPath = this.session.createHeapSnapshotPath(index);
+    if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
+      await this.session.appendEvent({
+        capturedAt: this.now().toISOString(),
+        type: "heap-snapshot-skipped",
+        detail: {
+          index,
+          phase,
+          reason: "limit-reached",
+          limit: this.config.heapSnapshotLimit,
+        },
+      });
+      await this.notifyHeapSnapshotLimitReached();
+      return;
+    }
+
+    const snapshotNumber = this.heapSnapshotsCaptured + 1;
+    this.heapSnapshotsCaptured = snapshotNumber;
+    const snapshotPath = this.session.createHeapSnapshotPath(index, phase);
     const snapshotFilename = artifactFilename(snapshotPath);
     try {
       await this.target.takeHeapSnapshot(snapshotPath);
@@ -331,7 +444,13 @@ export class RendererHotCpuProfiler {
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "heap-snapshot-written",
-        detail: { filename: snapshotFilename },
+        detail: {
+          filename: snapshotFilename,
+          index,
+          phase,
+          snapshotNumber,
+          limit: this.config.heapSnapshotLimit,
+        },
       });
     } catch (error) {
       await this.session.appendEvent({
@@ -339,10 +458,60 @@ export class RendererHotCpuProfiler {
         type: "heap-snapshot-failed",
         detail: {
           filename: snapshotFilename,
+          index,
+          phase,
+          snapshotNumber,
+          limit: this.config.heapSnapshotLimit,
           error: serializeError(error),
         },
       });
       this.logger.error("[pwragent:hot-cpu] heap snapshot failed", error);
+    } finally {
+      if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
+        await this.notifyHeapSnapshotLimitReached();
+      }
+    }
+  }
+
+  private scheduleMidProfileHeapSnapshot(index: number): void {
+    if (
+      !this.config.captureHeapSnapshot ||
+      !this.target.takeHeapSnapshot ||
+      this.config.heapSnapshotLimit < 3 ||
+      this.heapSnapshotLimitReached
+    ) {
+      return;
+    }
+
+    this.clearHeapSnapshotMidTimer();
+    this.heapSnapshotMidTimer = setTimeout(() => {
+      this.heapSnapshotMidTimer = null;
+      void this.captureHeapSnapshot(index, "mid");
+    }, Math.max(1, Math.floor(this.config.profileDurationMs / 2)));
+  }
+
+  private async notifyHeapSnapshotLimitReached(): Promise<void> {
+    if (this.heapSnapshotLimitReached) {
+      return;
+    }
+
+    this.heapSnapshotLimitReached = true;
+    await this.session.appendEvent({
+      capturedAt: this.now().toISOString(),
+      type: "heap-snapshot-limit-reached",
+      detail: {
+        captured: this.heapSnapshotsCaptured,
+        limit: this.config.heapSnapshotLimit,
+      },
+    });
+
+    try {
+      await this.onHeapSnapshotLimitReached?.();
+    } catch (error) {
+      this.logger.warn("[pwragent:hot-cpu] heap snapshot auto-disable failed", {
+        error: serializeError(error),
+        sessionDirectory: this.session.directoryPath,
+      });
     }
   }
 
@@ -383,5 +552,14 @@ export class RendererHotCpuProfiler {
 
     clearTimeout(this.profileDurationTimer);
     this.profileDurationTimer = null;
+  }
+
+  private clearHeapSnapshotMidTimer(): void {
+    if (!this.heapSnapshotMidTimer) {
+      return;
+    }
+
+    clearTimeout(this.heapSnapshotMidTimer);
+    this.heapSnapshotMidTimer = null;
   }
 }

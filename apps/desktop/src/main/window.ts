@@ -373,8 +373,10 @@ export function createMainWindow(options?: {
   const { webContents } = window;
   attachWindowFocusSync(window);
   let rendererLoaded = false;
+  let hotCpuProfilerConfigKey: string | null = null;
   let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;
   let hotCpuProfilerGeneration = 0;
+  let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
   const createHotCpuProfiler = async (
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
@@ -403,54 +405,87 @@ export function createMainWindow(options?: {
     return new RendererHotCpuProfiler({
       config: hotCpuConfig,
       getAppMetrics: () => app.getAppMetrics(),
+      onHeapSnapshotLimitReached: async () => {
+        await getDesktopSettingsService().writeConfigPatch({
+          general: { hotCpuProfilingCaptureHeapSnapshot: false },
+        });
+        syncHotCpuProfilersFromSettings("heap-snapshot-limit-reached");
+      },
       session: created.session,
       target: webContents,
     });
   };
 
-  const stopHotCpuProfiler = (reason: string) => {
+  const stopHotCpuProfiler = async (reason: string): Promise<void> => {
     hotCpuProfilerGeneration += 1;
     const profilerPromise = hotCpuProfilerPromise;
+    hotCpuProfilerConfigKey = null;
     hotCpuProfilerPromise = null;
     if (!profilerPromise) {
       return;
     }
 
-    void profilerPromise
-      .then(async (profiler) => {
-        await profiler?.stop(reason);
-      })
-      .catch((error: unknown) => {
-        hotCpuLog.warn("failed to stop hot CPU diagnostics", {
-          reason,
-          error: serializeError(error),
-        });
+    try {
+      const profiler = await profilerPromise;
+      await profiler?.stop(reason);
+    } catch (error: unknown) {
+      hotCpuLog.warn("failed to stop hot CPU diagnostics", {
+        reason,
+        error: serializeError(error),
       });
+    }
   };
 
-  const syncHotCpuProfiler = (reason: string) => {
-    void (async () => {
+  const hotCpuConfigKey = (
+    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+  ): string => {
+    return JSON.stringify({
+      intervalMs: hotCpuConfig.intervalMs,
+      thresholdPercent: hotCpuConfig.thresholdPercent,
+      consecutiveSamples: hotCpuConfig.consecutiveSamples,
+      profileDurationMs: hotCpuConfig.profileDurationMs,
+      cooldownMs: hotCpuConfig.cooldownMs,
+      maxProfiles: hotCpuConfig.maxProfiles,
+      captureHeapSnapshot: hotCpuConfig.captureHeapSnapshot,
+      heapSnapshotLimit: hotCpuConfig.heapSnapshotLimit,
+    });
+  };
+
+  const runHotCpuProfilerSync = async (reason: string): Promise<void> => {
+    try {
       if (!rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
         return;
       }
 
       const settingsService = getDesktopSettingsService();
+      const captureHeapSnapshot =
+        settingsService.resolveHotCpuProfilingCaptureHeapSnapshot();
       const hotCpuConfig = resolveHotCpuProfileConfig({
-        enabled: settingsService.resolveHotCpuProfilingEnabled(),
+        captureHeapSnapshot,
+        enabled:
+          settingsService.resolveHotCpuProfilingEnabled() ||
+          captureHeapSnapshot,
+        heapSnapshotLimit:
+          settingsService.resolveHotCpuProfilingHeapSnapshotLimit(),
         outputRoot: resolveHotCpuProfileOutputRoot(),
         repoRoot: resolveRepoRoot(),
       });
 
       if (!hotCpuConfig.enabled) {
-        stopHotCpuProfiler(reason);
+        await stopHotCpuProfiler(reason);
         return;
       }
 
+      const nextConfigKey = hotCpuConfigKey(hotCpuConfig);
       if (hotCpuProfilerPromise) {
-        return;
+        if (hotCpuProfilerConfigKey === nextConfigKey) {
+          return;
+        }
+        await stopHotCpuProfiler(reason);
       }
 
       const generation = hotCpuProfilerGeneration;
+      hotCpuProfilerConfigKey = nextConfigKey;
       hotCpuProfilerPromise = createHotCpuProfiler(hotCpuConfig);
       const profiler = await hotCpuProfilerPromise;
       if (generation !== hotCpuProfilerGeneration) {
@@ -460,16 +495,25 @@ export function createMainWindow(options?: {
 
       if (!profiler) {
         hotCpuProfilerPromise = null;
+        hotCpuProfilerConfigKey = null;
         return;
       }
 
       await profiler.start();
-    })().catch((error: unknown) => {
+    } catch (error: unknown) {
       hotCpuLog.warn("failed to sync hot CPU diagnostics", {
         reason,
         error: serializeError(error),
       });
-    });
+    }
+  };
+
+  const syncHotCpuProfiler = (reason: string) => {
+    hotCpuProfilerSyncQueue = hotCpuProfilerSyncQueue.then(
+      () => runHotCpuProfilerSync(reason),
+      () => runHotCpuProfilerSync(reason),
+    );
+    void hotCpuProfilerSyncQueue;
   };
   hotCpuProfilerSyncHandlers.set(window.id, syncHotCpuProfiler);
 
@@ -552,7 +596,7 @@ export function createMainWindow(options?: {
 
     webContents.on("render-process-gone", (_event, details) => {
       stopHeapMonitor("render-process-gone");
-      stopHotCpuProfiler("render-process-gone");
+      void stopHotCpuProfiler("render-process-gone");
       mainLog.error("renderer process gone", details);
     });
 
@@ -614,7 +658,7 @@ export function createMainWindow(options?: {
   window.on("closed", () => {
     hotCpuProfilerSyncHandlers.delete(window.id);
     stopHeapMonitor("window-closed");
-    stopHotCpuProfiler("window-closed");
+    void stopHotCpuProfiler("window-closed");
   });
 
   return window;
