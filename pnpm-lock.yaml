@@ -12,6 +12,8 @@ overrides:
   tmp: 0.2.6
   ws: 8.20.1
 
+pnpmfileChecksum: sha256-ENVI4WvTe5sygYLw830xNJB8CimBQgr6EM0Oi3TR7os=
+
 importers:
 
   .:
