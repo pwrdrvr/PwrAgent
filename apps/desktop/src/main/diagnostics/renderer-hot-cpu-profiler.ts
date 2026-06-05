@@ -58,11 +58,15 @@ export class RendererHotCpuProfiler {
   private readonly getAppMetrics: () => ProcessMetric[];
   private readonly logger: Logger;
   private readonly now: () => Date;
+  private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
   private readonly session: HotCpuProfileSession;
   private readonly target: RendererHotCpuTarget;
 
   private consecutiveHotSamples = 0;
   private debuggerAttached = false;
+  private heapSnapshotLimitReached = false;
+  private heapSnapshotsCaptured = 0;
+  private heapSnapshotMidTimer: ReturnType<typeof setTimeout> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
   private previousCumulativeCpuSeconds: number | null = null;
@@ -79,11 +83,13 @@ export class RendererHotCpuProfiler {
     target: RendererHotCpuTarget;
     logger?: Logger;
     now?: () => Date;
+    onHeapSnapshotLimitReached?: () => void | Promise<void>;
   }) {
     this.config = options.config;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
+    this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
     this.session = options.session;
     this.target = options.target;
   }
@@ -101,6 +107,8 @@ export class RendererHotCpuProfiler {
         thresholdPercent: this.config.thresholdPercent,
         consecutiveSamples: this.config.consecutiveSamples,
         profileDurationMs: this.config.profileDurationMs,
+        captureHeapSnapshot: this.config.captureHeapSnapshot,
+        heapSnapshotLimit: this.config.heapSnapshotLimit,
       },
     });
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
@@ -122,6 +130,7 @@ export class RendererHotCpuProfiler {
       this.intervalTimer = null;
     }
     this.clearProfileDurationTimer();
+    this.clearHeapSnapshotMidTimer();
 
     if (this.profiling) {
       await this.stopProfile(reason);
@@ -307,12 +316,13 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
       this.profileCount += 1;
+      const index = this.profileCount;
       this.lastProfileAtMs = Date.parse(options.capturedAt);
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
         type: "profile-started",
         detail: {
-          index: this.profileCount,
+          index,
           cpuPercent: options.cpuPercent,
           pid: options.pid,
           durationMs: this.config.profileDurationMs,
@@ -323,6 +333,11 @@ export class RendererHotCpuProfiler {
         pid: options.pid,
         sessionDirectory: this.session.directoryPath,
       });
+
+      if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
+        await this.captureHeapSnapshot(index, "start");
+        this.scheduleMidProfileHeapSnapshot(index);
+      }
 
       this.profileDurationTimer = setTimeout(
         () => this.stopProfile("duration-elapsed"),
@@ -346,6 +361,7 @@ export class RendererHotCpuProfiler {
 
     this.profiling = false;
     this.clearProfileDurationTimer();
+    this.clearHeapSnapshotMidTimer();
     const index = this.profileCount;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
@@ -370,7 +386,7 @@ export class RendererHotCpuProfiler {
       });
 
       if (this.config.captureHeapSnapshot && this.target.takeHeapSnapshot) {
-        await this.captureHeapSnapshot(index);
+        await this.captureHeapSnapshot(index, "stop");
       }
     } catch (error) {
       await this.session.appendEvent({
@@ -388,12 +404,29 @@ export class RendererHotCpuProfiler {
     }
   }
 
-  private async captureHeapSnapshot(index: number): Promise<void> {
+  private async captureHeapSnapshot(index: number, phase: string): Promise<void> {
     if (!this.target.takeHeapSnapshot) {
       return;
     }
 
-    const snapshotPath = this.session.createHeapSnapshotPath(index);
+    if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
+      await this.session.appendEvent({
+        capturedAt: this.now().toISOString(),
+        type: "heap-snapshot-skipped",
+        detail: {
+          index,
+          phase,
+          reason: "limit-reached",
+          limit: this.config.heapSnapshotLimit,
+        },
+      });
+      await this.notifyHeapSnapshotLimitReached();
+      return;
+    }
+
+    const snapshotNumber = this.heapSnapshotsCaptured + 1;
+    this.heapSnapshotsCaptured = snapshotNumber;
+    const snapshotPath = this.session.createHeapSnapshotPath(index, phase);
     const snapshotFilename = artifactFilename(snapshotPath);
     try {
       await this.target.takeHeapSnapshot(snapshotPath);
@@ -401,7 +434,13 @@ export class RendererHotCpuProfiler {
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "heap-snapshot-written",
-        detail: { filename: snapshotFilename },
+        detail: {
+          filename: snapshotFilename,
+          index,
+          phase,
+          snapshotNumber,
+          limit: this.config.heapSnapshotLimit,
+        },
       });
     } catch (error) {
       await this.session.appendEvent({
@@ -409,10 +448,60 @@ export class RendererHotCpuProfiler {
         type: "heap-snapshot-failed",
         detail: {
           filename: snapshotFilename,
+          index,
+          phase,
+          snapshotNumber,
+          limit: this.config.heapSnapshotLimit,
           error: serializeError(error),
         },
       });
       this.logger.error("[pwragent:hot-cpu] heap snapshot failed", error);
+    } finally {
+      if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
+        await this.notifyHeapSnapshotLimitReached();
+      }
+    }
+  }
+
+  private scheduleMidProfileHeapSnapshot(index: number): void {
+    if (
+      !this.config.captureHeapSnapshot ||
+      !this.target.takeHeapSnapshot ||
+      this.config.heapSnapshotLimit < 3 ||
+      this.heapSnapshotLimitReached
+    ) {
+      return;
+    }
+
+    this.clearHeapSnapshotMidTimer();
+    this.heapSnapshotMidTimer = setTimeout(() => {
+      this.heapSnapshotMidTimer = null;
+      void this.captureHeapSnapshot(index, "mid");
+    }, Math.max(1, Math.floor(this.config.profileDurationMs / 2)));
+  }
+
+  private async notifyHeapSnapshotLimitReached(): Promise<void> {
+    if (this.heapSnapshotLimitReached) {
+      return;
+    }
+
+    this.heapSnapshotLimitReached = true;
+    await this.session.appendEvent({
+      capturedAt: this.now().toISOString(),
+      type: "heap-snapshot-limit-reached",
+      detail: {
+        captured: this.heapSnapshotsCaptured,
+        limit: this.config.heapSnapshotLimit,
+      },
+    });
+
+    try {
+      await this.onHeapSnapshotLimitReached?.();
+    } catch (error) {
+      this.logger.warn("[pwragent:hot-cpu] heap snapshot auto-disable failed", {
+        error: serializeError(error),
+        sessionDirectory: this.session.directoryPath,
+      });
     }
   }
 
@@ -453,5 +542,14 @@ export class RendererHotCpuProfiler {
 
     clearTimeout(this.profileDurationTimer);
     this.profileDurationTimer = null;
+  }
+
+  private clearHeapSnapshotMidTimer(): void {
+    if (!this.heapSnapshotMidTimer) {
+      return;
+    }
+
+    clearTimeout(this.heapSnapshotMidTimer);
+    this.heapSnapshotMidTimer = null;
   }
 }

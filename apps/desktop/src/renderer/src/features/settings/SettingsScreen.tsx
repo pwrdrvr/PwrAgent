@@ -327,6 +327,25 @@ function SettingsSectionBody(props: {
             general: { hotCpuProfilingEnabled },
           });
         }}
+        onHotCpuProfilingCaptureHeapSnapshotChange={async (
+          hotCpuProfilingCaptureHeapSnapshot: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            general: {
+              hotCpuProfilingCaptureHeapSnapshot,
+              ...(hotCpuProfilingCaptureHeapSnapshot
+                ? { hotCpuProfilingEnabled: true }
+                : {}),
+            },
+          });
+        }}
+        onHotCpuProfilingHeapSnapshotLimitChange={async (
+          hotCpuProfilingHeapSnapshotLimit: number,
+        ) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingHeapSnapshotLimit },
+          });
+        }}
         onConfirmQuitWithInProgressThreadsChange={async (
           confirmQuitWithInProgressThreads: boolean,
         ) => {

@@ -7,6 +7,8 @@ const DEFAULT_PROFILE_DURATION_MS = 15_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const DEFAULT_MAX_PROFILES = 5;
 const DEFAULT_HEAP_SNAPSHOT = false;
+const DEFAULT_HEAP_SNAPSHOT_LIMIT = 2;
+const MAX_HEAP_SNAPSHOT_LIMIT = 3;
 
 export type HotCpuProfileConfig =
   | { enabled: false }
@@ -21,6 +23,7 @@ export type HotCpuProfileConfig =
       cooldownMs: number;
       maxProfiles: number;
       captureHeapSnapshot: boolean;
+      heapSnapshotLimit: number;
     };
 
 function isEnabled(value: string | undefined): boolean {
@@ -48,9 +51,15 @@ function parsePositiveNumber(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function clampHeapSnapshotLimit(value: number): number {
+  return Math.min(Math.max(Math.round(value), 1), MAX_HEAP_SNAPSHOT_LIMIT);
+}
+
 export function resolveHotCpuProfileConfig(options?: {
+  captureHeapSnapshot?: boolean;
   enabled?: boolean;
   env?: NodeJS.ProcessEnv;
+  heapSnapshotLimit?: number;
   outputRoot?: string;
   repoRoot?: string;
 }): HotCpuProfileConfig {
@@ -94,7 +103,13 @@ export function resolveHotCpuProfileConfig(options?: {
     ),
     captureHeapSnapshot:
       env.PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT === undefined
-        ? DEFAULT_HEAP_SNAPSHOT
+        ? options?.captureHeapSnapshot ?? DEFAULT_HEAP_SNAPSHOT
         : isEnabled(env.PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT),
+    heapSnapshotLimit: clampHeapSnapshotLimit(
+      parsePositiveInteger(
+        env.PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT_LIMIT,
+        options?.heapSnapshotLimit ?? DEFAULT_HEAP_SNAPSHOT_LIMIT,
+      ),
+    ),
   };
 }

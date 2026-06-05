@@ -283,22 +283,50 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.general.hotCpuProfilingCaptureHeapSnapshot).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(initial.general.hotCpuProfilingHeapSnapshotLimit).toEqual({
+      value: 2,
+      source: "default",
+    });
     expect(service.resolveHotCpuProfilingEnabled()).toBe(false);
+    expect(service.resolveHotCpuProfilingCaptureHeapSnapshot()).toBe(false);
+    expect(service.resolveHotCpuProfilingHeapSnapshotLimit()).toBe(2);
 
     await service.writeConfigPatch({
       general: {
         hotCpuProfilingEnabled: true,
+        hotCpuProfilingCaptureHeapSnapshot: true,
+        hotCpuProfilingHeapSnapshotLimit: 3,
       },
     });
 
     const saved = fs.readFileSync(configPath, "utf8");
     expect(saved).toContain("[general]");
     expect(saved).toContain("hot_cpu_profiling_enabled = true");
+    expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
+    expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
     expect((await service.readSettings()).general.hotCpuProfilingEnabled).toEqual({
       value: true,
       source: "config",
     });
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingCaptureHeapSnapshot,
+    ).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingHeapSnapshotLimit,
+    ).toEqual({
+      value: 3,
+      source: "config",
+    });
     expect(service.resolveHotCpuProfilingEnabled()).toBe(true);
+    expect(service.resolveHotCpuProfilingCaptureHeapSnapshot()).toBe(true);
+    expect(service.resolveHotCpuProfilingHeapSnapshotLimit()).toBe(3);
   });
 
   it("defaults notifications to disabled and persists overrides", async () => {

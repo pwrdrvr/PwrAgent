@@ -394,6 +394,14 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        hotCpuProfilingCaptureHeapSnapshot: {
+          value: false,
+          source: "default",
+        },
+        hotCpuProfilingHeapSnapshotLimit: {
+          value: 2,
+          source: "default",
+        },
         notificationsEnabled: {
           value: false,
           source: "default",

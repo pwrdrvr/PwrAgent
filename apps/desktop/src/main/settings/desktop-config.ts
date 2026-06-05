@@ -67,6 +67,8 @@ export type DesktopSettingsConfig = {
     confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
+    hotCpuProfilingCaptureHeapSnapshot?: boolean;
+    hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
@@ -449,6 +451,18 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "hot_cpu_profiling_enabled"],
       patch.general.hotCpuProfilingEnabled,
+    );
+  }
+  if (patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_capture_heap_snapshot"],
+      patch.general.hotCpuProfilingCaptureHeapSnapshot,
+    );
+  }
+  if (patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_heap_snapshot_limit"],
+      patch.general.hotCpuProfilingHeapSnapshotLimit,
     );
   }
   if (patch.general?.confirmQuitWithInProgressThreads !== undefined) {
@@ -953,6 +967,12 @@ function normalizeDesktopConfig(
       ),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
+      hotCpuProfilingCaptureHeapSnapshot: readBoolean(
+        general?.hot_cpu_profiling_capture_heap_snapshot,
+      ),
+      hotCpuProfilingHeapSnapshotLimit: readNumber(
+        general?.hot_cpu_profiling_heap_snapshot_limit,
+      ),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
@@ -1158,6 +1178,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   const developerMode = config.general?.developerMode;
   const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;
+  const hotCpuProfilingCaptureHeapSnapshot =
+    config.general?.hotCpuProfilingCaptureHeapSnapshot;
+  const hotCpuProfilingHeapSnapshotLimit =
+    config.general?.hotCpuProfilingHeapSnapshotLimit;
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const notificationsEnabled = config.general?.notificationsEnabled;
@@ -1168,6 +1192,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   if (
     developerMode !== undefined ||
     hotCpuProfilingEnabled !== undefined ||
+    hotCpuProfilingCaptureHeapSnapshot !== undefined ||
+    hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
@@ -1180,6 +1206,14 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (hotCpuProfilingEnabled !== undefined) {
       pruned.general.hotCpuProfilingEnabled = hotCpuProfilingEnabled;
+    }
+    if (hotCpuProfilingCaptureHeapSnapshot !== undefined) {
+      pruned.general.hotCpuProfilingCaptureHeapSnapshot =
+        hotCpuProfilingCaptureHeapSnapshot;
+    }
+    if (hotCpuProfilingHeapSnapshotLimit !== undefined) {
+      pruned.general.hotCpuProfilingHeapSnapshotLimit =
+        hotCpuProfilingHeapSnapshotLimit;
     }
     if (confirmQuitWithInProgressThreads !== undefined) {
       pruned.general.confirmQuitWithInProgressThreads =

@@ -32,7 +32,7 @@ export type HotCpuProfileSession = {
   appendSample: (sample: HotCpuProfileSample) => Promise<void>;
   appendEvent: (event: HotCpuProfileEvent) => Promise<void>;
   createProfilePath: (index: number) => string;
-  createHeapSnapshotPath: (index: number) => string;
+  createHeapSnapshotPath: (index: number, phase: string) => string;
   registerArtifact: (filename: string) => Promise<void>;
 };
 
@@ -54,6 +54,7 @@ type HotCpuProfileSessionManifest = {
     cooldownMs: number;
     maxProfiles: number;
     captureHeapSnapshot: boolean;
+    heapSnapshotLimit: number;
   };
   versions: {
     appVersion: string;
@@ -112,6 +113,7 @@ export async function createHotCpuProfileSession(options: {
       cooldownMs: options.config.cooldownMs,
       maxProfiles: options.config.maxProfiles,
       captureHeapSnapshot: options.config.captureHeapSnapshot,
+      heapSnapshotLimit: options.config.heapSnapshotLimit,
     },
     versions: options.versions,
   };
@@ -154,8 +156,11 @@ export async function createHotCpuProfileSession(options: {
       appendEvent: async (event) => appendRecord(eventsPath, event),
       createProfilePath: (index) =>
         path.join(directoryPath, `renderer-hot-${String(index).padStart(4, "0")}.cpuprofile`),
-      createHeapSnapshotPath: (index) =>
-        path.join(directoryPath, `renderer-hot-${String(index).padStart(4, "0")}.heapsnapshot`),
+      createHeapSnapshotPath: (index, phase) =>
+        path.join(
+          directoryPath,
+          `renderer-hot-${String(index).padStart(4, "0")}-${phase}.heapsnapshot`,
+        ),
       registerArtifact,
     },
   };

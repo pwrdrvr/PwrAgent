@@ -226,6 +226,8 @@ export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
+  hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
+  hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
@@ -567,6 +569,8 @@ export type DesktopSettingsConfigPatch = {
     confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
+    hotCpuProfilingCaptureHeapSnapshot?: boolean;
+    hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
     appearance?: {
       theme?: DesktopAppearanceTheme;
