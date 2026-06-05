@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 const REACTION_GROUPS: { label: string; emojis: string[] }[] = [
   {
     label: "Status",
-    emojis: ["👀", "✋", "✅", "❌", "😢", "🚀", "🎉", "🙏"],
+    emojis: ["👀", "✋", "✅", "❌", "😢", "🚀", "🎉", "🙏", "🤔", "😱", "💩"],
   },
   {
     label: "Numbers",

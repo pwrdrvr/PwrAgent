@@ -184,6 +184,31 @@ describe("ThreadRow chip flow", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
+  it("includes the expanded first-row reaction presets", () => {
+    const { container } = renderRow();
+    const addReaction = container.querySelector(
+      ".thread-row__chip--add-reaction",
+    ) as HTMLElement;
+
+    fireEvent.click(addReaction);
+
+    const statusGroup = screen.getByRole("group", { name: "Status" });
+    const options = within(statusGroup).getAllByRole("menuitemradio");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "👀",
+      "✋",
+      "✅",
+      "❌",
+      "😢",
+      "🚀",
+      "🎉",
+      "🙏",
+      "🤔",
+      "😱",
+      "💩",
+    ]);
+  });
+
   it("does not invoke onSelectThread when an existing reaction chip is clicked", () => {
     const { container, onSelectThread, onSetReaction } = renderRow();
     const reaction = container.querySelector(
