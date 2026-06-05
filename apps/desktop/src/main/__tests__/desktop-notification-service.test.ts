@@ -72,7 +72,8 @@ const {
     }
 
     emitAction(actionIndex: number): void {
-      this.actionHandler?.({ actionIndex }, actionIndex, -1);
+      const event = { actionIndex, preventDefault: vi.fn() };
+      this.actionHandler?.(event, actionIndex, -1);
     }
 
     emitClick(): void {
@@ -226,61 +227,68 @@ describe("DesktopNotificationService", () => {
     expect(shownNotifications).toEqual([]);
   });
 
-  it("renders terminal notifications with show action and auto-closes them", () => {
-    vi.useFakeTimers();
-    try {
-      const service = new DesktopNotificationService();
-      const onShow = vi.fn();
-      getAllWindows.mockReturnValue([
-        { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
-      ]);
-      const serviceWithActionButtons = service as unknown as {
-        supportsActionButtons: () => boolean;
-      };
-      const serviceWithLiveNotifications = service as unknown as {
-        liveNotifications: Set<unknown>;
-      };
-      vi.spyOn(
-        serviceWithActionButtons,
-        "supportsActionButtons",
-      ).mockReturnValue(true);
+  it("renders terminal notifications as body-click notifications until explicit cleanup", () => {
+    const service = new DesktopNotificationService();
+    const onShow = vi.fn();
+    getAllWindows.mockReturnValue([
+      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+    ]);
+    const serviceWithActionButtons = service as unknown as {
+      supportsActionButtons: () => boolean;
+    };
+    const serviceWithLiveNotifications = service as unknown as {
+      attentionKeys: Set<string>;
+      liveNotifications: Set<unknown>;
+    };
+    vi.spyOn(
+      serviceWithActionButtons,
+      "supportsActionButtons",
+    ).mockReturnValue(true);
 
-      service.notifyTerminal({
-        enabled: true,
-        key: "codex:thread-1:turn-terminal",
-        title: "PwrAgent turn completed",
-        body: "PwrAgent > npm view eslint · turn completed.",
-        onShow,
-      });
+    service.notifyTerminal({
+      enabled: true,
+      key: "codex:thread-1:turn-terminal",
+      title: "PwrAgent turn completed",
+      body: "PwrAgent > npm view eslint · turn completed.",
+      onShow,
+    });
 
-      expect(shownNotifications[0]?.actions).toEqual([
-        { type: "button", text: "Show" },
-      ]);
-      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
+    expect(shownNotifications[0]?.actions).toBeUndefined();
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
+    expect(
+      serviceWithLiveNotifications.attentionKeys.has(
+        "codex:thread-1:turn-terminal",
+      ),
+    ).toBe(true);
 
-      shownNotifications[0]?.instance.emitAction(0);
+    shownNotifications[0]?.instance.emitClick();
 
-      expect(onShow).toHaveBeenCalledTimes(1);
-      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+    expect(onShow).toHaveBeenCalledTimes(1);
+    expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+    expect(
+      serviceWithLiveNotifications.attentionKeys.has(
+        "codex:thread-1:turn-terminal",
+      ),
+    ).toBe(true);
 
-      service.notifyTerminal({
-        closeAfterMs: 5000,
-        enabled: true,
-        key: "codex:thread-1:turn-terminal",
-        title: "PwrAgent turn completed",
-        body: "PwrAgent > npm view eslint · turn completed.",
-        onShow,
-      });
+    service.notifyTerminal({
+      enabled: true,
+      key: "codex:thread-1:turn-terminal",
+      title: "PwrAgent turn completed",
+      body: "PwrAgent > npm view eslint · turn completed again.",
+      onShow,
+    });
+    expect(shownNotifications).toHaveLength(1);
 
-      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
-      vi.advanceTimersByTime(5000);
-      expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    service.clearAttentionKey("codex:thread-1:turn-terminal");
+    expect(
+      serviceWithLiveNotifications.attentionKeys.has(
+        "codex:thread-1:turn-terminal",
+      ),
+    ).toBe(false);
   });
 
-  it("renders approval intents with native show, approve, and decline actions", () => {
+  it("renders approval intents with a native approve action and opens the thread on click", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
     const onShow = vi.fn();
@@ -304,9 +312,7 @@ describe("DesktopNotificationService", () => {
     });
 
     expect(shownNotifications[0]?.actions).toEqual([
-      { type: "button", text: "Show" },
       { type: "button", text: "Approve" },
-      { type: "button", text: "Decline" },
     ]);
     expect(shownNotifications[0]?.title).toBe("PwrAgent approval needed");
     expect(shownNotifications[0]?.body).toContain("Command Approval");
@@ -314,10 +320,7 @@ describe("DesktopNotificationService", () => {
     expect(shownNotifications[0]?.body).not.toContain("```shell");
     expect(shownNotifications[0]?.body).not.toContain("Reply with");
 
-    shownNotifications[0]?.instance.emitAction(0);
-    shownNotifications[0]?.instance.emitAction(1);
-    shownNotifications[0]?.instance.emitAction(2);
-
+    shownNotifications[0]?.instance.emitClick();
     expect(onShow).toHaveBeenCalledTimes(1);
     expect(onDecision).not.toHaveBeenCalled();
 
@@ -328,22 +331,12 @@ describe("DesktopNotificationService", () => {
       onDecision,
       onShow,
     });
-    shownNotifications[1]?.instance.emitAction(1);
+    shownNotifications[1]?.instance.emitAction(0);
+    shownNotifications[1]?.instance.emitClick();
 
     expect(onDecision).toHaveBeenCalledTimes(1);
     expect(onDecision).toHaveBeenLastCalledWith("accept");
-
-    service.notifyApproval({
-      enabled: true,
-      key: "codex:thread-1:req-2c",
-      intent: approvalIntent(),
-      onDecision,
-      onShow,
-    });
-    shownNotifications[2]?.instance.emitAction(2);
-
-    expect(onDecision).toHaveBeenCalledTimes(2);
-    expect(onDecision).toHaveBeenLastCalledWith("decline");
+    expect(onShow).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the native approve action when a fallback prompt includes command details", () => {
@@ -378,7 +371,6 @@ describe("DesktopNotificationService", () => {
 
     expect(shownNotifications[0]?.actions).toEqual([
       { type: "button", text: "Approve" },
-      { type: "button", text: "Decline" },
     ]);
     expect(shownNotifications[0]?.body).toContain("npm view eslint");
     expect(shownNotifications[0]?.body).not.toContain("Approve this action?");
@@ -418,13 +410,10 @@ describe("DesktopNotificationService", () => {
 
     expect(shownNotifications[0]?.body).toMatch(/\.\.\.$/);
     expect(shownNotifications[0]?.body).not.toContain("--dangerous-flag");
-    expect(shownNotifications[0]?.actions).toEqual([
-      { type: "button", text: "Show" },
-      { type: "button", text: "Decline" },
-    ]);
+    expect(shownNotifications[0]?.actions).toBeUndefined();
 
-    shownNotifications[0]?.instance.emitAction(1);
-    expect(onDecision).toHaveBeenCalledWith("decline");
+    shownNotifications[0]?.instance.emitAction(0);
+    expect(onDecision).not.toHaveBeenCalled();
     expect(onDecision).not.toHaveBeenCalledWith("accept");
   });
 
@@ -524,7 +513,7 @@ describe("DesktopNotificationService", () => {
     expect(onDecision).not.toHaveBeenCalled();
   });
 
-  it("keeps only safe native approval actions when the intent lacks details", () => {
+  it("keeps approval notifications passive when the intent lacks details", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
     const onShow = vi.fn();
@@ -552,29 +541,13 @@ describe("DesktopNotificationService", () => {
       onShow,
     });
 
-    expect(shownNotifications[0]?.actions).toEqual([
-      { type: "button", text: "Show" },
-      { type: "button", text: "Decline" },
-    ]);
-    shownNotifications[0]?.instance.emitAction(0);
+    expect(shownNotifications[0]?.actions).toBeUndefined();
+    shownNotifications[0]?.instance.emitClick();
     expect(onShow).toHaveBeenCalledTimes(1);
     expect(onDecision).not.toHaveBeenCalled();
 
-    service.notifyApproval({
-      enabled: true,
-      key: "codex:thread-1:req-generic-decline",
-      intent: approvalIntent({
-        body: [
-          "Approve this action?",
-          "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
-        ].join("\n\n"),
-      }),
-      onDecision,
-      onShow,
-    });
-    shownNotifications[1]?.instance.emitAction(1);
-
-    expect(onDecision).toHaveBeenCalledWith("decline");
+    shownNotifications[0]?.instance.emitAction(0);
+    expect(onDecision).not.toHaveBeenCalled();
     expect(onDecision).not.toHaveBeenCalledWith("accept");
   });
 

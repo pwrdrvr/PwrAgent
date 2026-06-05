@@ -14366,6 +14366,59 @@ command = "pnpm dev"
       await registry.close();
     });
 
+    it("looks up terminal notification context when no thread event seeded the cache", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-lookup",
+            title: "Notification Followup",
+            titleSource: "derived",
+            source: "codex",
+            linkedDirectories: [
+              {
+                id: "local:/Users/example/PwrAgent",
+                kind: "local",
+                label: "PwrAgent",
+                path: "/Users/example/PwrAgent",
+              },
+            ],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-lookup",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+
+      const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
+      expect(call.body).toContain("PwrAgent > Notification Followup");
+      expect(call.body).toContain("completed");
+
+      await registry.close();
+    });
+
     it("clears a previous terminal notification when a new turn starts", async () => {
       resetNotificationMocks();
       const registry = makeRegistry();

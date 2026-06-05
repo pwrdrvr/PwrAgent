@@ -7,7 +7,6 @@ import { getMainLogger } from "../log";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 const NATIVE_NOTIFICATION_BODY_MAX_LENGTH = 220;
-const TERMINAL_NOTIFICATION_CLOSE_AFTER_MS = 5000;
 
 type NativeNotificationAction = {
   text: string;
@@ -110,9 +109,8 @@ export class DesktopNotificationService {
     title: string;
     body: string;
     onShow?: () => void;
-    closeAfterMs?: number;
   }): void {
-    if (!params.enabled) {
+    if (!params.enabled || (params.key && this.attentionKeys.has(params.key))) {
       return;
     }
     if (!this.isAppInactive()) {
@@ -121,20 +119,14 @@ export class DesktopNotificationService {
     if (!Notification.isSupported()) {
       return;
     }
+    if (params.key) {
+      this.attentionKeys.add(params.key);
+    }
     this.show({
       attentionKey: params.key,
       title: params.title,
       body: params.body,
-      actions: params.onShow
-        ? [
-            {
-              text: "Show",
-              run: params.onShow,
-            },
-          ]
-        : undefined,
       onClick: params.onShow,
-      closeAfterMs: params.closeAfterMs ?? TERMINAL_NOTIFICATION_CLOSE_AFTER_MS,
     });
   }
 
@@ -153,7 +145,6 @@ export class DesktopNotificationService {
   private show(params: {
     attentionKey?: string;
     actions?: NativeNotificationAction[];
-    closeAfterMs?: number;
     onClick?: () => void;
     title: string;
     body: string;
@@ -184,12 +175,7 @@ export class DesktopNotificationService {
         }
         notifications.add(notification);
       }
-      let closeTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
-        if (closeTimer !== undefined) {
-          clearTimeout(closeTimer);
-          closeTimer = undefined;
-        }
         this.liveNotifications.delete(notification);
         if (params.attentionKey) {
           const notifications = this.attentionNotifications.get(params.attentionKey);
@@ -199,7 +185,11 @@ export class DesktopNotificationService {
           }
         }
       };
+      let handledAction = false;
       notification.on("click", () => {
+        if (handledAction) {
+          return;
+        }
         cleanup();
         params.onClick?.();
       });
@@ -217,19 +207,9 @@ export class DesktopNotificationService {
             return;
           }
           handled = true;
+          handledAction = true;
           action.run();
         });
-      }
-      if (params.closeAfterMs && params.closeAfterMs > 0) {
-        closeTimer = setTimeout(() => {
-          try {
-            notification.close();
-          } catch (error) {
-            notificationLog.warn("failed to auto-close native notification", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }, params.closeAfterMs);
       }
       notification.show();
     } catch (error) {
@@ -248,24 +228,11 @@ function nativeApprovalActions(
   },
 ): NativeNotificationAction[] | undefined {
   const actions: NativeNotificationAction[] = [];
-  if (callbacks.onShow) {
-    actions.push({
-      text: "Show",
-      run: callbacks.onShow,
-    });
-  }
   const accept = intent.decisions.find((action) => action.decision === "accept");
   if (accept && callbacks.onDecision && nativeApprovalCanApproveInline(intent)) {
     actions.push({
       text: "Approve",
       run: () => callbacks.onDecision?.(accept.decision),
-    });
-  }
-  const decline = intent.decisions.find((action) => action.decision === "decline");
-  if (decline && callbacks.onDecision) {
-    actions.push({
-      text: "Decline",
-      run: () => callbacks.onDecision?.(decline.decision),
     });
   }
   return actions.length > 0 ? actions : undefined;
