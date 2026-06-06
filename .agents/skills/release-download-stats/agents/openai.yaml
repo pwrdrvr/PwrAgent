@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Download Stats"
+  short_description: "Summarize PwrAgent GitHub release asset downloads"
+  default_prompt: "Check PwrAgent release download stats."
