@@ -47,9 +47,12 @@ def normalize_selector(selector: str) -> list[str]:
         candidates.append(f"v1.0.0-{lowered}")
     elif lowered.startswith(("beta-", "alpha-")):
         candidates.append(f"v1.0.0-{lowered.replace('-', '.', 1)}")
-    elif lowered.startswith(("beta", "alpha")) and lowered[4:].isdigit():
-        prefix = lowered[:4]
-        number = lowered[4:]
+    elif any(
+        lowered.startswith(prefix) and lowered[len(prefix) :].isdigit()
+        for prefix in ("beta", "alpha")
+    ):
+        prefix = "beta" if lowered.startswith("beta") else "alpha"
+        number = lowered[len(prefix) :]
         candidates.append(f"v1.0.0-{prefix}.{number}")
     elif selector.isdigit():
         candidates.append(f"v1.0.0-beta.{selector}")
