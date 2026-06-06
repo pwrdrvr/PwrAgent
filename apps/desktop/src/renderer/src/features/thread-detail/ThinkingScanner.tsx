@@ -5,10 +5,11 @@ type ThinkingScannerProps = {
 };
 
 const SCAN_DURATION_MS = 1800;
+const SCAN_FRAME_INTERVAL_MS = 1000 / 30;
 const FULL_SCAN_TRAVEL_PX = 44;
 const MINI_SCAN_TRAVEL_PX = 10;
 let activeScannerCount = 0;
-let animationFrameId: number | undefined;
+let scannerTimerId: number | undefined;
 
 function easedPingPong(progress: number): number {
   const linear = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
@@ -16,7 +17,12 @@ function easedPingPong(progress: number): number {
   return 0.5 - Math.cos(linear * Math.PI) / 2;
 }
 
-function setThinkingScannerProgress(timestamp: number) {
+function scheduleThinkingScannerTick() {
+  scannerTimerId = window.setTimeout(setThinkingScannerProgress, SCAN_FRAME_INTERVAL_MS);
+}
+
+function setThinkingScannerProgress() {
+  const timestamp = performance.now();
   const progress = (timestamp % SCAN_DURATION_MS) / SCAN_DURATION_MS;
   const easedProgress = easedPingPong(progress);
   const rootStyle = document.documentElement.style;
@@ -31,23 +37,23 @@ function setThinkingScannerProgress(timestamp: number) {
     `${(easedProgress * MINI_SCAN_TRAVEL_PX).toFixed(2)}px`
   );
 
-  animationFrameId = window.requestAnimationFrame(setThinkingScannerProgress);
+  scheduleThinkingScannerTick();
 }
 
 function startThinkingScannerClock() {
   activeScannerCount += 1;
 
   if (activeScannerCount === 1) {
-    animationFrameId = window.requestAnimationFrame(setThinkingScannerProgress);
+    setThinkingScannerProgress();
   }
 }
 
 function stopThinkingScannerClock() {
   activeScannerCount = Math.max(0, activeScannerCount - 1);
 
-  if (activeScannerCount === 0 && animationFrameId !== undefined) {
-    window.cancelAnimationFrame(animationFrameId);
-    animationFrameId = undefined;
+  if (activeScannerCount === 0 && scannerTimerId !== undefined) {
+    window.clearTimeout(scannerTimerId);
+    scannerTimerId = undefined;
   }
 }
 
@@ -56,8 +62,10 @@ export function ThinkingScanner(props: ThinkingScannerProps = {}) {
     if (
       typeof window === "undefined" ||
       typeof document === "undefined" ||
-      typeof window.requestAnimationFrame !== "function" ||
-      typeof window.cancelAnimationFrame !== "function"
+      typeof window.setTimeout !== "function" ||
+      typeof window.clearTimeout !== "function" ||
+      typeof performance === "undefined" ||
+      typeof performance.now !== "function"
     ) {
       return;
     }
