@@ -128,10 +128,17 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("does not leave unresolved theme token references in app.css", () => {
+    const localTokens = new Set([
+      "thinking-scanner-beam-width",
+      "thinking-scanner-delay",
+      "thinking-scanner-travel",
+    ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
     );
-    const missingTokens = tokenReferences.filter((token) => !tokens[token]);
+    const missingTokens = tokenReferences.filter(
+      (token) => !tokens[token] && !localTokens.has(token)
+    );
 
     expect([...new Set(missingTokens)]).toEqual([]);
   });
@@ -722,18 +729,18 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps thinking scanner variants on one shared visible sweep", () => {
-    expect(css).toContain("--thinking-scanner-progress: 0;");
-    expect(css).toContain("--thinking-scanner-full-offset: 0px;");
-    expect(css).toContain("--thinking-scanner-mini-offset: 0px;");
-    expect(css).not.toContain("@keyframes pwragent-kitt-scan");
+    expect(css).not.toContain("--thinking-scanner-progress");
+    expect(css).not.toContain("--thinking-scanner-full-offset");
+    expect(css).not.toContain("--thinking-scanner-mini-offset");
+    expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
     expect(css).toMatch(
-      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-offset:\s*var\(--thinking-scanner-full-offset\);[\s\S]*?width:\s*62px;[\s\S]*?\}/
+      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-delay:\s*0ms;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
     );
     expect(css).toMatch(
-      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-offset:\s*var\(--thinking-scanner-mini-offset\);[\s\S]*?width:\s*16px;[\s\S]*?\}/
+      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/
     );
     expect(css).toMatch(
-      /\.thinking-scanner__beam\s*\{[\s\S]*?transform:\s*translateX\(var\(--thinking-scanner-offset\)\);[\s\S]*?\}/
+      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?animation-delay:\s*var\(--thinking-scanner-delay\);[\s\S]*?\}/
     );
   });
 });
