@@ -3759,6 +3759,148 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not rewrite completed turn usage from later same-id updates", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(async ({ backend, threadId }) => {
+      readCount += 1;
+      return {
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries:
+            readCount > 1
+              ? [
+                  {
+                    type: "activity" as const,
+                    id: "live-token-usage-turn-1",
+                    summary:
+                      "Latest request usage: 1,715 uncached in · 18,285 cached · 90 out (30 reasoning)",
+                    status: "completed" as const,
+                    createdAt: 20_000,
+                    turn: {
+                      id: "turn-1",
+                      status: "completed" as const,
+                    },
+                    details: [
+                      {
+                        id: "live-token-usage-turn-1-input",
+                        kind: "read" as const,
+                        label: "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
+                        status: "completed" as const,
+                      },
+                    ],
+                  },
+                ]
+              : [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+    });
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), model: "gpt-5.5" },
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 43_000,
+                cached_input_tokens: 20_000,
+                output_tokens: 900,
+                reasoning_output_tokens: 450,
+                total_tokens: 44_350,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    const originalSummary = result.current.entries[0]?.type === "activity"
+      ? result.current.entries[0].summary
+      : undefined;
+    expect(originalSummary).toContain("23,000 uncached in");
+    expect(originalSummary).toContain("20,000 cached");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 20_000,
+                cached_input_tokens: 18_285,
+                output_tokens: 90,
+                reasoning_output_tokens: 30,
+                total_tokens: 20_120,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      `activity:${originalSummary}`,
+    ]);
+
+    rerender({
+      thread: { ...buildThread({ id: "thread-1", updatedAt: 2_000 }), model: "gpt-5.5" },
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        `activity:${originalSummary}`,
+      ]);
+    });
+    expect(persistThreadUsageActivity).toHaveBeenCalled();
+  });
+
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

@@ -207,6 +207,33 @@ function createOverlayStoreMock(params?: {
     }) => overlays.get(`${backend}:${threadId}`),
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, overlays.get(`codex:${threadId}`)])),
+    persistThreadUsageActivity: async ({
+      backend,
+      threadId,
+      activity,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      activity: NonNullable<ThreadOverlayState["immutableUsageActivities"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const existingActivities = current.immutableUsageActivities ?? [];
+      if (existingActivities.some((entry) => entry.id === activity.id)) {
+        return { overlay: current, persisted: false };
+      }
+      const next = {
+        ...current,
+        immutableUsageActivities: [...existingActivities, activity],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return { overlay: next, persisted: true };
+    },
     setThreadExecutionMode: async ({
       backend,
       threadId,
@@ -5534,6 +5561,129 @@ script = "echo setup"
     expect(fullReconcileCalls()).toHaveLength(1);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("hydrates immutable usage activities from the thread overlay", async () => {
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-turn-1",
+            role: "assistant",
+            phase: "final",
+            text: "Done.",
+            createdAt: 10_000,
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+          {
+            type: "activity",
+            id: "command-turn-1",
+            summary: "Ran shell command",
+            status: "completed",
+            createdAt: 10_001,
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+            details: [
+              {
+                id: "command-turn-1-detail",
+                kind: "command",
+                label: "npm test",
+                status: "completed",
+              },
+            ],
+          },
+          {
+            type: "activity",
+            id: "live-token-usage-turn-1",
+            summary:
+              "Latest request usage: 1,715 uncached in · 18,285 cached · 90 out (30 reasoning)",
+            status: "completed",
+            createdAt: 10_002,
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+            details: [
+              {
+                id: "live-token-usage-turn-1-input",
+                kind: "read",
+                label: "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
+                status: "completed",
+              },
+            ],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              {
+                type: "activity",
+                id: "live-turn-usage-turn-1",
+                summary:
+                  "Turn usage: 23,000 uncached in · 20,000 cached · 900 out (450 reasoning) · $0.12 list price",
+                status: "completed",
+                createdAt: 10_003,
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                },
+                details: [
+                  {
+                    id: "live-turn-usage-turn-1-input",
+                    kind: "read",
+                    label: "Input: 43,000 tokens (23,000 uncached, 20,000 cached)",
+                    status: "completed",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-turn-1",
+      "command-turn-1",
+      "live-turn-usage-turn-1",
+    ]);
+    expect(response.replay.entries[1]).toMatchObject({
+      id: "command-turn-1",
+      summary: "Ran shell command",
+    });
+    expect(response.replay.entries[2]).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      summary:
+        "Turn usage: 23,000 uncached in · 20,000 cached · 900 out (450 reasoning) · $0.12 list price",
+    });
+
     await registry.close();
   });
 

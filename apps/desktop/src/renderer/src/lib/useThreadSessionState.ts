@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
+  AppServerBackendKind,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
@@ -187,6 +188,42 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
   }
 
   return [...deduped.values()];
+}
+
+function mergeFinalizedUsageEntry(
+  olderItems: AppServerThreadEntry[],
+  usageEntry: AppServerThreadActivityEntry
+): AppServerThreadEntry[] {
+  const existingEntry = olderItems.find((entry) => entry.id === usageEntry.id);
+  if (
+    existingEntry &&
+    existingEntry.type === "activity" &&
+    isTokenUsageActivityEntry(existingEntry) &&
+    existingEntry.status === "completed"
+  ) {
+    return olderItems;
+  }
+
+  return mergeItems(olderItems, [usageEntry]);
+}
+
+function persistFinalizedUsageEntry(params: {
+  backend: AppServerBackendKind;
+  desktopApi?: DesktopApi;
+  entry?: AppServerThreadActivityEntry;
+  threadId: string;
+}): void {
+  if (!params.entry || params.entry.status !== "completed") {
+    return;
+  }
+
+  void params.desktopApi?.persistThreadUsageActivity?.({
+    backend: params.backend,
+    threadId: params.threadId,
+    activity: params.entry,
+  }).catch(() => {
+    // Usage display is still correct for the live session; retry on later final updates.
+  });
 }
 
 function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
@@ -719,6 +756,10 @@ function activityEntriesMatch(
     tokenUsageMatch &&
     tokenUsageActivityScope(candidate) !== tokenUsageActivityScope(optimisticEntry)
   ) {
+    return false;
+  }
+
+  if (tokenUsageMatch && candidate.summary !== optimisticEntry.summary) {
     return false;
   }
 
@@ -3508,6 +3549,12 @@ export function useThreadSessionState(params: {
             current.pendingUsageActivityEntry && completedTurn
               ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
               : current.pendingUsageActivityEntry;
+          persistFinalizedUsageEntry({
+            backend: event.backend,
+            desktopApi,
+            entry: completedUsageActivity,
+            threadId: notificationThreadId,
+          });
 
           return {
             ...current,
@@ -3542,7 +3589,10 @@ export function useThreadSessionState(params: {
                 : current.nextLiveEntrySequence,
             optimisticEntries:
               completedTurnMatchesActive && completedUsageActivity
-                ? mergeItems(remainingOptimisticEntries, [completedUsageActivity])
+                ? mergeFinalizedUsageEntry(
+                    remainingOptimisticEntries,
+                    completedUsageActivity
+                  )
                 : remainingOptimisticEntries,
             pendingAssistantMessage: completedTurnMatchesActive
               ? undefined
@@ -3724,6 +3774,14 @@ export function useThreadSessionState(params: {
               turn?.id === current.activeTurnId &&
               turn.status !== "completed"
           );
+          if (usageEntry && !holdUsageUntilTurnCompletes) {
+            persistFinalizedUsageEntry({
+              backend: event.backend,
+              desktopApi,
+              entry: usageEntry,
+              threadId: notificationThreadId,
+            });
+          }
 
           return {
             ...current,
@@ -3738,7 +3796,7 @@ export function useThreadSessionState(params: {
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
-              ? mergeItems(current.optimisticEntries, [usageEntry])
+              ? mergeFinalizedUsageEntry(current.optimisticEntries, usageEntry)
               : current.optimisticEntries,
             pendingUsageActivityEntry: holdUsageUntilTurnCompletes
               ? usageEntry

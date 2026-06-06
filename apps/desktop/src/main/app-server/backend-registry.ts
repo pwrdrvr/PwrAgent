@@ -25,6 +25,8 @@ import {
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AppServerThreadActivityEntry,
+  type AppServerThreadEntry,
   type AppServerThreadReplay,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
@@ -1927,6 +1929,103 @@ function readSelectedActionIdByEnvironmentIdForFork(
     return { [runtime.environmentId]: runtime.actionId };
   }
   return undefined;
+}
+
+function isUsageActivityEntry(
+  entry: AppServerThreadEntry,
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity" &&
+    (entry.id.startsWith("live-token-usage-") ||
+      entry.id.startsWith("live-turn-usage-") ||
+      entry.summary.startsWith("Latest request usage:") ||
+      entry.summary.startsWith("Turn usage:") ||
+      entry.summary.startsWith("Usage:"))
+  );
+}
+
+function usageActivityScope(
+  entry: AppServerThreadActivityEntry,
+): "latest-request" | "total" | "turn" | undefined {
+  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
+    return "turn";
+  }
+  if (entry.summary.startsWith("Latest request usage:")) {
+    return "latest-request";
+  }
+  if (entry.summary.startsWith("Usage:")) {
+    return "total";
+  }
+  if (entry.id.startsWith("live-token-usage-")) {
+    return "latest-request";
+  }
+  return undefined;
+}
+
+function insertTranscriptEntry(
+  entries: AppServerThreadEntry[],
+  activity: AppServerThreadActivityEntry,
+): AppServerThreadEntry[] {
+  const nextEntries = [...entries];
+  const turnId = activity.turn?.id;
+  if (turnId) {
+    const sameTurnIndex = nextEntries.findLastIndex((entry) => entry.turn?.id === turnId);
+    if (sameTurnIndex !== -1) {
+      nextEntries.splice(sameTurnIndex + 1, 0, activity);
+      return nextEntries;
+    }
+  }
+
+  if (typeof activity.createdAt === "number") {
+    const timedIndex = nextEntries.findIndex(
+      (entry) =>
+        typeof entry.createdAt === "number" &&
+        entry.createdAt > (activity.createdAt as number),
+    );
+    if (timedIndex !== -1) {
+      nextEntries.splice(timedIndex, 0, activity);
+      return nextEntries;
+    }
+  }
+
+  nextEntries.push(activity);
+  return nextEntries;
+}
+
+function mergeImmutableUsageActivities(params: {
+  replay: AppServerThreadReplay;
+  activities?: AppServerThreadActivityEntry[];
+}): AppServerThreadReplay {
+  if (!params.activities?.length) {
+    return params.replay;
+  }
+
+  let entries = params.replay.entries;
+  for (const activity of params.activities) {
+    const activityScope = usageActivityScope(activity);
+    const activityTurnId = activity.turn?.id;
+    entries = entries.filter((entry) => {
+      if (entry.id === activity.id) {
+        return false;
+      }
+      if (
+        activityScope === "turn" &&
+        activityTurnId &&
+        isUsageActivityEntry(entry) &&
+        entry.turn?.id === activityTurnId
+      ) {
+        const entryScope = usageActivityScope(entry);
+        return entryScope !== "latest-request" && entryScope !== "total";
+      }
+      return true;
+    });
+    entries = insertTranscriptEntry(entries, activity);
+  }
+
+  return {
+    ...params.replay,
+    entries,
+  };
 }
 
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
@@ -4469,15 +4568,21 @@ export class DesktopBackendRegistry {
       replay,
       runtime: overlay?.codexEnvironmentRuntime,
     });
+    const replayWithImmutableUsage = request.before
+      ? replayWithEnvironment
+      : mergeImmutableUsageActivities({
+          replay: replayWithEnvironment,
+          activities: overlay?.immutableUsageActivities,
+        });
 
     return {
       backend,
       fetchedAt: Date.now(),
       threadId: request.threadId,
-      ...(replayWithEnvironment.threadStatus
-        ? { threadStatus: replayWithEnvironment.threadStatus }
+      ...(replayWithImmutableUsage.threadStatus
+        ? { threadStatus: replayWithImmutableUsage.threadStatus }
         : {}),
-      replay: replayWithEnvironment,
+      replay: replayWithImmutableUsage,
     };
   }
 
