@@ -71,6 +71,7 @@ export type ForkThreadResponse = {
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 export type ThreadMigrationOperation = "move" | "copy";
@@ -523,6 +524,7 @@ export type SetCodexThreadEnvironmentRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   environmentId?: string;
+  actionId?: string;
 };
 
 export type SetCodexThreadEnvironmentResponse = {

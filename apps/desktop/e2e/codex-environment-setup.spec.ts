@@ -382,9 +382,7 @@ test("selected environments run setup and show transcript output", async () => {
     const launchpadTools = app.window.getByLabel("Composer tools");
     await launchpadTools.getByRole("button", { name: "Environment", exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
-    await expect(
-      launchpadTools.locator("label", { hasText: "Run setup" }).locator("input"),
-    ).toBeChecked();
+    await expect(launchpadTools.getByLabel("Run setup")).toHaveCount(0);
 
     await app.window.getByRole("textbox", { name: "New thread" }).fill("hello env");
     await app.window.getByRole("button", { name: "Start thread" }).click();
@@ -622,7 +620,7 @@ test("directory launchpad keeps selected environment controls after snapshot rel
     ).toContainText(
       "Fixture Env",
     );
-    await expect(tools.getByLabel("Run setup")).toBeChecked();
+    await expect(tools.getByLabel("Run setup")).toHaveCount(0);
   } finally {
     if (secondApp) {
       await secondApp.close();

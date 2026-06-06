@@ -21,6 +21,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  CodexEnvironmentOption,
   CodexEnvironmentActionRun,
   CodexThreadEnvironmentRuntime,
   DesktopApplicationDiscoveryCandidate,
@@ -191,6 +192,25 @@ type ComposerDropdownOption = {
 };
 
 type ComposerDropdownIcon = (props: { size?: number }) => ReactNode;
+
+function resolveSelectedCodexEnvironmentActionId(params: {
+  environment?: CodexEnvironmentOption;
+  actionId?: string;
+  actionIdByEnvironmentId?: Record<string, string>;
+}): string | undefined {
+  const { environment } = params;
+  if (!environment) {
+    return undefined;
+  }
+  if (environment.actions.some((action) => action.id === params.actionId)) {
+    return params.actionId;
+  }
+  const mappedActionId = params.actionIdByEnvironmentId?.[environment.id];
+  if (environment.actions.some((action) => action.id === mappedActionId)) {
+    return mappedActionId;
+  }
+  return environment.actions[0]?.id;
+}
 
 type QueuedTurnDraft = {
   id: string;
@@ -2716,7 +2736,7 @@ export function Composer(props: ComposerProps) {
       markComposerDraftSubmitted(submittedScopeKey);
       props.onPendingStatusChange?.(
         props.launchpad.codexEnvironmentId &&
-          props.launchpad.codexEnvironmentSetupEnabled
+          selectedCodexEnvironment?.setupScript
           ? "Running environment setup"
           : "Reviewing",
       );
@@ -3359,7 +3379,7 @@ export function Composer(props: ComposerProps) {
       markComposerDraftSubmitted(submittedScopeKey);
       props.onPendingStatusChange?.(
         props.launchpad.codexEnvironmentId &&
-          props.launchpad.codexEnvironmentSetupEnabled
+          selectedCodexEnvironment?.setupScript
           ? "Running environment setup"
           : collaborationMode
             ? "Planning"
@@ -3753,6 +3773,7 @@ export function Composer(props: ComposerProps) {
 
   const setThreadCodexEnvironment = async (
     environmentId?: string,
+    actionId?: string,
   ): Promise<void> => {
     if (
       !props.thread ||
@@ -3762,7 +3783,6 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    setSelectedThreadCodexActionId("");
     props.onPendingStatusChange?.(
       environmentId ? "Selecting environment" : "Clearing environment",
     );
@@ -3771,6 +3791,7 @@ export function Composer(props: ComposerProps) {
         backend: props.thread.source,
         threadId: props.thread.id,
         environmentId,
+        actionId,
       });
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
@@ -3912,8 +3933,25 @@ export function Composer(props: ComposerProps) {
     runtimeThreadCodexEnvironmentActions.length > 0
       ? runtimeThreadCodexEnvironmentActions
       : selectedThreadCodexEnvironmentOption?.actions ?? [];
-  const [selectedThreadCodexActionId, setSelectedThreadCodexActionId] =
-    useState<string>("");
+  const selectedThreadCodexEnvironmentForAction =
+    selectedThreadCodexEnvironmentOption ??
+    (props.thread?.codexEnvironmentRuntime
+      ? {
+          id: props.thread.codexEnvironmentRuntime.environmentId,
+          name: props.thread.codexEnvironmentRuntime.environmentName,
+          sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
+          actions: threadCodexEnvironmentActions,
+        }
+      : undefined);
+  const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
+    environment: selectedThreadCodexEnvironmentForAction,
+    actionId:
+      props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId?.[
+        props.thread.codexEnvironmentRuntime.environmentId
+      ],
+    actionIdByEnvironmentId:
+      props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
+  });
   const selectedThreadCodexAction =
     threadCodexEnvironmentActions.find(
       (action) => action.id === selectedThreadCodexActionId,
@@ -5466,7 +5504,7 @@ export function Composer(props: ComposerProps) {
       {props.launchpad &&
       launchpadSubmitting &&
       props.launchpad.codexEnvironmentId &&
-      props.launchpad.codexEnvironmentSetupEnabled ? (
+      selectedCodexEnvironment?.setupScript ? (
         <p className="composer__meta">Running environment setup…</p>
       ) : null}
       {props.updatingExecutionMode ? (
@@ -5528,22 +5566,6 @@ export function Composer(props: ComposerProps) {
               />
             ) : null}
 
-            {props.launchpad && selectedCodexEnvironment?.setupScript ? (
-              <label className="composer__checkbox">
-                <input
-                  checked={Boolean(props.launchpad.codexEnvironmentSetupEnabled)}
-                  disabled={launchpadSubmitting}
-                  type="checkbox"
-                  onChange={(event) => {
-                    handleLaunchpadPatch({
-                      codexEnvironmentSetupEnabled: event.target.checked,
-                    });
-                  }}
-                />
-                <span>Run setup</span>
-              </label>
-            ) : null}
-
             {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
@@ -5559,7 +5581,16 @@ export function Composer(props: ComposerProps) {
                   })),
                 ]}
                 onChange={(value) => {
-                  void setThreadCodexEnvironment(value || undefined);
+                  const environment = threadCodexEnvironmentOptions.find(
+                    (candidate) => candidate.id === value,
+                  );
+                  const actionId = resolveSelectedCodexEnvironmentActionId({
+                    environment,
+                    actionIdByEnvironmentId:
+                      props.thread?.codexEnvironmentRuntime
+                        ?.selectedActionIdByEnvironmentId,
+                  });
+                  void setThreadCodexEnvironment(value || undefined, actionId);
                 }}
               />
             ) : null}
@@ -5583,7 +5614,10 @@ export function Composer(props: ComposerProps) {
                       : [{ label: "No commands", value: "" }]
                   }
                   onChange={(value) => {
-                    setSelectedThreadCodexActionId(value);
+                    void setThreadCodexEnvironment(
+                      props.thread?.codexEnvironmentRuntime?.environmentId,
+                      value || undefined,
+                    );
                   }}
                 />
                 <button

@@ -113,6 +113,39 @@ export function withCodexEnvironmentOptions(
   };
 }
 
+export function pruneCodexEnvironmentActionMap(
+  map: Record<string, string> | undefined,
+  options: CodexEnvironmentOption[],
+): Record<string, string> {
+  if (!map) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(map).filter(([environmentId, actionId]) => {
+      const environment = options.find((candidate) => candidate.id === environmentId);
+      return Boolean(
+        environment?.actions.some((action) => action.id === actionId),
+      );
+    }),
+  );
+}
+
+export function resolveCodexEnvironmentActionId(params: {
+  actionId?: string;
+  environment: CodexEnvironmentOption;
+  selectedActionIdByEnvironmentId: Record<string, string>;
+}): string | undefined {
+  if (params.environment.actions.some((action) => action.id === params.actionId)) {
+    return params.actionId;
+  }
+  const mappedActionId =
+    params.selectedActionIdByEnvironmentId[params.environment.id];
+  if (params.environment.actions.some((action) => action.id === mappedActionId)) {
+    return mappedActionId;
+  }
+  return params.environment.actions[0]?.id;
+}
+
 export async function hydrateLaunchpadCodexEnvironmentOptions(
   launchpad: NavigationLaunchpadDraft,
 ): Promise<NavigationLaunchpadDraft> {

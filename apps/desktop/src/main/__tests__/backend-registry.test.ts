@@ -20,6 +20,7 @@ import type {
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendRateLimitSummary,
+  CodexThreadEnvironmentRuntime,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   ThreadExecutionMode,
@@ -590,6 +591,7 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
   lastForkThreadParams?: {
     threadId: string;
@@ -600,6 +602,7 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
   lastStartTurnParams?: {
     backend?: "codex" | "grok";
@@ -613,6 +616,7 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
   startTurnCallCount = 0;
   lastSteerTurnParams?: {
@@ -624,6 +628,8 @@ class MockBackendClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
+    cwd?: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
   lastCompactThreadParams?: {
     threadId: string;
@@ -856,6 +862,7 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return { threadId: "thread-1" };
@@ -870,6 +877,7 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }> {
     this.lastForkThreadParams = params;
     return { threadId: "thread-fork" };
@@ -888,6 +896,7 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     if (this.options.startTurnError) {
@@ -901,6 +910,8 @@ class MockBackendClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
+    cwd?: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     this.lastStartReviewParams = params;
     return {
@@ -6664,6 +6675,108 @@ command = "pnpm dev:messaging"
     }
   });
 
+  it("persists selected Codex environment actions per thread environment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-action-select-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev"
+command = "pnpm dev"
+
+[[actions]]
+name = "Test"
+command = "pnpm test"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: root,
+            setupEnabled: true,
+            setupStatus: "completed",
+            shellEnvironment: {
+              PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+            },
+            selectedActionIdByEnvironmentId: {
+              environment: "dev",
+            },
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: 1,
+            projectKey: root,
+            linkedDirectories: [
+              {
+                id: root,
+                kind: "local",
+                label: "repo",
+                path: root,
+              },
+            ],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await registry.setCodexThreadEnvironment({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: "environment",
+        actionId: "test",
+      });
+
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          environmentId: "environment",
+          shellEnvironment: {
+            PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          },
+          selectedActionIdByEnvironmentId: {
+            environment: "test",
+          },
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes stale thread environment actions before running a command", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
     const outputPath = path.join(root, "action.txt");
@@ -7640,6 +7753,233 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("copies Codex environment selection and hydration when forking within the same workspace", async () => {
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "pwragent",
+      environmentName: "PwrAgent",
+      executionTarget: "local",
+      cwd: "/repo/app",
+      setupEnabled: true,
+      setupStatus: "completed",
+      setupCommand: "nvm use",
+      shellEnvironment: {
+        PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/huntharo/.nvm",
+      },
+      selectedActionIdByEnvironmentId: {
+        pwragent: "start-dev",
+      },
+      actions: [
+        {
+          id: "start-dev",
+          name: "Start dev",
+          command: "pnpm dev",
+        },
+      ],
+      actionRuns: [
+        {
+          runId: "parent-action-run",
+          actionId: "start-dev",
+          actionName: "Start dev",
+          command: "pnpm dev",
+          status: "started",
+          startedAt: 1_000,
+        },
+      ],
+      sourcePath: "/repo/app/.codex/environments/pwragent.toml",
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          executionMode: "default",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    const response = await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local",
+    });
+
+    const { actionRuns: _actionRuns, ...sourceRuntimeWithoutRuns } = sourceRuntime;
+    const expectedRuntime = {
+      ...sourceRuntimeWithoutRuns,
+      cwd: "/repo/app",
+    };
+    expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toEqual(
+      expectedRuntime,
+    );
+    expect(response.codexEnvironmentRuntime).toEqual(expectedRuntime);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-fork",
+      }),
+    ).resolves.toMatchObject({
+      codexEnvironmentRuntime: expectedRuntime,
+    });
+    expect(response.codexEnvironmentRuntime?.actionRuns).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("reruns selected Codex environment setup when forking into a new worktree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-env-setup-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(worktreePath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[setup]
+script = "printf setup"
+
+[[actions]]
+name = "Dev"
+command = "pnpm dev"
+`,
+      "utf8",
+    );
+
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
+      expect(params).toMatchObject({
+        cwd: worktreePath,
+        command: "printf setup",
+        mode: "wait",
+        captureShellEnvironment: true,
+      });
+      return {
+        durationMs: 5,
+        exitCode: 0,
+        output: "setup",
+        shellEnvironment: {
+          PATH: `${worktreePath}/.venv/bin:/usr/bin`,
+          VIRTUAL_ENV: `${worktreePath}/.venv`,
+        },
+      };
+    });
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "environment",
+      environmentName: "PwrAgnt",
+      executionTarget: "local",
+      cwd: repoPath,
+      setupEnabled: true,
+      setupStatus: "completed",
+      setupCommand: "printf setup",
+      shellEnvironment: {
+        PATH: `${repoPath}/.venv/bin:/usr/bin`,
+        VIRTUAL_ENV: `${repoPath}/.venv`,
+      },
+      selectedActionIdByEnvironmentId: {
+        environment: "dev",
+      },
+      actions: [
+        {
+          id: "dev",
+          name: "Dev",
+          command: "pnpm dev",
+        },
+      ],
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          executionMode: "default",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      codexEnvironmentCommandRunner: commandRunner,
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    try {
+      const response = await registry.forkThread({
+        backend: "codex",
+        sourceThreadId: "thread-parent",
+        parentThreadId: "thread-parent",
+        executionMode: "default",
+        directoryKind: "directory",
+        directoryLabel: "repo",
+        directoryPath: repoPath,
+        workMode: "worktree",
+      });
+
+      expect(commandRunner).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toMatchObject({
+        environmentId: "environment",
+        cwd: worktreePath,
+        setupStatus: "completed",
+        shellEnvironment: {
+          PATH: `${worktreePath}/.venv/bin:/usr/bin`,
+          VIRTUAL_ENV: `${worktreePath}/.venv`,
+        },
+        selectedActionIdByEnvironmentId: {
+          environment: "dev",
+        },
+      });
+      expect(
+        codexClient.lastForkThreadParams?.codexEnvironmentRuntime?.shellEnvironment
+          ?.VIRTUAL_ENV,
+      ).not.toBe(`${repoPath}/.venv`);
+      expect(response.codexEnvironmentRuntime).toEqual(
+        codexClient.lastForkThreadParams?.codexEnvironmentRuntime,
+      );
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forks a Codex thread into a new managed worktree", async () => {
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const prepareLaunchpadWorkspace = vi.fn(async () => ({
@@ -8043,6 +8383,51 @@ command = "pnpm dev"
       reasoningEffort: "medium",
       fastMode: undefined,
       collaborationMode: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("passes persisted Codex environment hydration when starting turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "env",
+      environmentName: "Env",
+      executionTarget: "local",
+      shellEnvironment: {
+        PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/huntharo/.nvm",
+      },
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-env": {
+            backend: "codex",
+            threadId: "thread-env",
+            executionMode: "default",
+            codexEnvironmentRuntime,
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-env",
+      input: [{ type: "text", text: "Use hydrated environment" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-env",
+      codexEnvironmentRuntime,
     });
 
     await registry.close();
@@ -9061,6 +9446,60 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+    });
+
+    await registry.close();
+  });
+
+  it("passes persisted Codex environment hydration when starting reviews", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["review/start"] },
+    });
+    const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "env",
+      environmentName: "Env",
+      executionTarget: "local",
+      shellEnvironment: {
+        PATH: "/repo/app/.venv/bin:/usr/bin",
+        VIRTUAL_ENV: "/repo/app/.venv",
+      },
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-env": {
+            backend: "codex",
+            threadId: "thread-env",
+            executionMode: "default",
+            codexEnvironmentRuntime,
+            extraLinkedDirectories: [
+              {
+                id: "/repo/app",
+                kind: "local",
+                label: "app",
+                path: "/repo/app",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-env",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      threadId: "thread-env",
+      cwd: "/repo/app",
+      codexEnvironmentRuntime,
     });
 
     await registry.close();
