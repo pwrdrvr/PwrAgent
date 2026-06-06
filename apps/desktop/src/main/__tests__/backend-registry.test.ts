@@ -2465,6 +2465,7 @@ describe("DesktopBackendRegistry", () => {
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
       "turn/started",
+      "thread/name/updated",
       "turn/completed",
       "turn/started",
       "turn/completed",
