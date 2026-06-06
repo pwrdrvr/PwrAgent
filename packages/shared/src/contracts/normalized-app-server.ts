@@ -1038,6 +1038,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "skills/changed";
+      params: {
+        cwd?: string;
+        cwds?: string[];
+        reason?: string;
+        [key: string]: unknown;
+      };
+    }
+  | {
       method: "thread/codexEnvironment/updated";
       params: {
         threadId: string;
