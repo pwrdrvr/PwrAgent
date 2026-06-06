@@ -130,6 +130,7 @@ export class SqliteOverlayStore {
           codexEnvironmentRuntime:
             current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
+          immutableUsageActivities: current?.immutableUsageActivities,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],

@@ -3940,6 +3940,97 @@ describe("useThreadSessionState", () => {
     expect(persistThreadUsageActivity).not.toHaveBeenCalled();
   });
 
+  it("does not persist pending usage for an unrelated delayed completion", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                total_tokens: 1_250,
+              },
+              total_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                total_tokens: 1_250,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Older turn done." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(persistThreadUsageActivity).not.toHaveBeenCalled();
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 1,000 uncached in · 200 cached · 50 out",
+    );
+  });
+
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

@@ -3593,9 +3593,11 @@ export function useThreadSessionState(params: {
                 : entry
             );
           const completedUsageActivity =
-            current.pendingUsageActivityEntry && completedTurn
+            current.pendingUsageActivityEntry &&
+            completedTurn &&
+            completedTurnMatchesActive
               ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
-              : current.pendingUsageActivityEntry;
+              : undefined;
           persistFinalizedUsageEntry({
             backend: event.backend,
             desktopApi,
