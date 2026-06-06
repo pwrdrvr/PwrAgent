@@ -382,6 +382,7 @@ function DesktopAppShell(props: {
     pendingRequest: session.pendingRequest,
     pendingUserInput: session.pendingUserInput,
     pendingStatusText: session.pendingStatusText,
+    runningTurnUsageText: session.runningTurnUsageText,
     threadBusy: session.threadBusy,
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,

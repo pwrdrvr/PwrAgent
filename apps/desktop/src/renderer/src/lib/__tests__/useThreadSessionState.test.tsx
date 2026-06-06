@@ -3406,6 +3406,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
 
     act(() => {
       agentEventHandler?.({
@@ -3503,6 +3504,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 900 uncached in · 100 cached · 20 out (5 reasoning)"
+    );
 
     act(() => {
       agentEventHandler?.({
@@ -3534,6 +3538,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)"
+    );
 
     act(() => {
       agentEventHandler?.({
@@ -3557,6 +3564,7 @@ describe("useThreadSessionState", () => {
       "message:Done.",
       "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
     ]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
     expect(result.current.entries.at(-1)).toMatchObject({
       id: "live-turn-usage-turn-1",
       turn: {
@@ -3594,6 +3602,7 @@ describe("useThreadSessionState", () => {
       "message:Done.",
       "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
     ]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
   });
 
   it("keeps aggregate turn usage when hydration includes per-request usage", async () => {

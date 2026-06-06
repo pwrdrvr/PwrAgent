@@ -791,6 +791,7 @@ export type ThreadViewProps = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  runningTurnUsageText?: string;
   threadBusy?: boolean;
   pastedImageMaxPatches?: number;
   platform?: string;
@@ -2185,6 +2186,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
+              runningTurnUsageText={props.runningTurnUsageText}
               restoredViewport={props.transcriptViewport}
               reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}

@@ -7694,6 +7694,18 @@ textarea,
   line-height: 1.45;
 }
 
+.transcript-list__pending-usage {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.transcript-list__pending-usage::before {
+  content: "/";
+  margin-right: 14px;
+  color: var(--border-strong);
+}
+
 .transcript-request {
   width: min(100%, 760px);
   display: flex;

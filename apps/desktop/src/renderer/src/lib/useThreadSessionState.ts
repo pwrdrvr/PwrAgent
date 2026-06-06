@@ -304,6 +304,16 @@ function shouldSuppressLiveUsageEntry(
   );
 }
 
+function runningTurnUsageTextFromEntry(
+  entry: AppServerThreadActivityEntry | undefined
+): string | undefined {
+  if (!entry || tokenUsageActivityScope(entry) !== "turn") {
+    return undefined;
+  }
+
+  return entry.summary.replace(/^Turn usage:/, "Usage so far:");
+}
+
 function hasOptimisticTurnUsageForEntry(
   entry: AppServerThreadEntry,
   optimisticTurnUsageIds: ReadonlySet<string>
@@ -2578,6 +2588,7 @@ export function useThreadSessionState(params: {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  runningTurnUsageText?: string;
   approvalRequestThreadKeys: Record<string, boolean>;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
@@ -4239,6 +4250,9 @@ export function useThreadSessionState(params: {
     pendingRequest: selectedSession?.pendingRequest,
     pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
+    runningTurnUsageText: runningTurnUsageTextFromEntry(
+      selectedSession?.pendingUsageActivityEntry
+    ),
     approvalRequestThreadKeys,
     removeOptimisticMessage,
     response: selectedSession?.response,
