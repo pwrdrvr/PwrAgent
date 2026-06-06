@@ -104,11 +104,13 @@ export class DesktopNotificationService {
   }
 
   notifyTerminal(params: {
+    key?: string;
     enabled: boolean;
     title: string;
     body: string;
+    onShow?: () => void;
   }): void {
-    if (!params.enabled) {
+    if (!params.enabled || (params.key && this.attentionKeys.has(params.key))) {
       return;
     }
     if (!this.isAppInactive()) {
@@ -117,9 +119,14 @@ export class DesktopNotificationService {
     if (!Notification.isSupported()) {
       return;
     }
+    if (params.key) {
+      this.attentionKeys.add(params.key);
+    }
     this.show({
+      attentionKey: params.key,
       title: params.title,
       body: params.body,
+      onClick: params.onShow,
     });
   }
 
@@ -178,7 +185,11 @@ export class DesktopNotificationService {
           }
         }
       };
+      let handledAction = false;
       notification.on("click", () => {
+        if (handledAction) {
+          return;
+        }
         cleanup();
         params.onClick?.();
       });
@@ -196,6 +207,7 @@ export class DesktopNotificationService {
             return;
           }
           handled = true;
+          handledAction = true;
           action.run();
         });
       }
@@ -216,24 +228,11 @@ function nativeApprovalActions(
   },
 ): NativeNotificationAction[] | undefined {
   const actions: NativeNotificationAction[] = [];
-  if (callbacks.onShow) {
-    actions.push({
-      text: "Show",
-      run: callbacks.onShow,
-    });
-  }
   const accept = intent.decisions.find((action) => action.decision === "accept");
   if (accept && callbacks.onDecision && nativeApprovalCanApproveInline(intent)) {
     actions.push({
       text: "Approve",
       run: () => callbacks.onDecision?.(accept.decision),
-    });
-  }
-  const decline = intent.decisions.find((action) => action.decision === "decline");
-  if (decline && callbacks.onDecision) {
-    actions.push({
-      text: "Decline",
-      run: () => callbacks.onDecision?.(decline.decision),
     });
   }
   return actions.length > 0 ? actions : undefined;

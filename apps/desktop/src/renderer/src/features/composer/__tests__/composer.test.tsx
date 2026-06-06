@@ -8218,6 +8218,9 @@ describe("Composer", () => {
       })
     );
 
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    });
     await clickButton("Stop");
 
     await waitFor(() => {
