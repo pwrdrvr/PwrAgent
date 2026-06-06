@@ -2465,6 +2465,7 @@ describe("DesktopBackendRegistry", () => {
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
       "turn/started",
+      "thread/name/updated",
       "turn/completed",
       "turn/started",
       "turn/completed",
@@ -14304,21 +14305,33 @@ command = "pnpm dev"
       await registry.close();
     });
 
-    it("calls notifyTerminal on turn/completed and includes the cached thread title", async () => {
+    it("calls notifyTerminal on turn/completed with project and thread context", async () => {
       resetNotificationMocks();
       const registry = makeRegistry();
 
-      // Seed the title cache via thread/name/updated, then complete the turn.
+      // Seed the notification context cache via thread/started, then complete the turn.
       await registry.publishLocalEvent({
         backend: "codex",
         notification: {
-          method: "thread/name/updated",
+          method: "thread/started",
           params: {
             threadId: "thread-2",
-            threadName: "My Investigation",
+            thread: {
+              id: "thread-2",
+              title: "My Investigation",
+              linkedDirectories: [
+                {
+                  kind: "local",
+                  label: "PwrAgent",
+                  path: "/Users/example/PwrAgent",
+                },
+              ],
+            },
           },
         } as AppServerNotification,
       });
+      desktopNotificationServiceMock.clearAttentionKey.mockClear();
+
       await registry.publishLocalEvent({
         backend: "codex",
         notification: {
@@ -14338,10 +14351,115 @@ command = "pnpm dev"
       expect(desktopNotificationServiceMock.notifyTerminal).toHaveBeenCalledTimes(1);
       const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
       expect(call).toMatchObject({
+        key: "codex:thread-2:turn-terminal",
         title: "PwrAgent turn completed",
       });
-      expect(call.body).toContain("My Investigation");
+      expect(call.body).toContain("PwrAgent > My Investigation");
       expect(call.body).toContain("completed");
+      expect(typeof call.onShow).toBe("function");
+
+      call.onShow?.();
+      expect(requestShowThreadMock).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-2",
+      });
+
+      await registry.close();
+    });
+
+    it("looks up terminal notification context when no thread event seeded the cache", async () => {
+      resetNotificationMocks();
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-lookup",
+            title: "Notification Followup",
+            titleSource: "derived",
+            source: "codex",
+            linkedDirectories: [
+              {
+                id: "local:/Users/example/PwrAgent",
+                kind: "local",
+                label: "PwrAgent",
+                path: "/Users/example/PwrAgent",
+              },
+            ],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error(
+            "grok app server unavailable: XAI_API_KEY is not set",
+          ),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-lookup",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+
+      const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
+      expect(call.body).toContain("PwrAgent > Notification Followup");
+      expect(call.body).toContain("completed");
+
+      await registry.close();
+    });
+
+    it("clears a previous terminal notification when a new turn starts", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+      expect(desktopNotificationServiceMock.notifyTerminal).toHaveBeenCalledTimes(1);
+      desktopNotificationServiceMock.clearAttentionKey.mockClear();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-2",
+            turn: {
+              id: "turn-2",
+              status: "in_progress",
+            },
+          },
+        },
+      });
+
+      expect(desktopNotificationServiceMock.clearAttentionKey).toHaveBeenCalledWith(
+        "codex:thread-2:turn-terminal",
+      );
 
       await registry.close();
     });

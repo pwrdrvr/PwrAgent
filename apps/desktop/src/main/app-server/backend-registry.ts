@@ -1121,6 +1121,44 @@ function buildPendingRequestKey(params: {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
 }
 
+function buildTerminalNotificationKey(params: {
+  backend: AppServerBackendKind;
+  threadId: string;
+}): string {
+  return `${params.backend}:${params.threadId}:turn-terminal`;
+}
+
+function readNotificationProjectLabel(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+  const linkedDirectories = Array.isArray(thread.linkedDirectories)
+    ? thread.linkedDirectories
+    : [];
+  for (const directory of linkedDirectories) {
+    if (!directory || typeof directory !== "object" || Array.isArray(directory)) {
+      continue;
+    }
+    const record = directory as Record<string, unknown>;
+    const label = readNonEmptyString(record.label);
+    if (label) {
+      return label;
+    }
+    const directoryPath = readNonEmptyString(record.path);
+    if (directoryPath) {
+      return path.basename(directoryPath);
+    }
+  }
+  const projectKey = readNonEmptyString(thread.projectKey);
+  return projectKey ? path.basename(projectKey) : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function isAcpPermissionRequest(
   request: AppServerPendingRequestNotification,
 ): boolean {
@@ -2236,13 +2274,15 @@ export class DesktopBackendRegistry {
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
   /**
-   * Best-effort cache of thread titles keyed by `${backend}:${threadId}`, used
+   * Best-effort cache of thread labels keyed by `${backend}:${threadId}`, used
    * only to label native attention/terminal notifications so multiple
    * background turns are distinguishable. Populated from `thread/started` and
    * `thread/name/updated` notifications as they fan out through `emit()`.
-   * Falls back to a generic body when a title hasn't been observed yet.
+   * Falls back to a thread-list lookup, then a generic body when context still
+   * isn't available.
    */
   private readonly notificationThreadTitles = new Map<string, string>();
+  private readonly notificationThreadProjectLabels = new Map<string, string>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
@@ -9547,18 +9587,73 @@ export class DesktopBackendRegistry {
       if (typeof threadId !== "string") {
         return;
       }
-      const thread = params.thread;
-      const candidate =
-        (typeof thread?.title === "string" ? thread.title : undefined) ??
-        (typeof thread?.name === "string" ? thread.name : undefined);
-      const trimmed = candidate?.trim();
-      if (trimmed) {
-        this.notificationThreadTitles.set(
-          `${event.backend}:${threadId}`,
-          trimmed,
-        );
-      }
+      this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
     }
+  }
+
+  private rememberThreadNotificationContext(
+    backend: AppServerBackendKind,
+    threadId: string,
+    thread: unknown,
+  ): void {
+    if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
+      return;
+    }
+    const record = thread as Record<string, unknown>;
+    const candidate =
+      (typeof record.title === "string" ? record.title : undefined) ??
+      (typeof record.name === "string" ? record.name : undefined);
+    const trimmed = candidate?.trim();
+    const key = `${backend}:${threadId}`;
+    if (trimmed) {
+      this.notificationThreadTitles.set(key, trimmed);
+    }
+    const projectLabel = readNotificationProjectLabel(record);
+    if (projectLabel) {
+      this.notificationThreadProjectLabels.set(key, projectLabel);
+    }
+  }
+
+  private notificationThreadContextLabel(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): string | undefined {
+    const key = `${backend}:${threadId}`;
+    const projectLabel = this.notificationThreadProjectLabels.get(key);
+    const threadTitle = this.notificationThreadTitles.get(key);
+    if (projectLabel && threadTitle) {
+      return `${projectLabel} > ${threadTitle}`;
+    }
+    return threadTitle ?? projectLabel;
+  }
+
+  private async notificationThreadContextLabelForTerminal(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string | undefined> {
+    const cached = this.notificationThreadContextLabel(backend, threadId);
+    if (cached) {
+      return cached;
+    }
+    try {
+      const threads = await this.listThreads({
+        backend,
+        callerReason: "notification-context",
+        enrichDirectories: true,
+      });
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (thread) {
+        this.rememberThreadNotificationContext(backend, threadId, thread);
+        return this.notificationThreadContextLabel(backend, threadId);
+      }
+    } catch (error) {
+      backendRegistryLog.debug("native terminal notification context lookup failed", {
+        backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId,
+      });
+    }
+    return undefined;
   }
 
   private notifyForAttentionRequired(event: AgentEvent): void {
@@ -9678,7 +9773,29 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private notifyForTerminalOutcome(event: AgentEvent): void {
+  private async notifyForTerminalOutcome(event: AgentEvent): Promise<void> {
+    if (event.notification.method === "turn/started") {
+      const threadId = (event.notification.params as { threadId?: unknown })
+        .threadId;
+      if (typeof threadId !== "string") {
+        return;
+      }
+      try {
+        getDesktopNotificationService().clearAttentionKey(
+          buildTerminalNotificationKey({
+            backend: event.backend,
+            threadId,
+          }),
+        );
+      } catch (error) {
+        backendRegistryLog.warn("native terminal notification cleanup failed", {
+          backend: event.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+      }
+      return;
+    }
     if (
       event.notification.method !== "turn/completed" &&
       event.notification.method !== "turn/failed" &&
@@ -9694,18 +9811,34 @@ export class DesktopBackendRegistry {
           : "cancelled";
     const threadId = (event.notification.params as { threadId?: unknown })
       .threadId;
-    const threadTitle =
+    const contextLabel =
       typeof threadId === "string"
-        ? this.notificationThreadTitles.get(`${event.backend}:${threadId}`)
+        ? await this.notificationThreadContextLabelForTerminal(event.backend, threadId)
         : undefined;
-    const body = threadTitle
-      ? `${threadTitle} · turn ${status}.`
+    const body = contextLabel
+      ? `${contextLabel} · turn ${status}.`
       : `A turn ${status}.`;
     try {
       getDesktopNotificationService().notifyTerminal({
         enabled: this.notificationsEnabled(),
+        key:
+          typeof threadId === "string"
+            ? buildTerminalNotificationKey({
+                backend: event.backend,
+                threadId,
+              })
+            : undefined,
         title: `PwrAgent turn ${status}`,
         body,
+        onShow:
+          typeof threadId === "string"
+            ? () => {
+                requestShowThread({
+                  backend: event.backend,
+                  threadId,
+                });
+              }
+            : undefined,
       });
     } catch (error) {
       backendRegistryLog.warn("native terminal notification failed", {
@@ -9962,7 +10095,7 @@ export class DesktopBackendRegistry {
 
     this.rememberThreadTitleFromEvent(event);
     this.notifyForAttentionRequired(event);
-    this.notifyForTerminalOutcome(event);
+    await this.notifyForTerminalOutcome(event);
 
     for (const listener of this.eventListeners) {
       try {
