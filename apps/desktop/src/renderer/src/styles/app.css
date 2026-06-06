@@ -138,11 +138,6 @@
 
   /* Status-error tints used inside box-shadow rings. */
   --status-error-ring-soft: color-mix(in srgb, var(--status-error) 22%, transparent);
-  --thinking-scanner-beam-width: 18px;
-  --thinking-scanner-full-offset: 0px;
-  --thinking-scanner-mini-offset: 0px;
-  --thinking-scanner-offset: var(--thinking-scanner-full-offset);
-  --thinking-scanner-progress: 0;
   /* Issue #240: max reading width for the centered chat column —
      transcript message column AND composer rows both cap here so
      the input's text-block lines up with the messages above it. The
@@ -8020,7 +8015,8 @@ textarea,
 .thinking-scanner {
   position: relative;
   --thinking-scanner-beam-width: 18px;
-  --thinking-scanner-offset: var(--thinking-scanner-full-offset);
+  --thinking-scanner-delay: 0ms;
+  --thinking-scanner-travel: 44px;
   width: 62px;
   height: 6px;
   flex: 0 0 auto;
@@ -8032,7 +8028,7 @@ textarea,
 
 .thinking-scanner--mini {
   --thinking-scanner-beam-width: 6px;
-  --thinking-scanner-offset: var(--thinking-scanner-mini-offset);
+  --thinking-scanner-travel: 10px;
   width: 16px;
   height: 6px;
 }
@@ -8053,8 +8049,10 @@ textarea,
   box-shadow:
     0 0 10px color-mix(in srgb, var(--accent) 42%, transparent),
     0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
-  opacity: calc(0.76 + (var(--thinking-scanner-progress, 0) * 0.24));
-  transform: translateX(var(--thinking-scanner-offset));
+  animation: pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;
+  animation-delay: var(--thinking-scanner-delay);
+  opacity: 0.76;
+  transform: translateX(0);
   will-change: opacity, transform;
 }
 
@@ -8062,6 +8060,19 @@ textarea,
   box-shadow:
     0 0 8px color-mix(in srgb, var(--accent) 42%, transparent),
     0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@keyframes pwragent-thinking-scanner-sweep {
+  0%,
+  100% {
+    opacity: 0.76;
+    transform: translateX(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateX(var(--thinking-scanner-travel));
+  }
 }
 
 .transcript-activity__header {
