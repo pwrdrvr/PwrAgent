@@ -62,6 +62,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  NavigationBrowseMode,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   ReorderDirectoryPinsRequest,
@@ -184,6 +185,8 @@ import type {
   WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
+  SetNavigationBrowseModeRequest,
+  SetNavigationBrowseModeResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -292,6 +295,7 @@ import {
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
@@ -740,6 +744,10 @@ const desktopApi = Object.freeze({
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>
     await ipcRenderer.invoke(NAVIGATION_SNAPSHOT_CHANNEL, request),
+  setNavigationBrowseMode: async (
+    request: SetNavigationBrowseModeRequest,
+  ): Promise<SetNavigationBrowseModeResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_BROWSE_MODE_CHANNEL, request),
   markThreadSeen: async (
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> =>
@@ -1055,9 +1063,40 @@ function readBootstrapAppearance(): {
 }
 const bootstrapAppearance = readBootstrapAppearance();
 
+// Decode the navigation preference hint passed from main via
+// `webPreferences.additionalArguments`. React reads this during the
+// initial useState call so the thread lens is correct before first paint.
+const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
+function readBootstrapNavigationPreferences(): {
+  browseMode: NavigationBrowseMode;
+} {
+  for (const arg of process.argv) {
+    if (!arg.startsWith(NAVIGATION_ARG_PREFIX)) continue;
+    try {
+      const raw = JSON.parse(arg.slice(NAVIGATION_ARG_PREFIX.length));
+      const browseMode =
+        raw &&
+        (raw.browseMode === "inbox" ||
+          raw.browseMode === "recents" ||
+          raw.browseMode === "directories")
+          ? raw.browseMode
+          : "inbox";
+      return { browseMode };
+    } catch {
+      break;
+    }
+  }
+  return { browseMode: "inbox" };
+}
+const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragent", desktopApi);
   contextBridge.exposeInMainWorld("__pwragentAppearance", bootstrapAppearance);
+  contextBridge.exposeInMainWorld(
+    "__pwragentNavigationPreferences",
+    bootstrapNavigationPreferences,
+  );
   recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });

@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
+  NavigationBrowseMode,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
@@ -32,7 +33,7 @@ import {
   type ThreadWorkspaceMode,
 } from "./subthread-launchpads";
 
-export type BrowseMode = "inbox" | "recents" | "directories";
+export type BrowseMode = NavigationBrowseMode;
 export type { ThreadWorkspaceMode } from "./subthread-launchpads";
 
 export type ArchiveThreadNotice = {
@@ -49,6 +50,23 @@ export type ArchiveThreadOptions = {
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
+const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
+
+function normalizeBrowseMode(value: unknown): BrowseMode {
+  return value === "inbox" || value === "recents" || value === "directories"
+    ? value
+    : DEFAULT_BROWSE_MODE;
+}
+
+function readBridgedBrowseMode(): BrowseMode {
+  if (typeof window === "undefined") {
+    return DEFAULT_BROWSE_MODE;
+  }
+  const bridged = (window as unknown as {
+    __pwragentNavigationPreferences?: { browseMode?: unknown };
+  }).__pwragentNavigationPreferences;
+  return normalizeBrowseMode(bridged?.browseMode);
+}
 
 function isRendererViewForeground(): boolean {
   if (typeof document === "undefined") {
@@ -1872,9 +1890,10 @@ export function useThreadNavigation(
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
+  const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const threadViewVisible = options.threadViewVisible ?? true;
-  const [browseMode, setBrowseMode] = useState<BrowseMode>("inbox");
+  const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
@@ -1931,9 +1950,22 @@ export function useThreadNavigation(
   );
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
   const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
+  const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
+
+  useEffect(() => {
+    setNavigationBrowseModeRequestRef.current = setNavigationBrowseModeRequest;
+  }, [setNavigationBrowseModeRequest]);
+
+  const updateBrowseMode = useCallback((nextBrowseMode: BrowseMode): void => {
+    const normalized = normalizeBrowseMode(nextBrowseMode);
+    setBrowseMode(normalized);
+    void setNavigationBrowseModeRequestRef.current?.({
+      browseMode: normalized,
+    }).catch(() => undefined);
+  }, []);
 
   const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
     const retainedThread = retainedUnreadThreadRef.current;
@@ -4434,7 +4466,7 @@ export function useThreadNavigation(
     setThreadModelSettingsError,
     updatingThreadExecutionMode,
     updateDirectoryLaunchpad,
-    setBrowseMode,
+    setBrowseMode: updateBrowseMode,
     selectThread,
     showThread,
     archiveThread,

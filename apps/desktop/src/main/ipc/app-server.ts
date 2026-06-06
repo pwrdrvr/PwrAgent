@@ -57,6 +57,8 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetNavigationBrowseModeRequest,
+  SetNavigationBrowseModeResponse,
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
@@ -116,6 +118,7 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -584,6 +587,18 @@ class DesktopAppServerService {
     this.pendingNavigationSnapshots.set(requestKey, promise);
 
     return await promise;
+  }
+
+  async setNavigationBrowseMode(
+    request: SetNavigationBrowseModeRequest,
+  ): Promise<SetNavigationBrowseModeResponse> {
+    const browseMode = await this.getOverlayStore().setNavigationBrowseMode(
+      request.browseMode,
+    );
+
+    logDebug("setNavigationBrowseMode", { browseMode });
+
+    return { browseMode };
   }
 
   private async readNavigationSnapshot(
@@ -1677,6 +1692,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getNavigationSnapshot(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+    async (
+      _event,
+      request: SetNavigationBrowseModeRequest,
+    ): Promise<SetNavigationBrowseModeResponse> => {
+      return await appServerService.setNavigationBrowseMode(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.handle(
     NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -1875,6 +1900,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);

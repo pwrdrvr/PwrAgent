@@ -7,6 +7,7 @@ import type {
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
+  NavigationBrowseMode,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -62,6 +63,17 @@ function normalizeLaunchpadDefaults(
     delete next.serviceTier;
   }
   return next;
+}
+
+const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
+const DEFAULT_NAVIGATION_BROWSE_MODE: NavigationBrowseMode = "inbox";
+
+export function normalizeNavigationBrowseMode(
+  value: unknown,
+): NavigationBrowseMode {
+  return value === "inbox" || value === "recents" || value === "directories"
+    ? value
+    : DEFAULT_NAVIGATION_BROWSE_MODE;
 }
 
 export class SqliteOverlayStore {
@@ -826,6 +838,24 @@ export class SqliteOverlayStore {
     return next;
   }
 
+  getNavigationBrowseModeSync(): NavigationBrowseMode {
+    return normalizeNavigationBrowseMode(
+      this.stateDb.getMeta(NAVIGATION_BROWSE_MODE_META_KEY),
+    );
+  }
+
+  async getNavigationBrowseMode(): Promise<NavigationBrowseMode> {
+    return this.getNavigationBrowseModeSync();
+  }
+
+  async setNavigationBrowseMode(
+    browseMode: NavigationBrowseMode,
+  ): Promise<NavigationBrowseMode> {
+    const normalized = normalizeNavigationBrowseMode(browseMode);
+    this.stateDb.setMeta(NAVIGATION_BROWSE_MODE_META_KEY, normalized);
+    return normalized;
+  }
+
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
@@ -1152,6 +1182,8 @@ export type OverlayStoreLike = Pick<
   | "appendMessagingBindingTransition"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
+  | "getNavigationBrowseMode"
+  | "setNavigationBrowseMode"
   | "getDirectoryLaunchpad"
   | "listDirectoryLaunchpads"
   | "upsertDirectoryLaunchpad"

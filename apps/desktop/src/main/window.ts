@@ -39,6 +39,10 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  navigationPreferencesAdditionalArguments,
+  readBootstrapNavigationPreferences,
+} from "./navigation-browse-mode-bootstrap";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
@@ -292,6 +296,7 @@ export function createMainWindow(options?: {
 }): BrowserWindow {
   const preloadPath = getPreloadPath();
   const appearance = readBootstrapAppearance();
+  const navigationPreferences = readBootstrapNavigationPreferences();
   const macWindowChrome = isMac
     ? {
         titleBarStyle: "hiddenInset" as const,
@@ -330,7 +335,10 @@ export function createMainWindow(options?: {
       // theme). The renderer's writeSettingsConfig IPC keeps the TOML
       // in sync; the next launch reads the updated value back via this
       // same path.
-      additionalArguments: themedWindowAdditionalArguments(appearance),
+      additionalArguments: [
+        ...themedWindowAdditionalArguments(appearance),
+        ...navigationPreferencesAdditionalArguments(navigationPreferences),
+      ],
     }
   });
 
