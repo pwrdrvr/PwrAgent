@@ -33,6 +33,7 @@ export function useThreadSkills(params: {
 } {
   const { desktopApi, launchpad, thread } = params;
   const requestVersionsRef = useRef<Record<string, number>>({});
+  const stateByThreadKeyRef = useRef<Record<string, SkillState>>({});
   const [stateByThreadKey, setStateByThreadKey] = useState<Record<string, SkillState>>({});
   const skillTarget = useMemo(() => {
     if (thread) {
@@ -67,14 +68,122 @@ export function useThreadSkills(params: {
   const state = skillTarget ? stateByThreadKey[skillTarget.key] : undefined;
 
   useEffect(() => {
-    if (!desktopApi?.onAgentEvent || !skillTarget?.threadId) {
+    stateByThreadKeyRef.current = stateByThreadKey;
+  }, [stateByThreadKey]);
+
+  const loadTarget = useCallback(
+    async (options: { force?: boolean } = {}): Promise<void> => {
+      if (!skillTarget) {
+        return;
+      }
+
+      if (!desktopApi?.listSkills) {
+        setStateByThreadKey((current) => ({
+          ...current,
+          [skillTarget.key]: {
+            error: "Desktop bridge is missing listSkills().",
+            loading: false,
+            response: undefined,
+          },
+        }));
+        return;
+      }
+
+      const currentState = stateByThreadKeyRef.current[skillTarget.key];
+      if (!options.force && (currentState?.loading || currentState?.response)) {
+        return;
+      }
+
+      const requestVersion =
+        (requestVersionsRef.current[skillTarget.key] ?? 0) + 1;
+      requestVersionsRef.current[skillTarget.key] = requestVersion;
+      const cwds = skillTarget.cwds;
+
+      setStateByThreadKey((current) => ({
+        ...current,
+        [skillTarget.key]: {
+          ...createEmptySkillState(),
+          loading: true,
+        },
+      }));
+
+      try {
+        const response = await desktopApi.listSkills({
+          backend: skillTarget.backend,
+          ...(cwds.length === 1 ? { cwd: cwds[0] } : {}),
+          ...(cwds.length > 0 ? { cwds } : {}),
+          ...(skillTarget.threadId ? { threadId: skillTarget.threadId } : {}),
+        });
+
+        if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
+          return;
+        }
+
+        setStateByThreadKey((current) => ({
+          ...current,
+          [skillTarget.key]: {
+            error: undefined,
+            loading: false,
+            response,
+          },
+        }));
+      } catch (error) {
+        if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
+          return;
+        }
+
+        setStateByThreadKey((current) => ({
+          ...current,
+          [skillTarget.key]: {
+            error: error instanceof Error ? error.message : String(error),
+            loading: false,
+            response: undefined,
+          },
+        }));
+      }
+    },
+    [desktopApi, skillTarget],
+  );
+
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !skillTarget) {
       return;
     }
 
     const { backend, key, threadId } = skillTarget;
     return desktopApi.onAgentEvent((event) => {
+      if (event.backend !== backend) {
+        return;
+      }
+
+      if (event.notification.method === "skills/changed") {
+        const currentState = stateByThreadKeyRef.current[key];
+        if (!currentState?.loading && !currentState?.response) {
+          return;
+        }
+        const staleKeyPrefixes = [`${backend}:`, `launchpad:${backend}:`];
+        const retainedEntries: Array<[string, SkillState]> = [];
+
+        for (const [cachedKey, cachedState] of Object.entries(
+          stateByThreadKeyRef.current,
+        )) {
+          if (staleKeyPrefixes.some((prefix) => cachedKey.startsWith(prefix))) {
+            requestVersionsRef.current[cachedKey] =
+              (requestVersionsRef.current[cachedKey] ?? 0) + 1;
+            continue;
+          }
+          retainedEntries.push([cachedKey, cachedState]);
+        }
+        const next = Object.fromEntries(retainedEntries);
+        stateByThreadKeyRef.current = next;
+        setStateByThreadKey(next);
+
+        void loadTarget({ force: true });
+        return;
+      }
+
       if (
-        event.backend !== backend ||
+        !threadId ||
         event.notification.method !== "thread/availableCommands/updated" ||
         event.notification.params.threadId !== threadId
       ) {
@@ -108,77 +217,11 @@ export function useThreadSkills(params: {
         },
       }));
     });
-  }, [desktopApi, skillTarget]);
+  }, [desktopApi, loadTarget, skillTarget]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
-    if (!skillTarget) {
-      return;
-    }
-
-    if (!desktopApi?.listSkills) {
-      setStateByThreadKey((current) => ({
-        ...current,
-        [skillTarget.key]: {
-          error: "Desktop bridge is missing listSkills().",
-          loading: false,
-          response: undefined,
-        },
-      }));
-      return;
-    }
-
-    const currentState = stateByThreadKey[skillTarget.key];
-    if (currentState?.loading || currentState?.response) {
-      return;
-    }
-
-    const requestVersion = (requestVersionsRef.current[skillTarget.key] ?? 0) + 1;
-    requestVersionsRef.current[skillTarget.key] = requestVersion;
-    const cwds = skillTarget.cwds;
-
-    setStateByThreadKey((current) => ({
-      ...current,
-      [skillTarget.key]: {
-        ...createEmptySkillState(),
-        loading: true,
-      },
-    }));
-
-    try {
-      const response = await desktopApi.listSkills({
-        backend: skillTarget.backend,
-        ...(cwds.length === 1 ? { cwd: cwds[0] } : {}),
-        ...(cwds.length > 0 ? { cwds } : {}),
-        ...(skillTarget.threadId ? { threadId: skillTarget.threadId } : {}),
-      });
-
-      if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
-        return;
-      }
-
-      setStateByThreadKey((current) => ({
-        ...current,
-        [skillTarget.key]: {
-          error: undefined,
-          loading: false,
-          response,
-        },
-      }));
-    } catch (error) {
-      if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
-        return;
-      }
-
-      setStateByThreadKey((current) => ({
-        ...current,
-        [skillTarget.key]: {
-          error: error instanceof Error ? error.message : String(error),
-          loading: false,
-          response: undefined,
-        },
-      }));
-    }
-  }, [desktopApi, skillTarget, stateByThreadKey]);
+    await loadTarget();
+  }, [loadTarget]);
 
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
