@@ -1996,12 +1996,15 @@ function mergeImmutableUsageActivities(params: {
   replay: AppServerThreadReplay;
   activities?: AppServerThreadActivityEntry[];
 }): AppServerThreadReplay {
-  if (!params.activities?.length) {
+  const immutableTurnUsageActivities = params.activities?.filter(
+    (activity) => usageActivityScope(activity) === "turn",
+  );
+  if (!immutableTurnUsageActivities?.length) {
     return params.replay;
   }
 
   let entries = params.replay.entries;
-  for (const activity of params.activities) {
+  for (const activity of immutableTurnUsageActivities) {
     const activityScope = usageActivityScope(activity);
     const activityTurnId = activity.turn?.id;
     entries = entries.filter((entry) => {

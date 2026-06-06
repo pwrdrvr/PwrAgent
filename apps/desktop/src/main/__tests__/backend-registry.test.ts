@@ -223,6 +223,13 @@ function createOverlayStoreMock(params?: {
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
+      if (
+        !activity.id.startsWith("live-turn-usage-") &&
+        !activity.summary.startsWith("Turn usage:")
+      ) {
+        return { overlay: current, persisted: false };
+      }
+
       const existingActivities = current.immutableUsageActivities ?? [];
       if (existingActivities.some((entry) => entry.id === activity.id)) {
         return { overlay: current, persisted: false };
@@ -5638,6 +5645,26 @@ script = "echo setup"
             executionMode: "default",
             extraLinkedDirectories: [],
             immutableUsageActivities: [
+              {
+                type: "activity",
+                id: "live-token-usage-turn-1",
+                summary:
+                  "Latest request usage: 1,715 uncached in · 18,285 cached · 90 out (30 reasoning)",
+                status: "completed",
+                createdAt: 10_002,
+                turn: {
+                  id: "turn-1",
+                  status: "in_progress",
+                },
+                details: [
+                  {
+                    id: "live-token-usage-turn-1-input",
+                    kind: "read",
+                    label: "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
+                    status: "completed",
+                  },
+                ],
+              },
               {
                 type: "activity",
                 id: "live-turn-usage-turn-1",

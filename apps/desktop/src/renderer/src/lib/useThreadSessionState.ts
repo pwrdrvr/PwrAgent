@@ -213,7 +213,11 @@ function persistFinalizedUsageEntry(params: {
   entry?: AppServerThreadActivityEntry;
   threadId: string;
 }): void {
-  if (!params.entry || params.entry.status !== "completed") {
+  if (
+    !params.entry ||
+    params.entry.status !== "completed" ||
+    tokenUsageActivityScope(params.entry) !== "turn"
+  ) {
     return;
   }
 
@@ -266,6 +270,38 @@ function tokenUsageActivityScope(
     return "latest-request";
   }
   return undefined;
+}
+
+function hasTurnUsageForEntry(
+  entries: AppServerThreadEntry[],
+  usageEntry: AppServerThreadActivityEntry
+): boolean {
+  const turnId = usageEntry.turn?.id;
+  if (!turnId) {
+    return false;
+  }
+
+  return entries.some(
+    (entry) =>
+      entry.type === "activity" &&
+      entry.turn?.id === turnId &&
+      tokenUsageActivityScope(entry) === "turn"
+  );
+}
+
+function shouldSuppressLiveUsageEntry(
+  session: ThreadSessionEntry,
+  usageEntry: AppServerThreadActivityEntry
+): boolean {
+  const scope = tokenUsageActivityScope(usageEntry);
+  if (scope !== "latest-request" && scope !== "total") {
+    return false;
+  }
+
+  return (
+    hasTurnUsageForEntry(session.optimisticEntries, usageEntry) ||
+    hasTurnUsageForEntry(session.response?.replay.entries ?? [], usageEntry)
+  );
 }
 
 function hasOptimisticTurnUsageForEntry(
@@ -3774,11 +3810,13 @@ export function useThreadSessionState(params: {
               turn?.id === current.activeTurnId &&
               turn.status !== "completed"
           );
+          const suppressUsageEntry =
+            usageEntry && shouldSuppressLiveUsageEntry(current, usageEntry);
           if (usageEntry && !holdUsageUntilTurnCompletes) {
             persistFinalizedUsageEntry({
               backend: event.backend,
               desktopApi,
-              entry: usageEntry,
+              entry: suppressUsageEntry ? undefined : usageEntry,
               threadId: notificationThreadId,
             });
           }
@@ -3796,7 +3834,9 @@ export function useThreadSessionState(params: {
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
-              ? mergeFinalizedUsageEntry(current.optimisticEntries, usageEntry)
+              ? suppressUsageEntry
+                ? current.optimisticEntries
+                : mergeFinalizedUsageEntry(current.optimisticEntries, usageEntry)
               : current.optimisticEntries,
             pendingUsageActivityEntry: holdUsageUntilTurnCompletes
               ? usageEntry

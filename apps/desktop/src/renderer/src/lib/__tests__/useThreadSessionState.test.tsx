@@ -3564,6 +3564,36 @@ describe("useThreadSessionState", () => {
         status: "completed",
       },
     });
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 2_000,
+                cached_input_tokens: 1_800,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 2_040,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
+    ]);
   });
 
   it("keeps aggregate turn usage when hydration includes per-request usage", async () => {
@@ -3898,7 +3928,7 @@ describe("useThreadSessionState", () => {
         `activity:${originalSummary}`,
       ]);
     });
-    expect(persistThreadUsageActivity).toHaveBeenCalled();
+    expect(persistThreadUsageActivity).not.toHaveBeenCalled();
   });
 
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {

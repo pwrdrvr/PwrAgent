@@ -329,6 +329,13 @@ export class SqliteOverlayStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    if (
+      !params.activity.id.startsWith("live-turn-usage-") &&
+      !params.activity.summary.startsWith("Turn usage:")
+    ) {
+      return { overlay: current, persisted: false };
+    }
+
     const existingActivities = current.immutableUsageActivities ?? [];
     if (existingActivities.some((activity) => activity.id === params.activity.id)) {
       return { overlay: current, persisted: false };
