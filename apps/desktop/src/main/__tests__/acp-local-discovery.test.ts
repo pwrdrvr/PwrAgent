@@ -47,6 +47,32 @@ describe("discoverLocalAcpAgents", () => {
     ]);
   });
 
+  it("prefers a concrete Gemini executable path when it is available", async () => {
+    const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
+      if (command !== "/opt/homebrew/bin/gemini") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (args[0] === "--version") {
+        return { stdout: "0.45.0\n" };
+      }
+      if (args[0] === "--help") {
+        return { stdout: "Usage: gemini [options]\n  --acp Starts ACP mode\n" };
+      }
+      throw new Error("unexpected probe");
+    });
+
+    const agents = await discoverLocalAcpAgents({ probe, now: () => 1234 });
+
+    expect(agents[0]).toMatchObject({
+      backendId: "acp:gemini",
+      distributionSource: "/opt/homebrew/bin/gemini --acp --skip-trust",
+      launchDescriptor: {
+        command: "/opt/homebrew/bin/gemini",
+        args: ["--acp", "--skip-trust"],
+      },
+    });
+  });
+
   it("discovers Kimi Code CLI when the local command supports ACP", async () => {
     const probe = vi.fn<LocalAcpAgentProbe>(async (command, args) => {
       if (command !== "kimi") {

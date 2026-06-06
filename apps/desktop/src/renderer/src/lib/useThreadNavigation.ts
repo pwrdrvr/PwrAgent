@@ -3554,10 +3554,11 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
 
+      const materializeParentThreadId =
+        parentThreadId ?? getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+      let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
       try {
-        const materializeParentThreadId =
-          parentThreadId ?? getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
-        const response = await desktopApi.materializeDirectoryLaunchpad({
+        response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
           launchpad,
           input,
@@ -3567,39 +3568,44 @@ export function useThreadNavigation(
             ? { parentThreadId: materializeParentThreadId }
             : {}),
         });
-        const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
-          directory,
-          launchpad,
-          backend: response.backend,
-          threadId: response.threadId,
-          executionMode: response.executionMode,
-          workMode: response.workMode,
-          codexEnvironmentRuntime: response.codexEnvironmentRuntime,
-          optimisticUserMessage: buildOptimisticUserMessage(input),
-          parentThreadId: materializeParentThreadId,
-        });
-        const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
-        setLocalLaunchpads((current) => {
-          if (!current[directoryKey]) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[directoryKey];
-          return next;
-        });
-        setOptimisticThread(optimisticMaterializedThread);
-        setSelectedItemKey(nextThreadKey);
-        setPendingSeenThreadKey(nextThreadKey);
-        setState((current) => ({
-          ...current,
-          response: current.response
-            ? applyLaunchpadReset(
-                current.response,
-                directoryKey,
-                current.response.launchpadDefaults
-              )
-            : current.response,
-        }));
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
+        directory,
+        launchpad,
+        backend: response.backend,
+        threadId: response.threadId,
+        executionMode: response.executionMode,
+        workMode: response.workMode,
+        codexEnvironmentRuntime: response.codexEnvironmentRuntime,
+        optimisticUserMessage: buildOptimisticUserMessage(input),
+        parentThreadId: materializeParentThreadId,
+      });
+      const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+      setLocalLaunchpads((current) => {
+        if (!current[directoryKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[directoryKey];
+        return next;
+      });
+      setOptimisticThread(optimisticMaterializedThread);
+      setSelectedItemKey(nextThreadKey);
+      setPendingSeenThreadKey(nextThreadKey);
+      setState((current) => ({
+        ...current,
+        response: current.response
+          ? applyLaunchpadReset(
+              current.response,
+              directoryKey,
+              current.response.launchpadDefaults
+            )
+          : current.response,
+      }));
+      try {
         await refresh(nextThreadKey, optimisticMaterializedThread);
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));

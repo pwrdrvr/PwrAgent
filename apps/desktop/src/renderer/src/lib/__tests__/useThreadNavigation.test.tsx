@@ -1554,6 +1554,143 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
+  it("rejects materialize failures after recording the launchpad error", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "acp:gemini" as const,
+            executionMode: "default" as const,
+            prompt: "Investigate Gemini",
+            workMode: "worktree" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "acp:gemini" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => {
+      throw new Error("spawn gemini ENOENT");
+    });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+    });
+
+    await act(async () => {
+      await expect(
+        result.current.materializeDirectoryLaunchpad(directoryKey)
+      ).rejects.toThrow("spawn gemini ENOENT");
+    });
+
+    expect(result.current.launchpadError).toBe("spawn gemini ENOENT");
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+    expect(result.current.selectedThread).toBeUndefined();
+  });
+
+  it("keeps the materialized thread selected when the post-create refresh fails", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const initialSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "acp:gemini" as const,
+            executionMode: "default" as const,
+            prompt: "Investigate Gemini",
+            workMode: "worktree" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "acp:gemini" as const,
+        executionMode: "default" as const,
+      },
+    };
+    let snapshotCalls = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      snapshotCalls += 1;
+      if (snapshotCalls > 1) {
+        throw new Error("refresh failed");
+      }
+      return initialSnapshot;
+    });
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "acp:gemini" as const,
+      threadId: "thread-new",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(result.current.launchpadError).toBeUndefined();
+    expect(result.current.error).toBe("refresh failed");
+    expect(result.current.selectedThread?.id).toBe("thread-new");
+    expect(result.current.selectedThread?.source).toBe("acp:gemini");
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+  });
+
   it("keeps a launchpad prompt-derived title when the hydrated thread only has a fallback id title", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const threadId = "019df3a2-75b2-73d1-a273-5f94ac425966";

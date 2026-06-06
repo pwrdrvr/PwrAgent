@@ -40,6 +40,32 @@ export type AcpStdioJsonRpcTransportOptions = {
   spawn?: AcpStdioSpawn;
 };
 
+function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform === "win32") {
+    return env;
+  }
+
+  const pathKey = "PATH";
+  const pathEntries = (env[pathKey] ?? "").split(":").filter(Boolean);
+  const pathSet = new Set(pathEntries);
+  for (const candidate of [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    `${process.env.HOME ?? ""}/.local/bin`,
+    `${process.env.HOME ?? ""}/bin`,
+  ]) {
+    if (candidate && !pathSet.has(candidate)) {
+      pathEntries.push(candidate);
+      pathSet.add(candidate);
+    }
+  }
+
+  return {
+    ...env,
+    [pathKey]: pathEntries.join(":"),
+  };
+}
+
 export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   private readonly lineTransport: AcpLineStdioTransport;
   private readonly connection: JsonRpcConnection;
@@ -155,7 +181,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     }
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
-    const env = { ...process.env, ...descriptor.env };
+    const env = appendExecutableSearchPaths({ ...process.env, ...descriptor.env });
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,
