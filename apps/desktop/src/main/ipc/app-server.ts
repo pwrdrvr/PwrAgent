@@ -17,6 +17,8 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  PersistThreadUsageActivityRequest,
+  PersistThreadUsageActivityResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -93,6 +95,7 @@ import {
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+  APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -448,6 +451,22 @@ class DesktopAppServerService {
     });
 
     return rewriteTranscriptImageUrlsForRenderer(response);
+  }
+
+  async persistThreadUsageActivity(
+    request: PersistThreadUsageActivityRequest,
+  ): Promise<PersistThreadUsageActivityResponse> {
+    const response = await this.getOverlayStore().persistThreadUsageActivity({
+      backend: request.backend,
+      threadId: request.threadId,
+      activity: request.activity,
+    });
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      activityId: request.activity.id,
+      persisted: response.persisted,
+    };
   }
 
   async archiveThread(
@@ -1575,6 +1594,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.readThread(request);
     }
   );
+  ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
+    async (
+      _event,
+      request: PersistThreadUsageActivityRequest,
+    ): Promise<PersistThreadUsageActivityResponse> => {
+      return await appServerService.persistThreadUsageActivity(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -1888,6 +1917,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
   ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCES_CHANNEL);

@@ -3406,6 +3406,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
 
     act(() => {
       agentEventHandler?.({
@@ -3427,7 +3428,7 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Done.",
-      "activity:Usage: 1,000 uncached in · 200 cached · 50 out (10 reasoning)",
+      "activity:Latest request usage: 1,000 uncached in · 200 cached · 50 out (10 reasoning)",
     ]);
     expect(result.current.entries.at(-1)).toMatchObject({
       id: "live-token-usage-turn-1",
@@ -3436,6 +3437,598 @@ describe("useThreadSessionState", () => {
         status: "completed",
       },
     });
+  });
+
+  it("finalizes active-turn usage from cumulative token deltas", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+              total_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 900 uncached in · 100 cached · 20 out (5 reasoning)"
+    );
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 2_000,
+                cached_input_tokens: 1_800,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 2_040,
+              },
+              total_token_usage: {
+                input_tokens: 3_000,
+                cached_input_tokens: 1_900,
+                output_tokens: 50,
+                reasoning_output_tokens: 15,
+                total_tokens: 3_065,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)"
+    );
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
+    ]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    });
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 2_000,
+                cached_input_tokens: 1_800,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 2_040,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
+    ]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
+  });
+
+  it("keeps aggregate turn usage when hydration includes per-request usage", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(async ({ backend, threadId }) => {
+      readCount += 1;
+      const hydratedCompletedTurn = readCount > 1;
+      return {
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: hydratedCompletedTurn
+            ? [
+                {
+                  type: "message" as const,
+                  id: "assistant-turn-1",
+                  role: "assistant" as const,
+                  phase: "final" as const,
+                  text: "Done.",
+                  createdAt: 10_000,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                },
+                {
+                  type: "activity" as const,
+                  id: "command-turn-1",
+                  summary: "Ran shell command",
+                  status: "completed" as const,
+                  createdAt: 10_001,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                  details: [
+                    {
+                      id: "command-turn-1-detail",
+                      kind: "read" as const,
+                      label: "npm test",
+                      status: "completed" as const,
+                    },
+                  ],
+                },
+                {
+                  type: "activity" as const,
+                  id: "live-token-usage-turn-1",
+                  summary: "Latest request usage: 200 uncached in · 1,800 cached · 30 out (10 reasoning)",
+                  status: "completed" as const,
+                  createdAt: 10_002,
+                  turn: {
+                    id: "turn-1",
+                    status: "completed" as const,
+                  },
+                  details: [
+                    {
+                      id: "live-token-usage-turn-1-input",
+                      kind: "read" as const,
+                      label: "Input: 2,000 tokens (200 uncached, 1,800 cached)",
+                      status: "completed" as const,
+                    },
+                    {
+                      id: "live-token-usage-turn-1-output",
+                      kind: "read" as const,
+                      label: "Output: 30 tokens, including 10 reasoning",
+                      status: "completed" as const,
+                    },
+                  ],
+                },
+              ]
+            : [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+              total_token_usage: {
+                input_tokens: 1_000,
+                cached_input_tokens: 100,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 1_025,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 2_000,
+                cached_input_tokens: 1_800,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 2_040,
+              },
+              total_token_usage: {
+                input_tokens: 3_000,
+                cached_input_tokens: 1_900,
+                output_tokens: 50,
+                reasoning_output_tokens: 15,
+                total_tokens: 3_065,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Done.",
+        "activity:Ran shell command",
+        "activity:Turn usage: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
+      ]);
+    });
+  });
+
+  it("does not rewrite completed turn usage from later same-id updates", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(async ({ backend, threadId }) => {
+      readCount += 1;
+      return {
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries:
+            readCount > 1
+              ? [
+                  {
+                    type: "activity" as const,
+                    id: "live-token-usage-turn-1",
+                    summary:
+                      "Latest request usage: 1,715 uncached in · 18,285 cached · 90 out (30 reasoning)",
+                    status: "completed" as const,
+                    createdAt: 20_000,
+                    turn: {
+                      id: "turn-1",
+                      status: "completed" as const,
+                    },
+                    details: [
+                      {
+                        id: "live-token-usage-turn-1-input",
+                        kind: "read" as const,
+                        label: "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
+                        status: "completed" as const,
+                      },
+                    ],
+                  },
+                ]
+              : [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+    });
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), model: "gpt-5.5" },
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 43_000,
+                cached_input_tokens: 20_000,
+                output_tokens: 900,
+                reasoning_output_tokens: 450,
+                total_tokens: 44_350,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    const originalSummary = result.current.entries[0]?.type === "activity"
+      ? result.current.entries[0].summary
+      : undefined;
+    expect(originalSummary).toContain("23,000 uncached in");
+    expect(originalSummary).toContain("20,000 cached");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 20_000,
+                cached_input_tokens: 18_285,
+                output_tokens: 90,
+                reasoning_output_tokens: 30,
+                total_tokens: 20_120,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      `activity:${originalSummary}`,
+    ]);
+
+    rerender({
+      thread: { ...buildThread({ id: "thread-1", updatedAt: 2_000 }), model: "gpt-5.5" },
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        `activity:${originalSummary}`,
+      ]);
+    });
+    expect(persistThreadUsageActivity).not.toHaveBeenCalled();
+  });
+
+  it("does not persist pending usage for an unrelated delayed completion", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-2");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                total_tokens: 1_250,
+              },
+              total_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                total_tokens: 1_250,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Older turn done." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(persistThreadUsageActivity).not.toHaveBeenCalled();
+    expect(result.current.runningTurnUsageText).toBe(
+      "Usage so far: 1,000 uncached in · 200 cached · 50 out",
+    );
   });
 
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
@@ -3549,7 +4142,7 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:Done.",
-        "activity:Usage: 1,000 uncached in · 200 cached · 50 out",
+        "activity:Latest request usage: 1,000 uncached in · 200 cached · 50 out",
         "message:Take another look",
       ]);
     });
@@ -5511,6 +6104,8 @@ describe("useThreadSessionState", () => {
       cachedInputTokens: undefined,
       cumulativeCachedInputTokens: undefined,
       cumulativeInputTokens: undefined,
+      cumulativeOutputTokens: undefined,
+      cumulativeReasoningOutputTokens: undefined,
       cumulativeTotalTokens: undefined,
       inputTokens: undefined,
       modelContextWindow: 128_000,
@@ -5580,6 +6175,8 @@ describe("useThreadSessionState", () => {
       cachedInputTokens: undefined,
       cumulativeCachedInputTokens: undefined,
       cumulativeInputTokens: undefined,
+      cumulativeOutputTokens: undefined,
+      cumulativeReasoningOutputTokens: undefined,
       cumulativeTotalTokens: undefined,
       inputTokens: 1_200,
       modelContextWindow: 258_400,
@@ -5644,6 +6241,7 @@ describe("useThreadSessionState", () => {
                 input_tokens: 41_267,
                 cached_input_tokens: 23_808,
                 output_tokens: 75,
+                reasoning_output_tokens: 30,
                 total_tokens: 41_342,
               },
               model_context_window: 258_400,
@@ -5657,6 +6255,8 @@ describe("useThreadSessionState", () => {
       cachedInputTokens: 20_352,
       cumulativeCachedInputTokens: 23_808,
       cumulativeInputTokens: 41_267,
+      cumulativeOutputTokens: 75,
+      cumulativeReasoningOutputTokens: 30,
       cumulativeTotalTokens: 41_342,
       inputTokens: 20_663,
       modelContextWindow: 258_400,

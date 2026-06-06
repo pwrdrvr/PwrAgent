@@ -3,6 +3,7 @@ import type {
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
+  AppServerThreadActivityEntry,
   AppServerThreadImagePart,
   AppServerThreadSummary,
   CodexEnvironmentAction,
@@ -644,6 +645,12 @@ export type ThreadOverlayState = {
    */
   prsRefreshKey?: string;
   /**
+   * PwrAgent-authored finalized token usage rows. These are immutable
+   * transcript activities because provider hydration can later report a
+   * narrower per-request usage payload for the same completed turn.
+   */
+  immutableUsageActivities?: AppServerThreadActivityEntry[];
+  /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize
    * these two fields across app restart. Surfaced on the navigation
@@ -673,6 +680,8 @@ export type ThreadOverlayState = {
  * the cap is exceeded.
  */
 export const MAX_PERMISSION_TRANSITION_LOG_ENTRIES = 100;
+
+export const MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES = 100;
 
 export type ThreadPermissionTransitionStatus =
   | "queued"

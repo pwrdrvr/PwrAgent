@@ -544,8 +544,8 @@ describe("buildTranscriptRenderItems", () => {
     const turn = completedTurn("turn-1", 20_000);
     const usageActivity: AppServerThreadActivityEntry = {
       type: "activity",
-      id: "live-token-usage-turn-1",
-      summary: "Usage: 1.2k uncached in / 0 cached / 12 out",
+      id: "persisted-token-usage-turn-1",
+      summary: "Latest request usage: 1.2k uncached in / 0 cached / 12 out",
       details: [],
       turn,
     };
