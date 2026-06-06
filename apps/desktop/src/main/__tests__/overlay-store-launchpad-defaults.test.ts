@@ -36,6 +36,23 @@ function readDefaultValue(key: string): unknown {
 }
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
+  it("persists the selected navigation browse mode", async () => {
+    expect(store.getNavigationBrowseModeSync()).toBe("inbox");
+
+    await expect(store.setNavigationBrowseMode("directories")).resolves.toBe(
+      "directories",
+    );
+    await expect(store.getNavigationBrowseMode()).resolves.toBe("directories");
+
+    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedStore = new SqliteOverlayStore(reopenedDb);
+    try {
+      expect(reopenedStore.getNavigationBrowseModeSync()).toBe("directories");
+    } finally {
+      reopenedDb.close();
+    }
+  });
+
   it("does not persist Codex Fast serviceTier in launchpad defaults", async () => {
     const defaults = await store.setLaunchpadDefaults({
       model: "gpt-5.5",

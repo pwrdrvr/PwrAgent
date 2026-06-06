@@ -51,6 +51,8 @@ export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =
   "agent:latest-codex-config-warning";
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
+export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
+  "navigation:set-browse-mode";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";

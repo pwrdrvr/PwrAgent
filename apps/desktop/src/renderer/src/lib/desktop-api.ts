@@ -190,6 +190,8 @@ import type {
   WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
+  SetNavigationBrowseModeRequest,
+  SetNavigationBrowseModeResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -406,6 +408,9 @@ export type DesktopApi = {
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
+  setNavigationBrowseMode?: (
+    request: SetNavigationBrowseModeRequest,
+  ) => Promise<SetNavigationBrowseModeResponse>;
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
