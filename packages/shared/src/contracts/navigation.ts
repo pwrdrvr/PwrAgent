@@ -171,6 +171,7 @@ export type PrSummary = {
 };
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
+export type NavigationBrowseMode = "inbox" | "recents" | "directories";
 export type LaunchpadWorkMode = "local" | "worktree";
 
 export type CodexEnvironmentOption = {
@@ -370,6 +371,14 @@ export type NavigationSnapshot = {
 export type GetNavigationSnapshotRequest = {
   backend?: AppServerBackendScope;
   filter?: string;
+};
+
+export type SetNavigationBrowseModeRequest = {
+  browseMode: NavigationBrowseMode;
+};
+
+export type SetNavigationBrowseModeResponse = {
+  browseMode: NavigationBrowseMode;
 };
 
 export type MarkThreadSeenRequest = {

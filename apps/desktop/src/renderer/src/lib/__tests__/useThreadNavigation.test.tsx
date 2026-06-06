@@ -17,6 +17,9 @@ describe("useThreadNavigation", () => {
   });
 
   afterEach(() => {
+    delete (window as unknown as {
+      __pwragentNavigationPreferences?: unknown;
+    }).__pwragentNavigationPreferences;
     vi.restoreAllMocks();
   });
 
@@ -4121,6 +4124,65 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.refresh).toBe(initialRefresh);
+  });
+
+  it("initializes browse mode from bridged navigation preferences", async () => {
+    Object.defineProperty(window, "__pwragentNavigationPreferences", {
+      configurable: true,
+      value: { browseMode: "recents" },
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    expect(result.current.browseMode).toBe("recents");
+  });
+
+  it("persists browse mode changes through the desktop bridge", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setNavigationBrowseMode = vi.fn(async (request) => request);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      setNavigationBrowseMode,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    act(() => {
+      result.current.setBrowseMode("directories");
+    });
+
+    expect(result.current.browseMode).toBe("directories");
+    expect(setNavigationBrowseMode).toHaveBeenCalledWith({
+      browseMode: "directories",
+    });
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {
