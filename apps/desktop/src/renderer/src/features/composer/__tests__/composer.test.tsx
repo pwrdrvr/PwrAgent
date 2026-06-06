@@ -1054,6 +1054,8 @@ describe("Composer", () => {
           cachedInputTokens: 32_000,
           cumulativeCachedInputTokens: 48_000,
           cumulativeInputTokens: 72_000,
+          cumulativeOutputTokens: 8_000,
+          cumulativeReasoningOutputTokens: 4_000,
           cumulativeTotalTokens: 80_000,
           inputTokens: 63_000,
           modelContextWindow: 128_000,
@@ -1092,6 +1094,7 @@ describe("Composer", () => {
         "Current breakdown: 63k input, 32k cached (50.8%), 1k output",
         "Cumulative usage reported: 80k tokens",
         "Cumulative cached input: 48k (66.7%)",
+        "Cumulative output: 8k output, 4k reasoning",
       ].join("\n")
     );
     expect(screen.getByRole("img")).not.toHaveAttribute("title");

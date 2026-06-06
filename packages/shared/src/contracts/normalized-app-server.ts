@@ -591,6 +591,19 @@ export type AppServerReadThreadResponse = {
   threadStatus?: AppServerThreadStatus;
 };
 
+export type PersistThreadUsageActivityRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  activity: AppServerThreadActivityEntry;
+};
+
+export type PersistThreadUsageActivityResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  activityId: string;
+  persisted: boolean;
+};
+
 export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
   cwd?: string;

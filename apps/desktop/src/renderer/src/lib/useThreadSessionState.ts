@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
+  AppServerBackendKind,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
@@ -92,6 +93,8 @@ export type ThreadContextWindowState = {
   cachedInputTokens?: number;
   cumulativeCachedInputTokens?: number;
   cumulativeInputTokens?: number;
+  cumulativeOutputTokens?: number;
+  cumulativeReasoningOutputTokens?: number;
   cumulativeTotalTokens?: number;
   inputTokens?: number;
   modelContextWindow: number;
@@ -102,6 +105,19 @@ export type ThreadContextWindowState = {
   remainingTokens?: number;
   totalTokens: number;
   usedPercent: number;
+};
+
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type TurnUsageAccumulator = {
+  baseline?: TokenUsageBreakdown;
+  turnId: string;
 };
 
 type ThreadSessionEntry = {
@@ -126,6 +142,7 @@ type ThreadSessionEntry = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
   thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
@@ -173,6 +190,46 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
   return [...deduped.values()];
 }
 
+function mergeFinalizedUsageEntry(
+  olderItems: AppServerThreadEntry[],
+  usageEntry: AppServerThreadActivityEntry
+): AppServerThreadEntry[] {
+  const existingEntry = olderItems.find((entry) => entry.id === usageEntry.id);
+  if (
+    existingEntry &&
+    existingEntry.type === "activity" &&
+    isTokenUsageActivityEntry(existingEntry) &&
+    existingEntry.status === "completed"
+  ) {
+    return olderItems;
+  }
+
+  return mergeItems(olderItems, [usageEntry]);
+}
+
+function persistFinalizedUsageEntry(params: {
+  backend: AppServerBackendKind;
+  desktopApi?: DesktopApi;
+  entry?: AppServerThreadActivityEntry;
+  threadId: string;
+}): void {
+  if (
+    !params.entry ||
+    params.entry.status !== "completed" ||
+    tokenUsageActivityScope(params.entry) !== "turn"
+  ) {
+    return;
+  }
+
+  void params.desktopApi?.persistThreadUsageActivity?.({
+    backend: params.backend,
+    threadId: params.threadId,
+    activity: params.entry,
+  }).catch(() => {
+    // Usage display is still correct for the live session; retry on later final updates.
+  });
+}
+
 function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
   if (entry.type === "review") {
     return true;
@@ -189,15 +246,105 @@ function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
 function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "activity" &&
-    (entry.id.startsWith("live-token-usage-") || entry.summary.startsWith("Usage:"))
+    (entry.id.startsWith("live-token-usage-") ||
+      entry.id.startsWith("live-turn-usage-") ||
+      entry.summary.startsWith("Turn usage:") ||
+      entry.summary.startsWith("Usage:") ||
+      entry.summary.startsWith("Latest request usage:"))
   );
+}
+
+function tokenUsageActivityScope(
+  entry: AppServerThreadActivityEntry
+): "latest-request" | "total" | "turn" | undefined {
+  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
+    return "turn";
+  }
+  if (entry.summary.startsWith("Latest request usage:")) {
+    return "latest-request";
+  }
+  if (entry.summary.startsWith("Usage:")) {
+    return "total";
+  }
+  if (entry.id.startsWith("live-token-usage-")) {
+    return "latest-request";
+  }
+  return undefined;
+}
+
+function hasTurnUsageForEntry(
+  entries: AppServerThreadEntry[],
+  usageEntry: AppServerThreadActivityEntry
+): boolean {
+  const turnId = usageEntry.turn?.id;
+  if (!turnId) {
+    return false;
+  }
+
+  return entries.some(
+    (entry) =>
+      entry.type === "activity" &&
+      entry.turn?.id === turnId &&
+      tokenUsageActivityScope(entry) === "turn"
+  );
+}
+
+function shouldSuppressLiveUsageEntry(
+  session: ThreadSessionEntry,
+  usageEntry: AppServerThreadActivityEntry
+): boolean {
+  const scope = tokenUsageActivityScope(usageEntry);
+  if (scope !== "latest-request" && scope !== "total") {
+    return false;
+  }
+
+  return (
+    hasTurnUsageForEntry(session.optimisticEntries, usageEntry) ||
+    hasTurnUsageForEntry(session.response?.replay.entries ?? [], usageEntry)
+  );
+}
+
+function runningTurnUsageTextFromEntry(
+  entry: AppServerThreadActivityEntry | undefined
+): string | undefined {
+  if (!entry || tokenUsageActivityScope(entry) !== "turn") {
+    return undefined;
+  }
+
+  return entry.summary.replace(/^Turn usage:/, "Usage so far:");
+}
+
+function hasOptimisticTurnUsageForEntry(
+  entry: AppServerThreadEntry,
+  optimisticTurnUsageIds: ReadonlySet<string>
+): boolean {
+  return Boolean(entry.turn?.id && optimisticTurnUsageIds.has(entry.turn.id));
 }
 
 function mergeTranscriptEntries(
   responseEntries: AppServerThreadEntry[],
   optimisticEntries: AppServerThreadEntry[]
 ): AppServerThreadEntry[] {
-  const merged = [...responseEntries];
+  const optimisticTurnUsageIds = new Set(
+    optimisticEntries
+      .filter(
+        (entry): entry is AppServerThreadActivityEntry =>
+          entry.type === "activity" &&
+          tokenUsageActivityScope(entry) === "turn" &&
+          Boolean(entry.turn?.id)
+      )
+      .map((entry) => entry.turn?.id as string)
+  );
+  const merged = responseEntries.filter(
+    (entry) => {
+      const usageScope =
+        entry.type === "activity" ? tokenUsageActivityScope(entry) : undefined;
+      return !(
+        (usageScope === "latest-request" || usageScope === "total") &&
+        hasOptimisticTurnUsageForEntry(entry, optimisticTurnUsageIds)
+      );
+    }
+  );
 
   for (const optimisticEntry of optimisticEntries) {
     const existingIndex = merged.findIndex((entry) => entry.id === optimisticEntry.id);
@@ -649,6 +796,19 @@ function activityEntriesMatch(
   candidate: AppServerThreadActivityEntry,
   optimisticEntry: AppServerThreadActivityEntry
 ): boolean {
+  const tokenUsageMatch =
+    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
+  if (
+    tokenUsageMatch &&
+    tokenUsageActivityScope(candidate) !== tokenUsageActivityScope(optimisticEntry)
+  ) {
+    return false;
+  }
+
+  if (tokenUsageMatch && candidate.summary !== optimisticEntry.summary) {
+    return false;
+  }
+
   if (candidate.id === optimisticEntry.id) {
     return true;
   }
@@ -657,8 +817,6 @@ function activityEntriesMatch(
     return false;
   }
 
-  const tokenUsageMatch =
-    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
   return optimisticEntry.details.every((detail) =>
     candidate.details.some((candidateDetail) => {
       if (candidateDetail.id === detail.id) {
@@ -1155,14 +1313,6 @@ function findFirstNestedValue(value: unknown, keys: string[]): unknown {
   return undefined;
 }
 
-type TokenUsageBreakdown = {
-  cachedInputTokens?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  reasoningOutputTokens?: number;
-  totalTokens?: number;
-};
-
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
   const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
@@ -1198,9 +1348,13 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
   };
 }
 
-function normalizeThreadContextWindowState(
-  tokenUsage: unknown
-): ThreadContextWindowState | undefined {
+type TokenUsageRecords = {
+  currentUsage?: TokenUsageBreakdown;
+  latestUsage?: TokenUsageBreakdown;
+  totalUsage?: TokenUsageBreakdown;
+};
+
+function readTokenUsageRecords(tokenUsage: unknown): TokenUsageRecords | undefined {
   const root =
     readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
     readRecord(tokenUsage);
@@ -1208,19 +1362,175 @@ function normalizeThreadContextWindowState(
     return undefined;
   }
 
-  const currentUsageRecord =
+  const latestUsageRecord =
     readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
     readRecord(root.last) ??
-    readRecord(root.last_token_usage) ??
-    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
-    readRecord(root.total) ??
-    readRecord(root.total_token_usage);
+    readRecord(root.last_token_usage);
   const totalUsageRecord =
     readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
     readRecord(root.total) ??
     readRecord(root.total_token_usage);
-  const currentUsage = currentUsageRecord ? readTokenBreakdown(currentUsageRecord) : undefined;
+  const latestUsage = latestUsageRecord ? readTokenBreakdown(latestUsageRecord) : undefined;
   const totalUsage = totalUsageRecord ? readTokenBreakdown(totalUsageRecord) : undefined;
+  const currentUsage = latestUsage ?? totalUsage;
+
+  if (!currentUsage && !latestUsage && !totalUsage) {
+    return undefined;
+  }
+
+  return {
+    currentUsage,
+    latestUsage,
+    totalUsage,
+  };
+}
+
+function tokenBreakdownFromContextCumulative(
+  contextWindow: ThreadContextWindowState | undefined
+): TokenUsageBreakdown | undefined {
+  if (typeof contextWindow?.cumulativeTotalTokens !== "number") {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens: contextWindow.cumulativeCachedInputTokens,
+    inputTokens: contextWindow.cumulativeInputTokens,
+    outputTokens: contextWindow.cumulativeOutputTokens,
+    reasoningOutputTokens: contextWindow.cumulativeReasoningOutputTokens,
+    totalTokens: contextWindow.cumulativeTotalTokens,
+  };
+}
+
+function subtractTokenBreakdowns(
+  total: TokenUsageBreakdown,
+  baseline: TokenUsageBreakdown
+): TokenUsageBreakdown | undefined {
+  const result: TokenUsageBreakdown = {
+    cachedInputTokens: subtractTokenField(total.cachedInputTokens, baseline.cachedInputTokens),
+    inputTokens: subtractTokenField(total.inputTokens, baseline.inputTokens),
+    outputTokens: subtractTokenField(total.outputTokens, baseline.outputTokens),
+    reasoningOutputTokens: subtractTokenField(
+      total.reasoningOutputTokens,
+      baseline.reasoningOutputTokens
+    ),
+    totalTokens: subtractTokenField(total.totalTokens, baseline.totalTokens),
+  };
+
+  return hasTokenBreakdownValue(result) ? result : undefined;
+}
+
+function subtractTokenField(
+  total: number | undefined,
+  baseline: number | undefined
+): number | undefined {
+  if (typeof total !== "number" || typeof baseline !== "number") {
+    return undefined;
+  }
+  return Math.max(0, total - baseline);
+}
+
+function hasTokenBreakdownValue(tokens: TokenUsageBreakdown): boolean {
+  return (
+    typeof tokens.cachedInputTokens === "number" ||
+    typeof tokens.inputTokens === "number" ||
+    typeof tokens.outputTokens === "number" ||
+    typeof tokens.reasoningOutputTokens === "number" ||
+    typeof tokens.totalTokens === "number"
+  );
+}
+
+function tokenUsagePayloadFromBreakdown(tokens: TokenUsageBreakdown): {
+  total: Record<string, number>;
+} {
+  const total: Record<string, number> = {};
+  if (typeof tokens.inputTokens === "number") total.inputTokens = tokens.inputTokens;
+  if (typeof tokens.cachedInputTokens === "number") {
+    total.cachedInputTokens = tokens.cachedInputTokens;
+  }
+  if (typeof tokens.outputTokens === "number") total.outputTokens = tokens.outputTokens;
+  if (typeof tokens.reasoningOutputTokens === "number") {
+    total.reasoningOutputTokens = tokens.reasoningOutputTokens;
+  }
+  if (typeof tokens.totalTokens === "number") total.totalTokens = tokens.totalTokens;
+
+  return { total };
+}
+
+function deriveTurnUsageBaseline(params: {
+  contextWindow?: ThreadContextWindowState;
+  latestUsage?: TokenUsageBreakdown;
+  totalUsage: TokenUsageBreakdown;
+}): TokenUsageBreakdown | undefined {
+  const previousCumulative = tokenBreakdownFromContextCumulative(params.contextWindow);
+  if (previousCumulative) {
+    return previousCumulative;
+  }
+
+  return params.latestUsage
+    ? subtractTokenBreakdowns(params.totalUsage, params.latestUsage)
+    : undefined;
+}
+
+function buildPendingTurnUsage(params: {
+  contextWindow?: ThreadContextWindowState;
+  existing?: TurnUsageAccumulator;
+  model?: string;
+  tokenUsage: unknown;
+  turn?: AppServerThreadTurnMetadata;
+}): {
+  accumulator?: TurnUsageAccumulator;
+  entry?: AppServerThreadActivityEntry;
+} {
+  const turnId = params.turn?.id;
+  const usageRecords = readTokenUsageRecords(params.tokenUsage);
+  const totalUsage = usageRecords?.totalUsage;
+  if (!turnId || !totalUsage) {
+    return {};
+  }
+
+  const existing = params.existing?.turnId === turnId ? params.existing : undefined;
+  const baseline =
+    existing?.baseline ??
+    deriveTurnUsageBaseline({
+      contextWindow: params.contextWindow,
+      latestUsage: usageRecords.latestUsage,
+      totalUsage,
+    });
+  const accumulator: TurnUsageAccumulator = {
+    turnId,
+    ...(baseline ? { baseline } : {}),
+  };
+  const turnUsage = baseline
+    ? subtractTokenBreakdowns(totalUsage, baseline)
+    : usageRecords.latestUsage;
+  const entry = turnUsage
+    ? buildTokenUsageActivityEntry({
+        id: `live-turn-usage-${turnId}`,
+        model: params.model,
+        summaryPrefix: "Turn usage",
+        tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
+        turn: params.turn,
+      })
+    : undefined;
+
+  return {
+    accumulator,
+    ...(entry ? { entry } : {}),
+  };
+}
+
+function normalizeThreadContextWindowState(
+  tokenUsage: unknown
+): ThreadContextWindowState | undefined {
+  const usageRecords = readTokenUsageRecords(tokenUsage);
+  const currentUsage = usageRecords?.currentUsage;
+  const totalUsage = usageRecords?.totalUsage;
+  const root =
+    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
+    readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
   const nestedModelContextWindow = findFirstNestedValue(root, [
     "modelContextWindow",
     "model_context_window",
@@ -1252,6 +1562,12 @@ function normalizeThreadContextWindowState(
       ? totalUsage.cachedInputTokens
       : undefined,
     cumulativeInputTokens: hasDistinctCumulativeUsage ? totalUsage.inputTokens : undefined,
+    cumulativeOutputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.outputTokens
+      : undefined,
+    cumulativeReasoningOutputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.reasoningOutputTokens
+      : undefined,
     cumulativeTotalTokens: hasDistinctCumulativeUsage ? totalUsage.totalTokens : undefined,
     inputTokens: currentUsage.inputTokens,
     modelContextWindow,
@@ -2272,6 +2588,7 @@ export function useThreadSessionState(params: {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  runningTurnUsageText?: string;
   approvalRequestThreadKeys: Record<string, boolean>;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
@@ -2956,6 +3273,7 @@ export function useThreadSessionState(params: {
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
+            pendingTurnUsage: undefined,
           };
         }
 
@@ -3163,6 +3481,9 @@ export function useThreadSessionState(params: {
               pendingRequest: completedTurnMatchesActive
                 ? undefined
                 : current.pendingRequest,
+              pendingTurnUsage: completedTurnMatchesActive
+                ? undefined
+                : current.pendingTurnUsage,
               pendingUserInput: completedTurnMatchesActive
                 ? undefined
                 : current.pendingUserInput,
@@ -3272,9 +3593,17 @@ export function useThreadSessionState(params: {
                 : entry
             );
           const completedUsageActivity =
-            current.pendingUsageActivityEntry && completedTurn
+            current.pendingUsageActivityEntry &&
+            completedTurn &&
+            completedTurnMatchesActive
               ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
-              : current.pendingUsageActivityEntry;
+              : undefined;
+          persistFinalizedUsageEntry({
+            backend: event.backend,
+            desktopApi,
+            entry: completedUsageActivity,
+            threadId: notificationThreadId,
+          });
 
           return {
             ...current,
@@ -3309,7 +3638,10 @@ export function useThreadSessionState(params: {
                 : current.nextLiveEntrySequence,
             optimisticEntries:
               completedTurnMatchesActive && completedUsageActivity
-                ? mergeItems(remainingOptimisticEntries, [completedUsageActivity])
+                ? mergeFinalizedUsageEntry(
+                    remainingOptimisticEntries,
+                    completedUsageActivity
+                  )
                 : remainingOptimisticEntries,
             pendingAssistantMessage: completedTurnMatchesActive
               ? undefined
@@ -3323,6 +3655,9 @@ export function useThreadSessionState(params: {
             pendingUsageActivityEntry: completedTurnMatchesActive
               ? undefined
               : current.pendingUsageActivityEntry,
+            pendingTurnUsage: completedTurnMatchesActive
+              ? undefined
+              : current.pendingTurnUsage,
             pendingUserInput: completedTurnMatchesActive
               ? undefined
               : current.pendingUserInput,
@@ -3362,6 +3697,7 @@ export function useThreadSessionState(params: {
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -3390,6 +3726,7 @@ export function useThreadSessionState(params: {
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -3429,6 +3766,7 @@ export function useThreadSessionState(params: {
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
             pendingUsageActivityEntry: undefined,
+            pendingTurnUsage: undefined,
             pendingStatusText: undefined,
             response: undefined,
           };
@@ -3446,15 +3784,35 @@ export function useThreadSessionState(params: {
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
           });
-          const usageEntry = buildTokenUsageActivityEntry({
-            id: `live-token-usage-${turn?.id ?? notificationThreadId}`,
-            model:
-              thread?.source === event.backend && thread.id === notificationThreadId
-                ? thread.model
-                : undefined,
+          const usageEntryId = `live-token-usage-${turn?.id ?? notificationThreadId}`;
+          const model =
+            thread?.source === event.backend && thread.id === notificationThreadId
+              ? thread.model
+              : undefined;
+          let usageEntry = buildTokenUsageActivityEntry({
+            id: usageEntryId,
+            model,
             tokenUsage: event.notification.params.tokenUsage,
             turn,
           });
+          let pendingTurnUsage = current.pendingTurnUsage;
+          const activeTurnUsage = Boolean(
+            usageEntry &&
+              current.activeTurnId &&
+              turn?.id === current.activeTurnId &&
+              turn.status !== "completed"
+          );
+          if (activeTurnUsage) {
+            const turnUsage = buildPendingTurnUsage({
+              contextWindow: current.contextWindow,
+              existing: current.pendingTurnUsage,
+              model,
+              tokenUsage: event.notification.params.tokenUsage,
+              turn,
+            });
+            pendingTurnUsage = turnUsage.accumulator ?? current.pendingTurnUsage;
+            usageEntry = turnUsage.entry ?? usageEntry;
+          }
           if (!contextWindow && !usageEntry) {
             return current;
           }
@@ -3465,6 +3823,16 @@ export function useThreadSessionState(params: {
               turn?.id === current.activeTurnId &&
               turn.status !== "completed"
           );
+          const suppressUsageEntry =
+            usageEntry && shouldSuppressLiveUsageEntry(current, usageEntry);
+          if (usageEntry && !holdUsageUntilTurnCompletes) {
+            persistFinalizedUsageEntry({
+              backend: event.backend,
+              desktopApi,
+              entry: suppressUsageEntry ? undefined : usageEntry,
+              threadId: notificationThreadId,
+            });
+          }
 
           return {
             ...current,
@@ -3479,11 +3847,16 @@ export function useThreadSessionState(params: {
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
             optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
-              ? mergeItems(current.optimisticEntries, [usageEntry])
+              ? suppressUsageEntry
+                ? current.optimisticEntries
+                : mergeFinalizedUsageEntry(current.optimisticEntries, usageEntry)
               : current.optimisticEntries,
             pendingUsageActivityEntry: holdUsageUntilTurnCompletes
               ? usageEntry
               : current.pendingUsageActivityEntry,
+            pendingTurnUsage: holdUsageUntilTurnCompletes
+              ? pendingTurnUsage
+              : current.pendingTurnUsage,
           };
         }
 
@@ -3681,6 +4054,7 @@ export function useThreadSessionState(params: {
         expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
         interacted: Boolean(turnId) || current.interacted,
         lastTouchedAt: Date.now(),
+        pendingTurnUsage: undefined,
       }));
     },
     [threadKey, updateSession]
@@ -3878,6 +4252,9 @@ export function useThreadSessionState(params: {
     pendingRequest: selectedSession?.pendingRequest,
     pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
+    runningTurnUsageText: runningTurnUsageTextFromEntry(
+      selectedSession?.pendingUsageActivityEntry
+    ),
     approvalRequestThreadKeys,
     removeOptimisticMessage,
     response: selectedSession?.response,

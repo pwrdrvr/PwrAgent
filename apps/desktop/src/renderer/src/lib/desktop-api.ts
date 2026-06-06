@@ -29,6 +29,8 @@ import type {
   ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  PersistThreadUsageActivityRequest,
+  PersistThreadUsageActivityResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -326,6 +328,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  persistThreadUsageActivity?: (
+    request: PersistThreadUsageActivityRequest,
+  ) => Promise<PersistThreadUsageActivityResponse>;
   archiveThread?: (
     request: ArchiveThreadRequest
   ) => Promise<ArchiveThreadResponse>;

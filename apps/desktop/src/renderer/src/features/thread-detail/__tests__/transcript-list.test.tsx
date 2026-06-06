@@ -868,12 +868,16 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         pendingStatusText="Waiting for the app server…"
+        runningTurnUsageText="Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
+    );
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
   });
 

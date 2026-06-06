@@ -21,6 +21,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
+  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
 } from "@pwragent/shared";
@@ -129,6 +130,7 @@ export class SqliteOverlayStore {
           codexEnvironmentRuntime:
             current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
+          immutableUsageActivities: current?.immutableUsageActivities,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -314,6 +316,41 @@ export class SqliteOverlayStore {
   }): Promise<ThreadOverlayState | undefined> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     return this.getThread(threadKey);
+  }
+
+  async persistThreadUsageActivity(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    activity: NonNullable<ThreadOverlayState["immutableUsageActivities"]>[number];
+  }): Promise<{ overlay: ThreadOverlayState; persisted: boolean }> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    if (
+      !params.activity.id.startsWith("live-turn-usage-") &&
+      !params.activity.summary.startsWith("Turn usage:")
+    ) {
+      return { overlay: current, persisted: false };
+    }
+
+    const existingActivities = current.immutableUsageActivities ?? [];
+    if (existingActivities.some((activity) => activity.id === params.activity.id)) {
+      return { overlay: current, persisted: false };
+    }
+
+    const nextState: ThreadOverlayState = {
+      ...current,
+      immutableUsageActivities: [
+        ...existingActivities,
+        params.activity,
+      ].slice(-MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES),
+    };
+    this.putThread(threadKey, nextState);
+    return { overlay: nextState, persisted: true };
   }
 
   async setThreadReaction(params: {
@@ -1160,6 +1197,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadExecutionMode"
   | "getThreadOverlayState"
   | "getThreadOverlayStates"
+  | "persistThreadUsageActivity"
   | "setThreadReaction"
   | "setThreadPin"
   | "setThreadParent"

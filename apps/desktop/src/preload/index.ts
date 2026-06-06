@@ -51,6 +51,8 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  PersistThreadUsageActivityRequest,
+  PersistThreadUsageActivityResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -257,6 +259,7 @@ import {
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+  APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -601,6 +604,13 @@ const desktopApi = Object.freeze({
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_READ_THREAD_CHANNEL, request),
+  persistThreadUsageActivity: async (
+    request: PersistThreadUsageActivityRequest,
+  ): Promise<PersistThreadUsageActivityResponse> =>
+    await ipcRenderer.invoke(
+      APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
+      request,
+    ),
   archiveThread: async (
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> =>

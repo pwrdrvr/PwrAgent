@@ -57,7 +57,7 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry).toMatchObject({
       type: "activity",
       id: "usage-1",
-      summary: expect.stringContaining("19,549 uncached in"),
+      summary: expect.stringContaining("Latest request usage: 19,549 uncached in"),
       status: "completed",
       turn: { id: "turn-1" },
     });
@@ -84,6 +84,7 @@ describe("buildTokenUsageActivityEntry", () => {
       },
     });
 
+    expect(entry?.summary).toContain("Usage: 1,000 uncached in");
     expect(entry?.summary).toContain("$0.006 list price");
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost: $0.006 list price for gpt-5.4-mini",

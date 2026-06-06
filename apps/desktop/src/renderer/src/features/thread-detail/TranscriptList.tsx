@@ -66,6 +66,7 @@ type TranscriptListProps = {
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  runningTurnUsageText?: string;
   pagination?: AppServerThreadReplayPagination;
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
@@ -93,6 +94,7 @@ type ScrollSnapshot = {
   itemCount: number;
   lastMessageId?: string;
   pendingStatusText?: string;
+  runningTurnUsageText?: string;
   scrollHeight: number;
   scrollTop: number;
   threadId?: string;
@@ -346,7 +348,8 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingRequest ||
       props.pendingMcpInteraction ||
       props.pendingUserInput ||
-      props.pendingStatusText
+      props.pendingStatusText ||
+      props.runningTurnUsageText
   );
   const automationThreadTarget = useMemo(
     () => parseThreadIdentity(props.threadId),
@@ -443,7 +446,7 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const visibleItemCount =
     transcriptEntries.length +
-    (props.pendingStatusText ? 1 : 0) +
+    (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0) +
     (props.pendingRequest ? 1 : 0) +
     (props.pendingMcpInteraction ? 1 : 0) +
     (props.pendingUserInput ? 1 : 0);
@@ -497,6 +500,7 @@ export function TranscriptList(props: TranscriptListProps) {
       itemCount: visibleItemCount,
       lastMessageId,
       pendingStatusText: props.pendingStatusText,
+      runningTurnUsageText: props.runningTurnUsageText,
       scrollHeight: container.scrollHeight,
       scrollTop: container.scrollTop,
       threadId: props.threadId
@@ -506,6 +510,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
+    props.runningTurnUsageText,
     props.threadId,
     transcriptEntries,
     visibleItemCount
@@ -667,6 +672,7 @@ export function TranscriptList(props: TranscriptListProps) {
         !hasPrependedMessages &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
+          previousSnapshot.runningTurnUsageText !== props.runningTurnUsageText ||
           previousSnapshot.itemCount < visibleItemCount)
     );
     const hasGrownWhileFollowingBottom = Boolean(
@@ -725,6 +731,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
+    props.runningTurnUsageText,
     props.restoredViewport,
     props.threadId,
     scrollToBottom,
@@ -870,10 +877,15 @@ export function TranscriptList(props: TranscriptListProps) {
               </div>
             );
           })}
-          {props.pendingStatusText ? (
+          {props.pendingStatusText || props.runningTurnUsageText ? (
             <div className="transcript-list__pending" role="status">
-              <ThinkingScanner />
-              <span>{props.pendingStatusText}</span>
+              {props.pendingStatusText ? <ThinkingScanner /> : null}
+              {props.pendingStatusText ? <span>{props.pendingStatusText}</span> : null}
+              {props.runningTurnUsageText ? (
+                <span className="transcript-list__pending-usage">
+                  {props.runningTurnUsageText}
+                </span>
+              ) : null}
             </div>
           ) : null}
           {props.pendingUserInput ? (

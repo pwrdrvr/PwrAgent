@@ -312,7 +312,13 @@ function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.id.startsWith("live-token-usage-") || entry.summary.startsWith("Usage:");
+  return (
+    entry.id.startsWith("live-token-usage-") ||
+    entry.id.startsWith("live-turn-usage-") ||
+    entry.summary.startsWith("Turn usage:") ||
+    entry.summary.startsWith("Usage:") ||
+    entry.summary.startsWith("Latest request usage:")
+  );
 }
 
 function readCompletedTurn(
