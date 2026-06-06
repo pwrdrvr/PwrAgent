@@ -4593,6 +4593,15 @@ describe("CodexAppServerClient", () => {
       sandbox: "workspace-write",
       serviceTier: "fast",
       fastMode: true,
+      codexEnvironmentRuntime: {
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        executionTarget: "local",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          NVM_DIR: "/Users/huntharo/.nvm",
+        },
+      },
     });
 
     expect(forked).toEqual({
@@ -4610,6 +4619,9 @@ describe("CodexAppServerClient", () => {
       serviceTier: "priority",
       config: {
         fast_mode: true,
+        "shell_environment_policy.set.PATH":
+          "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
       },
       excludeTurns: true,
       persistExtendedHistory: false,
@@ -4696,6 +4708,46 @@ describe("CodexAppServerClient", () => {
           deferLoading: false,
         },
       ],
+    });
+
+    await client.close();
+  });
+
+  it("passes local environment shell hydration to Codex thread/start config", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      codexEnvironmentRuntime: {
+        environmentId: "env",
+        environmentName: "Env",
+        executionTarget: "local",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v26.0.0/bin:/usr/bin",
+          NVM_DIR: "/Users/huntharo/.nvm",
+        },
+      },
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const startPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/start");
+
+    expect(startPayload?.params).toMatchObject({
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      config: {
+        "shell_environment_policy.set.PATH":
+          "/Users/huntharo/.nvm/versions/node/v26.0.0/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
+      },
     });
 
     await client.close();
@@ -5471,7 +5523,17 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply to the existing thread" }],
       cwd: "/repo/app/.worktrees/thread-2/app",
-      model: "gpt-5.4"
+      model: "gpt-5.4",
+      codexEnvironmentRuntime: {
+        environmentId: "env",
+        environmentName: "Env",
+        executionTarget: "local",
+        cwd: "/repo/app/.worktrees/thread-2/app",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          NVM_DIR: "/Users/huntharo/.nvm",
+        },
+      },
     });
 
     expect(result).toEqual({
@@ -5503,6 +5565,11 @@ describe("CodexAppServerClient", () => {
     expect(resumePayload?.params).toMatchObject({
       threadId: "thread-2",
       cwd: "/repo/app/.worktrees/thread-2/app",
+      config: {
+        "shell_environment_policy.set.PATH":
+          "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
+      },
     });
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-2",
@@ -5525,6 +5592,14 @@ describe("CodexAppServerClient", () => {
       input: [{ type: "text", text: "Reply quickly" }],
       model: "gpt-5.5",
       fastMode: true,
+      codexEnvironmentRuntime: {
+        environmentId: "env",
+        environmentName: "Env",
+        executionTarget: "local",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        },
+      },
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -5542,6 +5617,11 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           model: "gpt-5.5",
           serviceTier: "priority",
+          config: {
+            fast_mode: true,
+            "shell_environment_policy.set.PATH":
+              "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          },
         }),
       }),
     );
@@ -5723,6 +5803,16 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      cwd: "/Users/example/project",
+      codexEnvironmentRuntime: {
+        environmentId: "env",
+        environmentName: "Env",
+        executionTarget: "local",
+        shellEnvironment: {
+          PATH: "/Users/example/project/.venv/bin:/usr/bin",
+          VIRTUAL_ENV: "/Users/example/project/.venv",
+        },
+      },
     });
 
     expect(result).toEqual({
@@ -5737,6 +5827,21 @@ describe("CodexAppServerClient", () => {
       (message) => JSON.parse(message) as { method?: string; params?: unknown }
     );
     expect(requests.map((request) => request.method)).toContain("thread/resume");
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/resume",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          cwd: "/Users/example/project",
+          "config": {
+            "shell_environment_policy.set.PATH":
+              "/Users/example/project/.venv/bin:/usr/bin",
+            "shell_environment_policy.set.VIRTUAL_ENV":
+              "/Users/example/project/.venv",
+          },
+        }),
+      }),
+    );
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "review/start",

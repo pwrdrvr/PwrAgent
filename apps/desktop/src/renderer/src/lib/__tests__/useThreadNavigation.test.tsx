@@ -2893,6 +2893,15 @@ describe("useThreadNavigation", () => {
       fastMode: true,
       gitBranch: "feature/parent",
       observedGitBranch: "feature/parent",
+      codexEnvironmentRuntime: {
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        executionTarget: "local" as const,
+        cwd: "/repo/app/.worktrees/parent/app",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        },
+      },
       messagingBindings: [
         {
           bindingId: "binding-parent",
@@ -2938,6 +2947,15 @@ describe("useThreadNavigation", () => {
         path: "/repo/app",
         worktreePath: "/repo/app/.worktrees/thread-fork/app",
         kind: "worktree" as const,
+      },
+      codexEnvironmentRuntime: {
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        executionTarget: "local" as const,
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        shellEnvironment: {
+          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        },
       },
     }));
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -2992,6 +3010,11 @@ describe("useThreadNavigation", () => {
           worktreePath: "/repo/app/.worktrees/thread-fork/app",
         },
       ],
+      codexEnvironmentRuntime: {
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+      },
     });
     expect(result.current.selectedThread?.messagingBindings).toBeUndefined();
     expect(result.current.selectedThread?.prs).toBeUndefined();

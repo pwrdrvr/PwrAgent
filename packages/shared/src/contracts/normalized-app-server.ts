@@ -165,6 +165,7 @@ export type CodexThreadEnvironmentRuntime = {
   environmentId: string;
   environmentName: string;
   executionTarget: CodexEnvironmentExecutionTarget;
+  selectedActionIdByEnvironmentId?: Record<string, string>;
   /**
    * CWD used when this environment runtime was selected or last launched.
    * This is persisted runtime state and can become stale after workspace
@@ -179,6 +180,12 @@ export type CodexThreadEnvironmentRuntime = {
   setupOutput?: string;
   setupExitCode?: number;
   setupDurationMs?: number;
+  /**
+   * Non-secret toolchain environment captured after a successful local
+   * Codex environment setup. Used by PwrAgent to start local Codex
+   * app-server threads with the same PATH/version-manager context.
+   */
+  shellEnvironment?: Record<string, string>;
   actions?: CodexEnvironmentAction[];
   /**
    * Live + recently-finished action invocations on this thread, oldest
