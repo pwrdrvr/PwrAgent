@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.24 - 2026-06-06
+
+- Fixed local Codex environment hydration so successful project setup can preserve non-secret toolchain environment values for future local Codex threads and environment actions.
+- Improved terminal outcome notifications with short auto-close behavior, stale notification cleanup when a new turn starts, Show routing, and clearer project/thread context.
+- Added profile-scoped persistence for the selected thread-list lens so PwrAgent reopens on the last-used Inbox, Created, or Directories view without first painting the default tab.
+- Reduced renderer CPU from thinking scanner animations by moving scanner phase alignment into CSS animation delays instead of frame-by-frame root variable updates.
+- Added release maintenance-branch support for future long-lived `releases/<major>.<minor>` patch trains, with CI and release metadata checks covering `releases/**`.
+- Tightened Codex environment profile test isolation so CODEX_HOME assertions no longer leak through the real login-shell environment probe.
+
 ## v1.0.0-beta.23 - 2026-06-05
 
 - Fixed Kimi Code ACP discovery so GUI-launched PwrAgent can find the default `~/.kimi-code/bin/kimi` install path and detect ACP support from the `kimi acp --help` exit code instead of brittle help text.
