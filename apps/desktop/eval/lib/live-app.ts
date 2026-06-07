@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
+import { listCodexEnvironmentOptions } from "../../src/main/app-server/codex-environment-config";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(here, "../..");
@@ -24,6 +25,53 @@ const mainEntry = path.join(desktopRoot, "out/main/index.js");
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+/**
+ * Optionally run a one-time setup in the clone before launching — so the
+ * agents don't each burn tokens running `pnpm install`. Two knobs:
+ *   - EVAL_SETUP_ENV=<name>  run a repo Codex environment's setup script
+ *     (read from <clone>/.codex/environments/*.toml). Benefits ALL backends,
+ *     since they share the clone cwd — even though the env itself is Codex-only.
+ *   - EVAL_SETUP_CMD="<cmd>"  run an explicit shell command instead.
+ * Runs in a login shell in the clone so PATH/pnpm resolve.
+ */
+async function runCloneSetup(clonePath: string): Promise<void> {
+  const explicit = process.env.EVAL_SETUP_CMD?.trim();
+  const envName = process.env.EVAL_SETUP_ENV?.trim();
+  let script = explicit || undefined;
+  let label = explicit ? "EVAL_SETUP_CMD" : undefined;
+
+  if (!script && envName) {
+    const envs = await listCodexEnvironmentOptions(clonePath);
+    const match = envs.find(
+      (e) =>
+        e.name.toLowerCase() === envName.toLowerCase() ||
+        e.id.toLowerCase() === envName.toLowerCase(),
+    );
+    if (!match) {
+      const have = envs.map((e) => e.name).join(", ") || "(none)";
+      throw new Error(
+        `EVAL_SETUP_ENV="${envName}" not found in ${clonePath}/.codex/environments (have: ${have})`,
+      );
+    }
+    if (!match.setupScript) {
+      console.log(`  setup env "${match.name}" has no setup script — skipping`);
+      return;
+    }
+    script = match.setupScript;
+    label = `env:${match.name}`;
+  }
+
+  if (!script) return;
+  const timeoutMs = Number(process.env.EVAL_SETUP_TIMEOUT_MS ?? 900_000);
+  console.log(`  running clone setup (${label}) in ${clonePath} …`);
+  execFileSync("bash", ["-lc", script], {
+    cwd: clonePath,
+    stdio: "inherit",
+    timeout: timeoutMs,
+  });
+  console.log("  clone setup complete");
 }
 
 export type LiveApp = {
@@ -74,6 +122,9 @@ export async function launchLiveApp(opts?: {
   // agents a real git repo to reason about and a throwaway dir to act in.
   git(tmpBase, ["clone", "--quiet", "--no-hardlinks", repoRoot, clonePath]);
   git(clonePath, ["checkout", "--quiet", sha]);
+
+  // Optional one-time setup (e.g. install deps) so agents don't each do it.
+  await runCloneSetup(clonePath);
 
   // Seed the `default` profile so boot opens straight into it with no wizard.
   applyDesktopSettingsPatch(

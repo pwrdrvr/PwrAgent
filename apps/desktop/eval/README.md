@@ -93,6 +93,29 @@ the in-tree normalizer. Pass `EVAL_KEEP_TEMP=1` to retain them.
 | `EVAL_STRICT` | off | non-zero exit if ANY scenario fails (not just `whatis`) |
 | `EVAL_KEEP_TEMP` | off | keep the temp profile / clone / captures dirs |
 | `EVAL_DRIVE_UI` | off | drive the composer UI instead of the IPC (`pnpm eval:smoke:ui`) |
+| `EVAL_SETUP_ENV` | — | run a repo Codex environment's setup script in the clone first (e.g. `PwrAgnt`) |
+| `EVAL_SETUP_CMD` | — | run an explicit setup command in the clone first (e.g. `pnpm install`) |
+| `EVAL_SETUP_TIMEOUT_MS` | `900000` | timeout for the clone setup step |
+
+### Pre-installing deps (cut token usage)
+
+By default the clone has no `node_modules`, so the build / unit-test scenarios
+make each agent install deps itself — slow and token-hungry. To install once up
+front so **every** backend starts ready:
+
+```bash
+# Run the repo's "PwrAgnt" Codex environment setup script in the clone:
+EVAL_SETUP_ENV=PwrAgnt pnpm eval:smoke:ui
+
+# …or run an explicit command:
+EVAL_SETUP_CMD="pnpm install" pnpm eval:smoke
+```
+
+`EVAL_SETUP_ENV` reads `<clone>/.codex/environments/*.toml` (the env ships in
+the repo, so it's in the clone) and runs the named environment's `setup.script`
+in the clone's working dir. Even though Codex environments are Codex-only at
+runtime, running the setup here benefits **all** backends because they share the
+clone cwd.
 
 ```bash
 # Just Codex + Gemini, only the "what is this?" probe, keep transcripts:
