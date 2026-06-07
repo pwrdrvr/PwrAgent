@@ -1,10 +1,42 @@
 ---
 title: "Decision 2: Codex path for Phase B — B-full vs B-wrap (vs staged hybrid)"
-status: decision-draft
+status: decided
 supersedes-note: "Resolves the deferred Decision 2 in 2026-06-06-001 §Decisions."
 ---
 
 # Decision 2 — the Codex path for Phase B
+
+## DECISION (chosen 2026-06-07)
+
+**B-full via agent-kit-first**, with safety nets. The draft analysis below
+recommended a *staged* hybrid (swap engine now, shim features, upstream over
+time); the owner chose the cleaner end-state path instead:
+
+1. **Add every missing Codex feature to agent-kit first** — steering, compaction,
+   review, `fastMode`, the `model/skills/account/rateLimits/mcp` queries, and
+   `thread/read` replay — testing them hard in the kit, **porting PwrAgent's
+   existing Codex tests** (notably the 6,276-line `codex-client.test.ts`). Land
+   these **incrementally** (one PR per feature on `pwrdrvr/agent-kit`).
+2. **Then swap PwrAgent to `ChatThreadController`** and **delete the in-tree
+   `CodexAppServerClient`** + its bespoke normalization in one move.
+3. **Verify, don't pray.** Two non-negotiable gates added to the owner's
+   "test and pray":
+   - **Extend the B1 parity harness to Codex** (replay the smoke eval's real
+     captured `codex-default.jsonl` through old client vs kit path; assert the
+     `AppServerThreadReplay` matches) — built **before** the swap.
+   - **Run the smoke eval** (Codex + ACP, IPC + UI) and the full e2e suite
+     around the swap.
+
+Trade-off accepted: a bigger single swap (vs the staged hybrid's incremental
+one) in exchange for a clean end state — kit hosts everything, PwrAgent keeps no
+custom controller and no interim feature shims. The two gates shrink the
+swap-day risk to a parity-checked surface.
+
+**First action:** build the Codex parity gate (this is the de-risk that
+everything else rides on). Then the agent-kit feature PRs.
+
+---
+
 
 The Wave-2 plan
 ([2026-06-06-001](2026-06-06-001-feat-acp-agent-kit-adoption-and-settings-redesign-plan.md)
