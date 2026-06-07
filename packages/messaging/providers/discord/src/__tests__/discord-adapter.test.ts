@@ -34,6 +34,7 @@ describe("discord adapter", () => {
   it("declares Monitor as a desired Discord application command", () => {
     expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
       "resume",
+      "agent",
       "new",
       "status",
       "detach",

@@ -422,6 +422,23 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Pending skill: $ce:plan");
   });
 
+  it("labels Agent-thread bindings on the status card", () => {
+    const binding = {
+      ...buildBinding(),
+      targetKind: "agent_thread",
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-agent-binding",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Agent binding: Thread one (codex)");
+    expect(intent.text).not.toContain("Binding: Thread one (codex)");
+  });
+
   it("renders inherited streaming as on when the channel default is on", () => {
     const binding = {
       id: "binding-1",

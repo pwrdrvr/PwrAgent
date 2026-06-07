@@ -11301,8 +11301,9 @@ function boundThreadConfirmationBody(
   binding: MessagingBindingRecord,
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
+  const noun = binding.targetKind === "agent_thread" ? "Agent thread" : "thread";
   return [
-    "Messages in this conversation will route to the selected thread.",
+    `Messages in this conversation will route to the selected ${noun}.`,
     sharedConversationMentionInstruction(binding, capabilityProfile),
   ].filter((line): line is string => Boolean(line)).join("\n\n");
 }
@@ -11312,7 +11313,9 @@ function boundThreadFallbackText(
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
   return sharedConversationMentionInstruction(binding, capabilityProfile)
-    ?? "Send a message to continue the thread.";
+    ?? (binding.targetKind === "agent_thread"
+      ? "Send a message to continue with the Agent thread."
+      : "Send a message to continue the thread.");
 }
 
 function sharedConversationMentionInstruction(

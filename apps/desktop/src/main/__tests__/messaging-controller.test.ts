@@ -169,6 +169,13 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       targetKind: "agent_thread",
     });
+    const confirmation = harness.delivered.find(
+      (intent) => intent.kind === "confirmation" && intent.title === "Thread bound",
+    );
+    expect(confirmation).toMatchObject({
+      body: expect.stringContaining("selected Agent thread"),
+      fallbackText: "Send a message to continue with the Agent thread.",
+    });
   });
 
   it("returns from the nested new-thread picker back to the resume browser", async () => {
