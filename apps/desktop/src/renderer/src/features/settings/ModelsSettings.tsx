@@ -223,10 +223,11 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
 
+      {props.snapshot.experimental.agentCoreGrok.value ? (
       <SettingsSection
         eyebrow="Models"
-        title="Grok"
-        description="Only used by the experimental AgentCore - Grok backend (Settings → Experimental). The Grok CLI (ACP) backend authenticates separately through the Grok CLI itself."
+        title="Grok (xAI API)"
+        description="The x.ai API key for the experimental AgentCore - Grok backend (enabled in Settings → Experimental). The Grok CLI (ACP) agent authenticates separately through the Grok CLI itself and is configured under ACP agents below."
       >
         <div className="settings-fields">
           <SettingsField
@@ -290,6 +291,7 @@ export function ModelsSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
     </SettingsSectionStack>
   );
 }

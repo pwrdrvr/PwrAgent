@@ -11551,11 +11551,22 @@ textarea,
   overflow-wrap: anywhere;
 }
 
+.settings-acp-agent-body {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-acp-agent-body__summary {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0;
+}
+
 .settings-acp-instances {
   display: grid;
   gap: 6px;
   list-style: none;
-  margin: 12px 0;
+  margin: 4px 0;
   padding: 0;
 }
 

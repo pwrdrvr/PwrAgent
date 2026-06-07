@@ -6,7 +6,11 @@ import type {
   DesktopSettingsValue,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { SettingsSection } from "./SettingsLayout";
+import {
+  SettingsPanelHead,
+  SettingsSection,
+  SettingsSectionStack,
+} from "./SettingsLayout";
 import { acpStatusLabel } from "./acp-agent-copy";
 
 /** Look up the persisted CLI-path override for an agent by its registry id. */
@@ -81,11 +85,12 @@ export function AcpAgentsSettings(props: {
   }, [props.desktopApi]);
 
   return (
-    <SettingsSection
-      eyebrow="ACP"
-      title="ACP agents"
-      description="ACP agent CLIs (Gemini, Grok, Kimi, Qwen) PwrAgent found on this machine. Pick which install to use when several are found, or set a manual path. Discovered agents are usable as a chat backend."
-    >
+    <SettingsSectionStack paneId="acp-agents" aria-label="ACP agent settings">
+      <SettingsPanelHead
+        eyebrow="ACP"
+        title="ACP agents"
+        help="ACP agent CLIs (Gemini, Grok, Kimi, Qwen) PwrAgent found on this machine. Pick which install to use when several are found, or set a manual path. Discovered agents are usable as a chat backend."
+      />
       <div className="settings-inline-actions">
         <button
           className="button button--secondary"
@@ -104,22 +109,28 @@ export function AcpAgentsSettings(props: {
       {!loading && entries.length === 0 ? (
         <p className="settings-empty">No ACP agents discovered.</p>
       ) : null}
-      <div className="settings-acp-agents">
-        {entries.map((entry) => (
-          <AcpAgentCard
-            key={entry.backendId}
+      {entries.map((entry) => (
+        <SettingsSection
+          key={entry.backendId}
+          eyebrow="ACP"
+          title={entry.name}
+          sectionId={`acp-${entry.registryId}`}
+          chip={acpStatusLabel(entry)}
+          chipKind={entry.installed ? "ok" : "muted"}
+        >
+          <AcpAgentBody
             entry={entry}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             saving={props.saving}
             onCliPathChange={props.onCliPathChange}
           />
-        ))}
-      </div>
-    </SettingsSection>
+        </SettingsSection>
+      ))}
+    </SettingsSectionStack>
   );
 }
 
-function AcpAgentCard(props: {
+function AcpAgentBody(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   saving?: boolean;
@@ -139,10 +150,6 @@ function AcpAgentCard(props: {
     setDraft(savedPath);
   }, [savedPath]);
 
-  const pickInstall = (command: string): void => {
-    void props.onCliPathChange?.(entry.registryId, command);
-  };
-
   const summary = [
     `${installCount} install${installCount === 1 ? "" : "s"} found`,
     entry.version ? `active v${entry.version}` : undefined,
@@ -152,14 +159,10 @@ function AcpAgentCard(props: {
     .join(" · ");
 
   return (
-    <article className="settings-acp-agent">
-      <div className="settings-acp-agent__main">
-        <div>
-          <h3>{entry.name}</h3>
-          <p>{installCount > 0 ? summary : "Not installed"}</p>
-        </div>
-        <span className="settings-acp-agent__status">{acpStatusLabel(entry)}</span>
-      </div>
+    <div className="settings-acp-agent-body">
+      <p className="settings-acp-agent-body__summary">
+        {installCount > 0 ? summary : "Not installed"}
+      </p>
 
       {installCount > 0 ? (
         <ul className="settings-acp-instances">
@@ -169,7 +172,9 @@ function AcpAgentCard(props: {
               instance={instance}
               active={instance.command === entry.activeCommand}
               saving={props.saving}
-              onUse={() => pickInstall(instance.command)}
+              onUse={() => {
+                void props.onCliPathChange?.(entry.registryId, instance.command);
+              }}
             />
           ))}
         </ul>
@@ -213,7 +218,7 @@ function AcpAgentCard(props: {
           {entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason}
         </p>
       ) : null}
-    </article>
+    </div>
   );
 }
 
