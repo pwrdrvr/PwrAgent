@@ -2657,6 +2657,123 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not send /yolo for Kimi once it advertises runtime modes (#658)", async () => {
+    // The #658 fix: when kimi exposes its own runtime modes, approval policy is
+    // controlled via the runtime "yolo" mode (session/set_mode), NOT the legacy
+    // /yolo slash command (which current kimi rejects). So the registry must
+    // suppress the hardcoded execution modes AND never send /yolo.
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const sendControlPrompt = vi.fn(async () => ({ text: "" }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "full-access" }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "kimi-session-1",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      sendControlPrompt,
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "kimi",
+          name: "Kimi Code CLI",
+          version: "1.44.0",
+          distributionKind: "local",
+          distributionSource: "kimi acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-kimi-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "approval-mode",
+                label: "Permission mode",
+                type: "select",
+                category: "mode",
+                currentValue: "default",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "yolo", label: "Yolo" },
+                ],
+              },
+            ],
+          },
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "kimi",
+            distributionKind: "local",
+            command: "kimi",
+            args: ["acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    // The hardcoded Default/Full Access modes are gone — only the runtime
+    // modes remain (one dropdown in the UI).
+    const backends = await registry.listBackends({ includeUnavailable: true });
+    expect(
+      backends.backends.find((backend) => backend.kind === acpBackendId)
+        ?.executionModes,
+    ).toEqual([]);
+
+    // Even a full-access thread + an execution-mode change must NOT send /yolo.
+    await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      executionMode: "full-access",
+    });
+    await registry.setThreadExecutionMode({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "default",
+    });
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
     // Regression test for the Grok-ACP Full Access bug: creating a Grok
     // thread with executionMode="full-access" must persist that mode to
