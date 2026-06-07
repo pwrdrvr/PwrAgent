@@ -1939,9 +1939,14 @@ function upsertLiveActivityEntry(
   }
 
   const lastOptimisticEntry = flushed.optimisticEntries[flushed.optimisticEntries.length - 1];
+  const latestMergedEntry = mergeTranscriptEntries(
+    flushed.response?.replay.entries ?? [],
+    flushed.optimisticEntries
+  ).at(-1);
   const canMergeWithLastActivity =
     lastOptimisticEntry?.type === "activity" &&
-    lastOptimisticEntry.turn?.id === params.turn?.id;
+    lastOptimisticEntry.turn?.id === params.turn?.id &&
+    latestMergedEntry?.id === lastOptimisticEntry.id;
 
   if (canMergeWithLastActivity) {
     const updated = updateActivityEntry(
