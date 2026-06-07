@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type {
+  AcpAgentPreference,
   AcpAgentSettingsEntry,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
@@ -78,7 +79,7 @@ import {
 import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
-import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
+import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
@@ -218,14 +219,12 @@ async function listInstalledAndLocalAcpAgents(
     try {
       const grokOverride = resolveGrokCliPathOverride();
       const qwenOverride = resolveQwenCliPathOverride();
-      discovered = await discoverLocalAcpAgents({
-        overrides:
-          grokOverride || qwenOverride
-            ? {
-                ...(grokOverride ? { grok: grokOverride } : {}),
-                ...(qwenOverride ? { qwen: qwenOverride } : {}),
-              }
-            : undefined,
+      const preferences: Record<string, AcpAgentPreference> = {
+        ...(grokOverride ? { grok: { overridePath: grokOverride } } : {}),
+        ...(qwenOverride ? { qwen: { overridePath: qwenOverride } } : {}),
+      };
+      discovered = await discoverLocalAcpAgentRecords({
+        ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();
@@ -419,6 +418,10 @@ function installedAcpAgentSettingsEntry(
     lastDiscoveredAt: record.lastDiscoveredAt,
     lastDiscoveryError: record.lastDiscoveryError,
     runtime: record.runtimeCapabilities,
+    ...(record.instances !== undefined ? { instances: record.instances } : {}),
+    ...(record.activeCommand !== undefined
+      ? { activeCommand: record.activeCommand }
+      : {}),
   };
 }
 
