@@ -1,4 +1,5 @@
 import type {
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
   DesktopUpdateChannel,
@@ -35,7 +36,6 @@ export type SettingsSection =
   | "experimental"
   | "messaging"
   | "models"
-  | "agents"
   | "profiles"
   | "applications"
   | "worktrees"
@@ -47,8 +47,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
-  { id: "models", label: "Models" },
-  { id: "agents", label: "ACP Agents" },
+  { id: "models", label: "AI Providers" },
   { id: "messaging", label: "Messaging" },
   { id: "worktrees", label: "Worktrees" },
   { id: "thread-management", label: "Thread Management" },
@@ -62,7 +61,6 @@ const PRIMARY_SECTIONS: SettingsSection[] = [
   "applications",
   "profiles",
   "models",
-  "agents",
   "messaging",
 ];
 
@@ -545,26 +543,6 @@ function SettingsSectionBody(props: {
     return <ThreadManagementSettings desktopApi={props.desktopApi} />;
   }
 
-  if (props.section === "agents") {
-    return (
-      <AcpAgentsSettings
-        desktopApi={props.desktopApi}
-        saving={props.settings.saving}
-        snapshot={props.snapshot}
-        onGrokCliPathChange={async (cliPath: string) => {
-          await props.settings.writeConfig({
-            acpAgents: { grok: { cliPath } },
-          });
-        }}
-        onQwenCliPathChange={async (cliPath: string) => {
-          await props.settings.writeConfig({
-            acpAgents: { qwen: { cliPath } },
-          });
-        }}
-      />
-    );
-  }
-
   if (props.section === "applications") {
     return (
       <ApplicationsSettings
@@ -617,27 +595,41 @@ function SettingsSectionBody(props: {
   }
 
   return (
-    <ModelsSettings
-      desktopApi={props.desktopApi}
-      saving={props.settings.saving}
-      snapshot={props.snapshot}
-      onClearSecret={props.settings.clearSecret}
-      onReplaceSecret={props.settings.replaceSecret}
-      onRefresh={props.settings.refresh}
-      onSaveCodexPath={async (path) => {
-        await props.settings.writeConfig({
-          models: {
-            codex: { path },
-          },
-        });
-      }}
-      onSaveCodexProfile={async (profile) => {
-        await props.settings.writeConfig({
-          models: {
-            codex: { profile },
-          },
-        });
-      }}
-    />
+    <>
+      <ModelsSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onClearSecret={props.settings.clearSecret}
+        onReplaceSecret={props.settings.replaceSecret}
+        onRefresh={props.settings.refresh}
+        onSaveCodexPath={async (path) => {
+          await props.settings.writeConfig({
+            models: {
+              codex: { path },
+            },
+          });
+        }}
+        onSaveCodexProfile={async (profile) => {
+          await props.settings.writeConfig({
+            models: {
+              codex: { profile },
+            },
+          });
+        }}
+      />
+      <AcpAgentsSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onCliPathChange={async (registryId, cliPath) => {
+          await props.settings.writeConfig({
+            acpAgents: { [registryId]: { cliPath } } as NonNullable<
+              DesktopSettingsConfigPatch["acpAgents"]
+            >,
+          });
+        }}
+      />
+    </>
   );
 }

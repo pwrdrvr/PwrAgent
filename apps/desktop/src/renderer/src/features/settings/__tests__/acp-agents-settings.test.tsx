@@ -52,6 +52,8 @@ describe("AcpAgentsSettings", () => {
       installStatus: "installed",
       authStatus: "not-required",
       verificationStatus: "not-applicable",
+      instances: [{ command: "gemini", version: "0.42.0", source: "path" }],
+      activeCommand: "gemini",
       lastDiscoveredAt: 1779400000000,
       lastDiscoveryError: "previous probe failed",
       runtime: {
@@ -92,51 +94,64 @@ describe("AcpAgentsSettings", () => {
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
     });
-    expect(screen.getByText("Gemini 3 Flash")).toBeInTheDocument();
-    expect(screen.getByText("Permission mode")).toBeInTheDocument();
-    expect(screen.getByText("Discovered · session-load")).toBeInTheDocument();
+    // The multi-install card shows the discovered install with the "Using"
+    // badge and stays visible while the registry refresh is in flight.
+    expect(screen.getByText("1 install found · active v0.42.0 · auto")).toBeInTheDocument();
+    expect(screen.getByText("Using")).toBeInTheDocument();
     expect(screen.getByText("previous probe failed")).toBeInTheDocument();
-    expect(screen.queryByText("No discovered ACP agents found.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discovering..." })).toBeDisabled();
+    expect(screen.queryByText("No ACP agents discovered.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discovering…" })).toBeDisabled();
 
     resolveRefresh?.({ fetchedAt: 2000, entries: [cachedEntry] });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Discover new" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
     });
   });
 
-  it("renders discovered ACP agents with provenance", async () => {
+  it("renders multiple installs with a 'Use' action and the active one as 'Using'", async () => {
+    const onCliPathChange = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
         entries: [
           {
-            backendId: "acp:gemini",
-            registryId: "gemini",
-            name: "Gemini CLI",
-            description: "Gemini over ACP",
-            version: "0.42.0",
-            license: "Apache-2.0",
-            authors: ["Google"],
-            repositoryUrl: "https://github.com/google-gemini/gemini-cli",
-            distributionKind: "npx",
-            distributionSource: "@google/gemini-cli@0.42.0",
+            backendId: "acp:qwen",
+            registryId: "qwen",
+            name: "Qwen Code",
+            version: "0.17.0",
+            authors: ["Qwen Team"],
+            distributionKind: "local",
+            distributionSource: "/usr/bin/qwen --acp",
             installable: false,
-            installed: false,
-            installStatus: "unavailable",
+            installed: true,
+            installStatus: "installed",
             authStatus: "not-required",
             verificationStatus: "not-applicable",
+            instances: [
+              { command: "/usr/bin/qwen", version: "0.17.0", source: "path" },
+              { command: "/opt/homebrew/bin/qwen", version: "0.16.0", source: "path" },
+            ],
+            activeCommand: "/usr/bin/qwen",
           } satisfies AcpAgentSettingsEntry,
         ],
       })),
     };
 
-    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+    render(
+      <AcpAgentsSettings desktopApi={desktopApi} onCliPathChange={onCliPathChange} />,
+    );
 
-    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
-    expect(screen.getByText("Apache-2.0")).toBeInTheDocument();
-    expect(screen.getByText(/@google\/gemini-cli/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /install/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
+    expect(
+      screen.getByText("2 installs found · active v0.17.0 · auto"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("/usr/bin/qwen")).toBeInTheDocument();
+    expect(screen.getByText("/opt/homebrew/bin/qwen")).toBeInTheDocument();
+    // The active install shows "Using"; the other offers a "Use" action that
+    // pins it by writing its command as the cliPath override.
+    expect(screen.getByText("Using")).toBeInTheDocument();
+    screen.getByRole("button", { name: "Use" }).click();
+    expect(onCliPathChange).toHaveBeenCalledWith("qwen", "/opt/homebrew/bin/qwen");
   });
 
   it("loads exactly once under StrictMode's double-invoked mount effect", async () => {

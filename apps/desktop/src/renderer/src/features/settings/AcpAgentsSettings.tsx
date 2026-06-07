@@ -1,43 +1,37 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  AcpAgentInstance,
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
+  DesktopSettingsValue,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import {
-  SettingsField,
-  SettingsPanelHead,
-  SettingsSection,
-  SettingsSectionStack,
-} from "./SettingsLayout";
-import { sourceBadge } from "./settings-fields";
+import { SettingsSection } from "./SettingsLayout";
 import { acpStatusLabel } from "./acp-agent-copy";
+
+/** Look up the persisted CLI-path override for an agent by its registry id. */
+function cliPathSnapshotFor(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  registryId: string,
+): DesktopSettingsValue<string> | undefined {
+  const agents = snapshot?.acpAgents as
+    | Record<string, { cliPath?: DesktopSettingsValue<string> } | undefined>
+    | undefined;
+  return agents?.[registryId]?.cliPath;
+}
 
 export function AcpAgentsSettings(props: {
   desktopApi?: DesktopApi;
   saving?: boolean;
   snapshot?: DesktopSettingsSnapshot;
-  onGrokCliPathChange?: (cliPath: string) => Promise<void>;
-  onQwenCliPathChange?: (cliPath: string) => Promise<void>;
+  /** Persist a per-agent CLI-path override (also used to "pin" a discovered
+   *  install — picking an install writes its command as the override). */
+  onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const grokCliPathSnapshot = props.snapshot?.acpAgents?.grok?.cliPath;
-  const qwenCliPathSnapshot = props.snapshot?.acpAgents?.qwen?.cliPath;
-  const [grokCliPathDraft, setGrokCliPathDraft] = useState<string>(
-    grokCliPathSnapshot?.value ?? "",
-  );
-  const [qwenCliPathDraft, setQwenCliPathDraft] = useState<string>(
-    qwenCliPathSnapshot?.value ?? "",
-  );
-  useEffect(() => {
-    setGrokCliPathDraft(grokCliPathSnapshot?.value ?? "");
-  }, [grokCliPathSnapshot?.value]);
-  useEffect(() => {
-    setQwenCliPathDraft(qwenCliPathSnapshot?.value ?? "");
-  }, [qwenCliPathSnapshot?.value]);
 
   async function refresh(
     refreshRegistry = false,
@@ -68,22 +62,15 @@ export function AcpAgentsSettings(props: {
     }
   }
 
-  // Run the initial load exactly once. The mount renders cached agents
-  // immediately (refresh(false), a pure cache read — no agent launches), then
-  // does a registry refresh that only probes undiscovered/stale agents. The
-  // ref guards against React StrictMode double-invoking this effect in dev
-  // (the main process also coalesces concurrent refreshes as a backstop).
+  // Run the initial load exactly once. Mount renders cached agents immediately
+  // (refresh(false) — pure cache read, no launches), then a registry refresh
+  // that only probes undiscovered/stale agents. The ref guards React StrictMode
+  // double-invoking this effect in dev (main also coalesces refreshes).
   const didInitialLoad = useRef(false);
   useEffect(() => {
     if (didInitialLoad.current) {
       return;
     }
-    // Don't latch until the preload bridge is actually available. useDesktopApi
-    // resolves the API asynchronously (polling undefined → defined), so this
-    // pane can mount before it's ready. If we latched now we'd stick on the
-    // "unavailable" error forever even after the API arrives. Instead surface
-    // that state without latching and let the effect re-run (dep:
-    // props.desktopApi) to do the real load once the API is present.
     if (!props.desktopApi?.listAcpAgents) {
       void refresh(false);
       return;
@@ -94,266 +81,171 @@ export function AcpAgentsSettings(props: {
   }, [props.desktopApi]);
 
   return (
-    <SettingsSectionStack paneId="acp-agents" aria-label="ACP agent settings">
-      <SettingsPanelHead
-        eyebrow="ACP"
-        title="ACP Agents"
-        help="Manage discovered ACP coding agents and their local runtime capabilities."
-      />
-
-      {props.snapshot && props.onGrokCliPathChange ? (
-        <SettingsSection
-          eyebrow="ACP"
-          title="Grok CLI path"
-          description="Override the executable used by Grok CLI auto-discovery. Leave empty to probe $PATH, ~/.grok/bin/grok, /opt/homebrew/bin/grok, and /usr/local/bin/grok in that order."
+    <SettingsSection
+      eyebrow="ACP"
+      title="ACP agents"
+      description="ACP agent CLIs (Gemini, Grok, Kimi, Qwen) PwrAgent found on this machine. Pick which install to use when several are found, or set a manual path. Discovered agents are usable as a chat backend."
+    >
+      <div className="settings-inline-actions">
+        <button
+          className="button button--secondary"
+          disabled={loading || refreshing}
+          type="button"
+          onClick={() => {
+            // Explicit user action: re-probe every agent, bypassing the cache.
+            void refresh(true, true);
+          }}
         >
-          <div className="settings-fields">
-            <SettingsField
-              label="Custom path"
-              sub="Absolute path to the grok executable. Click Discover new after saving to re-probe."
-              source={
-                grokCliPathSnapshot ? sourceBadge(grokCliPathSnapshot) : undefined
-              }
-              control={
-                <div className="settings-secret">
-                  <input
-                    aria-label="Grok CLI path"
-                    className="settings-input"
-                    disabled={props.saving}
-                    placeholder="/Users/you/.grok/bin/grok"
-                    type="text"
-                    value={grokCliPathDraft}
-                    onChange={(event) =>
-                      setGrokCliPathDraft(event.currentTarget.value)
-                    }
-                  />
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      props.saving ||
-                      grokCliPathDraft.trim() ===
-                        (grokCliPathSnapshot?.value ?? "").trim()
-                    }
-                    type="button"
-                    onClick={() => {
-                      void props.onGrokCliPathChange?.(grokCliPathDraft.trim());
-                    }}
-                  >
-                    Save
-                  </button>
-                  <button
-                    className="button button--ghost"
-                    disabled={props.saving || grokCliPathDraft === ""}
-                    type="button"
-                    onClick={() => {
-                      setGrokCliPathDraft("");
-                      void props.onGrokCliPathChange?.("");
-                    }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              }
+          {refreshing ? "Discovering…" : "Refresh"}
+        </button>
+      </div>
+      {loading ? <p className="settings-empty">Loading ACP agents…</p> : null}
+      {error ? <p className="settings-row__error">{error}</p> : null}
+      {!loading && entries.length === 0 ? (
+        <p className="settings-empty">No ACP agents discovered.</p>
+      ) : null}
+      <div className="settings-acp-agents">
+        {entries.map((entry) => (
+          <AcpAgentCard
+            key={entry.backendId}
+            entry={entry}
+            cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
+            saving={props.saving}
+            onCliPathChange={props.onCliPathChange}
+          />
+        ))}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function AcpAgentCard(props: {
+  entry: AcpAgentSettingsEntry;
+  cliPathSnapshot: DesktopSettingsValue<string> | undefined;
+  saving?: boolean;
+  onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+}) {
+  const { entry } = props;
+  const instances = entry.instances ?? [];
+  const installCount = instances.length;
+  const activeInstance = instances.find(
+    (instance) => instance.command === entry.activeCommand,
+  );
+  const pinned = activeInstance?.source === "override";
+
+  const savedPath = props.cliPathSnapshot?.value ?? "";
+  const [draft, setDraft] = useState(savedPath);
+  useEffect(() => {
+    setDraft(savedPath);
+  }, [savedPath]);
+
+  const pickInstall = (command: string): void => {
+    void props.onCliPathChange?.(entry.registryId, command);
+  };
+
+  const summary = [
+    `${installCount} install${installCount === 1 ? "" : "s"} found`,
+    entry.version ? `active v${entry.version}` : undefined,
+    installCount > 0 ? (pinned ? "pinned" : "auto") : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <article className="settings-acp-agent">
+      <div className="settings-acp-agent__main">
+        <div>
+          <h3>{entry.name}</h3>
+          <p>{installCount > 0 ? summary : "Not installed"}</p>
+        </div>
+        <span className="settings-acp-agent__status">{acpStatusLabel(entry)}</span>
+      </div>
+
+      {installCount > 0 ? (
+        <ul className="settings-acp-instances">
+          {instances.map((instance) => (
+            <AcpInstanceRow
+              key={instance.command}
+              instance={instance}
+              active={instance.command === entry.activeCommand}
+              saving={props.saving}
+              onUse={() => pickInstall(instance.command)}
             />
-          </div>
-        </SettingsSection>
+          ))}
+        </ul>
       ) : null}
 
-      {props.snapshot && props.onQwenCliPathChange ? (
-        <SettingsSection
-          eyebrow="ACP"
-          title="Qwen Code path"
-          description="Override the executable used by Qwen Code auto-discovery. Leave empty to probe $PATH, ~/.qwen/bin/qwen, /opt/homebrew/bin/qwen, and /usr/local/bin/qwen in that order."
-        >
-          <div className="settings-fields">
-            <SettingsField
-              label="Custom path"
-              sub="Absolute path to the qwen executable. Click Discover new after saving to re-probe."
-              source={
-                qwenCliPathSnapshot ? sourceBadge(qwenCliPathSnapshot) : undefined
-              }
-              control={
-                <div className="settings-secret">
-                  <input
-                    aria-label="Qwen Code path"
-                    className="settings-input"
-                    disabled={props.saving}
-                    placeholder="/opt/homebrew/bin/qwen"
-                    type="text"
-                    value={qwenCliPathDraft}
-                    onChange={(event) =>
-                      setQwenCliPathDraft(event.currentTarget.value)
-                    }
-                  />
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      props.saving ||
-                      qwenCliPathDraft.trim() ===
-                        (qwenCliPathSnapshot?.value ?? "").trim()
-                    }
-                    type="button"
-                    onClick={() => {
-                      void props.onQwenCliPathChange?.(qwenCliPathDraft.trim());
-                    }}
-                  >
-                    Save
-                  </button>
-                  <button
-                    className="button button--ghost"
-                    disabled={props.saving || qwenCliPathDraft === ""}
-                    type="button"
-                    onClick={() => {
-                      setQwenCliPathDraft("");
-                      void props.onQwenCliPathChange?.("");
-                    }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              }
-            />
-          </div>
-        </SettingsSection>
-      ) : null}
-
-      <SettingsSection eyebrow="ACP" title="Known agents">
-        <div className="settings-inline-actions">
+      {props.onCliPathChange ? (
+        <div className="settings-secret">
+          <input
+            aria-label={`${entry.name} manual path`}
+            className="settings-input"
+            disabled={props.saving}
+            placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
+            type="text"
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+          />
           <button
             className="button button--secondary"
-            disabled={loading || refreshing}
+            disabled={props.saving || draft.trim() === savedPath.trim()}
+            type="button"
+            onClick={() => props.onCliPathChange?.(entry.registryId, draft.trim())}
+          >
+            Save
+          </button>
+          <button
+            className="button button--ghost"
+            disabled={props.saving || draft === ""}
             type="button"
             onClick={() => {
-              // Explicit user action: force a re-probe of every agent,
-              // bypassing the freshness cache.
-              void refresh(true, true);
+              setDraft("");
+              void props.onCliPathChange?.(entry.registryId, "");
             }}
           >
-            {refreshing ? "Discovering..." : "Discover new"}
+            Clear
           </button>
         </div>
-        {loading ? <p className="settings-empty">Loading ACP agents...</p> : null}
-        {error ? <p className="settings-row__error">{error}</p> : null}
-        {!loading && entries.length === 0 ? (
-          <p className="settings-empty">No discovered ACP agents found.</p>
-        ) : null}
-        <div className="settings-acp-agents">
-          {entries.map((entry) => (
-            <article className="settings-acp-agent" key={entry.backendId}>
-              <div className="settings-acp-agent__main">
-                <div>
-                  <h3>{entry.name}</h3>
-                  <p>{entry.description ?? entry.distributionSource}</p>
-                </div>
-                <span className="settings-acp-agent__status">
-                  {acpStatusLabel(entry)}
-                </span>
-              </div>
-              <dl className="settings-acp-agent__meta">
-                <div>
-                  <dt>Version</dt>
-                  <dd>{entry.version ?? "unknown"}</dd>
-                </div>
-                <div>
-                  <dt>License</dt>
-                  <dd>{entry.license ?? "unknown"}</dd>
-                </div>
-                <div>
-                  <dt>Distribution</dt>
-                  <dd>{entry.distributionKind} · {entry.distributionSource}</dd>
-                </div>
-                <div>
-                  <dt>Verification</dt>
-                  <dd>{entry.verificationStatus}</dd>
-                </div>
-                <div>
-                  <dt>Auth</dt>
-                  <dd>{formatAcpStatusValue(entry.authStatus)}</dd>
-                </div>
-                <div>
-                  <dt>Last checked</dt>
-                  <dd>{formatAcpTimestamp(acpLastCheckedAt(entry))}</dd>
-                </div>
-                {entry.runtime?.status ? (
-                  <div>
-                    <dt>Runtime</dt>
-                    <dd>
-                      {formatAcpStatusValue(entry.runtime.status)}
-                      {entry.runtime.source ? ` · ${entry.runtime.source}` : ""}
-                    </dd>
-                  </div>
-                ) : null}
-                {entry.runtime?.protocolVersion ? (
-                  <div>
-                    <dt>Protocol</dt>
-                    <dd>{entry.runtime.protocolVersion}</dd>
-                  </div>
-                ) : null}
-                {entry.runtime?.modes?.availableModes.length ? (
-                  <div>
-                    <dt>Modes</dt>
-                    <dd>
-                      {entry.runtime.modes.availableModes
-                        .map((mode) => mode.label)
-                        .join(", ")}
-                    </dd>
-                  </div>
-                ) : null}
-                {entry.runtime?.configOptions?.length ? (
-                  <div>
-                    <dt>Options</dt>
-                    <dd>
-                      {entry.runtime.configOptions
-                        .map((option) => option.label)
-                        .join(", ")}
-                    </dd>
-                  </div>
-                ) : null}
-                {entry.runtime?.models?.availableModels.length ? (
-                  <div>
-                    <dt>Models</dt>
-                    <dd>
-                      {entry.runtime.models.availableModels
-                        .map((model) => model.label ?? model.id)
-                        .join(", ")}
-                    </dd>
-                  </div>
-                ) : null}
-              </dl>
-              {entry.repositoryUrl || entry.websiteUrl ? (
-                <p className="settings-acp-agent__links">
-                  {entry.repositoryUrl ? <span>{entry.repositoryUrl}</span> : null}
-                  {entry.websiteUrl ? <span>{entry.websiteUrl}</span> : null}
-                </p>
-              ) : null}
-              {entry.lastDiscoveryError || entry.lastError || entry.unavailableReason ? (
-                <p className="settings-row__error">
-                  {entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason}
-                </p>
-              ) : null}
-            </article>
-          ))}
-        </div>
-      </SettingsSection>
-    </SettingsSectionStack>
+      ) : null}
+
+      {entry.lastDiscoveryError || entry.lastError || entry.unavailableReason ? (
+        <p className="settings-row__error">
+          {entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason}
+        </p>
+      ) : null}
+    </article>
   );
 }
 
-function acpLastCheckedAt(entry: AcpAgentSettingsEntry): number | undefined {
+function AcpInstanceRow(props: {
+  instance: AcpAgentInstance;
+  active: boolean;
+  saving?: boolean;
+  onUse: () => void;
+}) {
+  const { instance } = props;
+  const meta = [
+    instance.version ? `v${instance.version}` : undefined,
+    instance.source === "override" ? "override" : "found",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    entry.lastDiscoveredAt ??
-    entry.runtime?.checkedAt ??
-    entry.runtime?.discoveredAt ??
-    entry.updatedAt
+    <li className="settings-acp-instance">
+      <code className="settings-acp-instance__path">{instance.command}</code>
+      <span className="settings-acp-instance__meta">{meta}</span>
+      {props.active ? (
+        <span className="settings-acp-instance__using">Using</span>
+      ) : (
+        <button
+          className="button button--ghost"
+          disabled={props.saving}
+          type="button"
+          onClick={props.onUse}
+        >
+          Use
+        </button>
+      )}
+    </li>
   );
-}
-
-function formatAcpTimestamp(value: number | undefined): string {
-  return value ? new Date(value).toLocaleString() : "never";
-}
-
-function formatAcpStatusValue(value: string): string {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
