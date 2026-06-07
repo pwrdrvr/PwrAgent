@@ -55,8 +55,7 @@ import {
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import {
-  resolveGrokCliPathOverride,
-  resolveQwenCliPathOverride,
+  resolveAcpCliPathOverride,
 } from "../settings/desktop-config";
 import {
   disposeDesktopBackendRegistry,
@@ -217,12 +216,13 @@ async function listInstalledAndLocalAcpAgents(
   let discovered: AcpInstalledAgentRecord[] = [];
   if (options?.refreshLocal) {
     try {
-      const grokOverride = resolveGrokCliPathOverride();
-      const qwenOverride = resolveQwenCliPathOverride();
-      const preferences: Record<string, AcpAgentPreference> = {
-        ...(grokOverride ? { grok: { overridePath: grokOverride } } : {}),
-        ...(qwenOverride ? { qwen: { overridePath: qwenOverride } } : {}),
-      };
+      const preferences: Record<string, AcpAgentPreference> = {};
+      for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
+        const override = resolveAcpCliPathOverride(registryId);
+        if (override) {
+          preferences[registryId] = { overridePath: override };
+        }
+      }
       discovered = await discoverLocalAcpAgentRecords({
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
       });

@@ -264,7 +264,9 @@ function createSnapshot(
       },
     },
     acpAgents: {
+      gemini: { cliPath: { value: "", source: "default" } },
       grok: { cliPath: { value: "", source: "default" } },
+      kimi: { cliPath: { value: "", source: "default" } },
       qwen: { cliPath: { value: "", source: "default" } },
     },
     applications: {

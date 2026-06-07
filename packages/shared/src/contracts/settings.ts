@@ -540,11 +540,25 @@ export type DesktopSettingsSnapshot = {
     };
   };
   acpAgents: {
+    gemini: {
+      /**
+       * Optional override for the Gemini CLI executable path. When empty,
+       * the kit's discovery probes $PATH + well-known bin dirs.
+       */
+      cliPath: DesktopSettingsValue<string>;
+    };
     grok: {
       /**
        * Optional override for the Grok CLI executable path. When empty,
        * discovery probes the standard locations ($PATH, ~/.grok/bin/grok,
        * /opt/homebrew/bin/grok, /usr/local/bin/grok).
+       */
+      cliPath: DesktopSettingsValue<string>;
+    };
+    kimi: {
+      /**
+       * Optional override for the Kimi Code executable path. When empty,
+       * the kit's discovery probes $PATH + ~/.kimi-code/bin + well-known dirs.
        */
       cliPath: DesktopSettingsValue<string>;
     };
@@ -677,7 +691,13 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   acpAgents?: {
+    gemini?: {
+      cliPath?: string;
+    };
     grok?: {
+      cliPath?: string;
+    };
+    kimi?: {
       cliPath?: string;
     };
     qwen?: {

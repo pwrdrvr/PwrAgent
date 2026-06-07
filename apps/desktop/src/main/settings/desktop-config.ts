@@ -33,7 +33,9 @@ import {
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
+  ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
+  ACP_AGENTS_KIMI_CLI_PATH_ENV,
   ACP_AGENTS_QWEN_CLI_PATH_ENV,
   AGENT_CORE_GROK_ENV,
 } from "./desktop-settings-env";
@@ -174,7 +176,13 @@ export type DesktopSettingsConfig = {
     };
   };
   acpAgents?: {
+    gemini?: {
+      cliPath?: string;
+    };
     grok?: {
+      cliPath?: string;
+    };
+    kimi?: {
       cliPath?: string;
     };
     qwen?: {
@@ -323,6 +331,40 @@ export function resolveQwenCliPathOverride(
   try {
     const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
     return config.acpAgents?.qwen?.cliPath?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
+  gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
+  grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
+  kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,
+  qwen: ACP_AGENTS_QWEN_CLI_PATH_ENV,
+};
+
+/**
+ * Resolve the active override path for any ACP agent's CLI executable
+ * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
+ * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
+ * undefined. Generalizes the per-agent resolvers above to all four agents.
+ */
+export function resolveAcpCliPathOverride(
+  registryId: string,
+  options?: { env?: NodeJS.ProcessEnv },
+): string | undefined {
+  const env = options?.env ?? process.env;
+  const envKey = ACP_CLI_PATH_ENV_BY_ID[registryId];
+  const envOverride = envKey ? env[envKey]?.trim() || undefined : undefined;
+  if (envOverride) {
+    return envOverride;
+  }
+  try {
+    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
+    const agents = config.acpAgents as
+      | Record<string, { cliPath?: string } | undefined>
+      | undefined;
+    return agents?.[registryId]?.cliPath?.trim() || undefined;
   } catch {
     return undefined;
   }
@@ -902,8 +944,14 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.acpAgents?.gemini?.cliPath !== undefined) {
+    set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
+  }
   if (patch.acpAgents?.grok?.cliPath !== undefined) {
     set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
+  }
+  if (patch.acpAgents?.kimi?.cliPath !== undefined) {
+    set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
   }
   if (patch.acpAgents?.qwen?.cliPath !== undefined) {
     set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
@@ -953,7 +1001,9 @@ function normalizeDesktopConfig(
   const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
   const codex = tables["models.codex"];
+  const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
+  const acpAgentsKimi = tables["acp_agents.kimi"];
   const acpAgentsQwen = tables["acp_agents.qwen"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -1149,8 +1199,14 @@ function normalizeDesktopConfig(
       },
     },
     acpAgents: {
+      gemini: {
+        cliPath: readString(acpAgentsGemini?.cli_path),
+      },
       grok: {
         cliPath: readString(acpAgentsGrok?.cli_path),
+      },
+      kimi: {
+        cliPath: readString(acpAgentsKimi?.cli_path),
       },
       qwen: {
         cliPath: readString(acpAgentsQwen?.cli_path),
@@ -1335,15 +1391,25 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.models = { codex };
   }
 
+  const acpAgentsGemini = config.acpAgents?.gemini;
   const acpAgentsGrok = config.acpAgents?.grok;
+  const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
   if (
+    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
     (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
+    (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
     (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
   ) {
     pruned.acpAgents = {
+      ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
+        ? { gemini: acpAgentsGemini }
+        : {}),
       ...(acpAgentsGrok && hasDefinedValue(acpAgentsGrok)
         ? { grok: acpAgentsGrok }
+        : {}),
+      ...(acpAgentsKimi && hasDefinedValue(acpAgentsKimi)
+        ? { kimi: acpAgentsKimi }
         : {}),
       ...(acpAgentsQwen && hasDefinedValue(acpAgentsQwen)
         ? { qwen: acpAgentsQwen }

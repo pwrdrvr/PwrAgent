@@ -37,7 +37,9 @@ import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
+  ACP_AGENTS_KIMI_CLI_PATH_ENV,
   ACP_AGENTS_QWEN_CLI_PATH_ENV,
   AGENT_CORE_GROK_ENV,
   CODEX_COMMAND_ENV,
@@ -686,10 +688,22 @@ export class DesktopSettingsService {
         },
       },
       acpAgents: {
+        gemini: {
+          cliPath: this.resolveString(
+            config.acpAgents?.gemini?.cliPath,
+            ACP_AGENTS_GEMINI_CLI_PATH_ENV,
+          ),
+        },
         grok: {
           cliPath: this.resolveString(
             config.acpAgents?.grok?.cliPath,
             ACP_AGENTS_GROK_CLI_PATH_ENV,
+          ),
+        },
+        kimi: {
+          cliPath: this.resolveString(
+            config.acpAgents?.kimi?.cliPath,
+            ACP_AGENTS_KIMI_CLI_PATH_ENV,
           ),
         },
         qwen: {
