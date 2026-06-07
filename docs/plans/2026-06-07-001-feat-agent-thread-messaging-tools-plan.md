@@ -340,6 +340,8 @@ sequenceDiagram
 
 **Approach:** Reuse existing turn admission and binding refresh. Add Agent-specific copy where a second inbound message targets an Agent thread already running from another surface. The feedback should say the message was queued, superseded, or rejected according to existing queue policy; it should not imply separate per-surface context.
 
+**Progress 2026-06-07:** Verified the existing turn-admission queue is keyed by backend/thread rather than messaging surface for Agent bindings. Added a controller regression that binds Telegram and Discord to the same Agent thread, starts one turn, queues the second surface's message, proves no shadow thread is created, and then promotes the queued message to the same Agent thread after completion. Agent-specific status/binding labels were completed in U4.
+
 **Patterns to follow:** Existing messaging turn admission, thread FIFO behavior, and tool-update policy notices.
 
 **Test scenarios:**

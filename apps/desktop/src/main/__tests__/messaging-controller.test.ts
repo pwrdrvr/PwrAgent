@@ -6106,6 +6106,98 @@ describe("MessagingController", () => {
     });
   });
 
+  it("queues a second surface message on the same Agent thread without creating a shadow thread", async () => {
+    const harness = await createHarness();
+    const telegramChannel = buildTextEvent("ignored").channel;
+    const discordChannel: MessagingInboundTextEvent["channel"] = {
+      channel: "discord",
+      conversation: {
+        id: "discord-dm-1",
+        kind: "dm",
+      },
+    };
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: telegramChannel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:discord:dm::discord-dm-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: discordChannel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start from telegram", { channel: telegramChannel }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("follow up from discord", { channel: discordChannel }),
+    );
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "start from telegram",
+          },
+        ],
+      }),
+    );
+    expect(
+      harness.delivered
+        .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+        .at(-1),
+    ).toMatchObject({
+      body: expect.stringContaining("> follow up from discord"),
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "follow up from discord",
+          },
+        ],
+      }),
+    );
+  });
+
   it("retains queued follow-up input when promotion fails", async () => {
     const harness = await createHarness();
     await bindThread(harness);
