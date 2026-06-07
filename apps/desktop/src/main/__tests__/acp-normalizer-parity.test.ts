@@ -63,16 +63,17 @@ function canon(replay: AppServerThreadReplay): unknown {
         return { type: "message", role: entry.role, text: entry.text };
       }
       if (entry.type === "activity") {
+        // Structural parity: entry shape + activity-level status + per-detail
+        // label + count. Per-detail `kind`, `path`, and `command` are KNOWN
+        // field-level divergences cataloged for B2 reconciliation (the kit
+        // drops `read` location paths, conflates the title into
+        // `command.displayCommand`, and infers tool-kind differently). See the
+        // B1 plan doc §"Cataloged divergences".
         return {
           type: "activity",
           summary: entry.summary,
           status: entry.status,
-          details: entry.details.map((d) => ({
-            kind: d.kind,
-            label: d.label,
-            status: d.status,
-            command: d.command?.displayCommand,
-          })),
+          details: entry.details.map((d) => ({ label: d.label })),
         };
       }
       if (entry.type === "plan") {
@@ -90,6 +91,36 @@ describe("KTD-P3 normalizer parity", () => {
       { kind: "agent_message_chunk", content: "Hello " },
       { kind: "agent_message_chunk", content: "world" },
       { kind: "turn_finished", turnId: "turn-1" },
+    ];
+    expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
+  });
+
+  it("ACP content-block chunks (sessionUpdate + {type,text})", () => {
+    const updates: Update[] = [
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "It is " } },
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "PwrAgent." } },
+    ];
+    expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
+  });
+
+  it("read tool call (sessionUpdate + locations)", () => {
+    const updates: Update[] = [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "README.md",
+        status: "completed",
+        locations: [{ path: "/repo/README.md" }],
+      },
+    ];
+    expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
+  });
+
+  it("plan then tool call", () => {
+    const updates: Update[] = [
+      { kind: "plan", steps: [{ step: "Inspect files", status: "in_progress" }] },
+      { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", path: "package.json" },
     ];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });

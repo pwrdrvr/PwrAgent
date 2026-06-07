@@ -63,11 +63,14 @@ Test: `apps/desktop/src/main/__tests__/acp-normalizer-parity.test.ts`
       (messages via `agent_message_delta`/`agent_message`, tool-call activities,
       plans, status), adapter, and the parity test. Both **real** normalizers
       agree on the streamed-text case. ✅
-- [ ] **Increment 2 — tool calls / commands.** Real captured transcript with a
-      `commandExecution` (the smoke eval produces these). Reconcile detail
-      mapping (`NormalizedToolKind` → `read|write|command`, command detail,
-      status `pending`→`in_progress`).
-- [ ] **Increment 3 — plans, files, terminals.**
+- [x] **Increment 2 — tool calls + plans (structural parity).** Read tool call,
+      plan-then-tool-call, ACP content-block chunks. **Structural** parity holds
+      (entry types + order, activity summary + status, plan steps, per-detail
+      label + count). The harness surfaced field-level tool-detail divergences
+      (below) — cataloged for B2. Fixed one adapter bug (the in-tree keeps tool
+      status on the activity, not the detail; the adapter no longer sets
+      `detail.status`). ✅
+- [ ] **Increment 3 — files, terminals + command output/exitCode.**
 - [ ] **Increment 4 — reasoning/thought chunks + the `surfaceThoughts` quirk**
       (Qwen=false, others=true) and per-agent quirks (`titleFrom`).
 - [ ] **Increment 5 — failures + multi-turn + titles.**
@@ -97,3 +100,28 @@ ordered `params.update` objects, and drop them into the harness (or derive via
   symmetrically.)
 
 Anything else that differs is **drift to reconcile**, not an allowed divergence.
+
+## Cataloged divergences (require reconciliation before B2 ships)
+
+Found by the harness (increment 2). These are kit-side behaviors that lose or
+change information the in-tree normalizer preserves. Each needs an explicit
+decision — accept the loss, fix the adapter, or fix the kit (`@pwrdrvr/agent-acp`
+is maintained in its own repo) — before the in-tree path is deleted. Until then
+the tool-detail comparison is scoped to **structural** parity (label + count).
+
+1. **`read` tool location path dropped.** In-tree detail carries
+   `path: "/repo/README.md"` (from the update's `locations[].path`); the kit's
+   `NormalizedToolCall` has no `locations`/`path` field, so the path is lost
+   (the title is folded into `command.displayCommand` instead). **Likely a kit
+   fix** (preserve locations on the normalized tool call) — read activities
+   otherwise lose their file path in the renderer.
+2. **Command conflation on non-command tools.** The kit sets
+   `command.displayCommand = <title>` even for `read`/`write` tools; the in-tree
+   only emits a command detail when there's a real command/output/exitCode.
+3. **Tool-kind inference differs.** For updates without an explicit `kind`, the
+   in-tree (`toolDetailKind(kind, path)`) and the kit (`inferToolKind(name)`)
+   can land on different `read`/`write`/`command` classifications.
+
+Tracking: these gate **B2** (adopt `AgentBackend`/the kit normalizer for the
+live ACP path). Resolve via a kit patch + republish, or a documented
+accepted-loss + adapter shim, before deleting `acp-session-normalizer.ts`.

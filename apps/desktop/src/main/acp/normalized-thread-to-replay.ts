@@ -93,11 +93,12 @@ function planEntryToReplay(entry: NormalizedPlanEntry): AppServerThreadEntry {
 }
 
 function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDetail {
+  // NOTE: the in-tree normalizer keeps tool status on the ACTIVITY entry, not
+  // the detail (detail has no `status`), so we deliberately don't set it here.
   return {
     id: tool.id,
     kind: detailKind(tool.kind),
     label: tool.label,
-    ...(tool.status ? { status: activityStatus(tool.status) } : {}),
     ...(tool.command
       ? {
           command: {
