@@ -33,7 +33,9 @@ import {
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
+  ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
+  ACP_AGENTS_KIMI_CLI_PATH_ENV,
   ACP_AGENTS_QWEN_CLI_PATH_ENV,
   AGENT_CORE_GROK_ENV,
 } from "./desktop-settings-env";
@@ -174,11 +176,21 @@ export type DesktopSettingsConfig = {
     };
   };
   acpAgents?: {
+    gemini?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     grok?: {
       cliPath?: string;
+      enabled?: boolean;
+    };
+    kimi?: {
+      cliPath?: string;
+      enabled?: boolean;
     };
     qwen?: {
       cliPath?: string;
+      enabled?: boolean;
     };
   };
   applications?: {
@@ -326,6 +338,92 @@ export function resolveQwenCliPathOverride(
   } catch {
     return undefined;
   }
+}
+
+const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
+  gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
+  grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
+  kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,
+  qwen: ACP_AGENTS_QWEN_CLI_PATH_ENV,
+};
+
+/**
+ * Read + normalize the on-disk config, swallowing read/parse errors to an
+ * empty config so callers fall back to defaults. Use this when resolving
+ * several agent settings at once (e.g. all four ACP agents during discovery)
+ * to read + parse the TOML **once** instead of per lookup.
+ */
+export function readDesktopSettingsConfigSafe(): DesktopSettingsConfig {
+  try {
+    return readDesktopSettingsConfig(resolveDesktopConfigPath());
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve an ACP agent's CLI-path override from an already-loaded config.
+ * Order: env var > config (`acpAgents.<id>.cliPath`) > undefined. Prefer this
+ * over {@link resolveAcpCliPathOverride} when resolving multiple agents so the
+ * config is read once by the caller.
+ */
+export function acpCliPathOverrideFor(
+  config: DesktopSettingsConfig,
+  registryId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const envKey = ACP_CLI_PATH_ENV_BY_ID[registryId];
+  const envOverride = envKey ? env[envKey]?.trim() || undefined : undefined;
+  if (envOverride) {
+    return envOverride;
+  }
+  const agents = config.acpAgents as
+    | Record<string, { cliPath?: string } | undefined>
+    | undefined;
+  return agents?.[registryId]?.cliPath?.trim() || undefined;
+}
+
+/**
+ * Whether an ACP agent is enabled, from an already-loaded config. Defaults to
+ * **true** (agents are on unless explicitly disabled). Prefer this over
+ * {@link resolveAcpAgentEnabled} when resolving multiple agents.
+ */
+export function acpAgentEnabledFor(
+  config: DesktopSettingsConfig,
+  registryId: string,
+): boolean {
+  const agents = config.acpAgents as
+    | Record<string, { enabled?: boolean } | undefined>
+    | undefined;
+  return agents?.[registryId]?.enabled !== false;
+}
+
+/**
+ * Resolve the active override path for any ACP agent's CLI executable
+ * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
+ * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
+ * undefined. Single-shot convenience over {@link acpCliPathOverrideFor}.
+ */
+export function resolveAcpCliPathOverride(
+  registryId: string,
+  options?: { env?: NodeJS.ProcessEnv },
+): string | undefined {
+  return acpCliPathOverrideFor(
+    readDesktopSettingsConfigSafe(),
+    registryId,
+    options?.env ?? process.env,
+  );
+}
+
+/**
+ * Whether an ACP agent is enabled as a chat backend (registryId = gemini |
+ * grok | kimi | qwen). Defaults to **true** — agents are usable unless the user
+ * explicitly disabled them via Settings → AI Providers. Read directly from the
+ * on-disk config so the chat-launch path and Settings agree without a snapshot.
+ * Single-shot convenience over {@link acpAgentEnabledFor}.
+ */
+export function resolveAcpAgentEnabled(registryId: string): boolean {
+  return acpAgentEnabledFor(readDesktopSettingsConfigSafe(), registryId);
 }
 
 /**
@@ -902,11 +1000,29 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.acpAgents?.gemini?.cliPath !== undefined) {
+    set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
+  }
+  if (patch.acpAgents?.gemini?.enabled !== undefined) {
+    set(["acp_agents", "gemini", "enabled"], patch.acpAgents.gemini.enabled);
+  }
   if (patch.acpAgents?.grok?.cliPath !== undefined) {
     set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
   }
+  if (patch.acpAgents?.grok?.enabled !== undefined) {
+    set(["acp_agents", "grok", "enabled"], patch.acpAgents.grok.enabled);
+  }
+  if (patch.acpAgents?.kimi?.cliPath !== undefined) {
+    set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
+  }
+  if (patch.acpAgents?.kimi?.enabled !== undefined) {
+    set(["acp_agents", "kimi", "enabled"], patch.acpAgents.kimi.enabled);
+  }
   if (patch.acpAgents?.qwen?.cliPath !== undefined) {
     set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
+  }
+  if (patch.acpAgents?.qwen?.enabled !== undefined) {
+    set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
   }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
@@ -953,7 +1069,9 @@ function normalizeDesktopConfig(
   const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
   const codex = tables["models.codex"];
+  const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
+  const acpAgentsKimi = tables["acp_agents.kimi"];
   const acpAgentsQwen = tables["acp_agents.qwen"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -1149,11 +1267,21 @@ function normalizeDesktopConfig(
       },
     },
     acpAgents: {
+      gemini: {
+        cliPath: readString(acpAgentsGemini?.cli_path),
+        enabled: readBoolean(acpAgentsGemini?.enabled),
+      },
       grok: {
         cliPath: readString(acpAgentsGrok?.cli_path),
+        enabled: readBoolean(acpAgentsGrok?.enabled),
+      },
+      kimi: {
+        cliPath: readString(acpAgentsKimi?.cli_path),
+        enabled: readBoolean(acpAgentsKimi?.enabled),
       },
       qwen: {
         cliPath: readString(acpAgentsQwen?.cli_path),
+        enabled: readBoolean(acpAgentsQwen?.enabled),
       },
     },
     applications: {
@@ -1335,15 +1463,25 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.models = { codex };
   }
 
+  const acpAgentsGemini = config.acpAgents?.gemini;
   const acpAgentsGrok = config.acpAgents?.grok;
+  const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
   if (
+    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
     (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
+    (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
     (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
   ) {
     pruned.acpAgents = {
+      ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
+        ? { gemini: acpAgentsGemini }
+        : {}),
       ...(acpAgentsGrok && hasDefinedValue(acpAgentsGrok)
         ? { grok: acpAgentsGrok }
+        : {}),
+      ...(acpAgentsKimi && hasDefinedValue(acpAgentsKimi)
+        ? { kimi: acpAgentsKimi }
         : {}),
       ...(acpAgentsQwen && hasDefinedValue(acpAgentsQwen)
         ? { qwen: acpAgentsQwen }

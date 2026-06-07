@@ -44,10 +44,12 @@ import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 
 const localAcpDiscoveryMock = vi.hoisted(() => ({
-  discoverLocalAcpAgents: vi.fn(async () => [] as AcpInstalledAgentRecord[]),
+  discoverLocalAcpAgentRecords: vi.fn(
+    async () => [] as AcpInstalledAgentRecord[],
+  ),
 }));
 
-vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+vi.mock("../acp/acp-instance-discovery", () => localAcpDiscoveryMock);
 
 const desktopNotificationServiceMock = vi.hoisted(() => {
   const notifyApproval = vi.fn();

@@ -11,6 +11,7 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type BackendAcpSessionRuntimeState,
+  type AcpAgentPreference,
   type BackendAcpRuntimeCapabilities,
   type BackendCapabilities,
   type BackendLaunchpadOptions,
@@ -34,10 +35,11 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
-import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
+import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
-  resolveGrokCliPathOverride,
-  resolveQwenCliPathOverride,
+  acpAgentEnabledFor,
+  acpCliPathOverrideFor,
+  readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
@@ -676,17 +678,28 @@ export class AcpBackendAdapter {
     this.discoverLocalAcpAgents =
       options.discoverLocalAcpAgents ??
       (async () => {
-        const grokOverride = resolveGrokCliPathOverride();
-        const qwenOverride = resolveQwenCliPathOverride();
-        return await discoverLocalAcpAgents({
-          overrides:
-            grokOverride || qwenOverride
-              ? {
-                  ...(grokOverride ? { grok: grokOverride } : {}),
-                  ...(qwenOverride ? { qwen: qwenOverride } : {}),
-                }
-              : undefined,
+        // Chat-launch discovery runs through the kit's multi-install discovery
+        // (same as the settings path), so the binary that launches is the
+        // resolved active install (override → picked → first) and every agent's
+        // cliPath override is honored — consistent with what Settings shows.
+        // Read + parse the config once for all four agents (override + enabled),
+        // not once per lookup.
+        const config = readDesktopSettingsConfigSafe();
+        const preferences: Record<string, AcpAgentPreference> = {};
+        for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
+          const override = acpCliPathOverrideFor(config, registryId);
+          if (override) {
+            preferences[registryId] = { overridePath: override };
+          }
+        }
+        const records = await discoverLocalAcpAgentRecords({
+          ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         });
+        // Drop agents the user disabled in Settings → AI Providers so they
+        // never surface as launchable chat backends. Defaults to enabled.
+        return records.filter((record) =>
+          acpAgentEnabledFor(config, record.registryId),
+        );
       });
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =

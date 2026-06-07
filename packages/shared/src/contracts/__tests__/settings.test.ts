@@ -251,11 +251,21 @@ describe("desktop settings contracts", () => {
         },
       },
       acpAgents: {
+        gemini: {
+          cliPath: { value: "", source: "default" },
+          enabled: true,
+        },
         grok: {
           cliPath: { value: "", source: "default" },
+          enabled: true,
+        },
+        kimi: {
+          cliPath: { value: "", source: "default" },
+          enabled: true,
         },
         qwen: {
           cliPath: { value: "", source: "default" },
+          enabled: true,
         },
       },
       applications: {

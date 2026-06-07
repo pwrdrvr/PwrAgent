@@ -55,8 +55,8 @@ import {
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import {
-  resolveGrokCliPathOverride,
-  resolveQwenCliPathOverride,
+  acpCliPathOverrideFor,
+  readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
   disposeDesktopBackendRegistry,
@@ -77,6 +77,7 @@ import {
   resolveDefaultCodexHome,
 } from "@pwrdrvr/codex-discovery";
 import { getMainLogger } from "../log";
+import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
@@ -202,10 +203,84 @@ async function listAcpAgentSettingsImpl(
     }
   }
 
+  // Always present every supported provider (Gemini/Grok/Kimi/Qwen) as its own
+  // section, even when nothing was discovered for it — they are known providers
+  // we support via ACP, so an undiscovered one shows a "Not installed" status
+  // instead of vanishing. Fill a placeholder for any built-in strategy that
+  // neither the registry nor local discovery produced an entry for. This makes
+  // the screen independent of registry availability (offline / cold start).
+  const presentBackendIds = new Set(entries.map((entry) => entry.backendId));
+  for (const strategy of BUILT_IN_ACP_STRATEGIES) {
+    if (
+      isBannedAcpRegistryId(strategy.id) ||
+      presentBackendIds.has(`acp:${strategy.id}`)
+    ) {
+      continue;
+    }
+    entries.push(placeholderAcpAgentSettingsEntry(strategy));
+    presentBackendIds.add(`acp:${strategy.id}`);
+  }
+
+  // Stable, predictable order: the built-in catalog order first (Gemini, Grok,
+  // Kimi, Qwen), any extra non-catalog entries after in their existing order.
+  const catalogOrder = new Map(
+    BUILT_IN_ACP_STRATEGIES.map((strategy, index) => [
+      strategy.backendId,
+      index,
+    ]),
+  );
+  const orderedEntries = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => {
+      const ao = catalogOrder.get(a.entry.backendId);
+      const bo = catalogOrder.get(b.entry.backendId);
+      if (ao !== undefined && bo !== undefined) {
+        return ao - bo;
+      }
+      if (ao !== undefined) {
+        return -1;
+      }
+      if (bo !== undefined) {
+        return 1;
+      }
+      return a.index - b.index;
+    })
+    .map(({ entry }) => entry);
+
   return {
     fetchedAt: snapshot?.fetchedAt ?? Date.now(),
-    entries,
+    entries: orderedEntries,
     ...(error ? { error } : {}),
+  };
+}
+
+/**
+ * A synthetic "not installed" entry for a supported ACP provider that neither
+ * local discovery nor the registry produced a record for. Sourced from the
+ * built-in strategy catalog so the provider still renders its own section
+ * (with a not-installed status) instead of disappearing when undiscovered or
+ * when the registry is unavailable.
+ */
+function placeholderAcpAgentSettingsEntry(
+  strategy: AcpAgentStrategy,
+): AcpAgentSettingsEntry {
+  return {
+    backendId: `acp:${strategy.id}`,
+    registryId: strategy.id,
+    name: strategy.displayName,
+    authors: strategy.authors,
+    ...(strategy.license ? { license: strategy.license } : {}),
+    ...(strategy.repositoryUrl
+      ? { repositoryUrl: strategy.repositoryUrl }
+      : {}),
+    distributionKind: "local",
+    distributionSource: `${strategy.id} (not installed)`,
+    installable: false,
+    installed: false,
+    installStatus: "not-installed",
+    authStatus: "not-required",
+    verificationStatus: "unverified-allowed",
+    instances: [],
   };
 }
 
@@ -217,12 +292,14 @@ async function listInstalledAndLocalAcpAgents(
   let discovered: AcpInstalledAgentRecord[] = [];
   if (options?.refreshLocal) {
     try {
-      const grokOverride = resolveGrokCliPathOverride();
-      const qwenOverride = resolveQwenCliPathOverride();
-      const preferences: Record<string, AcpAgentPreference> = {
-        ...(grokOverride ? { grok: { overridePath: grokOverride } } : {}),
-        ...(qwenOverride ? { qwen: { overridePath: qwenOverride } } : {}),
-      };
+      const config = readDesktopSettingsConfigSafe();
+      const preferences: Record<string, AcpAgentPreference> = {};
+      for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
+        const override = acpCliPathOverrideFor(config, registryId);
+        if (override) {
+          preferences[registryId] = { overridePath: override };
+        }
+      }
       discovered = await discoverLocalAcpAgentRecords({
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
       });

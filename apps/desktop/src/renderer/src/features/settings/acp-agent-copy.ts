@@ -10,5 +10,8 @@ export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (entry.installStatus === "install-failed") {
     return "Discovery failed";
   }
+  if (entry.installStatus === "not-installed") {
+    return "Not installed";
+  }
   return "Unavailable";
 }

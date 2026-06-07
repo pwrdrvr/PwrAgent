@@ -540,6 +540,19 @@ export type DesktopSettingsSnapshot = {
     };
   };
   acpAgents: {
+    gemini: {
+      /**
+       * Optional override for the Gemini CLI executable path. When empty,
+       * the kit's discovery probes $PATH + well-known bin dirs.
+       */
+      cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
+    };
     grok: {
       /**
        * Optional override for the Grok CLI executable path. When empty,
@@ -547,6 +560,25 @@ export type DesktopSettingsSnapshot = {
        * /opt/homebrew/bin/grok, /usr/local/bin/grok).
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
+    };
+    kimi: {
+      /**
+       * Optional override for the Kimi Code executable path. When empty,
+       * the kit's discovery probes $PATH + ~/.kimi-code/bin + well-known dirs.
+       */
+      cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
     qwen: {
       /**
@@ -555,6 +587,12 @@ export type DesktopSettingsSnapshot = {
        * /opt/homebrew/bin/qwen, /usr/local/bin/qwen).
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
   };
   applications: DesktopApplicationsSnapshot;
@@ -677,11 +715,21 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   acpAgents?: {
+    gemini?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     grok?: {
       cliPath?: string;
+      enabled?: boolean;
+    };
+    kimi?: {
+      cliPath?: string;
+      enabled?: boolean;
     };
     qwen?: {
       cliPath?: string;
+      enabled?: boolean;
     };
   };
   applications?: {
