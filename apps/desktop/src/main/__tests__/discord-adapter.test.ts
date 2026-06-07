@@ -60,6 +60,17 @@ describe("DiscordAdapter", () => {
             },
           ],
         }),
+        createApplicationCommand("cmd-agent", {
+          description: "Choose a PwrAgent Agent thread to control from this conversation.",
+          name: "agent",
+          options: [
+            {
+              description: "Optional Agent filter text or resume flags.",
+              name: "args",
+              type: 3,
+            },
+          ],
+        }),
         createApplicationCommand("cmd-status", {
           description: "Show the current PwrAgent thread binding and controls.",
           name: "status",
@@ -144,7 +155,13 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(3);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(4);
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      DISCORD_APP_ID,
+      expect.objectContaining({
+        name: "agent",
+      }),
+    );
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -182,7 +199,7 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(5);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(6);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -353,6 +370,9 @@ describe("DiscordAdapter", () => {
             components: [
               expect.objectContaining({
                 label: "Projects",
+              }),
+              expect.objectContaining({
+                label: "Agents",
               }),
               expect.objectContaining({
                 label: "New",
@@ -594,6 +614,7 @@ describe("DiscordAdapter", () => {
       "10. Thread 10",
       "Previous",
       "Projects",
+      "Agents",
       "New",
       "Cancel",
     ]);

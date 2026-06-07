@@ -135,15 +135,13 @@ describe("messaging resume browser", () => {
         ],
         actions: expect.arrayContaining([
           expect.objectContaining({ id: "browse:mode:recents" }),
+          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
           expect.objectContaining({ id: "browse:cancel" }),
         ]),
       },
     });
     expect(intent.fallbackText).toContain("Agent thread");
     expect(intent.fallbackText).not.toContain("Ordinary thread");
-    expect(intent.page.actions).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "browse:mode:new" })]),
-    );
   });
 
   it("renders Grok worktree threads with the primary project label", () => {
