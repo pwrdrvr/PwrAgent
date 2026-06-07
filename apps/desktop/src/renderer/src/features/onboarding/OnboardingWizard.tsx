@@ -587,6 +587,39 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           );
         }
       }
+      // Dev mode (`pnpm dev`) can't spawn a working second Electron
+      // instance: a detached child process can't re-attach to
+      // electron-vite's single Vite dev server, so the auto-switch-into-
+      // profile window never comes up (it lands at chrome-error://) and
+      // `waitForProfileAlive` just times out. Graduation has already
+      // persisted the profile AND set it as the registry default, so
+      // there's nothing left to do but tell the operator how to open it
+      // and exit. The next launch — `pnpm dev` (the graduated profile is
+      // now the default) or `PWRAGENT_PROFILE=<name> pnpm dev` — boots
+      // straight into it. Production builds relaunch reliably, so they
+      // keep the spawn-and-switch path below.
+      if (import.meta.env.DEV && props.bootInfo?.mode === "bootstrap") {
+        // eslint-disable-next-line no-console
+        console.info(
+          `Onboarding: profile "${targetProfile}" is set up and ready. Dev mode `
+            + "can't open a second app instance, so PwrAgent will exit now — "
+            + `relaunch with \`PWRAGENT_PROFILE=${targetProfile} pnpm dev\` `
+            + `(or just \`pnpm dev\`, since "${targetProfile}" is now the default `
+            + "profile) to open it.",
+        );
+        if (api.quitApp) {
+          try {
+            await api.quitApp();
+          } catch (caught) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              "Onboarding: quitApp after graduation (dev) failed",
+              caught,
+            );
+          }
+        }
+        return;
+      }
       try {
         await api.openPwrAgentProfile({ profile: targetProfile });
       } catch (caught) {
