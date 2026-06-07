@@ -37,6 +37,14 @@ export type LiveApp = {
   capturesDir: string;
   /** Resolved SHA the clone was checked out at. */
   sha: string;
+  /**
+   * Focus a thread in the renderer — same path the app uses for menu / deep-
+   * link navigation (`window:show-thread` → `navigation.showThread`). We create
+   * threads via IPC, which doesn't auto-navigate the UI the way clicking "Start
+   * thread" does, so call this to make each thread render live (transcript +
+   * approval prompts) and watchable.
+   */
+  focusThread: (backend: string, threadId: string) => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -104,6 +112,25 @@ export async function launchLiveApp(opts?: {
   });
   const page = await electronApp.firstWindow();
 
+  const focusThread = async (backend: string, threadId: string): Promise<void> => {
+    // Run in the MAIN process and push the existing `window:show-thread`
+    // channel to the renderer — the renderer's onShowThreadRequested handler
+    // switches to the thread view and selects it, exactly like a menu/deep-link
+    // navigation. Channel literal mirrors WINDOW_SHOW_THREAD_CHANNEL.
+    await electronApp
+      .evaluate(
+        ({ BrowserWindow }, req) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send("window:show-thread", req);
+            }
+          }
+        },
+        { backend, threadId },
+      )
+      .catch(() => undefined);
+  };
+
   const cleanup = async (): Promise<void> => {
     await electronApp.close().catch(() => undefined);
     if (!opts?.keepTemp) {
@@ -118,6 +145,7 @@ export async function launchLiveApp(opts?: {
     clonePath,
     capturesDir,
     sha,
+    focusThread,
     cleanup,
   };
 }

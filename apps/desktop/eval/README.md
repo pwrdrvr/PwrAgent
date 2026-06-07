@@ -43,6 +43,17 @@ pnpm eval:smoke
   build is green.)
 - **Cleaned up** on exit (pass `EVAL_KEEP_TEMP=1` to keep the dirs).
 
+## What renders in the window
+
+The eval **creates threads via the backend IPC** (`startThread`) rather than by
+driving the composer, so it does not animate the pre-thread launchpad or the
+settings dropdowns. It DOES focus each thread as it runs (via the same
+`window:show-thread` navigation the menu/deep-links use), so you can watch the
+transcript stream and approval prompts appear live. If you want the eval to also
+exercise the composer launchpad UI (select backend / access mode / type / click
+Start), that's a heavier DOM-driven mode we can add — the IPC path was chosen
+for robustness and to exercise the full real backend stack.
+
 ## Transcript capture (feeds Phase B / KTD-P3)
 
 Every run enables protocol capture (`PWRAGENT_PROTOCOL_CAPTURE=1`) and writes

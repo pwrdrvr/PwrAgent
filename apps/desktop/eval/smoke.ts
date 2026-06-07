@@ -173,6 +173,9 @@ async function main(): Promise<void> {
           const threadId = await driver.startThread(backend.kind, app.clonePath, sc.mode);
           // Belt-and-suspenders: pin the mode explicitly post-create.
           await driver.setExecutionMode(backend.kind, threadId, sc.mode).catch(() => undefined);
+          // Focus the thread so it renders live (transcript + approvals) and is
+          // watchable — IPC thread creation doesn't auto-navigate the UI.
+          await app.focusThread(backend.kind, threadId);
           const turnId = await driver.startTurn(backend.kind, threadId, sc.prompt, sc.mode);
           const outcome = await driver.waitForTurn(backend.kind, threadId, turnId, {
             timeoutMs: sc.timeoutMs,
