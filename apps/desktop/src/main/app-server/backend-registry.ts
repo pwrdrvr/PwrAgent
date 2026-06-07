@@ -101,6 +101,7 @@ import {
   type SteerTurnResponse,
   type StartReviewRequest,
   type StartReviewResponse,
+  type StartThreadRequest,
   type StartThreadResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
@@ -160,7 +161,6 @@ import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
-  buildAutomationInspectionDynamicToolSpecs,
   handleAutomationInspectionDynamicToolCall,
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
@@ -178,6 +178,7 @@ import {
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
+import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -5107,6 +5108,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
@@ -5189,16 +5191,27 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
-    const dynamicTools =
+    const agentToolCatalogs = resolveAgentToolCatalogs({
+      agent: request.agent,
+      automationInspectionHandler: this.automationInspectionHandler,
+    });
+    const resolvedDynamicTools =
       backend === "codex"
         ? [
-            ...buildAutomationInspectionDynamicToolSpecs(),
+            ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
             ...buildTaskMonitorDynamicToolSpecs("parent"),
           ]
         : undefined;
+    const dynamicTools = resolvedDynamicTools?.length
+      ? resolvedDynamicTools
+      : undefined;
     if (dynamicTools?.length) {
-      backendRegistryLog.info("attaching codex dynamic tools", {
+      backendRegistryLog.info("attaching agent tool catalogs", {
         backend,
+        catalogFingerprints: agentToolCatalogs.map(
+          (catalog) => catalog.summary.fingerprint,
+        ),
+        catalogs: agentToolCatalogs.map((catalog) => catalog.id),
         toolCount: dynamicTools.length,
         tools: dynamicTools.map((tool) => tool.name),
       });
@@ -5272,6 +5285,14 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
+    }
+    if (request.agent) {
+      await this.overlayStore.setThreadAgent({
+        backend,
+        threadId: result.threadId,
+        agent: request.agent,
+      });
+      this.invalidateThreadListCache(backend);
     }
     if (request.codexEnvironmentRuntime) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({

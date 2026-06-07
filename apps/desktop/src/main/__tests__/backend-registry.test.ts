@@ -4994,7 +4994,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("passes automation inspection dynamic tools when starting Codex threads", async () => {
+  it("passes task monitor tools but not Agent tools when starting ordinary Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -5011,6 +5011,44 @@ script = "echo setup"
     });
 
     await registry.startThread({ backend: "codex" });
+
+    const dynamicTools = codexClient.lastStartThreadParams?.dynamicTools as
+      | Array<{ namespace: string; name: string }>
+      | undefined;
+    expect(dynamicTools).toEqual([
+      expect.objectContaining({
+        namespace: "pwragent_task_monitors",
+        name: "create_monitor_delegation",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("passes Agent dynamic tools when starting Agent Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      agent: {
+        name: "Inbox Agent",
+        instructions: "Track inbox automations.",
+      },
+    });
 
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
@@ -5036,6 +5074,16 @@ script = "echo setup"
         ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: expect.objectContaining({
+        name: "Inbox Agent",
+      }),
+    });
 
     await registry.close();
   });
@@ -6769,12 +6817,7 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent_automations",
-          name: "list_automations",
-        }),
-      ]),
+      dynamicTools: undefined,
     });
 
     await registry.close();

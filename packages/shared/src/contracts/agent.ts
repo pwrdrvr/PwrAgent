@@ -23,6 +23,14 @@ import type {
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
+  /**
+   * When present, start the thread as an Agent/persona thread and attach
+   * Agent-scoped tool catalogs during backend startup.
+   */
+  agent?: {
+    name: string;
+    instructions?: string;
+  };
   executionMode?: ThreadExecutionMode;
   cwd?: string;
   model?: string;
