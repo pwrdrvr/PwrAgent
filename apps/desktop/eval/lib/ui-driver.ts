@@ -64,11 +64,12 @@ export class UiDriver {
 
   /** Open the new-thread launchpad for a directory shown in the sidebar. */
   async openLaunchpad(dirLabel: string): Promise<void> {
-    // The directory rows live under the "Directories" sidebar tab.
-    const dirTab = this.page.getByRole("button", { name: "Directories", exact: true });
-    if (await dirTab.isVisible().catch(() => false)) {
-      await dirTab.click().catch(() => undefined);
-    }
+    // The directory rows live under the "Directories" sidebar tab (role=tab,
+    // not button — clicking the wrong role silently no-ops and the launchpad
+    // button never renders).
+    const dirTab = this.page.getByRole("tab", { name: "Directories", exact: true });
+    await dirTab.waitFor({ state: "visible", timeout: 15_000 });
+    await dirTab.click();
     const launch = this.page.getByRole("button", {
       name: `Open new thread launchpad for ${dirLabel}`,
     });

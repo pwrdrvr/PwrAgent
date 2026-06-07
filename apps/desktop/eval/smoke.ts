@@ -128,7 +128,10 @@ async function main(): Promise<void> {
 
   const driver = new LiveDriver(app.page);
   const ui = new UiDriver(app.page, app.capturesDir);
-  const dirLabel = path.basename(app.clonePath);
+  // Updated to the registered label after registerDirectory (the sidebar
+  // launchpad button is keyed on the directory's label, which may differ from
+  // the clone's basename). Falls back to basename.
+  let dirLabel = path.basename(app.clonePath);
 
   /**
    * Create a thread for a cell. In UI-drive mode this drives the composer
@@ -144,6 +147,9 @@ async function main(): Promise<void> {
     prompt: string,
   ): Promise<{ threadId: string; tag: string }> => {
     if (driveUi) {
+      // Drive the composer. A UI failure FAILS the cell (with a screenshot) —
+      // no IPC fallback, since the whole point of UI-drive is to catch exactly
+      // these "the control wasn't there / wasn't reachable" problems.
       try {
         const before = new Set(await driver.listThreadIds(backend));
         await ui.openLaunchpad(dirLabel);
@@ -170,17 +176,16 @@ async function main(): Promise<void> {
         );
         return { threadId, tag: "UI" };
       } catch (uiErr) {
-        const msg = uiErr instanceof Error ? uiErr.message : String(uiErr);
-        console.error(`    ✖ UI drive failed (${msg}); falling back to IPC`);
-        await ui.screenshot(`ui-fallback-${backend.replace(/[:]/g, "_")}-${mode}`);
+        await ui.screenshot(`ui-fail-${backend.replace(/[:]/g, "_")}-${mode}`);
+        throw uiErr;
       }
     }
-    // IPC path (default, or UI fallback).
+    // IPC path (default mode).
     const threadId = await driver.startThread(backend, app.clonePath, mode);
     await driver.setExecutionMode(backend, threadId, mode).catch(() => undefined);
     await app.focusThread(backend, threadId);
     await driver.startTurn(backend, threadId, prompt, mode);
-    return { threadId, tag: driveUi ? "IPC(fallback)" : "IPC" };
+    return { threadId, tag: "IPC" };
   };
 
   // Cells keyed `${backend}::${scenarioId}` → graded result.
@@ -198,6 +203,9 @@ async function main(): Promise<void> {
     if (!reg.ok) {
       throw new Error(`registerDirectoryFromDisk failed: ${reg.reason} — ${reg.message}`);
     }
+    // The sidebar launchpad button is keyed on the directory's label.
+    dirLabel = reg.directoryLabel;
+    console.log(`  registered directory: "${dirLabel}"`);
 
     const { backends } = await driver.listBackends();
     let usable = backends.filter(

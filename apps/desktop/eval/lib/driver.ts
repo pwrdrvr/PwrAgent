@@ -115,7 +115,7 @@ export class LiveDriver {
     path: string,
     preferredBackend?: BackendKind,
   ): Promise<
-    | { ok: true; directoryPath: string; directoryKey: string }
+    | { ok: true; directoryPath: string; directoryKey: string; directoryLabel: string }
     | { ok: false; reason: string; message: string }
   > {
     return this.call("registerDirectoryFromDisk", {
