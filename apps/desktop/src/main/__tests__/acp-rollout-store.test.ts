@@ -145,4 +145,58 @@ describe("AcpRolloutStore", () => {
       expect.objectContaining({ kind: "turn_finished" }),
     ]);
   });
+
+  it("does not persist Gemini's <session_context> boilerplate (no reload pollution)", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:gemini" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { kind: "pwragent_user_prompt", prompt: "What is this project?", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { kind: "agent_message_chunk", content: { type: "text", text: "It is PwrAgent." } },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { kind: "turn_finished", turnId: "turn-1" },
+    });
+    // Simulate a reload: session/load replays the environment block as a
+    // user_message_chunk. Without the guard this would be appended on every
+    // reload, permanently polluting the rollout.
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 2000,
+      update: {
+        kind: "user_message_chunk",
+        text: "<session_context>\nThis is the Gemini CLI.\n…\n</session_context>",
+      },
+    });
+
+    const updates = store.readUpdates({ backendId, sessionId: "session-1" });
+    expect(
+      updates.some(
+        (record) =>
+          (record.update.kind ?? record.update.session_update) ===
+          "user_message_chunk",
+      ),
+    ).toBe(false);
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+    expect(
+      replay.messages.some((message) => message.text.includes("session_context")),
+    ).toBe(false);
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "What is this project?" }),
+      expect.objectContaining({ role: "assistant", text: "It is PwrAgent." }),
+    ]);
+  });
 });

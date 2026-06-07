@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AcpBackendId, AppServerThreadReplay } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  isAcpSessionContextBoilerplate,
   readAcpContentText,
   readAcpTopicTitle,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -193,6 +194,16 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
     return false;
   }
   if (readAcpTopicTitle(update)) {
+    return false;
+  }
+  // Don't persist Gemini's <session_context> boilerplate. It arrives as a
+  // user_message_chunk during session/load replay, so without this guard every
+  // reload appends another copy to the rollout — permanently polluting the
+  // durable history with environment setup text.
+  if (
+    kind === "user_message_chunk" &&
+    isAcpSessionContextBoilerplate(readUpdateText(update))
+  ) {
     return false;
   }
   return kind !== "unknown";
