@@ -37,7 +37,9 @@ import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
+  ACP_AGENTS_KIMI_CLI_PATH_ENV,
   ACP_AGENTS_QWEN_CLI_PATH_ENV,
   AGENT_CORE_GROK_ENV,
   CODEX_COMMAND_ENV,
@@ -686,17 +688,33 @@ export class DesktopSettingsService {
         },
       },
       acpAgents: {
+        gemini: {
+          cliPath: this.resolveString(
+            config.acpAgents?.gemini?.cliPath,
+            ACP_AGENTS_GEMINI_CLI_PATH_ENV,
+          ),
+          enabled: config.acpAgents?.gemini?.enabled ?? true,
+        },
         grok: {
           cliPath: this.resolveString(
             config.acpAgents?.grok?.cliPath,
             ACP_AGENTS_GROK_CLI_PATH_ENV,
           ),
+          enabled: config.acpAgents?.grok?.enabled ?? true,
+        },
+        kimi: {
+          cliPath: this.resolveString(
+            config.acpAgents?.kimi?.cliPath,
+            ACP_AGENTS_KIMI_CLI_PATH_ENV,
+          ),
+          enabled: config.acpAgents?.kimi?.enabled ?? true,
         },
         qwen: {
           cliPath: this.resolveString(
             config.acpAgents?.qwen?.cliPath,
             ACP_AGENTS_QWEN_CLI_PATH_ENV,
           ),
+          enabled: config.acpAgents?.qwen?.enabled ?? true,
         },
       },
       applications: {

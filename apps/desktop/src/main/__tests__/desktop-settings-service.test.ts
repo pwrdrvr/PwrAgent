@@ -961,6 +961,34 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults ACP agents to enabled and round-trips a disable through write + read", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Unset → enabled by default (on-by-default policy).
+    const initial = await service.readSettings();
+    expect(initial.acpAgents.gemini.enabled).toBe(true);
+    expect(initial.acpAgents.kimi.enabled).toBe(true);
+
+    await service.writeConfigPatch({
+      acpAgents: { kimi: { enabled: false } },
+    });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.kimi]");
+    expect(tomlOnDisk).toContain("enabled = false");
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.acpAgents.kimi.enabled).toBe(false);
+    // Untouched agents stay enabled.
+    expect(snapshot.acpAgents.gemini.enabled).toBe(true);
+  });
+
   it("sets CODEX_HOME for the selected Codex auth profile", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

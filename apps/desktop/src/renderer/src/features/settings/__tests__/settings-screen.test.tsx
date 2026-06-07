@@ -264,8 +264,10 @@ function createSnapshot(
       },
     },
     acpAgents: {
-      grok: { cliPath: { value: "", source: "default" } },
-      qwen: { cliPath: { value: "", source: "default" } },
+      gemini: { cliPath: { value: "", source: "default" }, enabled: true },
+      grok: { cliPath: { value: "", source: "default" }, enabled: true },
+      kimi: { cliPath: { value: "", source: "default" }, enabled: true },
+      qwen: { cliPath: { value: "", source: "default" }, enabled: true },
     },
     applications: {
       editors: [
@@ -632,7 +634,7 @@ describe("SettingsScreen", () => {
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
     expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Models" }));
+    fireEvent.click(within(sections).getByRole("button", { name: "AI Providers" }));
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
     // The selected command appears in two places now: the pathrow
     // list (Codex discovery candidates) AND the SettingsTestBlock's
@@ -1197,7 +1199,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
   });
 
-  it("opens the ACP Agents settings section", async () => {
+  it("shows ACP agents inside the consolidated AI Providers section", async () => {
     const desktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
@@ -1208,18 +1210,21 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={desktopApi}
-        initialSection="agents"
+        initialSection="models"
         settings={createSettingsState()}
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: "ACP Agents" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "ACP Agents" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    // The ACP agents card now lives under the "AI Providers" pane (no separate
+    // "ACP Agents" nav item).
     expect(
-      screen.getByRole("textbox", { name: "Qwen Code path" }),
+      screen.getByRole("button", { name: "AI Providers" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.queryByRole("button", { name: "ACP Agents" }),
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("No AI providers are available right now."),
     ).toBeInTheDocument();
   });
 
@@ -2709,8 +2714,7 @@ describe("SettingsScreen", () => {
       "General",
       "Applications",
       "Profiles",
-      "Models",
-      "ACP Agents",
+      "AI Providers",
       "Messaging",
       "Worktrees",
       "Thread Management",

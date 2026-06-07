@@ -22,6 +22,7 @@ import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
+import { AcpAgentsSettings } from "./AcpAgentsSettings";
 
 type CodexPathMode = "auto" | "specified";
 
@@ -37,6 +38,10 @@ export function ModelsSettings(props: {
   onRefresh: () => Promise<void>;
   onSaveCodexPath: (path: string) => Promise<void>;
   onSaveCodexProfile: (profile: string) => Promise<void>;
+  /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
+  onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
+  /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
+  onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
@@ -223,10 +228,11 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
 
+      {props.snapshot.experimental.agentCoreGrok.value ? (
       <SettingsSection
         eyebrow="Models"
-        title="Grok"
-        description="Only used by the experimental AgentCore - Grok backend (Settings → Experimental). The Grok CLI (ACP) backend authenticates separately through the Grok CLI itself."
+        title="Grok (xAI API)"
+        description="The x.ai API key for the experimental AgentCore - Grok backend (enabled in Settings → Experimental). The Grok CLI (ACP) agent authenticates separately through the Grok CLI itself and is configured under ACP agents below."
       >
         <div className="settings-fields">
           <SettingsField
@@ -290,6 +296,15 @@ export function ModelsSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
+
+      <AcpAgentsSettings
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onCliPathChange={props.onAcpCliPathChange}
+        onEnabledChange={props.onAcpEnabledChange}
+      />
     </SettingsSectionStack>
   );
 }

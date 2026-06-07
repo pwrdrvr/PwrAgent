@@ -1,4 +1,5 @@
 import type {
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
   DesktopUpdateChannel,
@@ -9,7 +10,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
-import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { MessagingSettings } from "./MessagingSettings";
@@ -35,7 +35,6 @@ export type SettingsSection =
   | "experimental"
   | "messaging"
   | "models"
-  | "agents"
   | "profiles"
   | "applications"
   | "worktrees"
@@ -47,8 +46,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
-  { id: "models", label: "Models" },
-  { id: "agents", label: "ACP Agents" },
+  { id: "models", label: "AI Providers" },
   { id: "messaging", label: "Messaging" },
   { id: "worktrees", label: "Worktrees" },
   { id: "thread-management", label: "Thread Management" },
@@ -62,7 +60,6 @@ const PRIMARY_SECTIONS: SettingsSection[] = [
   "applications",
   "profiles",
   "models",
-  "agents",
   "messaging",
 ];
 
@@ -545,26 +542,6 @@ function SettingsSectionBody(props: {
     return <ThreadManagementSettings desktopApi={props.desktopApi} />;
   }
 
-  if (props.section === "agents") {
-    return (
-      <AcpAgentsSettings
-        desktopApi={props.desktopApi}
-        saving={props.settings.saving}
-        snapshot={props.snapshot}
-        onGrokCliPathChange={async (cliPath: string) => {
-          await props.settings.writeConfig({
-            acpAgents: { grok: { cliPath } },
-          });
-        }}
-        onQwenCliPathChange={async (cliPath: string) => {
-          await props.settings.writeConfig({
-            acpAgents: { qwen: { cliPath } },
-          });
-        }}
-      />
-    );
-  }
-
   if (props.section === "applications") {
     return (
       <ApplicationsSettings
@@ -636,6 +613,20 @@ function SettingsSectionBody(props: {
           models: {
             codex: { profile },
           },
+        });
+      }}
+      onAcpCliPathChange={async (registryId, cliPath) => {
+        await props.settings.writeConfig({
+          acpAgents: { [registryId]: { cliPath } } as NonNullable<
+            DesktopSettingsConfigPatch["acpAgents"]
+          >,
+        });
+      }}
+      onAcpEnabledChange={async (registryId, enabled) => {
+        await props.settings.writeConfig({
+          acpAgents: { [registryId]: { enabled } } as NonNullable<
+            DesktopSettingsConfigPatch["acpAgents"]
+          >,
         });
       }}
     />
