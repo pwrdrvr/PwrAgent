@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AcpAgentInstance } from "@pwragent/shared";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
-import { discoverAcpAgentInstances } from "../acp/acp-instance-discovery";
+import {
+  discoverAcpAgentInstances,
+  discoverLocalAcpAgentRecords,
+} from "../acp/acp-instance-discovery";
 
 function instance(
   command: string,
@@ -122,5 +125,46 @@ describe("discoverAcpAgentInstances", () => {
     const discover = vi.fn(async () => [group("gemini", [])]);
     const result = await discoverAcpAgentInstances({ discover });
     expect(result.has("gemini")).toBe(false);
+  });
+});
+
+describe("discoverLocalAcpAgentRecords", () => {
+  it("builds installed-agent records with a resolved launch descriptor", async () => {
+    const discover = vi.fn(async () => [
+      group("qwen", [
+        instance("/usr/bin/qwen", "path", "0.17.0"),
+        instance("/opt/homebrew/bin/qwen", "path", "0.16.0"),
+      ]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      now: () => 4242,
+      preferences: { qwen: { selectedPath: "/opt/homebrew/bin/qwen" } },
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      backendId: "acp:qwen",
+      registryId: "qwen",
+      installStatus: "installed",
+      version: "0.16.0", // the picked instance
+      activeCommand: "/opt/homebrew/bin/qwen",
+      installedAt: 4242,
+      launchDescriptor: {
+        command: "/opt/homebrew/bin/qwen", // resolved active feeds the spawn
+        args: ["--acp"],
+      },
+    });
+    expect(record?.instances).toEqual([
+      { command: "/usr/bin/qwen", version: "0.17.0", source: "path" },
+      { command: "/opt/homebrew/bin/qwen", version: "0.16.0", source: "path" },
+    ]);
+  });
+
+  it("omits agents with no installed instances", async () => {
+    const discover = vi.fn(async () => [group("gemini", [])]);
+    const records = await discoverLocalAcpAgentRecords({ discover });
+    expect(records).toEqual([]);
   });
 });

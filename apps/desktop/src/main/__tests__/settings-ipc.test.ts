@@ -18,7 +18,7 @@ const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 const localAcpDiscoveryMock = vi.hoisted(() => ({
-  discoverLocalAcpAgents: vi.fn(async () => [] as unknown[]),
+  discoverLocalAcpAgentRecords: vi.fn(async () => [] as unknown[]),
 }));
 const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
   discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
@@ -126,7 +126,7 @@ vi.mock("child_process", () => ({
   spawn: childProcessMocks.spawn,
 }));
 
-vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+vi.mock("../acp/acp-instance-discovery", () => localAcpDiscoveryMock);
 vi.mock("../acp/acp-runtime-discovery", () => acpRuntimeDiscoveryMock);
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -199,8 +199,8 @@ describe("settings ipc", () => {
     runtimeMock.requestCredentialValidation.mockReset();
     childProcessMocks.execFile.mockReset();
     childProcessMocks.spawn.mockReset();
-    localAcpDiscoveryMock.discoverLocalAcpAgents.mockReset();
-    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([]);
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockReset();
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({});
     electronMocks.openExternal.mockClear();
@@ -745,7 +745,7 @@ describe("settings ipc", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
-    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
       {
         backendId: "acp:gemini",
         registryId: "gemini",
@@ -867,10 +867,12 @@ describe("settings ipc", () => {
       registerSettingsIpcHandlers(service);
       await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
 
-      expect(localAcpDiscoveryMock.discoverLocalAcpAgents).toHaveBeenCalledWith({
-        overrides: {
-          grok: "/opt/pwragent/bin/grok",
-          qwen: "/opt/pwragent/bin/qwen",
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenCalledWith({
+        preferences: {
+          grok: { overridePath: "/opt/pwragent/bin/grok" },
+          qwen: { overridePath: "/opt/pwragent/bin/qwen" },
         },
       });
     } finally {
@@ -884,7 +886,7 @@ describe("settings ipc", () => {
     );
     tempRoots.push(tempRoot);
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
-    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
       {
         backendId: "acp:gemini",
         registryId: "gemini",
@@ -964,7 +966,7 @@ describe("settings ipc", () => {
     );
     tempRoots.push(tempRoot);
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
-    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
       {
         backendId: "acp:gemini",
         registryId: "gemini",

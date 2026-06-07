@@ -1,4 +1,5 @@
 import type {
+  AcpAgentInstance,
   AcpBackendId,
   BackendAcpAuthStatus,
   BackendAcpDistributionKind,
@@ -108,4 +109,9 @@ export type AcpInstalledAgentRecord = {
   lastDiscoveryError?: string;
   lastError?: string;
   registryAgent?: AcpRegistryAgent;
+  // Multi-install (Wave 2). Every installed executable found by the kit's
+  // discovery, and the one currently in effect (resolved from the user's
+  // preference). `launchDescriptor.command` mirrors `activeCommand`.
+  instances?: AcpAgentInstance[];
+  activeCommand?: string;
 };
