@@ -21,6 +21,21 @@ export type AgentToolRouterOptions = {
   unsupportedMessage?: string;
 };
 
+export type AgentMcpTool = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+export type AgentMcpToolCallResponse = {
+  content: Array<{
+    type: "text";
+    text: string;
+  }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+};
+
 export class AgentToolRouter {
   private readonly definitions: AgentToolDefinition[];
   private readonly unsupportedMessage: string;
@@ -41,6 +56,14 @@ export class AgentToolRouter {
       description: definition.description,
       inputSchema: definition.inputSchema as DynamicToolSpec["inputSchema"],
       deferLoading: definition.deferLoading ?? false,
+    }));
+  }
+
+  buildMcpTools(): AgentMcpTool[] {
+    return this.definitions.map((definition) => ({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: definition.inputSchema,
     }));
   }
 
@@ -75,6 +98,33 @@ export class AgentToolRouter {
     );
   }
 
+  async handleMcpToolCall(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    namespace?: string;
+    tool: string;
+    args?: unknown;
+  }): Promise<AgentMcpToolCallResponse> {
+    const definition = this.findMcpDefinition(params.namespace, params.tool);
+    if (!definition) {
+      return toMcpToolResponse(
+        agentToolFailure({
+          code: "unsupported_operation",
+          message: this.unsupportedMessage,
+        }),
+      );
+    }
+
+    const context: AgentToolCallContext = {
+      backend: params.backend,
+      threadId: params.threadId,
+      transport: "acp_mcp",
+    };
+    return toMcpToolResponse(
+      await definition.dispatch(normalizeToolArguments(params.args), context),
+    );
+  }
+
   private findDefinition(
     namespace: DynamicToolCallParams["namespace"],
     tool: string,
@@ -83,6 +133,17 @@ export class AgentToolRouter {
       (definition) =>
         definition.namespace === namespace && definition.name === tool,
     );
+  }
+
+  private findMcpDefinition(
+    namespace: string | undefined,
+    tool: string,
+  ): AgentToolDefinition | undefined {
+    if (namespace) {
+      return this.findDefinition(namespace, tool);
+    }
+    const matching = this.definitions.filter((definition) => definition.name === tool);
+    return matching.length === 1 ? matching[0] : undefined;
   }
 }
 
@@ -130,6 +191,22 @@ export function toDynamicToolResponse(
           text: JSON.stringify(payload, null, 2),
         },
       ],
+  };
+}
+
+export function toMcpToolResponse(
+  result: AgentToolDispatchResult,
+): AgentMcpToolCallResponse {
+  const payload = result.ok ? result.data : toFailurePayload(result);
+  return {
+    isError: result.ok ? undefined : true,
+    structuredContent: payload,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
   };
 }
 

@@ -71,6 +71,89 @@ describe("AgentToolRouter", () => {
     );
   });
 
+  it("projects and dispatches MCP tool calls", async () => {
+    const dispatch = vi.fn(() => agentToolSuccess({ status: "ok" }));
+    const router = new AgentToolRouter([
+      {
+        namespace: "pwragent_test",
+        name: "inspect",
+        description: "Inspect test state.",
+        inputSchema: { type: "object" },
+        dispatch,
+      },
+    ]);
+
+    expect(router.buildMcpTools()).toEqual([
+      {
+        name: "inspect",
+        description: "Inspect test state.",
+        inputSchema: { type: "object" },
+      },
+    ]);
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "thread-1",
+        namespace: "pwragent_test",
+        tool: "inspect",
+        args: { limit: 1 },
+      }),
+    ).resolves.toEqual({
+      structuredContent: { status: "ok" },
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ status: "ok" }, null, 2),
+        },
+      ],
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      { limit: 1 },
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        transport: "acp_mcp",
+      },
+    );
+  });
+
+  it("returns MCP errors for unsupported MCP tools", async () => {
+    const router = new AgentToolRouter([], {
+      unsupportedMessage: "Unsupported test MCP tool.",
+    });
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "thread-1",
+        namespace: "pwragent_test",
+        tool: "missing",
+        args: {},
+      }),
+    ).resolves.toEqual({
+      isError: true,
+      structuredContent: {
+        code: "unsupported_operation",
+        message: "Unsupported test MCP tool.",
+      },
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              code: "unsupported_operation",
+              message: "Unsupported test MCP tool.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+  });
+
   it("normalizes non-object arguments to an empty object", async () => {
     const dispatch = vi.fn(() => agentToolSuccess({ ok: true }));
     const router = new AgentToolRouter([

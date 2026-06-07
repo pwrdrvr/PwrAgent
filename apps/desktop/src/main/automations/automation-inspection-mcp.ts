@@ -1,38 +1,28 @@
 import type {
   AppServerBackendKind,
-  AutomationInspectionContext,
   AutomationInspectionOperationName,
-  AutomationInspectionRequest,
-  AutomationInspectionResponse,
 } from "@pwragent/shared";
 import {
   AUTOMATION_INSPECTION_OPERATION_NAMES,
   AUTOMATION_INSPECTION_TOOL_NAMESPACE,
 } from "@pwragent/shared";
-import type { AutomationInspectionHandler } from "./automation-inspection-codex-tools.js";
-import { buildAutomationInspectionToolCatalog } from "./automation-inspection-tool-catalog.js";
+import type {
+  AgentMcpTool,
+  AgentMcpToolCallResponse,
+} from "../agent-tools/agent-tool-router.js";
+import {
+  buildAutomationInspectionToolRouter,
+  type AutomationInspectionHandler,
+} from "./automation-inspection-agent-tools.js";
 
-export type AutomationInspectionMcpTool = {
+export type AutomationInspectionMcpTool = AgentMcpTool & {
   name: AutomationInspectionOperationName;
-  description: string;
-  inputSchema: Record<string, unknown>;
 };
-
-export type AutomationInspectionMcpCallResponse = {
-  content: Array<{
-    type: "text";
-    text: string;
-  }>;
-  structuredContent?: unknown;
-  isError?: boolean;
-};
+export type AutomationInspectionMcpCallResponse = AgentMcpToolCallResponse;
 
 export function buildAutomationInspectionMcpTools(): AutomationInspectionMcpTool[] {
-  return buildAutomationInspectionToolCatalog().map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-  }));
+  return buildAutomationInspectionToolRouter(undefined).buildMcpTools() as
+    AutomationInspectionMcpTool[];
 }
 
 export function isAutomationInspectionMcpToolName(
@@ -53,59 +43,13 @@ export async function handleAutomationInspectionMcpToolCall(params: {
   args?: unknown;
   handler: AutomationInspectionHandler | undefined;
 }): Promise<AutomationInspectionMcpCallResponse> {
-  if (!isAutomationInspectionMcpToolName(params.tool)) {
-    return toMcpToolResponse({
-      ok: false,
-      operation: "list_automations",
-      error: {
-        code: "unsupported_operation",
-        message: `Unsupported ${AUTOMATION_INSPECTION_TOOL_NAMESPACE} tool.`,
-      },
-    });
-  }
-  if (!params.handler) {
-    return toMcpToolResponse({
-      ok: false,
-      operation: params.tool,
-      error: {
-        code: "internal_error",
-        message: "PwrAgent automation inspection is not available.",
-      },
-    });
-  }
-  const context: AutomationInspectionContext = {
+  return await buildAutomationInspectionToolRouter(params.handler, {
+    unsupportedMessage: `Unsupported ${AUTOMATION_INSPECTION_TOOL_NAMESPACE} tool.`,
+  }).handleMcpToolCall({
     backend: params.backend,
     threadId: params.threadId,
-  };
-  return toMcpToolResponse(
-    await params.handler({
-      operation: params.tool,
-      context,
-      args: normalizeToolArguments(params.args),
-    } as AutomationInspectionRequest),
-  );
-}
-
-function toMcpToolResponse(
-  response: AutomationInspectionResponse,
-): AutomationInspectionMcpCallResponse {
-  const payload = response.ok ? response.data : response.error;
-  return {
-    isError: response.ok ? undefined : true,
-    structuredContent: payload,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, 2),
-      },
-    ],
-  };
-}
-
-function normalizeToolArguments(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+    namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+    tool: params.tool,
+    args: params.args,
+  });
 }
