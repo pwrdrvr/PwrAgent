@@ -98,6 +98,79 @@ describe("MessagingController", () => {
       });
   });
 
+  it("presents an Agent-only picker for authorized /agent commands", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [
+      {
+        ...navigation.threads[0]!,
+        id: "ordinary-thread",
+        title: "Ordinary thread",
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "agent-thread",
+        title: "Agent thread",
+        updatedAt: 2000,
+        agent: {
+          name: "Inbox Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+    ];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing PwrAgent Agent threads."),
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "agent-thread",
+          }),
+        ],
+      },
+    });
+    expect(harness.delivered[0]?.fallbackText).not.toContain("Ordinary thread");
+  });
+
+  it("binds /agent selections as Agent-thread targets", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Inbox Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const agentEvent = buildCommandEvent("/agent");
+    await harness.controller.handleInboundEvent(agentEvent);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const binding = await harness.store.findActiveBindingForChannel(agentEvent.channel);
+    expect(binding).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      targetKind: "agent_thread",
+    });
+  });
+
   it("returns from the nested new-thread picker back to the resume browser", async () => {
     const harness = await createHarness();
 

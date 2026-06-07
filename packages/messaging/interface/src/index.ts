@@ -6,6 +6,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
+  MessagingBindingTargetKind,
   MessagingDeliveryScope,
   MessagingToolUpdateMode,
   ThreadIdentifier,
@@ -32,6 +33,7 @@ export {
   type MessagingDeliveryScope,
   type MessagingDeliveryScopeBudget,
   type MessagingDeliveryScopeKind,
+  type MessagingBindingTargetKind,
   type MessagingMissingPermissionDegradationReason,
   type MessagingPlatformHealth,
   type MessagingPlatformStatus,
@@ -1107,6 +1109,7 @@ export type MessagingPendingSkillSelection = {
 export type MessagingBindingRecord = {
   id: string;
   channel: MessagingChannelRef;
+  targetKind?: MessagingBindingTargetKind;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   authorizedActorIds: string[];
@@ -1142,6 +1145,7 @@ export type MessagingPendingIntentRecord = {
 
 export type MessagingBrowseMode =
   | "recents"
+  | "agents"
   | "projects"
   | "project_threads"
   | "new_project"

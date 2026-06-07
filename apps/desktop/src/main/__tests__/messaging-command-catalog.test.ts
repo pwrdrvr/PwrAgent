@@ -18,6 +18,7 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
     // this order; if you reorder, the help text reorders too.
     expect(MESSAGING_COMMAND_CATALOG.map((spec) => spec.verb)).toEqual([
       "resume",
+      "agent",
       "new",
       "status",
       "detach",
@@ -48,6 +49,7 @@ describe("matchMessagingCommandVerb", () => {
 
   it("strips a leading slash before matching", () => {
     expect(matchMessagingCommandVerb("/resume")).toBe("resume");
+    expect(matchMessagingCommandVerb("/agent")).toBe("agent");
     expect(matchMessagingCommandVerb("/new")).toBe("new");
     expect(matchMessagingCommandVerb("/status")).toBe("status");
     expect(matchMessagingCommandVerb("/monitor")).toBe("monitor");
@@ -92,12 +94,14 @@ describe("formatMessagingCommandHelpBody", () => {
     // detach, etc. — catalog order is the contract.
     const resumeIdx = body.indexOf("/resume");
     const newIdx = body.indexOf("/new");
+    const agentIdx = body.indexOf("/agent");
     const statusIdx = body.indexOf("/status");
     const detachIdx = body.indexOf("/detach");
     const monitorIdx = body.indexOf("/monitor");
     const helpIdx = body.indexOf("/help");
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
-    expect(newIdx).toBeGreaterThan(resumeIdx);
+    expect(agentIdx).toBeGreaterThan(resumeIdx);
+    expect(newIdx).toBeGreaterThan(agentIdx);
     expect(statusIdx).toBeGreaterThan(newIdx);
     expect(detachIdx).toBeGreaterThan(statusIdx);
     expect(monitorIdx).toBeGreaterThan(detachIdx);
@@ -201,6 +205,7 @@ describe("paginateHelpCatalog", () => {
     expect(page.pageIndex).toBe(0);
     expect(page.commands.map((c) => c.verb)).toEqual([
       "resume",
+      "agent",
       "new",
       "status",
       "detach",
@@ -271,6 +276,7 @@ describe("buildHelpActions", () => {
     const ids = actions.map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:agent",
       "command:new",
       "command:status",
       "command:detach",
@@ -305,6 +311,7 @@ describe("buildHelpActions", () => {
       { row: 1, column: 1 },
       { row: 2, column: 0 },
       { row: 2, column: 1 },
+      { row: 3, column: 0 },
     ]);
   });
 

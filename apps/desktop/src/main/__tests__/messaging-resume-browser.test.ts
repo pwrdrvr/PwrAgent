@@ -98,6 +98,54 @@ describe("messaging resume browser", () => {
     });
   });
 
+  it("renders only Agent threads in agent browse mode", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: [
+          buildThread({ id: "ordinary-thread", title: "Ordinary thread" }),
+          buildThread({
+            id: "agent-thread",
+            title: "Agent thread",
+            updatedAt: 2000,
+            agent: {
+              name: "Inbox Agent",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1500,
+            },
+          }),
+        ],
+      }),
+      session: buildBrowseSession({
+        mode: "agents",
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing PwrAgent Agent threads."),
+      prompt: expect.stringContaining("Choose an Agent thread to attach"),
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "agent-thread",
+          }),
+        ],
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:recents" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+    expect(intent.fallbackText).toContain("Agent thread");
+    expect(intent.fallbackText).not.toContain("Ordinary thread");
+    expect(intent.page.actions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "browse:mode:new" })]),
+    );
+  });
+
   it("renders Grok worktree threads with the primary project label", () => {
     const intent = buildResumeIntent({
       id: "intent-1",
@@ -335,6 +383,30 @@ function buildNavigationSnapshot(
       backend: "codex",
       executionMode: "default",
     },
+    ...overrides,
+  };
+}
+
+function buildThread(
+  overrides: Partial<NavigationSnapshot["threads"][number]> = {},
+): NavigationSnapshot["threads"][number] {
+  return {
+    id: "thread-1",
+    title: "Thread one",
+    titleSource: "explicit",
+    source: "codex",
+    linkedDirectories: [
+      {
+        id: "directory:pwragent",
+        kind: "local",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+      },
+    ],
+    inbox: {
+      inInbox: false,
+    },
+    updatedAt: 1000,
     ...overrides,
   };
 }

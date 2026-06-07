@@ -299,6 +299,9 @@ function threadsForSession(
   session: MessagingBrowseSessionRecord,
 ): NavigationThreadSummary[] {
   let threads = navigation.threads;
+  if (session.mode === "agents") {
+    threads = threads.filter((thread) => Boolean(thread.agent));
+  }
   const selectedDirectory = session.selectedProject
     ? directoryForProjectSelection(navigation, session.selectedProject)
     : undefined;
@@ -316,6 +319,8 @@ function threadsForSession(
         thread.id,
         thread.title,
         thread.summary,
+        thread.agent?.name,
+        thread.agent?.instructions,
         thread.projectKey,
         ...thread.linkedDirectories.flatMap((directory) => [
           directory.label,
@@ -456,7 +461,15 @@ function navigationActions(
       layout: { row: NAV_ROW },
     });
   }
-  if (session.mode !== "projects" && session.mode !== "new_project") {
+  if (session.mode === "agents") {
+    actions.push({
+      id: "browse:mode:recents",
+      label: "Recent Threads",
+      style: "navigation",
+      fallbackText: "recent",
+      layout: { row: FOOTER_ROW },
+    });
+  } else if (session.mode !== "projects" && session.mode !== "new_project") {
     actions.push({
       id: "browse:mode:projects",
       label: "Projects",
@@ -473,7 +486,16 @@ function navigationActions(
       layout: { row: FOOTER_ROW },
     });
   }
-  if (session.launchAction !== "start_new_thread") {
+  if (session.mode !== "agents" && session.launchAction === "resume_thread") {
+    actions.push({
+      id: "browse:mode:agents",
+      label: "Agents",
+      style: "navigation",
+      fallbackText: "agents",
+      layout: { row: FOOTER_ROW },
+    });
+  }
+  if (session.mode !== "agents" && session.launchAction !== "start_new_thread") {
     actions.push({
       id: "browse:mode:new",
       label: "New",
@@ -506,13 +528,22 @@ function threadPickerPromptText(
   totalItems: number,
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
-  const scope = session.selectedProject
-    ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
-    : "Showing recent PwrAgent threads.";
+  const scope =
+    session.mode === "agents"
+      ? "Showing PwrAgent Agent threads."
+      : session.selectedProject
+        ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
+        : "Showing recent PwrAgent threads.";
   return [
     `${scope} ${pageLabel}.`,
-    "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
-    totalItems === 0 ? "No matching PwrAgent threads found." : "",
+    session.mode === "agents"
+      ? "Choose an Agent thread to attach. Use Recent Threads to show every thread, or Cancel to close this picker."
+      : "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
+    totalItems === 0
+      ? session.mode === "agents"
+        ? "No matching PwrAgent Agent threads found."
+        : "No matching PwrAgent threads found."
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -531,8 +562,9 @@ function threadPickerFallbackText(
   const controls = [
     page.pageIndex > 0 ? "previous" : undefined,
     page.pageIndex < page.totalPages - 1 ? "next" : undefined,
-    "projects",
-    "new",
+    session.mode === "agents" ? "recent" : "projects",
+    session.mode === "agents" ? undefined : "agents",
+    session.mode === "agents" ? undefined : "new",
     "cancel",
   ].filter(Boolean);
   return [

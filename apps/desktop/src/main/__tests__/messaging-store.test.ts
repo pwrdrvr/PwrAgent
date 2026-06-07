@@ -227,6 +227,7 @@ describe("MessagingStore", () => {
       id: "binding-1",
       backend: "codex",
       threadId: "thread-1",
+      targetKind: "thread",
     });
     await expect(reloaded.getPendingIntent("intent-1", { now: 1500 })).resolves
       .toMatchObject({
@@ -253,6 +254,22 @@ describe("MessagingStore", () => {
       value: {
         threadId: "thread-1",
       },
+    });
+  });
+
+  it("persists Agent-thread binding targets", async () => {
+    const { filePath, store } = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        targetKind: "agent_thread",
+      }),
+    );
+
+    const reloaded = new MessagingStore(filePath);
+
+    await expect(reloaded.getBinding("binding-1")).resolves.toMatchObject({
+      id: "binding-1",
+      targetKind: "agent_thread",
     });
   });
 

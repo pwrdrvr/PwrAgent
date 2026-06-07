@@ -1125,6 +1125,10 @@ export class MessagingController {
       await this.presentResumeBrowser(event);
       return;
     }
+    if (verb === "agent") {
+      await this.presentAgentBrowser(event);
+      return;
+    }
     if (verb === "new") {
       await this.presentResumeBrowser({
         ...event,
@@ -3047,6 +3051,49 @@ export class MessagingController {
     await this.renderResumeBrowser(session, navigation, event);
   }
 
+  private async presentAgentBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+    const parsed = parseResumeCommandArgs(event.args);
+    if (parsed.error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("agent-error"),
+          createdAt: this.now(),
+          title: "Agent command error",
+          body: parsed.error,
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      filter: parsed.query,
+    });
+    const session: MessagingBrowseSessionRecord = {
+      id: this.newIntentId("browse"),
+      allowedActorIds: [event.actor.platformUserId],
+      channel: event.channel,
+      createdAt: this.now(),
+      updatedAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      launchAction: "resume_thread",
+      mode: "agents",
+      pageIndex: 0,
+      pageSize: resumeBrowserPageSize(this.capabilityProfile),
+      preferences: parsed.preferences
+        ? {
+            ...parsed.preferences,
+            updatedAt: this.now(),
+          }
+        : undefined,
+      query: parsed.query,
+    };
+    await this.renderResumeBrowser(session, navigation, event);
+  }
+
   private async handleBrowseCallback(
     event: MessagingInboundCallbackEvent,
     actionId: string,
@@ -3112,6 +3159,20 @@ export class MessagingController {
           ...nextSession,
           launchAction: "resume_thread",
           mode: "recents",
+          pageIndex: 0,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:agents") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "resume_thread",
+          mode: "agents",
           pageIndex: 0,
           selectedProject: undefined,
         },
@@ -3540,6 +3601,10 @@ export class MessagingController {
       const targetThread = navigation.threads.find(
         (thread) => thread.source === target.backend && thread.id === target.threadId,
       );
+      if (session.mode === "agents" && !targetThread?.agent) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
       if (
         targetThread?.executionMode === "full-access" &&
         !(await this.canResumeFullAccessThreads())
@@ -3569,7 +3634,10 @@ export class MessagingController {
           return;
         }
       }
-      const binding = await this.bindChannelToThread(event, target);
+      const binding = await this.bindChannelToThread(event, {
+        ...target,
+        targetKind: session.mode === "agents" ? "agent_thread" : "thread",
+      });
       const updatedBinding = session.preferences
         ? await this.updateBindingPreferences(binding, session.preferences)
         : binding;
@@ -9528,7 +9596,11 @@ export class MessagingController {
 
   private async bindChannelToThread(
     event: MessagingInboundEvent,
-    target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
+    target: {
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      targetKind?: MessagingBindingRecord["targetKind"];
+    },
   ): Promise<MessagingBindingRecord> {
     const now = this.now();
     const previousBinding = await this.options.store.findActiveBindingForChannel(
@@ -9537,6 +9609,7 @@ export class MessagingController {
     const binding: MessagingBindingRecord = {
       id: `binding:${buildMessagingConversationKey(event.channel)}:${target.backend}:${target.threadId}`,
       channel: event.channel,
+      targetKind: target.targetKind ?? "thread",
       backend: target.backend,
       threadId: target.threadId,
       authorizedActorIds: [event.actor.platformUserId],
