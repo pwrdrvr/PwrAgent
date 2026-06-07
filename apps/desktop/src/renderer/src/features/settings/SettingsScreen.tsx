@@ -10,7 +10,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
-import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { MessagingSettings } from "./MessagingSettings";
@@ -595,41 +594,34 @@ function SettingsSectionBody(props: {
   }
 
   return (
-    <>
-      <ModelsSettings
-        desktopApi={props.desktopApi}
-        saving={props.settings.saving}
-        snapshot={props.snapshot}
-        onClearSecret={props.settings.clearSecret}
-        onReplaceSecret={props.settings.replaceSecret}
-        onRefresh={props.settings.refresh}
-        onSaveCodexPath={async (path) => {
-          await props.settings.writeConfig({
-            models: {
-              codex: { path },
-            },
-          });
-        }}
-        onSaveCodexProfile={async (profile) => {
-          await props.settings.writeConfig({
-            models: {
-              codex: { profile },
-            },
-          });
-        }}
-      />
-      <AcpAgentsSettings
-        desktopApi={props.desktopApi}
-        saving={props.settings.saving}
-        snapshot={props.snapshot}
-        onCliPathChange={async (registryId, cliPath) => {
-          await props.settings.writeConfig({
-            acpAgents: { [registryId]: { cliPath } } as NonNullable<
-              DesktopSettingsConfigPatch["acpAgents"]
-            >,
-          });
-        }}
-      />
-    </>
+    <ModelsSettings
+      desktopApi={props.desktopApi}
+      saving={props.settings.saving}
+      snapshot={props.snapshot}
+      onClearSecret={props.settings.clearSecret}
+      onReplaceSecret={props.settings.replaceSecret}
+      onRefresh={props.settings.refresh}
+      onSaveCodexPath={async (path) => {
+        await props.settings.writeConfig({
+          models: {
+            codex: { path },
+          },
+        });
+      }}
+      onSaveCodexProfile={async (profile) => {
+        await props.settings.writeConfig({
+          models: {
+            codex: { profile },
+          },
+        });
+      }}
+      onAcpCliPathChange={async (registryId, cliPath) => {
+        await props.settings.writeConfig({
+          acpAgents: { [registryId]: { cliPath } } as NonNullable<
+            DesktopSettingsConfigPatch["acpAgents"]
+          >,
+        });
+      }}
+    />
   );
 }

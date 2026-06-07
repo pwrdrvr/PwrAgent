@@ -22,6 +22,7 @@ import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
+import { AcpAgentsSettings } from "./AcpAgentsSettings";
 
 type CodexPathMode = "auto" | "specified";
 
@@ -37,6 +38,8 @@ export function ModelsSettings(props: {
   onRefresh: () => Promise<void>;
   onSaveCodexPath: (path: string) => Promise<void>;
   onSaveCodexProfile: (profile: string) => Promise<void>;
+  /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
+  onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
@@ -292,6 +295,13 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
       ) : null}
+
+      <AcpAgentsSettings
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onCliPathChange={props.onAcpCliPathChange}
+      />
     </SettingsSectionStack>
   );
 }

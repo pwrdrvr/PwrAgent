@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  AcpAgentInstance,
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import {
-  SettingsPanelHead,
-  SettingsSection,
-  SettingsSectionStack,
-} from "./SettingsLayout";
+import { SettingsField, SettingsSection } from "./SettingsLayout";
+import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { acpStatusLabel } from "./acp-agent-copy";
 
 /** Look up the persisted CLI-path override for an agent by its registry id. */
@@ -24,6 +20,13 @@ function cliPathSnapshotFor(
   return agents?.[registryId]?.cliPath;
 }
 
+/**
+ * Renders each discovered ACP agent (Gemini / Grok / Kimi / Qwen) as its own
+ * `SettingsSection`, styled identically to the Codex section (SettingsField
+ * rows + the shared SettingsPathRow install list). Returns a FRAGMENT — no
+ * stack/header of its own — so the caller (ModelsSettings) renders these as
+ * siblings of the Codex section inside one "Backends & credentials" stack.
+ */
 export function AcpAgentsSettings(props: {
   desktopApi?: DesktopApi;
   saving?: boolean;
@@ -85,172 +88,171 @@ export function AcpAgentsSettings(props: {
   }, [props.desktopApi]);
 
   return (
-    <SettingsSectionStack paneId="acp-agents" aria-label="ACP agent settings">
-      <SettingsPanelHead
-        eyebrow="ACP"
-        title="ACP agents"
-        help="ACP agent CLIs (Gemini, Grok, Kimi, Qwen) PwrAgent found on this machine. Pick which install to use when several are found, or set a manual path. Discovered agents are usable as a chat backend."
-      />
-      <div className="settings-inline-actions">
-        <button
-          className="button button--secondary"
-          disabled={loading || refreshing}
-          type="button"
-          onClick={() => {
-            // Explicit user action: re-probe every agent, bypassing the cache.
+    <>
+      {entries.map((entry) => (
+        <AcpAgentSection
+          key={entry.backendId}
+          entry={entry}
+          cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
+          saving={props.saving}
+          refreshing={refreshing || loading}
+          onCliPathChange={props.onCliPathChange}
+          onRefresh={() => {
             void refresh(true, true);
           }}
-        >
-          {refreshing ? "Discovering…" : "Refresh"}
-        </button>
-      </div>
-      {loading ? <p className="settings-empty">Loading ACP agents…</p> : null}
-      {error ? <p className="settings-row__error">{error}</p> : null}
-      {!loading && entries.length === 0 ? (
-        <p className="settings-empty">No ACP agents discovered.</p>
-      ) : null}
-      {entries.map((entry) => (
-        <SettingsSection
-          key={entry.backendId}
-          eyebrow="ACP"
-          title={entry.name}
-          sectionId={`acp-${entry.registryId}`}
-          chip={acpStatusLabel(entry)}
-          chipKind={entry.installed ? "ok" : "muted"}
-        >
-          <AcpAgentBody
-            entry={entry}
-            cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
-            saving={props.saving}
-            onCliPathChange={props.onCliPathChange}
-          />
-        </SettingsSection>
+        />
       ))}
-    </SettingsSectionStack>
+      {!loading && entries.length === 0 ? (
+        <SettingsSection eyebrow="Models" title="ACP agents" sectionId="acp-empty">
+          <p className="settings-empty">
+            {error ?? "No ACP agents discovered on this machine."}
+          </p>
+        </SettingsSection>
+      ) : null}
+    </>
   );
 }
 
-function AcpAgentBody(props: {
+function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   saving?: boolean;
+  refreshing?: boolean;
   onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+  onRefresh: () => void;
 }) {
   const { entry } = props;
   const instances = entry.instances ?? [];
-  const installCount = instances.length;
-  const activeInstance = instances.find(
-    (instance) => instance.command === entry.activeCommand,
-  );
-  const pinned = activeInstance?.source === "override";
-
   const savedPath = props.cliPathSnapshot?.value ?? "";
   const [draft, setDraft] = useState(savedPath);
   useEffect(() => {
     setDraft(savedPath);
   }, [savedPath]);
 
-  const summary = [
-    `${installCount} install${installCount === 1 ? "" : "s"} found`,
-    entry.version ? `active v${entry.version}` : undefined,
-    installCount > 0 ? (pinned ? "pinned" : "auto") : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const detail =
+    entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
 
   return (
-    <div className="settings-acp-agent-body">
-      <p className="settings-acp-agent-body__summary">
-        {installCount > 0 ? summary : "Not installed"}
-      </p>
+    <SettingsSection
+      eyebrow="Models"
+      title={entry.name}
+      sectionId={`acp-${entry.registryId}`}
+      chip={acpStatusLabel(entry)}
+      chipKind={entry.installed ? "ok" : "muted"}
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Installed paths"
+          sub="Binaries detected on this machine. The active one runs new threads — click Use to pick another."
+          source={`${instances.length} found`}
+          error={detail}
+          control={
+            <div className="settings-paths" aria-label={`${entry.name} installs`}>
+              {instances.length === 0 ? (
+                <p className="settings-empty">Not installed.</p>
+              ) : (
+                instances.map((instance) => {
+                  const active = instance.command === entry.activeCommand;
+                  const chips: SettingsPathRowChip[] = [
+                    {
+                      label: instance.source === "override" ? "override" : "path",
+                      tone: "muted",
+                    },
+                    {
+                      label: instance.version
+                        ? `v${instance.version}`
+                        : "version unknown",
+                      tone: "muted",
+                    },
+                  ];
+                  if (!active) {
+                    chips.push({ label: "available", tone: "muted" });
+                  }
+                  return (
+                    <SettingsPathRow
+                      key={instance.command}
+                      path={instance.command}
+                      chips={chips}
+                      selected={active}
+                      selectedLabel="Using"
+                      useLabel="Use"
+                      disabled={props.saving}
+                      onUse={
+                        props.onCliPathChange
+                          ? () => {
+                              void props.onCliPathChange?.(
+                                entry.registryId,
+                                instance.command,
+                              );
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })
+              )}
+            </div>
+          }
+        />
 
-      {installCount > 0 ? (
-        <ul className="settings-acp-instances">
-          {instances.map((instance) => (
-            <AcpInstanceRow
-              key={instance.command}
-              instance={instance}
-              active={instance.command === entry.activeCommand}
-              saving={props.saving}
-              onUse={() => {
-                void props.onCliPathChange?.(entry.registryId, instance.command);
-              }}
-            />
-          ))}
-        </ul>
-      ) : null}
-
-      {props.onCliPathChange ? (
-        <div className="settings-secret">
-          <input
-            aria-label={`${entry.name} manual path`}
-            className="settings-input"
-            disabled={props.saving}
-            placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
-            type="text"
-            value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+        {props.onCliPathChange ? (
+          <SettingsField
+            label="Manual path"
+            sub="Override discovery with an absolute path. Save, then Refresh to re-probe."
+            control={
+              <div className="settings-secret">
+                <input
+                  aria-label={`${entry.name} manual path`}
+                  className="settings-input"
+                  disabled={props.saving}
+                  placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
+                  type="text"
+                  value={draft}
+                  onChange={(event) => setDraft(event.currentTarget.value)}
+                />
+                <button
+                  className="button button--secondary"
+                  disabled={props.saving || draft.trim() === savedPath.trim()}
+                  type="button"
+                  onClick={() =>
+                    props.onCliPathChange?.(entry.registryId, draft.trim())
+                  }
+                >
+                  Save
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={props.saving || draft === ""}
+                  type="button"
+                  onClick={() => {
+                    setDraft("");
+                    void props.onCliPathChange?.(entry.registryId, "");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            }
           />
-          <button
-            className="button button--secondary"
-            disabled={props.saving || draft.trim() === savedPath.trim()}
-            type="button"
-            onClick={() => props.onCliPathChange?.(entry.registryId, draft.trim())}
-          >
-            Save
-          </button>
-          <button
-            className="button button--ghost"
-            disabled={props.saving || draft === ""}
-            type="button"
-            onClick={() => {
-              setDraft("");
-              void props.onCliPathChange?.(entry.registryId, "");
-            }}
-          >
-            Clear
-          </button>
-        </div>
-      ) : null}
+        ) : null}
 
-      {entry.lastDiscoveryError || entry.lastError || entry.unavailableReason ? (
-        <p className="settings-row__error">
-          {entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function AcpInstanceRow(props: {
-  instance: AcpAgentInstance;
-  active: boolean;
-  saving?: boolean;
-  onUse: () => void;
-}) {
-  const { instance } = props;
-  const meta = [
-    instance.version ? `v${instance.version}` : undefined,
-    instance.source === "override" ? "override" : "found",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return (
-    <li className="settings-acp-instance">
-      <code className="settings-acp-instance__path">{instance.command}</code>
-      <span className="settings-acp-instance__meta">{meta}</span>
-      {props.active ? (
-        <span className="settings-acp-instance__using">Using</span>
-      ) : (
-        <button
-          className="button button--ghost"
-          disabled={props.saving}
-          type="button"
-          onClick={props.onUse}
-        >
-          Use
-        </button>
-      )}
-    </li>
+        <SettingsField
+          label="Re-probe"
+          sub="Re-run discovery for every agent (versions, installs, capabilities)."
+          control={
+            <div className="settings-inline-actions">
+              <button
+                className="button button--secondary"
+                disabled={props.refreshing}
+                type="button"
+                onClick={props.onRefresh}
+              >
+                {props.refreshing ? "Discovering…" : "Refresh"}
+              </button>
+            </div>
+          }
+        />
+      </div>
+    </SettingsSection>
   );
 }

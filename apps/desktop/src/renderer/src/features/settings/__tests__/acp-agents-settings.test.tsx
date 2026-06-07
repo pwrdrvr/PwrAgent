@@ -94,12 +94,11 @@ describe("AcpAgentsSettings", () => {
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
     });
-    // The multi-install card shows the discovered install with the "Using"
-    // badge and stays visible while the registry refresh is in flight.
-    expect(screen.getByText("1 install found · active v0.42.0 · auto")).toBeInTheDocument();
+    // The agent's section shows its discovered install with the "Using" badge
+    // and stays visible while the registry refresh is in flight.
+    expect(screen.getByText("gemini")).toBeInTheDocument();
     expect(screen.getByText("Using")).toBeInTheDocument();
     expect(screen.getByText("previous probe failed")).toBeInTheDocument();
-    expect(screen.queryByText("No ACP agents discovered.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Discovering…" })).toBeDisabled();
 
     resolveRefresh?.({ fetchedAt: 2000, entries: [cachedEntry] });
@@ -142,9 +141,8 @@ describe("AcpAgentsSettings", () => {
     );
 
     expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
-    expect(
-      screen.getByText("2 installs found · active v0.17.0 · auto"),
-    ).toBeInTheDocument();
+    // Both installs render as path rows; "2 found" labels the install field.
+    expect(screen.getByText("2 found")).toBeInTheDocument();
     expect(screen.getByText("/usr/bin/qwen")).toBeInTheDocument();
     expect(screen.getByText("/opt/homebrew/bin/qwen")).toBeInTheDocument();
     // The active install shows "Using"; the other offers a "Use" action that
