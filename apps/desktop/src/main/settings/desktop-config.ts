@@ -348,30 +348,71 @@ const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
 };
 
 /**
- * Resolve the active override path for any ACP agent's CLI executable
- * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
- * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
- * undefined. Generalizes the per-agent resolvers above to all four agents.
+ * Read + normalize the on-disk config, swallowing read/parse errors to an
+ * empty config so callers fall back to defaults. Use this when resolving
+ * several agent settings at once (e.g. all four ACP agents during discovery)
+ * to read + parse the TOML **once** instead of per lookup.
  */
-export function resolveAcpCliPathOverride(
+export function readDesktopSettingsConfigSafe(): DesktopSettingsConfig {
+  try {
+    return readDesktopSettingsConfig(resolveDesktopConfigPath());
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve an ACP agent's CLI-path override from an already-loaded config.
+ * Order: env var > config (`acpAgents.<id>.cliPath`) > undefined. Prefer this
+ * over {@link resolveAcpCliPathOverride} when resolving multiple agents so the
+ * config is read once by the caller.
+ */
+export function acpCliPathOverrideFor(
+  config: DesktopSettingsConfig,
   registryId: string,
-  options?: { env?: NodeJS.ProcessEnv },
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const env = options?.env ?? process.env;
   const envKey = ACP_CLI_PATH_ENV_BY_ID[registryId];
   const envOverride = envKey ? env[envKey]?.trim() || undefined : undefined;
   if (envOverride) {
     return envOverride;
   }
-  try {
-    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
-    const agents = config.acpAgents as
-      | Record<string, { cliPath?: string } | undefined>
-      | undefined;
-    return agents?.[registryId]?.cliPath?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
+  const agents = config.acpAgents as
+    | Record<string, { cliPath?: string } | undefined>
+    | undefined;
+  return agents?.[registryId]?.cliPath?.trim() || undefined;
+}
+
+/**
+ * Whether an ACP agent is enabled, from an already-loaded config. Defaults to
+ * **true** (agents are on unless explicitly disabled). Prefer this over
+ * {@link resolveAcpAgentEnabled} when resolving multiple agents.
+ */
+export function acpAgentEnabledFor(
+  config: DesktopSettingsConfig,
+  registryId: string,
+): boolean {
+  const agents = config.acpAgents as
+    | Record<string, { enabled?: boolean } | undefined>
+    | undefined;
+  return agents?.[registryId]?.enabled !== false;
+}
+
+/**
+ * Resolve the active override path for any ACP agent's CLI executable
+ * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
+ * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
+ * undefined. Single-shot convenience over {@link acpCliPathOverrideFor}.
+ */
+export function resolveAcpCliPathOverride(
+  registryId: string,
+  options?: { env?: NodeJS.ProcessEnv },
+): string | undefined {
+  return acpCliPathOverrideFor(
+    readDesktopSettingsConfigSafe(),
+    registryId,
+    options?.env ?? process.env,
+  );
 }
 
 /**
@@ -379,17 +420,10 @@ export function resolveAcpCliPathOverride(
  * grok | kimi | qwen). Defaults to **true** — agents are usable unless the user
  * explicitly disabled them via Settings → AI Providers. Read directly from the
  * on-disk config so the chat-launch path and Settings agree without a snapshot.
+ * Single-shot convenience over {@link acpAgentEnabledFor}.
  */
 export function resolveAcpAgentEnabled(registryId: string): boolean {
-  try {
-    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
-    const agents = config.acpAgents as
-      | Record<string, { enabled?: boolean } | undefined>
-      | undefined;
-    return agents?.[registryId]?.enabled !== false;
-  } catch {
-    return true;
-  }
+  return acpAgentEnabledFor(readDesktopSettingsConfigSafe(), registryId);
 }
 
 /**

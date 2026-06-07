@@ -152,6 +152,39 @@ describe("AcpAgentsSettings", () => {
     expect(onCliPathChange).toHaveBeenCalledWith("qwen", "/opt/homebrew/bin/qwen");
   });
 
+  it("renders an undiscovered provider as a 'Not installed' section", async () => {
+    // A known provider with no discovered installs (the placeholder main emits
+    // so the section always shows) renders its own heading, a "Not installed"
+    // status chip, and an empty install list — it does not vanish.
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [
+          {
+            backendId: "acp:kimi",
+            registryId: "kimi",
+            name: "Kimi Code",
+            authors: [],
+            distributionKind: "local",
+            distributionSource: "kimi (not installed)",
+            installable: false,
+            installed: false,
+            installStatus: "not-installed",
+            authStatus: "not-required",
+            verificationStatus: "unverified-allowed",
+            instances: [],
+          } satisfies AcpAgentSettingsEntry,
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+
+    expect(await screen.findByText("Kimi Code")).toBeInTheDocument();
+    expect(screen.getByText("Not installed")).toBeInTheDocument();
+    expect(screen.getByText("Not installed.")).toBeInTheDocument();
+  });
+
   it("loads exactly once under StrictMode's double-invoked mount effect", async () => {
     const listAcpAgents = vi.fn(
       async (_request?: { refresh?: boolean; force?: boolean }) => ({

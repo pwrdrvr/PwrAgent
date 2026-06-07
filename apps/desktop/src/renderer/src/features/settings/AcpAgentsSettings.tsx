@@ -119,9 +119,13 @@ export function AcpAgentsSettings(props: {
         />
       ))}
       {!loading && entries.length === 0 ? (
-        <SettingsSection eyebrow="Models" title="ACP agents" sectionId="acp-empty">
+        <SettingsSection
+          eyebrow="Models"
+          title="AI providers"
+          sectionId="acp-unavailable"
+        >
           <p className="settings-empty">
-            {error ?? "No ACP agents discovered on this machine."}
+            {error ?? "No AI providers are available right now."}
           </p>
         </SettingsSection>
       ) : null}

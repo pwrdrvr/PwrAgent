@@ -37,8 +37,9 @@ import {
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
-  resolveAcpAgentEnabled,
-  resolveAcpCliPathOverride,
+  acpAgentEnabledFor,
+  acpCliPathOverrideFor,
+  readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
@@ -681,9 +682,12 @@ export class AcpBackendAdapter {
         // (same as the settings path), so the binary that launches is the
         // resolved active install (override → picked → first) and every agent's
         // cliPath override is honored — consistent with what Settings shows.
+        // Read + parse the config once for all four agents (override + enabled),
+        // not once per lookup.
+        const config = readDesktopSettingsConfigSafe();
         const preferences: Record<string, AcpAgentPreference> = {};
         for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
-          const override = resolveAcpCliPathOverride(registryId);
+          const override = acpCliPathOverrideFor(config, registryId);
           if (override) {
             preferences[registryId] = { overridePath: override };
           }
@@ -694,7 +698,7 @@ export class AcpBackendAdapter {
         // Drop agents the user disabled in Settings → AI Providers so they
         // never surface as launchable chat backends. Defaults to enabled.
         return records.filter((record) =>
-          resolveAcpAgentEnabled(record.registryId),
+          acpAgentEnabledFor(config, record.registryId),
         );
       });
     this.createAcpTransport = options.createAcpTransport;

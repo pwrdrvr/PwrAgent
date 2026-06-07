@@ -1224,7 +1224,7 @@ describe("SettingsScreen", () => {
       screen.queryByRole("button", { name: "ACP Agents" }),
     ).not.toBeInTheDocument();
     expect(
-      await screen.findByText("No ACP agents discovered on this machine."),
+      await screen.findByText("No AI providers are available right now."),
     ).toBeInTheDocument();
   });
 

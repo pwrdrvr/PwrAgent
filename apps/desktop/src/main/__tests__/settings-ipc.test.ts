@@ -801,11 +801,33 @@ describe("settings ipc", () => {
     initializeAppState();
     try {
       registerSettingsIpcHandlers(service);
-      await expect(
-        handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: false }),
-      ).resolves.toMatchObject({
-        entries: [],
-      });
+      // Even before any discovery (cache-only read), all four supported
+      // providers render as their own not-installed placeholder entries —
+      // known providers never vanish just because they're undiscovered.
+      const cached = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: false },
+      )) as
+        | {
+            entries?: Array<{
+              registryId: string;
+              installed: boolean;
+              installStatus: string;
+            }>;
+          }
+        | undefined;
+      expect(cached?.entries?.map((entry) => entry.registryId)).toEqual([
+        "gemini",
+        "kimi",
+        "grok",
+        "qwen",
+      ]);
+      expect(
+        cached?.entries?.every(
+          (entry) =>
+            entry.installed === false && entry.installStatus === "not-installed",
+        ),
+      ).toBe(true);
       const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
         {},
         { refresh: true },
