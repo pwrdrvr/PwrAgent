@@ -769,7 +769,7 @@ export class AcpBackendAdapter {
         session &&
         acpSessionHasConversationHistory(session) &&
         replay.entries.length === 0 &&
-        acpRuntimeSupportsSessionHistoryReplay(
+        acpRuntimeSupportsSessionLoad(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
@@ -796,11 +796,11 @@ export class AcpBackendAdapter {
       if (
         session &&
         replay.entries.length === 0 &&
-        !acpRuntimeSupportsSessionHistoryReplay(
+        !acpRuntimeSupportsSessionLoad(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
-        return this.readRolloutReplay(session, "rollout-no-history-replay");
+        return this.readRolloutReplay(session, "rollout-session-load-unsupported");
       }
       this.logSessionReplaySource({
         backend,
@@ -825,18 +825,11 @@ export class AcpBackendAdapter {
     }
 
     if (
-      !acpRuntimeSupportsSessionHistoryReplay(
+      !acpRuntimeSupportsSessionLoad(
         this.getInstalledAgent(backend)?.runtimeCapabilities,
       )
     ) {
-      // The agent's session/load does NOT replay the full transcript (Gemini,
-      // Grok, Qwen — anything without sessionHistoryReplay). It may still emit
-      // a boilerplate first turn (Gemini replays its <session_context> as a
-      // single user message), which is NOT history — trusting it would drop the
-      // real conversation. Use our own durable rollout, which captured every
-      // turn while the creating instance ran. The session is still resumed for
-      // *continuation* separately, at turn time, via client.ensureSession().
-      return this.readRolloutReplay(session, "rollout-no-history-replay");
+      return this.readRolloutReplay(session, "rollout-session-load-unsupported");
     }
     const client = await this.getClient(backend);
     try {
@@ -916,6 +909,52 @@ export class AcpBackendAdapter {
     session: AcpSessionMetadata;
   }): AppServerThreadReplay {
     const { backend, replay, session } = params;
+
+    // For agents that do NOT replay their transcript on session/load (Gemini,
+    // Grok, Qwen — anything without sessionHistoryReplay), the provider
+    // "replay" is not the real history. Gemini in particular re-emits its
+    // <session_context> as a single user message on session/load, so the
+    // provider replay is non-empty but bogus — trusting it (entries > 0) used
+    // to drop the real conversation on reload. Our durable rollout captured
+    // every turn while the creating instance ran, so prefer it whenever it has
+    // entries. (We still call session/load above to resume the agent session
+    // for continuation; we just don't trust its replay as history here.)
+    const supportsHistoryReplay = acpRuntimeSupportsSessionHistoryReplay(
+      this.getInstalledAgent(backend)?.runtimeCapabilities,
+    );
+    if (!supportsHistoryReplay) {
+      const rolloutReplay =
+        this.acpRolloutStore?.readReplay({
+          backendId: session.backendId,
+          sessionId: session.sessionId,
+        }) ?? new AcpSessionReplayNormalizer().replay();
+      if (rolloutReplay.entries.length > 0) {
+        this.logSessionReplaySource({
+          backend,
+          entries: rolloutReplay.entries.length,
+          messages: rolloutReplay.messages.length,
+          providerEntries: replay.entries.length,
+          providerMessages: replay.messages.length,
+          sessionId: session.sessionId,
+          source: "rollout-preferred-no-history-replay",
+        });
+        return {
+          ...rolloutReplay,
+          threadStatus: acpSessionThreadStatus(session.status),
+        };
+      }
+      // No rollout yet (e.g. a brand-new session opened before any turn
+      // persisted) — fall back to whatever the provider gave us.
+      this.logSessionReplaySource({
+        backend,
+        entries: replay.entries.length,
+        messages: replay.messages.length,
+        sessionId: session.sessionId,
+        source: "provider-no-rollout-no-history-replay",
+      });
+      return replay;
+    }
+
     if (replay.entries.length > 0 || !acpSessionHasConversationHistory(session)) {
       this.logSessionReplaySource({
         backend,

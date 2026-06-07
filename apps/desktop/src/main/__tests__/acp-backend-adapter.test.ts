@@ -697,9 +697,11 @@ describe("AcpBackendAdapter", () => {
     // transcript on session/load — it only re-emits its <session_context>
     // boilerplate as a single user message. On a cold reload (no cached
     // client) the adapter used to trust that 1-entry provider replay and show
-    // ONLY the session_context, dropping the whole conversation. The read path
-    // must key on sessionHistoryReplay (which Gemini lacks) and use our durable
-    // rollout instead — and must NOT call session/load for history.
+    // ONLY the session_context, dropping the whole conversation. Because Gemini
+    // lacks sessionHistoryReplay, the adapter must prefer our durable rollout
+    // (which captured the real turns) over that bogus provider replay. (It
+    // still calls session/load to RESUME the agent session for continuation —
+    // it just doesn't trust its replay as history.)
     const backendId = "acp:gemini" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),
@@ -837,9 +839,9 @@ describe("AcpBackendAdapter", () => {
         message.text?.includes("session_context"),
       ),
     ).toBe(false);
-    // History must come from the rollout without calling the agent's
-    // session/load (resume happens separately, at turn time).
-    expect(loadSession).not.toHaveBeenCalled();
+    // session/load is still invoked to resume the agent session, but its
+    // bogus <session_context> replay is discarded in favor of the rollout.
+    expect(loadSession).toHaveBeenCalled();
 
     await adapter.close();
   });
