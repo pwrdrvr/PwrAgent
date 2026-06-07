@@ -63,6 +63,8 @@ describe("AcpStdioJsonRpcTransport", () => {
       cwd: "/repo",
     });
     expect(options.env).toMatchObject({ ACP_TEST: "1" });
+    expect(String(options.env?.PATH)).toContain("/opt/homebrew/bin");
+    expect(String(options.env?.PATH)).toContain("/usr/local/bin");
 
     const envelope = JSON.parse(child.writes[0]) as { id: string; method: string };
     expect(child.writes[0]).toMatch(/\n$/);

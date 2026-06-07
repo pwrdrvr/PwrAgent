@@ -381,6 +381,88 @@ describe("ThreadView", () => {
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
+  it("keeps launch failures closable from the pending setup screen", async () => {
+    const selectedDirectory = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "PwrAgent",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "acp:gemini",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      prompt: "Run node --version",
+      updatedAt: 1000,
+      workMode: "worktree",
+    } satisfies NavigationLaunchpadDraft;
+    const onMaterializeLaunchpad = vi.fn(async () => {
+      throw new Error("json-rpc error (500): You have exhausted your capacity on this model.");
+    });
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "acp:gemini",
+            label: "Gemini",
+            available: true,
+            methods: ["session/new", "session/prompt"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    expect(await screen.findByRole("heading", { name: "Could not start PwrAgent" }))
+      .toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "json-rpc error (500): You have exhausted your capacity on this model.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
+  });
+
   it("describes sub-thread launchpads as grouped children with empty history", () => {
     const selectedDirectory = {
       key: "subthread:codex:thread-parent:new-worktree",

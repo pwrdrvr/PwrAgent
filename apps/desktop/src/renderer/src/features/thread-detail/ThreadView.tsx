@@ -214,6 +214,41 @@ function LaunchpadEnvironmentSetupPending(props: {
   );
 }
 
+function LaunchpadMaterializeFailure(props: {
+  directoryLabel: string;
+  error: string;
+  onClose: () => void;
+}) {
+  return (
+    <section
+      className="transcript-panel transcript-panel--pending"
+      aria-label="Thread launch failed"
+    >
+      <div className="launchpad-pending">
+        <div className="launchpad-pending__header">
+          <div>
+            <p className="eyebrow">Thread launch failed</p>
+            <h3>Could not start {props.directoryLabel}</h3>
+          </div>
+          <button
+            className="button button--ghost"
+            type="button"
+            onClick={props.onClose}
+          >
+            Close
+          </button>
+        </div>
+        <div className="launchpad-pending__output" aria-label="Launch error">
+          <div className="launchpad-pending__command-label">Error</div>
+          <pre>
+            <code>{props.error}</code>
+          </pre>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function EnvironmentSetupFailureChoice(props: {
   archiving: boolean;
   continuing: boolean;
@@ -958,6 +993,8 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const [launchpadMaterializeError, setLaunchpadMaterializeError] =
+    useState<string>();
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
     useState<Set<string>>(() => new Set());
   const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
@@ -994,6 +1031,7 @@ export function ThreadView(props: ThreadViewProps) {
     setContextRailResizing(false);
     setExpandedImage(undefined);
     setLaunchpadMaterializing(false);
+    setLaunchpadMaterializeError(undefined);
     setLaunchpadSetupProgress(undefined);
     setSetupFailureContinuing(false);
     setSetupFailureContinueError(undefined);
@@ -1919,6 +1957,7 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       setLaunchpadMaterializing(true);
+      setLaunchpadMaterializeError(undefined);
       try {
         await props.onMaterializeLaunchpad(
           directoryKey,
@@ -1927,7 +1966,9 @@ export function ThreadView(props: ThreadViewProps) {
           reviewTarget
         );
       } catch (error) {
-        setLaunchpadMaterializing(false);
+        setLaunchpadMaterializeError(
+          error instanceof Error ? error.message : String(error)
+        );
         throw error;
       }
     };
@@ -2023,7 +2064,16 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
 
         <div className="thread-view__launchpad-composer">
-          {launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
+          {launchpadMaterializing && launchpadMaterializeError ? (
+            <LaunchpadMaterializeFailure
+              directoryLabel={selectedLaunchpad.directoryLabel}
+              error={launchpadMaterializeError}
+              onClose={() => {
+                setLaunchpadMaterializing(false);
+                setLaunchpadMaterializeError(undefined);
+              }}
+            />
+          ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
             <LaunchpadEnvironmentSetupPending
               command={
                 launchpadSetupProgress?.command ??
