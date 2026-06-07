@@ -485,6 +485,10 @@ export type MaterializeDirectoryLaunchpadResponse = {
     phase: "setup" | "action";
     worktreeCleanupAvailable: boolean;
   };
+  turnStartFailure?: {
+    message: string;
+    phase: "turn" | "review";
+  };
 };
 
 export type CodexEnvironmentSetupProgressEvent = {

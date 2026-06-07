@@ -4794,6 +4794,21 @@ export class MessagingController {
       await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
       return;
     }
+    if (materialized?.turnStartFailure) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("turn-start-failed"),
+          createdAt: this.now(),
+          title: "Turn could not start",
+          body: materialized.turnStartFailure.message,
+          recoverable: true,
+        }),
+        updatedBinding,
+        event,
+      );
+      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      return;
+    }
     if (materialized?.turnId) {
       this.logger.info?.("messaging materialized launchpad turn started", {
         bindingId: updatedBinding.id,

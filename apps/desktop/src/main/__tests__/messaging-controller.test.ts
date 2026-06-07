@@ -907,6 +907,65 @@ describe("MessagingController", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("binds a materialized thread when its first turn fails", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+      ) => ({
+        backend: request.launchpad?.backend ?? "codex",
+        threadId: "new-thread-1",
+        executionMode: request.launchpad?.executionMode ?? "default",
+        workMode: request.launchpad?.workMode ?? "local",
+        turnStartFailure: {
+          message: "invalid model",
+          phase: "turn" as const,
+        },
+      }),
+    );
+    const harness = await createHarness({ materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Fix bug",
+          },
+        ],
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: "invalid model",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Binding: new-thread-1"),
+    });
+  });
+
   it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
     const harness = await createHarness();
     await harness.store.upsertBinding({

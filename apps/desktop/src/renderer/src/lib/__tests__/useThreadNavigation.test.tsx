@@ -1906,6 +1906,78 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("selects a materialized thread without optimistic input when the first turn fails", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const threadId = "thread-turn-failed";
+    const input = [{ type: "text" as const, text: "Fix the model setting" }];
+    const initialSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "Fix the model setting",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi.fn().mockResolvedValue(initialSnapshot);
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId,
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      turnStartFailure: {
+        message: "invalid model",
+        phase: "turn" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(
+        "Fix the model setting"
+      );
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey, input);
+    });
+
+    expect(result.current.selectedThread?.id).toBe(threadId);
+    expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
+    expect(result.current.launchpadError).toBe("invalid model");
+  });
+
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();

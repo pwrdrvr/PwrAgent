@@ -7550,28 +7550,45 @@ export class DesktopBackendRegistry {
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
+    let turnStartFailure:
+      | MaterializeDirectoryLaunchpadResponse["turnStartFailure"]
+      | undefined;
     if (codexEnvironmentStartupFailure) {
       turnId = undefined;
     } else if (request.reviewTarget) {
-      const reviewResponse = await this.startReview({
-        backend: launchpad.backend,
-        threadId: startThreadResponse.threadId,
-        target: request.reviewTarget,
-        delivery: "inline",
-      });
-      turnId = reviewResponse.turnId;
+      try {
+        const reviewResponse = await this.startReview({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          target: request.reviewTarget,
+          delivery: "inline",
+        });
+        turnId = reviewResponse.turnId;
+      } catch (error) {
+        turnStartFailure = {
+          message: error instanceof Error ? error.message : String(error),
+          phase: "review",
+        };
+      }
     } else if (input.length > 0) {
-      const turnResponse = await this.startTurn({
-        backend: launchpad.backend,
-        threadId: startThreadResponse.threadId,
-        input,
-        model: launchpad.model,
-        reasoningEffort: launchpad.reasoningEffort,
-        serviceTier: launchpad.serviceTier,
-        fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
-        collaborationMode: request.collaborationMode,
-      });
-      turnId = turnResponse.turnId;
+      try {
+        const turnResponse = await this.startTurn({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          input,
+          model: launchpad.model,
+          reasoningEffort: launchpad.reasoningEffort,
+          serviceTier: launchpad.serviceTier,
+          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+          collaborationMode: request.collaborationMode,
+        });
+        turnId = turnResponse.turnId;
+      } catch (error) {
+        turnStartFailure = {
+          message: error instanceof Error ? error.message : String(error),
+          phase: "turn",
+        };
+      }
     }
 
     await resetLaunchpadAfterMaterialize({
@@ -7592,6 +7609,7 @@ export class DesktopBackendRegistry {
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
+      turnStartFailure,
     };
   }
 
