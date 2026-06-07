@@ -25,8 +25,10 @@
  *   EVAL_STRICT=1              fail the run if any scenario (not just whatis) fails
  *   EVAL_KEEP_TEMP=1           keep the temp profile/clone/captures dirs
  */
+import path from "node:path";
 import { launchLiveApp } from "./lib/live-app";
-import { LiveDriver, type BackendSummary, type ExecutionMode } from "./lib/driver";
+import { LiveDriver, type BackendSummary, type ExecutionMode, type BackendKind } from "./lib/driver";
+import { UiDriver } from "./lib/ui-driver";
 
 type ScenarioId = "whatis" | "build" | "fulltest";
 
@@ -115,13 +117,72 @@ async function main(): Promise<void> {
     ? SCENARIOS.filter((s) => wantScenarios.includes(s.id))
     : SCENARIOS;
 
-  console.log("▶ PwrAgent live smoke eval — launching real app…");
+  const driveUi = process.env.EVAL_DRIVE_UI === "1";
+  console.log(
+    `▶ PwrAgent live smoke eval — launching real app… ${driveUi ? "(UI-drive)" : "(IPC-drive)"}`,
+  );
   const app = await launchLiveApp({ keepTemp: process.env.EVAL_KEEP_TEMP === "1" });
   console.log(`  profile root : ${app.pwragentHome}`);
   console.log(`  clone (@${app.sha.slice(0, 10)}) : ${app.clonePath}`);
   console.log(`  captures     : ${app.capturesDir}`);
 
   const driver = new LiveDriver(app.page);
+  const ui = new UiDriver(app.page, app.capturesDir);
+  const dirLabel = path.basename(app.clonePath);
+
+  /**
+   * Create a thread for a cell. In UI-drive mode this drives the composer
+   * (open launchpad → assert+select provider → assert+select access mode →
+   * type prompt → Start), which BOTH creates the thread and starts the turn,
+   * then discovers the new threadId. On any UI failure it screenshots and
+   * falls back to IPC creation so the grid still completes. Returns the
+   * threadId plus a short tag describing how it was created.
+   */
+  const createThread = async (
+    backend: BackendKind,
+    mode: ExecutionMode,
+    prompt: string,
+  ): Promise<{ threadId: string; tag: string }> => {
+    if (driveUi) {
+      try {
+        const before = new Set(await driver.listThreadIds(backend));
+        await ui.openLaunchpad(dirLabel);
+        const providerOffered = await ui.selectProvider(backend);
+        const modes = await ui.selectAccessMode(mode);
+        await ui.typePrompt(prompt);
+        await ui.clickStart();
+        // Discover the id of the thread the UI just created.
+        let threadId: string | undefined;
+        const deadline = Date.now() + 25_000;
+        while (Date.now() < deadline) {
+          const fresh = (await driver.listThreadIds(backend)).find((id) => !before.has(id));
+          if (fresh) {
+            threadId = fresh;
+            break;
+          }
+          await app.page.waitForTimeout(500);
+        }
+        if (!threadId) {
+          throw new Error("could not discover UI-created threadId via listThreads");
+        }
+        console.log(
+          `    ↳ UI: provider ${providerOffered ? "✓" : "(fixed)"}, modes [${modes.join(", ")}]`,
+        );
+        return { threadId, tag: "UI" };
+      } catch (uiErr) {
+        const msg = uiErr instanceof Error ? uiErr.message : String(uiErr);
+        console.error(`    ✖ UI drive failed (${msg}); falling back to IPC`);
+        await ui.screenshot(`ui-fallback-${backend.replace(/[:]/g, "_")}-${mode}`);
+      }
+    }
+    // IPC path (default, or UI fallback).
+    const threadId = await driver.startThread(backend, app.clonePath, mode);
+    await driver.setExecutionMode(backend, threadId, mode).catch(() => undefined);
+    await app.focusThread(backend, threadId);
+    await driver.startTurn(backend, threadId, prompt, mode);
+    return { threadId, tag: driveUi ? "IPC(fallback)" : "IPC" };
+  };
+
   // Cells keyed `${backend}::${scenarioId}` → graded result.
   const cells = new Map<string, { mark: string; note: string }>();
   let coreFailures = 0;
@@ -169,27 +230,20 @@ async function main(): Promise<void> {
       for (const sc of scenarios) {
         const key = `${backend.kind}::${sc.id}`;
         process.stdout.write(`  • ${sc.column} … `);
-        // Track the IPC step so a thrown error names exactly what failed.
-        let step = "startThread";
+        // Track the step so a thrown error names exactly what failed.
+        let step = "createThread";
         try {
-          const threadId = await driver.startThread(backend.kind, app.clonePath, sc.mode);
-          // Belt-and-suspenders: pin the mode explicitly post-create.
-          step = "setExecutionMode";
-          await driver.setExecutionMode(backend.kind, threadId, sc.mode).catch(() => undefined);
-          // Focus the thread so it renders live (transcript + approvals) and is
-          // watchable — IPC thread creation doesn't auto-navigate the UI.
-          step = "focusThread";
-          await app.focusThread(backend.kind, threadId);
-          step = "startTurn";
-          const turnId = await driver.startTurn(backend.kind, threadId, sc.prompt, sc.mode);
+          const created = await createThread(backend.kind, sc.mode, sc.prompt);
           step = "waitForTurn";
-          const outcome = await driver.waitForTurn(backend.kind, threadId, turnId, {
+          const outcome = await driver.waitForTurn(backend.kind, created.threadId, undefined, {
             timeoutMs: sc.timeoutMs,
             onLog: (m) => console.log(m),
           });
           const graded = sc.grade(outcome);
-          cells.set(key, graded);
-          console.log(`${MARK_GLYPH[graded.mark]} ${graded.note}`);
+          // Tag how the thread was created so the grid shows UI vs IPC/fallback.
+          const tagged = { ...graded, note: `[${created.tag}] ${graded.note}` };
+          cells.set(key, tagged);
+          console.log(`${MARK_GLYPH[graded.mark]} ${tagged.note}`);
           // Surface diagnostics whenever the cell isn't a clean pass so the
           // reason is visible (e.g. why codex requested no approval, or what a
           // failed/timed-out turn actually did).

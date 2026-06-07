@@ -26,7 +26,26 @@ pnpm eval:smoke:build
 
 # If the app is already built (out/main/index.js exists), skip the rebuild:
 pnpm eval:smoke
+
+# Drive the real composer UI (validates the controls are actually presented):
+pnpm eval:smoke:build:ui     # build + UI-drive
+pnpm eval:smoke:ui           # UI-drive, no rebuild
 ```
+
+### IPC-drive (default) vs UI-drive
+
+By default the eval creates threads via the backend IPC — robust, exercises the
+full real backend stack, and focuses each thread so you can watch it stream.
+
+`EVAL_DRIVE_UI=1` (a.k.a. `pnpm eval:smoke:ui`) instead drives the real
+**composer**: it opens the new-thread launchpad for the clone, asserts the
+**Provider** dropdown offers the agent and selects it, asserts the **Access
+mode** dropdown offers both Default + Full Access and selects the scenario's
+mode (accepting the "Enable Full Access?" dialog), types the prompt, and clicks
+**Start thread**. This validates the thing you'd otherwise hand-check — that the
+options are actually presented and selectable. If any UI step fails it
+screenshots to the captures dir and falls back to IPC creation, so the grid
+still completes; the grid note is tagged `[UI]`, `[IPC]`, or `[IPC(fallback)]`.
 
 ## What it does and does NOT touch
 
@@ -45,14 +64,15 @@ pnpm eval:smoke
 
 ## What renders in the window
 
-The eval **creates threads via the backend IPC** (`startThread`) rather than by
-driving the composer, so it does not animate the pre-thread launchpad or the
-settings dropdowns. It DOES focus each thread as it runs (via the same
-`window:show-thread` navigation the menu/deep-links use), so you can watch the
-transcript stream and approval prompts appear live. If you want the eval to also
-exercise the composer launchpad UI (select backend / access mode / type / click
-Start), that's a heavier DOM-driven mode we can add — the IPC path was chosen
-for robustness and to exercise the full real backend stack.
+In the default **IPC-drive** mode the eval creates threads via `startThread`
+rather than by driving the composer, so it does not animate the pre-thread
+launchpad or the settings dropdowns — but it DOES focus each thread as it runs
+(via the same `window:show-thread` navigation the menu/deep-links use), so you
+can watch the transcript stream and approval prompts appear live.
+
+For full UI fidelity — validating that the launchpad controls are actually
+presented and selectable — use **UI-drive** mode (`EVAL_DRIVE_UI=1` /
+`pnpm eval:smoke:ui`), described above.
 
 ## Transcript capture (feeds Phase B / KTD-P3)
 
@@ -72,6 +92,7 @@ the in-tree normalizer. Pass `EVAL_KEEP_TEMP=1` to retain them.
 | `EVAL_TURN_TIMEOUT_MS` | `180000` | per-turn timeout |
 | `EVAL_STRICT` | off | non-zero exit if ANY scenario fails (not just `whatis`) |
 | `EVAL_KEEP_TEMP` | off | keep the temp profile / clone / captures dirs |
+| `EVAL_DRIVE_UI` | off | drive the composer UI instead of the IPC (`pnpm eval:smoke:ui`) |
 
 ```bash
 # Just Codex + Gemini, only the "what is this?" probe, keep transcripts:

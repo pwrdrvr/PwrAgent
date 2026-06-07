@@ -101,6 +101,16 @@ export class LiveDriver {
     return this.call("listAcpAgents", { refresh: true });
   }
 
+  /** Thread ids currently known for a backend — used to discover the id of a
+   *  thread just created through the UI (diff before/after clicking Start). */
+  async listThreadIds(backend: BackendKind): Promise<string[]> {
+    const res = await this.call<{ threads?: Array<{ id: string }> }>(
+      "listThreads",
+      { backend },
+    );
+    return (res.threads ?? []).map((t) => t.id);
+  }
+
   registerDirectory(
     path: string,
     preferredBackend?: BackendKind,
@@ -199,7 +209,9 @@ export class LiveDriver {
   async waitForTurn(
     backend: BackendKind,
     threadId: string,
-    turnId: string,
+    // turnId is accepted for symmetry but completion is matched by threadId
+    // (UI-created threads don't hand back a turnId).
+    _turnId: string | undefined,
     opts: { timeoutMs: number; pollMs?: number; onLog?: (m: string) => void } = {
       timeoutMs: 180_000,
     },

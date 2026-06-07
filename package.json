@@ -27,6 +27,8 @@
     "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
     "eval:smoke": "pnpm --filter @pwragent/desktop eval:smoke",
     "eval:smoke:build": "pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke",
+    "eval:smoke:ui": "pnpm --filter @pwragent/desktop eval:smoke:ui",
+    "eval:smoke:build:ui": "pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke:ui",
     "test": "vitest run --config vitest.workspace.ts",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",
