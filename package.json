@@ -25,6 +25,8 @@
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",
     "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
+    "eval:smoke": "pnpm --filter @pwragent/desktop eval:smoke",
+    "eval:smoke:build": "pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke",
     "test": "vitest run --config vitest.workspace.ts",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",
