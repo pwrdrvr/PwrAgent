@@ -242,6 +242,39 @@ export type AcpAgentSettingsEntry = {
   lastDiscoveredAt?: number;
   lastDiscoveryError?: string;
   runtime?: BackendAcpRuntimeCapabilities;
+  // Multi-install (Wave 2 / agent-acp). Every installed executable of this
+  // agent found on the machine (PATH matches + fallbacks + a passing override),
+  // the one currently in effect, the user's enable toggle, and their path
+  // preference. Populated from the kit's `discoverLocalAcpAgentInstances`.
+  instances?: AcpAgentInstance[];
+  activeCommand?: string;
+  enabled?: boolean;
+  preference?: AcpAgentPreference;
+};
+
+/** How a discovered ACP instance's executable path was located. Mirrors the
+ *  kit's `AcpAgentInstanceSource`. */
+export type AcpAgentInstanceSource = "override" | "path" | "fallback";
+
+/** One installed executable of an ACP agent that passed discovery. A single
+ *  agent can have several (e.g. `qwen` under nvm AND Homebrew), each a distinct
+ *  binary the user can pick between. */
+export type AcpAgentInstance = {
+  /** Resolved command/path that passed the probe. */
+  command: string;
+  /** Parsed CLI version, when the version probe yielded one. */
+  version?: string;
+  /** How the path was found: user override, a `PATH` match, or a fallback path. */
+  source: AcpAgentInstanceSource;
+};
+
+/** A user's per-agent path choice. `overridePath` is a manual absolute path
+ *  (highest priority — probed even if outside `PATH`/fallbacks). `selectedPath`
+ *  is a discovered instance command the user clicked to pin. Both unset = auto
+ *  (first discovered instance). */
+export type AcpAgentPreference = {
+  overridePath?: string;
+  selectedPath?: string;
 };
 
 export type ListAcpAgentSettingsRequest = {
