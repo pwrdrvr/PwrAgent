@@ -130,6 +130,26 @@ export type OnboardingWizardProps = {
   desktopApi?: DesktopApi;
 };
 
+/**
+ * The profile name the wizard provisions for its single-profile bootstrap
+ * paths — Shared mode and "Skip and use default". When the operator pinned a
+ * profile via `PWRAGENT_PROFILE` / `--profile`, boot resolves that env/CLI name
+ * FIRST on every launch (before the registry default), so the provisioned
+ * profile MUST carry that exact name. Otherwise the next boot looks for the
+ * pinned name, doesn't find it (we created `default` instead), and re-fires the
+ * wizard forever. Falls back to `default` for the unnamed first-run case
+ * (`no-profile-configured`), where no name was requested.
+ */
+export function bootstrapProvisionProfileName(
+  bootInfo: DesktopBootInfo | null,
+): string {
+  const requested =
+    bootInfo?.decisionKind === "missing-named-profile"
+      ? bootInfo.requestedProfileName?.trim()
+      : undefined;
+  return requested || "default";
+}
+
 export function OnboardingWizard(props: OnboardingWizardProps) {
   // Initial step:
   //   - bootstrap with a CLI/env-named missing profile →
@@ -755,12 +775,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           if (activeProfile) {
             await writeBufferedSecretsIfAny(activeProfile, bufferedSecrets);
           } else if (props.desktopApi?.createPwrAgentProfile) {
-            // Bootstrap + Shared. Provision the default profile
-            // with the system-default Codex pairing implied (we
-            // skip `setPwrAgentProfileCodexProfile`; an unset
-            // codex.profile in the new profile's config.toml means
-            // "use ~/.codex/" — i.e. Shared).
-            const defaultName = "default";
+            // Bootstrap + Shared. Provision the profile with the
+            // system-default Codex pairing implied (we skip
+            // `setPwrAgentProfileCodexProfile`; an unset codex.profile
+            // in the new profile's config.toml means "use ~/.codex/"
+            // — i.e. Shared).
+            //
+            // Name it after the boot-requested profile when one was
+            // pinned (PWRAGENT_PROFILE=test / --profile test) so the next
+            // boot opens straight in instead of re-firing the wizard.
+            const defaultName = bootstrapProvisionProfileName(props.bootInfo);
             try {
               await props.desktopApi.createPwrAgentProfile({
                 profile: defaultName,
@@ -835,7 +859,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     if (submitting) return;
     setSubmitting(true);
     try {
-      const defaultName = "default";
+      // Honor a boot-requested profile name (PWRAGENT_PROFILE / --profile)
+      // here too — otherwise "Skip and use default" provisions `default`
+      // while the next boot still looks for the pinned name and re-fires
+      // the wizard.
+      const defaultName = bootstrapProvisionProfileName(props.bootInfo);
       if (!props.desktopApi?.createPwrAgentProfile) {
         props.onDismiss(false);
         return;
