@@ -44,7 +44,10 @@ import {
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
-import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
+import {
+  acpRuntimeSupportsSessionHistoryReplay,
+  acpRuntimeSupportsSessionLoad,
+} from "../acp/acp-runtime-capabilities";
 import {
   AcpSessionStore,
   type AcpSessionMetadata,
@@ -766,7 +769,7 @@ export class AcpBackendAdapter {
         session &&
         acpSessionHasConversationHistory(session) &&
         replay.entries.length === 0 &&
-        acpRuntimeSupportsSessionLoad(
+        acpRuntimeSupportsSessionHistoryReplay(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
@@ -793,11 +796,11 @@ export class AcpBackendAdapter {
       if (
         session &&
         replay.entries.length === 0 &&
-        !acpRuntimeSupportsSessionLoad(
+        !acpRuntimeSupportsSessionHistoryReplay(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
-        return this.readRolloutReplay(session, "rollout-session-load-unsupported");
+        return this.readRolloutReplay(session, "rollout-no-history-replay");
       }
       this.logSessionReplaySource({
         backend,
@@ -822,11 +825,18 @@ export class AcpBackendAdapter {
     }
 
     if (
-      !acpRuntimeSupportsSessionLoad(
+      !acpRuntimeSupportsSessionHistoryReplay(
         this.getInstalledAgent(backend)?.runtimeCapabilities,
       )
     ) {
-      return this.readRolloutReplay(session, "rollout-session-load-unsupported");
+      // The agent's session/load does NOT replay the full transcript (Gemini,
+      // Grok, Qwen — anything without sessionHistoryReplay). It may still emit
+      // a boilerplate first turn (Gemini replays its <session_context> as a
+      // single user message), which is NOT history — trusting it would drop the
+      // real conversation. Use our own durable rollout, which captured every
+      // turn while the creating instance ran. The session is still resumed for
+      // *continuation* separately, at turn time, via client.ensureSession().
+      return this.readRolloutReplay(session, "rollout-no-history-replay");
     }
     const client = await this.getClient(backend);
     try {

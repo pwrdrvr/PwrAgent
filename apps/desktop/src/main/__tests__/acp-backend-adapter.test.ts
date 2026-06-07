@@ -692,6 +692,158 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("reads Gemini history from rollout, not its session/load <session_context> replay", async () => {
+    // Regression: Gemini advertises loadSession=true but does NOT replay the
+    // transcript on session/load — it only re-emits its <session_context>
+    // boilerplate as a single user message. On a cold reload (no cached
+    // client) the adapter used to trust that 1-entry provider replay and show
+    // ONLY the session_context, dropping the whole conversation. The read path
+    // must key on sessionHistoryReplay (which Gemini lacks) and use our durable
+    // rollout instead — and must NOT call session/load for history.
+    const backendId = "acp:gemini" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        agentCapabilities: {
+          // Can resume the session (for continuing the chat) but does not
+          // replay history — exactly Gemini's shape.
+          loadSession: true,
+        },
+      },
+    };
+    const session: AcpSessionMetadata = {
+      backendId,
+      sessionId: "session-1",
+      title: "Gemini thread",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    };
+    const rolloutReplay = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "user:1",
+          role: "user" as const,
+          text: "What is this project?",
+          createdAt: 1001,
+        },
+        {
+          type: "message" as const,
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "It is PwrSnap.",
+          createdAt: 1002,
+        },
+      ],
+      messages: [
+        {
+          id: "user:1",
+          role: "user" as const,
+          text: "What is this project?",
+          createdAt: 1001,
+        },
+        {
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "It is PwrSnap.",
+          createdAt: 1002,
+        },
+      ],
+      lastAssistantMessage: "It is PwrSnap.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    };
+    // What Gemini's session/load returns: just the boilerplate context, as a
+    // single user message. If the adapter ever trusts this, the test fails.
+    const loadSession = vi.fn(async () => ({
+      entries: [
+        {
+          type: "message" as const,
+          id: "user:ctx",
+          role: "user" as const,
+          text: "<session_context>…</session_context>",
+          createdAt: 999,
+        },
+      ],
+      messages: [
+        {
+          id: "user:ctx",
+          role: "user" as const,
+          text: "<session_context>…</session_context>",
+          createdAt: 999,
+        },
+      ],
+      lastAssistantMessage: undefined,
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    }));
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpRolloutStore: {
+        appendUpdate: vi.fn(),
+        readUpdates: vi.fn(() => []),
+        readReplay: vi.fn(() => rolloutReplay),
+      },
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          loadSession,
+          readReplay: vi.fn(() => ({
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+            threadStatus: "idle",
+          })),
+          dispose: vi.fn(async () => undefined),
+          refreshSession: vi.fn(async () => undefined),
+        }) as never,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const result = await adapter.readReplay(backendId, "session-1");
+    // The real conversation from the rollout — not the lone session_context.
+    expect(result.messages).toHaveLength(2);
+    expect(result.lastAssistantMessage).toBe("It is PwrSnap.");
+    expect(
+      result.messages.some((message) =>
+        message.text?.includes("session_context"),
+      ),
+    ).toBe(false);
+    // History must come from the rollout without calling the agent's
+    // session/load (resume happens separately, at turn time).
+    expect(loadSession).not.toHaveBeenCalled();
+
+    await adapter.close();
+  });
+
   it("falls back to rollout history when Kimi session/load returns no replay", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
@@ -699,6 +851,16 @@ describe("AcpBackendAdapter", () => {
       backendId,
       registryId: "kimi",
       name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        agentCapabilities: {
+          // Real Kimi replays history via session/load, so the adapter calls
+          // it; this case exercises the empty-replay -> rollout fallback.
+          loadSession: true,
+          sessionHistoryReplay: true,
+        },
+      },
     };
     const session: AcpSessionMetadata = {
       backendId,
