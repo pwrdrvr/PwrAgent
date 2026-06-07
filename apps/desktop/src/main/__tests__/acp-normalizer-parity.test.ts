@@ -66,18 +66,19 @@ function canon(replay: AppServerThreadReplay): unknown {
         return { type: "message", role: entry.role, text: entry.text };
       }
       if (entry.type === "activity") {
-        // Transcript-level parity: the activity is present, in order, with the
-        // same summary, status, and number of details. The per-DETAIL fields
-        // (`kind`, `label`, `path`, `command`) are the KNOWN reconciliation
-        // surface — on the richer agents the kit infers tool-kind differently,
-        // formats the command display differently, and drops `read` location
-        // paths. Those are cataloged for B2 (see the B1 plan doc §"Cataloged
-        // divergences"); comparing them here would just re-assert known drift.
+        // Transcript parity now includes per-detail `label` + `path` (the
+        // `path` lands via agent-core 0.2.0's `locations`, agent-kit#1). The
+        // remaining scoped-out fields are `kind` (the kit infers tool-kind
+        // differently — e.g. ReadFile as `write` where the in-tree says
+        // `command`) and `command` display (the in-tree synthesizes/derives a
+        // command string the kit doesn't, and even produces a spurious one for
+        // Qwen's `tool_call_update`). Those are cataloged for B2 — see the B1
+        // plan doc §"Cataloged divergences".
         return {
           type: "activity",
           summary: entry.summary,
           status: entry.status,
-          detailCount: entry.details.length,
+          details: entry.details.map((d) => ({ label: d.label, path: d.path })),
         };
       }
       if (entry.type === "plan") {
@@ -124,7 +125,7 @@ describe("KTD-P3 normalizer parity", () => {
   it("plan then tool call", () => {
     const updates: Update[] = [
       { kind: "plan", steps: [{ step: "Inspect files", status: "in_progress" }] },
-      { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", path: "package.json" },
+      { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", locations: [{ path: "package.json" }] },
     ];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });
