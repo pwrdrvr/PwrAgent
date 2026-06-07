@@ -127,6 +127,7 @@ import {
   acpSessionToThreadSummary,
   formatAcpRuntimeLabel,
   inputToAcpPrompt,
+  acpAdvertisesRuntimeModeSelector,
   isAcpSessionMissingForProjectError,
   mergeAcpRuntimeState,
   readKimiYoloExecutionModeFromText,
@@ -5761,10 +5762,21 @@ export class DesktopBackendRegistry {
   private usesKimiSlashExecutionModes(
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
-    return (
-      isAcpBackendId(backend) &&
-      this.acpBackend.getInstalledAgent(backend)?.registryId === "kimi"
-    );
+    if (!isAcpBackendId(backend)) {
+      return false;
+    }
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    if (agent?.registryId !== "kimi") {
+      return false;
+    }
+    // Once kimi advertises its own runtime mode selector (Default/Plan/Auto/
+    // Yolo via session capabilities), the legacy `/yolo` slash command is both
+    // obsolete and rejected by current kimi (#658). The runtime "yolo" mode —
+    // set over the standard `session/set_mode` protocol method — is the
+    // approval-policy control instead, so never drive kimi through the slash
+    // path in that case. Falls back to `/yolo` only for a kimi build that
+    // exposes no runtime mode selector of its own.
+    return !acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities);
   }
 
   private usesGrokSlashExecutionModes(

@@ -335,6 +335,27 @@ function resolveDefaultAcpRolloutRoot(): string {
     : resolveActiveProfilePath("state/acp-rollouts");
 }
 
+/**
+ * Whether the agent advertises its OWN runtime mode selector that the renderer
+ * will surface as a dropdown. Mirrors the renderer's `getAcpRuntimeModeControl`
+ * gating EXACTLY so the two never disagree (which is what produced the #658
+ * double-dropdown): a `configOptions` entry of category "mode" with ≥2 values,
+ * or an ACP `SessionModeState` (`modes.availableModes`) with ≥2 modes. Kimi's
+ * Default/Plan/Auto/Yolo arrive via the latter, so checking only configOptions
+ * would miss it.
+ */
+export function acpAdvertisesRuntimeModeSelector(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+): boolean {
+  const modeConfigOption = runtimeCapabilities?.configOptions?.find(
+    (option) => option.category === "mode" && option.values.length > 0,
+  );
+  if (modeConfigOption) {
+    return modeConfigOption.values.length >= 2;
+  }
+  return (runtimeCapabilities?.modes?.availableModes?.length ?? 0) >= 2;
+}
+
 function buildAcpExecutionModes(
   agent: AcpInstalledAgentRecord,
   available: boolean,
@@ -345,6 +366,18 @@ function buildAcpExecutionModes(
   // identically at this layer (the per-agent slash command text + response
   // parsing lives in backend-registry.ts).
   if (agent.registryId !== "kimi" && agent.registryId !== "grok") {
+    return [];
+  }
+  // If the agent advertises its OWN runtime "mode" selector (kimi surfaces
+  // Default/Plan/Auto/Yolo via session capabilities), that is the single
+  // source of truth for approval policy. Surfacing these hardcoded
+  // Default/Full Access modes on top produced TWO overlapping mode dropdowns
+  // (#658) that mirror each other — and the legacy slash-command path they
+  // drive (kimi `/yolo`) is rejected by current kimi, failing the launch.
+  // Defer entirely to the runtime modes whenever the agent advertises a
+  // selector; only fall back to these hardcoded modes for agents (e.g. grok)
+  // that expose no runtime mode selector of their own.
+  if (acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
     return [];
   }
   return [

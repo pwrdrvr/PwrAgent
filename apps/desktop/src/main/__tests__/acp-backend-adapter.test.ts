@@ -49,6 +49,119 @@ describe("describeInstalledAcpBackend", () => {
 
     expect(backend.methods).toContain("session/load");
   });
+
+  it("suppresses hardcoded execution modes for Kimi once it advertises runtime modes (#658)", () => {
+    // Kimi exposes its own Default/Plan/Auto/Yolo runtime modes. Surfacing the
+    // hardcoded Default/Full Access modes too produced a second, overlapping
+    // dropdown — and the legacy /yolo path they drove is rejected by current
+    // kimi. The runtime modes must be the single source.
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        configOptions: [
+          {
+            id: "approval-mode",
+            label: "Permission mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              { value: "default", label: "Default" },
+              { value: "yolo", label: "Yolo" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(backend.executionModes).toEqual([]);
+  });
+
+  it("suppresses hardcoded execution modes when Kimi advertises modes via SessionModeState (#658)", () => {
+    // Kimi's real shape: modes arrive as an ACP SessionModeState
+    // (runtimeCapabilities.modes.availableModes), NOT as a configOptions entry.
+    // The suppression must cover this form too, or the duplicate dropdown
+    // survives on actual kimi.
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "yolo", label: "Yolo" },
+          ],
+        },
+      },
+    });
+
+    expect(backend.executionModes).toEqual([]);
+  });
+
+  it("keeps execution modes when only a single runtime mode is advertised", () => {
+    // Mainline kimi advertises ONLY "default" (a single mode = no real
+    // selector), so there's no runtime dropdown to defer to.
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        modes: {
+          currentModeId: "default",
+          availableModes: [{ id: "default", label: "Default" }],
+        },
+      },
+    });
+
+    expect(backend.executionModes.map((mode) => mode.mode)).toEqual([
+      "default",
+      "full-access",
+    ]);
+  });
+
+  it("falls back to hardcoded execution modes for Kimi with no runtime mode selector", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    });
+
+    expect(backend.executionModes.map((mode) => mode.mode)).toEqual([
+      "default",
+      "full-access",
+    ]);
+  });
+
+  it("keeps hardcoded execution modes for Grok (no runtime mode selector)", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      name: "Grok CLI",
+    });
+
+    expect(backend.executionModes.map((mode) => mode.mode)).toEqual([
+      "default",
+      "full-access",
+    ]);
+  });
 });
 
 describe("AcpBackendAdapter", () => {
