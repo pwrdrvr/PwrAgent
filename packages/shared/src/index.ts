@@ -14,6 +14,7 @@ export * from "./contracts/diff-focus";
 export * from "./contracts/messaging";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
+export * from "./contracts/thread-tools";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
 export * from "./profile-names";

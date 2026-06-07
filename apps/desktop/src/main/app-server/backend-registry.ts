@@ -28,6 +28,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadReplay,
+  type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
   type AppServerTurnInputItem,
@@ -97,6 +98,9 @@ import {
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
   type ThreadAgentMetadata,
+  type PwrAgentThreadInspectionRequest,
+  type PwrAgentThreadInspectionResponse,
+  type ThreadInspectionSummary,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -122,6 +126,10 @@ import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
   isAcpBackendId,
+  isAppServerBackendKind,
+  DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
+  MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+  PWRAGENT_THREAD_TOOL_NAMESPACE,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
@@ -177,6 +185,12 @@ import {
   normalizePreferredMonitorReasoningEffort,
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
+import {
+  buildPwrAgentThreadDynamicToolErrorResponse,
+  handlePwrAgentThreadDynamicToolCall,
+  readPwrAgentThreadDynamicToolCall,
+} from "../agent-tools/pwragent-thread-codex-tools";
+import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { createScratchProjectDirectory } from "./scratch-projects";
@@ -2888,6 +2902,8 @@ export class DesktopBackendRegistry {
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
+  private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
+    async (request) => await this.handleThreadInspectionRequest(request);
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -5194,6 +5210,7 @@ export class DesktopBackendRegistry {
     const agentToolCatalogs = resolveAgentToolCatalogs({
       agent: request.agent,
       automationInspectionHandler: this.automationInspectionHandler,
+      threadInspectionHandler: this.threadInspectionHandler,
     });
     const resolvedDynamicTools =
       backend === "codex"
@@ -10522,6 +10539,40 @@ export class DesktopBackendRegistry {
         handler: this.automationInspectionHandler,
       });
     }
+    const threadToolCall = readPwrAgentThreadDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (threadToolCall?.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE) {
+      if (!this.isLiveAutomationInspectionToolCall(backend, threadToolCall)) {
+        backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
+          backend,
+          callId: threadToolCall.callId,
+          namespace: threadToolCall.namespace,
+          threadId: threadToolCall.threadId,
+          tool: threadToolCall.tool,
+          turnId: threadToolCall.turnId,
+        });
+        return buildPwrAgentThreadDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Thread inspection tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling thread inspection dynamic tool call", {
+        backend,
+        callId: threadToolCall.callId,
+        namespace: threadToolCall.namespace,
+        threadId: threadToolCall.threadId,
+        tool: threadToolCall.tool,
+        turnId: threadToolCall.turnId,
+      });
+      return await handlePwrAgentThreadDynamicToolCall({
+        backend,
+        call: threadToolCall,
+        handler: this.threadInspectionHandler,
+      });
+    }
 
     const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
       method: request.method,
@@ -11456,6 +11507,128 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async handleThreadInspectionRequest(
+    request: PwrAgentThreadInspectionRequest,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (request.operation === "search_threads") {
+      const backend = readThreadInspectionBackend(request.args.backend);
+      if (request.args.backend !== undefined && !backend) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "backend must be all or a known PwrAgent backend.",
+          },
+        };
+      }
+      const limit = clampInteger(
+        request.args.limit,
+        DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
+        MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+      );
+      const threads = await this.listThreads({
+        backend: backend === "all" ? undefined : backend,
+        archived: request.args.includeArchived === true,
+        callerReason: "agent-thread-inspection",
+      });
+      const enriched = await this.enrichThreadInspectionSummaries(threads);
+      const filtered = filterThreadInspectionSummaries(enriched, {
+        agentOnly: request.args.agentOnly === true,
+        query: request.args.query,
+      });
+      return {
+        ok: true,
+        data: {
+          threads: filtered.slice(0, limit),
+          totalCount: filtered.length,
+          limit,
+          truncated: filtered.length > limit,
+        },
+      };
+    }
+
+    if (request.operation === "get_thread_status") {
+      if (!isAppServerBackendKind(request.args.backend)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "backend must be a known PwrAgent backend.",
+          },
+        };
+      }
+      const threadId = request.args.threadId?.trim();
+      if (!threadId) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "threadId is required.",
+          },
+        };
+      }
+      const threads = await this.listThreads({
+        backend: request.args.backend,
+        archived: true,
+        callerReason: "agent-thread-inspection",
+      });
+      const [summary] = await this.enrichThreadInspectionSummaries(
+        threads.filter((thread) => thread.id === threadId),
+      );
+      if (!summary) {
+        return {
+          ok: false,
+          error: {
+            code: "not_found",
+            message: `Thread ${request.args.backend}:${threadId} was not found.`,
+          },
+        };
+      }
+      const status = await this.readThread({
+        backend: request.args.backend,
+        limit: 0,
+        threadId,
+      })
+        .then((response) => response.threadStatus ?? response.replay.threadStatus)
+        .catch((): AppServerThreadStatus | undefined => undefined);
+      const queueKey = buildThreadIdentityKey(request.args.backend, threadId);
+      const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
+      return {
+        ok: true,
+        data: {
+          thread: {
+            ...summary,
+            status,
+            queuedExecutionMode: queued?.mode,
+            queuedExecutionModeAt: queued?.queuedAt,
+          },
+        },
+      };
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_operation",
+        message: "Unsupported PwrAgent thread inspection operation.",
+      },
+    };
+  }
+
+  private async enrichThreadInspectionSummaries(
+    threads: AppServerThreadSummary[],
+  ): Promise<ThreadInspectionSummary[]> {
+    return await Promise.all(
+      threads.map(async (thread) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        return toThreadInspectionSummary(thread, overlay?.agent);
+      }),
+    );
+  }
+
   private notificationsEnabled(): boolean {
     try {
       return getDesktopSettingsService().resolveNotificationsEnabled();
@@ -12054,6 +12227,86 @@ export class DesktopBackendRegistry {
       }
     }
   }
+}
+
+function readThreadInspectionBackend(
+  value: unknown,
+): AppServerBackendKind | "all" | undefined {
+  if (value === undefined || value === "all") {
+    return "all";
+  }
+  return typeof value === "string" && isAppServerBackendKind(value)
+    ? value
+    : undefined;
+}
+
+function clampInteger(
+  value: unknown,
+  defaultValue: number,
+  maxValue: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return Math.max(1, Math.min(maxValue, Math.floor(value)));
+}
+
+function filterThreadInspectionSummaries(
+  threads: ThreadInspectionSummary[],
+  options: { agentOnly: boolean; query?: string },
+): ThreadInspectionSummary[] {
+  const query = options.query?.trim().toLowerCase();
+  return threads
+    .filter((thread) => !options.agentOnly || Boolean(thread.agent))
+    .filter((thread) => {
+      if (!query) {
+        return true;
+      }
+      return [
+        thread.backend,
+        thread.threadId,
+        thread.title,
+        thread.summary,
+        thread.projectKey,
+        thread.agent?.name,
+        thread.agent?.instructions,
+        ...thread.linkedDirectories.flatMap((directory) => [
+          directory.label,
+          directory.path,
+          directory.worktreePath,
+        ]),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase().includes(query));
+    })
+    .sort(
+      (left, right) =>
+        (right.updatedAt ?? right.createdAt ?? 0) -
+        (left.updatedAt ?? left.createdAt ?? 0),
+    );
+}
+
+function toThreadInspectionSummary(
+  thread: AppServerThreadSummary,
+  agent: ThreadAgentMetadata | undefined,
+): ThreadInspectionSummary {
+  return {
+    backend: thread.source,
+    threadId: thread.id,
+    title: thread.title,
+    summary: thread.summary,
+    projectKey: thread.projectKey,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    archivedAt: thread.archivedAt,
+    agent,
+    executionMode: thread.executionMode,
+    model: thread.model,
+    reasoningEffort: thread.reasoningEffort,
+    serviceTier: thread.serviceTier,
+    fastMode: thread.fastMode,
+    linkedDirectories: thread.linkedDirectories,
+  };
 }
 
 let registry: DesktopBackendRegistry | null = null;

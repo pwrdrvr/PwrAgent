@@ -5064,6 +5064,14 @@ script = "echo setup"
           namespace: "pwragent_task_monitors",
           name: "create_monitor_delegation",
         }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "get_thread_status",
+        }),
       ]),
     );
     expect(
@@ -11189,6 +11197,120 @@ command = "pnpm dev"
     expect(events).toEqual([]);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("handles thread inspection dynamic tool calls from active Agent turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Inbox triage",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory:/repo/app",
+              kind: "local",
+              label: "App",
+              path: "/repo/app",
+            },
+          ],
+          updatedAt: 2000,
+        },
+        {
+          id: "thread-2",
+          title: "Ordinary work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            agent: {
+              name: "Inbox Agent",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1500,
+            },
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {
+          agentOnly: true,
+          query: "inbox",
+          limit: 5,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.any(String),
+        },
+      ],
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      threads: [
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          title: "Inbox triage",
+          agent: {
+            name: "Inbox Agent",
+          },
+        },
+      ],
+      totalCount: 1,
+      limit: 5,
+      truncated: false,
+    });
+    expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
+      callerReason: "agent-thread-inspection",
+    });
+
     await registry.close();
   });
 

@@ -1,4 +1,7 @@
-export const AGENT_TOOL_CATALOG_IDS = ["automation_inspection"] as const;
+export const AGENT_TOOL_CATALOG_IDS = [
+  "automation_inspection",
+  "thread_inspection",
+] as const;
 
 export type AgentToolCatalogId = (typeof AGENT_TOOL_CATALOG_IDS)[number];
 

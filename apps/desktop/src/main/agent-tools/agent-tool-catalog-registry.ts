@@ -4,11 +4,16 @@ import type {
   ThreadAgentMetadata,
 } from "@pwragent/shared";
 import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_THREAD_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   buildAutomationInspectionToolRouter,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-agent-tools.js";
+import {
+  buildPwrAgentThreadToolRouter,
+  type PwrAgentThreadInspectionHandler,
+} from "./pwragent-thread-agent-tools.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -19,6 +24,7 @@ export type ResolvedAgentToolCatalog = {
 export function resolveAgentToolCatalogs(params: {
   agent?: ThreadAgentMetadata | { name: string; instructions?: string } | null;
   automationInspectionHandler?: AutomationInspectionHandler;
+  threadInspectionHandler?: PwrAgentThreadInspectionHandler;
 }): ResolvedAgentToolCatalog[] {
   if (!params.agent) {
     return [];
@@ -27,20 +33,37 @@ export function resolveAgentToolCatalogs(params: {
   const automationRouter = buildAutomationInspectionToolRouter(
     params.automationInspectionHandler,
   );
-  const dynamicTools = automationRouter.buildDynamicToolSpecs();
+  const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
+  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
+  const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
-      dynamicTools,
+      dynamicTools: automationDynamicTools,
       summary: {
         id: "automation_inspection",
         namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: dynamicTools.length,
+        toolCount: automationDynamicTools.length,
         fingerprint: buildCatalogFingerprint({
           id: "automation_inspection",
           namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
-          tools: dynamicTools,
+          tools: automationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "thread_inspection",
+      dynamicTools: threadDynamicTools,
+      summary: {
+        id: "thread_inspection",
+        namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: threadDynamicTools.length,
+        fingerprint: buildCatalogFingerprint({
+          id: "thread_inspection",
+          namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+          tools: threadDynamicTools,
         }),
       },
     },

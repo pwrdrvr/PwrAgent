@@ -8,8 +8,12 @@ import {
 
 describe("agent tool contracts", () => {
   it("defines the v1 agent tool catalog ids", () => {
-    expect(AGENT_TOOL_CATALOG_IDS).toEqual(["automation_inspection"]);
+    expect(AGENT_TOOL_CATALOG_IDS).toEqual([
+      "automation_inspection",
+      "thread_inspection",
+    ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
+    expect(isAgentToolCatalogId("thread_inspection")).toBe(true);
     expect(isAgentToolCatalogId("shell")).toBe(false);
   });
 
@@ -18,9 +22,10 @@ describe("agent tool contracts", () => {
       normalizeAgentToolCatalogIds([
         "automation_inspection",
         "automation_inspection",
+        "thread_inspection",
         "unknown",
       ]),
-    ).toEqual(["automation_inspection"]);
+    ).toEqual(["automation_inspection", "thread_inspection"]);
     expect(
       normalizeAgentToolCatalogIds(undefined, {
         defaultValue: ["automation_inspection"],

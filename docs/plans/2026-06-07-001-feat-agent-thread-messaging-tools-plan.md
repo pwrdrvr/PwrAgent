@@ -370,6 +370,8 @@ sequenceDiagram
 
 **Approach:** Add a `pwragent_threads` namespace with read-only tools such as `search_threads`, `get_thread_status`, and `get_thread_queue`. Results should use existing `NavigationThreadSummary`, turn-queue notifications, backend summary, and overlay state rather than Codex-owned storage. Return compact results by default and require explicit IDs for detail.
 
+**Progress 2026-06-07:** Added the `thread_inspection` Agent tool catalog and `pwragent_threads` namespace with read-only `search_threads` and `get_thread_status` tools. The registry handler uses `listThreads`, overlay Agent metadata, `readThread(...limit: 0)`, and queued execution-mode snapshots; dynamic tool calls are gated to the active turn on the same Agent thread. `get_thread_queue` and richer queue detail remain follow-up work.
+
 **Patterns to follow:** Automation inspection tools, navigation snapshot enrichment, and the Codex storage boundary guidance.
 
 **Test scenarios:**
