@@ -1,4 +1,4 @@
-import type { JsonRpcObserver, JsonRpcObserverEvent } from "../codex-app-server/json-rpc";
+import type { JsonRpcObserver, JsonRpcObserverEvent } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 
 const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";

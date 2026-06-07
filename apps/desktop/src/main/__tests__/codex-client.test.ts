@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
-import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
+import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 
 const codexClientLogError = vi.hoisted(() => vi.fn());
 const codexClientLogInfo = vi.hoisted(() => vi.fn());

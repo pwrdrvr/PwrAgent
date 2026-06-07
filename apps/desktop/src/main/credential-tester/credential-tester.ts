@@ -11,7 +11,7 @@ import type { CredentialValidationRequest } from "../messaging/messaging-runtime
 import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
-} from "../settings/codex-discovery";
+} from "@pwrdrvr/codex-discovery";
 
 const execFileAsync = promisify(execFile);
 

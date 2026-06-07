@@ -31,7 +31,7 @@ import type {
 import type {
   JsonRpcObserver,
   JsonRpcObserverDiagnostics,
-} from "../codex-app-server/json-rpc";
+} from "@pwrdrvr/agent-transport";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { getMainLogger } from "../log";
 import {
