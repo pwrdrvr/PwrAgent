@@ -267,6 +267,8 @@ sequenceDiagram
 
 **Approach:** Resolve enabled tool catalogs when starting or resuming an Agent thread. Codex starts receive dynamic tool specs. ACP sessions receive MCP server definitions only when `BackendAcpRuntimeAgentCapabilities.mcp` supports a compatible transport. The registry logs catalog fingerprints and stores enough active-turn context for the router to prove same-thread liveness.
 
+**Progress 2026-06-07:** Added a desktop-main Agent tool catalog resolver and an explicit `startThread({ agent })` contract. Codex Agent starts now attach the automation inspection catalog and persist Agent metadata, while ordinary Codex starts no longer advertise Agent tools. ACP MCP catalog resolution, resume-time catalog refresh, stale-catalog warnings, and PwrAgent control tools remain follow-up work.
+
 **Patterns to follow:** Existing `buildAutomationInspectionDynamicToolSpecs`, `readAutomationInspectionDynamicToolCall`, `isLiveAutomationInspectionToolCall`, and `buildAutomationInspectionAcpMcpServers`.
 
 **Test scenarios:**
@@ -303,6 +305,8 @@ sequenceDiagram
 - Test: `apps/desktop/src/main/__tests__/messaging-store-sqlite.test.ts`
 
 **Approach:** Add `/agent` to the channel-neutral command catalog. Reuse browse-session mechanics with a new mode or launch action that filters thread summaries to `thread.agent`. The Agent creation path should reuse messaging's existing new-thread backend/project flow, then call `setThreadAgent` after thread creation with the requested Agent name and optional instructions. Binding records persist `targetKind: "agent_thread"` and status cards label the binding as an Agent.
+
+**Progress 2026-06-07:** Added the `/agent` command, an Agent-only browse mode, stale-selection rejection for ordinary threads, and `targetKind: "agent_thread"` persistence through JSON and sqlite messaging stores. `/resume` keeps the existing all-thread behavior. Agent creation from messaging, status-card Agent labeling, provider-native slash command registration, and zero-Agent create affordances remain follow-up work.
 
 **Patterns to follow:** `/resume --new`, backend selection plan implementation, status-card action budgeting, and the automation editor's Agent-only picker.
 
