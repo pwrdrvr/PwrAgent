@@ -219,6 +219,14 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
+    if (isAcpSessionContextBoilerplate(text)) {
+      // Gemini re-emits its <session_context> environment block (date, OS,
+      // workspace dir, directory tree) as a user_message_chunk on session/load.
+      // It's setup boilerplate the agent injects, not a turn the user typed —
+      // surfacing it makes a reloaded thread look like the human pasted a file
+      // listing. Drop it from the transcript entirely.
+      return;
+    }
     if (this.currentTurnId) {
       const localPromptId = `user:${this.currentTurnId}`;
       if (this.messages.some((message) => message.id === localPromptId)) {
@@ -595,6 +603,17 @@ function readContentText(
   key: string,
 ): string | undefined {
   return readAcpContentText(record[key]);
+}
+
+/**
+ * Whether a message's text is the Gemini CLI `<session_context>` environment
+ * block — the date/OS/workspace/directory-tree preamble Gemini injects (and
+ * re-emits as a user_message_chunk on session/load). It is agent boilerplate,
+ * not a user turn, so it must never appear in the transcript. Used both to keep
+ * it out of the rendered replay and to stop persisting it into the rollout.
+ */
+export function isAcpSessionContextBoilerplate(text: string | undefined): boolean {
+  return text !== undefined && text.trimStart().startsWith("<session_context>");
 }
 
 export function readAcpContentText(value: unknown): string | undefined {

@@ -25,6 +25,40 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("Hello world");
   });
 
+  it("drops Gemini's <session_context> boilerplate user_message_chunk", () => {
+    // Gemini re-emits its <session_context> environment block (date/OS/workspace
+    // /directory tree) as a user_message_chunk on session/load. It is agent
+    // boilerplate, not a user turn — it must never appear in the transcript.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { kind: "user_message_chunk", text: "What is this project?" },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { kind: "agent_message_chunk", content: "It is PwrAgent." },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        kind: "user_message_chunk",
+        text: "<session_context>\nThis is the Gemini CLI.\n…\n</session_context>",
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "What is this project?" }),
+      expect.objectContaining({ role: "assistant", text: "It is PwrAgent." }),
+    ]);
+    expect(
+      replay.messages.some((message) => message.text.includes("session_context")),
+    ).toBe(false);
+  });
+
   it("reads ACP text content blocks from assistant chunks", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
