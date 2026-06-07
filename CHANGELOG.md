@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0-beta.25 - 2026-06-07
+
+- Reworked ACP provider discovery around the shared agent-kit multi-install engine so Gemini, Grok, Kimi, and Qwen can find PATH installs, well-known install directories, and manual overrides through one consistent path.
+- Rebuilt Settings -> AI Providers so Codex and ACP providers live in one screen, each ACP provider appears even when it is not installed, discovered installs can be pinned with Using/Use rows, manual paths work across providers, and providers can be disabled individually.
+- Fixed ACP chat launch selection so the launched provider binary matches the install shown as Using in Settings and disabled providers are hidden from new-thread choices.
+- Fixed Kimi Code mode handling so Kimi uses one ACP runtime-mode selector and no longer sends the legacy rejected `/yolo` command when the provider advertises its own modes.
+- Fixed Gemini ACP recovery paths so failed launchpads can return to the editable draft, concrete Homebrew/user-bin executables are preferred, slow provider failures show visible waiting activity, and reloaded Gemini threads keep their real history.
+- Improved ACP transcript reliability by keeping live tool activity in transcript order and adding local smoke/parity harnesses for real-agent ACP validation and the next normalizer migration.
+- Moved shared Codex discovery, JSON-RPC, and ACP substrate toward published `@pwrdrvr` agent-kit packages while preserving release/license metadata.
+- Fixed smaller desktop and release issues including skill catalog refresh after changes, latest-request token-usage labeling, onboarding profile graduation, release download stats, and the Electron 41.7.1 patch update.
+
 ## v1.0.0-beta.24 - 2026-06-06
 
 - Fixed local Codex environment hydration so successful project setup can preserve non-secret toolchain environment values for future local Codex threads and environment actions.
