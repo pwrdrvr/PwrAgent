@@ -1680,6 +1680,135 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("starts a new live activity bucket after assistant messages completed into the response", async () => {
+    let now = 80_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "message-1",
+              type: "agentMessage",
+              phase: "commentary",
+              text: "Starting to look through the project.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-2",
+              type: "commandExecution",
+              command: "rg -n transcript src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message"
+          ? `message:${entry.text}`
+          : entry.type === "activity"
+            ? `activity:${entry.summary}:${entry.details.length}`
+            : entry.type
+      )
+    ).toEqual([
+      "activity:Explored 1 item:1",
+      "message:Starting to look through the project.",
+      "activity:Explored 1 item:1",
+    ]);
+  });
+
   it("keeps live activity between assistant messages after coarse hydration", async () => {
     let now = 30_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
