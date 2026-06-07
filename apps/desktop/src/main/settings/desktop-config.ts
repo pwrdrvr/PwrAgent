@@ -178,15 +178,19 @@ export type DesktopSettingsConfig = {
   acpAgents?: {
     gemini?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     grok?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     kimi?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     qwen?: {
       cliPath?: string;
+      enabled?: boolean;
     };
   };
   applications?: {
@@ -367,6 +371,24 @@ export function resolveAcpCliPathOverride(
     return agents?.[registryId]?.cliPath?.trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether an ACP agent is enabled as a chat backend (registryId = gemini |
+ * grok | kimi | qwen). Defaults to **true** — agents are usable unless the user
+ * explicitly disabled them via Settings → AI Providers. Read directly from the
+ * on-disk config so the chat-launch path and Settings agree without a snapshot.
+ */
+export function resolveAcpAgentEnabled(registryId: string): boolean {
+  try {
+    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
+    const agents = config.acpAgents as
+      | Record<string, { enabled?: boolean } | undefined>
+      | undefined;
+    return agents?.[registryId]?.enabled !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -947,14 +969,26 @@ export function desktopSettingsPatchToEdits(
   if (patch.acpAgents?.gemini?.cliPath !== undefined) {
     set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
   }
+  if (patch.acpAgents?.gemini?.enabled !== undefined) {
+    set(["acp_agents", "gemini", "enabled"], patch.acpAgents.gemini.enabled);
+  }
   if (patch.acpAgents?.grok?.cliPath !== undefined) {
     set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
+  }
+  if (patch.acpAgents?.grok?.enabled !== undefined) {
+    set(["acp_agents", "grok", "enabled"], patch.acpAgents.grok.enabled);
   }
   if (patch.acpAgents?.kimi?.cliPath !== undefined) {
     set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
   }
+  if (patch.acpAgents?.kimi?.enabled !== undefined) {
+    set(["acp_agents", "kimi", "enabled"], patch.acpAgents.kimi.enabled);
+  }
   if (patch.acpAgents?.qwen?.cliPath !== undefined) {
     set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
+  }
+  if (patch.acpAgents?.qwen?.enabled !== undefined) {
+    set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
   }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
@@ -1201,15 +1235,19 @@ function normalizeDesktopConfig(
     acpAgents: {
       gemini: {
         cliPath: readString(acpAgentsGemini?.cli_path),
+        enabled: readBoolean(acpAgentsGemini?.enabled),
       },
       grok: {
         cliPath: readString(acpAgentsGrok?.cli_path),
+        enabled: readBoolean(acpAgentsGrok?.enabled),
       },
       kimi: {
         cliPath: readString(acpAgentsKimi?.cli_path),
+        enabled: readBoolean(acpAgentsKimi?.enabled),
       },
       qwen: {
         cliPath: readString(acpAgentsQwen?.cli_path),
+        enabled: readBoolean(acpAgentsQwen?.enabled),
       },
     },
     applications: {

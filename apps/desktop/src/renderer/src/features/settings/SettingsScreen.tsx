@@ -622,6 +622,13 @@ function SettingsSectionBody(props: {
           >,
         });
       }}
+      onAcpEnabledChange={async (registryId, enabled) => {
+        await props.settings.writeConfig({
+          acpAgents: { [registryId]: { enabled } } as NonNullable<
+            DesktopSettingsConfigPatch["acpAgents"]
+          >,
+        });
+      }}
     />
   );
 }

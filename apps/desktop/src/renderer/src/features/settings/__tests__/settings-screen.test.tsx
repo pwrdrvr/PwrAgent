@@ -264,10 +264,10 @@ function createSnapshot(
       },
     },
     acpAgents: {
-      gemini: { cliPath: { value: "", source: "default" } },
-      grok: { cliPath: { value: "", source: "default" } },
-      kimi: { cliPath: { value: "", source: "default" } },
-      qwen: { cliPath: { value: "", source: "default" } },
+      gemini: { cliPath: { value: "", source: "default" }, enabled: true },
+      grok: { cliPath: { value: "", source: "default" }, enabled: true },
+      kimi: { cliPath: { value: "", source: "default" }, enabled: true },
+      qwen: { cliPath: { value: "", source: "default" }, enabled: true },
     },
     applications: {
       editors: [

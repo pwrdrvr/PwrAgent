@@ -546,6 +546,12 @@ export type DesktopSettingsSnapshot = {
        * the kit's discovery probes $PATH + well-known bin dirs.
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
     grok: {
       /**
@@ -554,6 +560,12 @@ export type DesktopSettingsSnapshot = {
        * /opt/homebrew/bin/grok, /usr/local/bin/grok).
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
     kimi: {
       /**
@@ -561,6 +573,12 @@ export type DesktopSettingsSnapshot = {
        * the kit's discovery probes $PATH + ~/.kimi-code/bin + well-known dirs.
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
     qwen: {
       /**
@@ -569,6 +587,12 @@ export type DesktopSettingsSnapshot = {
        * /opt/homebrew/bin/qwen, /usr/local/bin/qwen).
        */
       cliPath: DesktopSettingsValue<string>;
+      /**
+       * Whether this agent is enabled as a chat backend. Defaults to `true`
+       * (on-by-default); disabling hides it from the model picker and the
+       * chat-launch discovery path.
+       */
+      enabled: boolean;
     };
   };
   applications: DesktopApplicationsSnapshot;
@@ -693,15 +717,19 @@ export type DesktopSettingsConfigPatch = {
   acpAgents?: {
     gemini?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     grok?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     kimi?: {
       cliPath?: string;
+      enabled?: boolean;
     };
     qwen?: {
       cliPath?: string;
+      enabled?: boolean;
     };
   };
   applications?: {

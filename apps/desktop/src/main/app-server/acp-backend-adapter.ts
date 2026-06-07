@@ -36,7 +36,10 @@ import {
 } from "../acp/acp-client";
 import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
-import { resolveAcpCliPathOverride } from "../settings/desktop-config";
+import {
+  resolveAcpAgentEnabled,
+  resolveAcpCliPathOverride,
+} from "../settings/desktop-config";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -685,9 +688,14 @@ export class AcpBackendAdapter {
             preferences[registryId] = { overridePath: override };
           }
         }
-        return await discoverLocalAcpAgentRecords({
+        const records = await discoverLocalAcpAgentRecords({
           ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         });
+        // Drop agents the user disabled in Settings → AI Providers so they
+        // never surface as launchable chat backends. Defaults to enabled.
+        return records.filter((record) =>
+          resolveAcpAgentEnabled(record.registryId),
+        );
       });
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =

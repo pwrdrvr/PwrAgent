@@ -7,6 +7,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
+import { SettingsSwitch } from "./SettingsSwitch";
 import { acpStatusLabel } from "./acp-agent-copy";
 
 /** Look up the persisted CLI-path override for an agent by its registry id. */
@@ -18,6 +19,17 @@ function cliPathSnapshotFor(
     | Record<string, { cliPath?: DesktopSettingsValue<string> } | undefined>
     | undefined;
   return agents?.[registryId]?.cliPath;
+}
+
+/** Whether an agent is enabled per the snapshot (defaults to enabled). */
+function enabledSnapshotFor(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  registryId: string,
+): boolean {
+  const agents = snapshot?.acpAgents as
+    | Record<string, { enabled?: boolean } | undefined>
+    | undefined;
+  return agents?.[registryId]?.enabled !== false;
 }
 
 /**
@@ -34,6 +46,8 @@ export function AcpAgentsSettings(props: {
   /** Persist a per-agent CLI-path override (also used to "pin" a discovered
    *  install — picking an install writes its command as the override). */
   onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+  /** Persist a per-agent enabled flag (off = hidden from the model picker). */
+  onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,9 +108,11 @@ export function AcpAgentsSettings(props: {
           key={entry.backendId}
           entry={entry}
           cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
+          enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
           saving={props.saving}
           refreshing={refreshing || loading}
           onCliPathChange={props.onCliPathChange}
+          onEnabledChange={props.onEnabledChange}
           onRefresh={() => {
             void refresh(true, true);
           }}
@@ -116,12 +132,14 @@ export function AcpAgentsSettings(props: {
 function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
+  enabled: boolean;
   saving?: boolean;
   refreshing?: boolean;
   onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+  onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   onRefresh: () => void;
 }) {
-  const { entry } = props;
+  const { entry, enabled } = props;
   const instances = entry.instances ?? [];
   const savedPath = props.cliPathSnapshot?.value ?? "";
   const [draft, setDraft] = useState(savedPath);
@@ -137,10 +155,27 @@ function AcpAgentSection(props: {
       eyebrow="Models"
       title={entry.name}
       sectionId={`acp-${entry.registryId}`}
-      chip={acpStatusLabel(entry)}
-      chipKind={entry.installed ? "ok" : "muted"}
+      chip={enabled ? acpStatusLabel(entry) : "Disabled"}
+      chipKind={enabled ? (entry.installed ? "ok" : "muted") : "muted"}
     >
       <div className="settings-fields">
+        {props.onEnabledChange ? (
+          <SettingsField
+            label="Enabled"
+            sub="Show this agent in the model picker and launch threads with it."
+            control={
+              <SettingsSwitch
+                checked={enabled}
+                disabled={props.saving}
+                label={`Enable ${entry.name}`}
+                onChange={(next) => {
+                  void props.onEnabledChange?.(entry.registryId, next);
+                }}
+              />
+            }
+          />
+        ) : null}
+
         <SettingsField
           label="Installed paths"
           sub="Binaries detected on this machine. The active one runs new threads — click Use to pick another."

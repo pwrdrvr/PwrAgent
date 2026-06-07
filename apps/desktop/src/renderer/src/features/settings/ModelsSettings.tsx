@@ -40,6 +40,8 @@ export function ModelsSettings(props: {
   onSaveCodexProfile: (profile: string) => Promise<void>;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
   onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
+  /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
+  onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
@@ -301,6 +303,7 @@ export function ModelsSettings(props: {
         saving={props.saving}
         snapshot={props.snapshot}
         onCliPathChange={props.onAcpCliPathChange}
+        onEnabledChange={props.onAcpEnabledChange}
       />
     </SettingsSectionStack>
   );
