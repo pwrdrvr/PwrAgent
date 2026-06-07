@@ -54,6 +54,21 @@ export type ResumeBrowserThreadSelection = {
 
 export type ResumeBrowserProjectSelection = MessagingBrowseSelectedProject;
 
+export function isNewThreadLaunchAction(
+  launchAction: MessagingBrowseLaunchAction,
+): boolean {
+  return (
+    launchAction === "start_new_thread" ||
+    launchAction === "start_new_agent_thread"
+  );
+}
+
+export function isNewAgentThreadLaunchAction(
+  launchAction: MessagingBrowseLaunchAction,
+): boolean {
+  return launchAction === "start_new_agent_thread";
+}
+
 export function parseResumeCommandArgs(args: string[]): ParsedResumeCommand {
   const tokens = normalizeOptionDashes(args.join(" "))
     .split(/\s+/)
@@ -344,7 +359,7 @@ function projectsForSession(
 ): NavigationDirectorySummary[] {
   const query = session.query?.trim().toLowerCase();
   const directories =
-    session.launchAction === "start_new_thread"
+    isNewThreadLaunchAction(session.launchAction)
       ? collapseWorkspaceScratchpadDirectories(navigation.directories)
       : navigation.directories;
 
@@ -363,7 +378,7 @@ function projectsForSession(
         .some((value) => value!.toLowerCase().includes(query));
     })
     .sort((left, right) => {
-      if (session.launchAction === "start_new_thread") {
+      if (isNewThreadLaunchAction(session.launchAction)) {
         const leftRank = isWorkspaceScratchpadDirectory(left) ? 0 : 1;
         const rightRank = isWorkspaceScratchpadDirectory(right) ? 0 : 1;
         if (leftRank !== rightRank) {
@@ -422,7 +437,7 @@ function formatProjectPickerLabel(
   project: NavigationDirectorySummary,
   session: MessagingBrowseSessionRecord,
 ): string {
-  return session.launchAction === "start_new_thread" &&
+  return isNewThreadLaunchAction(session.launchAction) &&
     isWorkspaceScratchpadDirectory(project)
     ? WORKSPACES_SCRATCHPAD_LABEL
     : project.label;
@@ -495,7 +510,7 @@ function navigationActions(
       layout: { row: FOOTER_ROW },
     });
   }
-  if (session.mode !== "agents" && session.launchAction !== "start_new_thread") {
+  if (session.mode !== "agents" && !isNewThreadLaunchAction(session.launchAction)) {
     actions.push({
       id: "browse:mode:new",
       label: "New",
@@ -587,13 +602,17 @@ function projectPickerPromptText(
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
   const opening =
-    session.launchAction === "start_new_thread"
+    isNewAgentThreadLaunchAction(session.launchAction)
+      ? "Choose a project for the new PwrAgent Agent thread."
+      : session.launchAction === "start_new_thread"
       ? "Choose a project for the new PwrAgent thread."
       : "Choose a project to filter recent PwrAgent threads.";
   return [
     `${opening} ${pageLabel}.`,
-    session.launchAction === "start_new_thread"
-      ? "Tap a project to start a fresh thread there."
+    isNewThreadLaunchAction(session.launchAction)
+      ? isNewAgentThreadLaunchAction(session.launchAction)
+        ? "Tap a project to start a fresh Agent thread there."
+        : "Tap a project to start a fresh thread there."
       : "Tap a project to show only that project's threads.",
     totalItems === 0 ? "No PwrAgent projects found." : "",
   ]

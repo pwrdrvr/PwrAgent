@@ -473,6 +473,11 @@ export type ResetDirectoryLaunchpadResponse = {
 export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
   launchpad?: NavigationLaunchpadDraft;
+  /**
+   * When present, materialize the launchpad into an Agent/persona thread and
+   * attach Agent-scoped tool catalogs during backend startup.
+   */
+  agent?: StartThreadRequest["agent"];
   input?: AppServerTurnInputItem[];
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;

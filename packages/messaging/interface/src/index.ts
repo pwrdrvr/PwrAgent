@@ -1151,7 +1151,10 @@ export type MessagingBrowseMode =
   | "new_project"
   | "new_thread_options";
 
-export type MessagingBrowseLaunchAction = "resume_thread" | "start_new_thread";
+export type MessagingBrowseLaunchAction =
+  | "resume_thread"
+  | "start_new_thread"
+  | "start_new_agent_thread";
 
 export type MessagingBrowseSelectedProject = {
   directoryKey?: string;

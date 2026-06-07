@@ -8343,6 +8343,61 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("passes Agent metadata through materialized launchpad starts", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Keep shared messaging context.",
+      },
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: response.backend,
+        threadId: response.threadId,
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Keep shared messaging context.",
+      },
+    });
+
+    await registry.close();
+  });
+
   it("forks a Codex thread into the same worktree and records the visual parent", async () => {
     const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({

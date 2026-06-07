@@ -178,6 +178,60 @@ describe("MessagingController", () => {
     });
   });
 
+  it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Agent: Messaging Agent"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      agent: {
+        name: "Messaging Agent",
+        instructions: expect.stringContaining("created from messaging"),
+      },
+      launchpad: expect.objectContaining({
+        backend: "codex",
+        directoryKey: "directory:pwragent",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+      }),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      targetKind: "agent_thread",
+    });
+  });
+
   it("returns from the nested new-thread picker back to the resume browser", async () => {
     const harness = await createHarness();
 
@@ -3461,6 +3515,7 @@ describe("MessagingController", () => {
     const ids = (last?.actions ?? []).map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:agent",
       "command:new",
       "command:status",
       "command:detach",

@@ -112,6 +112,8 @@ import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
   directoryForProjectSelection,
+  isNewAgentThreadLaunchAction,
+  isNewThreadLaunchAction,
   parseResumeCommandArgs,
   resumeBrowserPageSize,
   resumeReturnTargetForSession,
@@ -194,6 +196,9 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
+const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
+  "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
@@ -1431,7 +1436,8 @@ export class MessagingController {
       now: this.now(),
     });
     if (
-      session?.launchAction === "start_new_thread" &&
+      session &&
+      isNewThreadLaunchAction(session.launchAction) &&
       session.mode === "new_thread_options" &&
       session.selectedProject &&
       (session.textInputExpiresAt ?? session.expiresAt) > this.now()
@@ -3005,7 +3011,7 @@ export class MessagingController {
       filter: parsed.query,
     });
     const selectedBackend =
-      parsed.launchAction === "start_new_thread"
+      isNewThreadLaunchAction(parsed.launchAction)
         ? await this.resolveNewThreadBackendForSession(
             {
               launchpadBackend: navigation.launchpadDefaults.backend,
@@ -3013,7 +3019,7 @@ export class MessagingController {
             event,
           )
         : undefined;
-    if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
+    if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
       return;
     }
     const selectedDirectory = parsed.cwd
@@ -3072,15 +3078,35 @@ export class MessagingController {
       backend: "all",
       filter: parsed.query,
     });
+    const selectedBackend =
+      parsed.launchAction === "start_new_thread"
+        ? await this.resolveNewThreadBackendForSession(
+            {
+              launchpadBackend: navigation.launchpadDefaults.backend,
+            },
+            event,
+          )
+        : undefined;
+    if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
+      return;
+    }
+    const selectedDirectory = parsed.cwd
+      ? navigation.directories.find(
+          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
+        )
+      : undefined;
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("browse"),
       allowedActorIds: [event.actor.platformUserId],
+      backend: selectedBackend?.kind,
       channel: event.channel,
       createdAt: this.now(),
       updatedAt: this.now(),
       expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: "resume_thread",
-      mode: "agents",
+      launchAction: parsed.launchAction === "start_new_thread"
+        ? "start_new_agent_thread"
+        : "resume_thread",
+      mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
       pageIndex: 0,
       pageSize: resumeBrowserPageSize(this.capabilityProfile),
       preferences: parsed.preferences
@@ -3090,6 +3116,13 @@ export class MessagingController {
           }
         : undefined,
       query: parsed.query,
+      selectedProject: selectedDirectory
+        ? {
+            directoryKey: selectedDirectory.key,
+            label: selectedDirectory.label,
+            path: selectedDirectory.path,
+          }
+        : undefined,
     };
     await this.renderResumeBrowser(session, navigation, event);
   }
@@ -3255,7 +3288,7 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      if (session.launchAction === "start_new_thread") {
+      if (isNewThreadLaunchAction(session.launchAction)) {
         await this.startNewThreadFromProject(event, session, navigation, project);
         return;
       }
@@ -4987,6 +5020,9 @@ export class MessagingController {
       const binding = await this.bindChannelToThread(event, {
         backend: started.backend,
         threadId: started.threadId,
+        targetKind: isNewAgentThreadLaunchAction(session.launchAction)
+          ? "agent_thread"
+          : undefined,
       });
       await retireBrowseSession();
       let updatedBinding = preferences
@@ -5012,6 +5048,7 @@ export class MessagingController {
         fastMode: options.supportsFast ? options.fastMode : undefined,
         acpRuntime: options.acpRuntime,
         codexEnvironmentRuntime: started.codexEnvironmentRuntime,
+        agent: agentForNewThreadSession(session),
         preferences,
         project,
         threadId: started.threadId,
@@ -5040,6 +5077,7 @@ export class MessagingController {
       ? await this.options.backend.materializeDirectoryLaunchpad(
           {
             directoryKey: messagingLaunchpadMaterializationKey(session),
+            agent: agentForNewThreadSession(session),
             launchpad,
             input: prepared.input,
           },
@@ -5059,6 +5097,7 @@ export class MessagingController {
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
       serviceTier: preferences?.serviceTier,
       acpRuntime: options.acpRuntime,
+      agent: agentForNewThreadSession(session),
       ...(options.workMode === "worktree"
         ? {
             workMode: "worktree" as const,
@@ -11189,6 +11228,9 @@ function newThreadPromptGateBody(
   return [
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
+    isNewAgentThreadLaunchAction(session.launchAction)
+      ? `Agent: ${DEFAULT_MESSAGING_AGENT_NAME}`
+      : undefined,
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
@@ -12088,6 +12130,7 @@ type TurnLifecycleParams = {
 
 function navigationWithStartedThread(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
+  agent?: ReturnType<typeof agentForNewThreadSession>;
   backend: AppServerBackendKind;
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   directory?: NavigationDirectorySummary;
@@ -12140,6 +12183,16 @@ function navigationWithStartedThread(params: {
         executionMode: params.executionMode,
         acpRuntime: params.acpRuntime,
         codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+        agent: params.agent
+          ? {
+              ...params.agent,
+              instructionLineCount: params.agent.instructions
+                ? params.agent.instructions.split(/\r?\n/).length
+                : 0,
+              instructionsTooLong: false,
+              updatedAt: params.now,
+            }
+          : undefined,
         model: params.model,
         reasoningEffort: params.reasoningEffort,
         serviceTier: params.serviceTier,
@@ -12242,6 +12295,18 @@ function messagingLaunchpadMaterializationKey(
   session: MessagingBrowseSessionRecord,
 ): string {
   return `messaging:${session.id}`;
+}
+
+function agentForNewThreadSession(
+  session: MessagingBrowseSessionRecord,
+): { name: string; instructions?: string } | undefined {
+  if (!isNewAgentThreadLaunchAction(session.launchAction)) {
+    return undefined;
+  }
+  return {
+    name: DEFAULT_MESSAGING_AGENT_NAME,
+    instructions: DEFAULT_MESSAGING_AGENT_INSTRUCTIONS,
+  };
 }
 
 function formatResumeRepostText(params: {
