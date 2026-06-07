@@ -35,7 +35,13 @@ export default defineConfig({
           include: [
             "apps/desktop/src/main/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
-          ]
+          ],
+          // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without
+          // this, the kit's bundled `import { spawn } from "child_process"`
+          // is loaded raw by Node and bypasses the tests'
+          // `vi.mock("child_process")` (Codex login + status now run through
+          // the package, not in-tree code).
+          server: { deps: { inline: ["@pwrdrvr/codex-discovery"] } }
         }
       },
       {

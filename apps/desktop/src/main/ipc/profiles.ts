@@ -51,7 +51,7 @@ import {
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
-import { discoverCodexAuthProfiles } from "../settings/codex-profiles";
+import { discoverCodexAuthProfiles } from "@pwrdrvr/codex-discovery";
 import { getAppStateMode } from "../state/app-state";
 import { isSecretStorageDisabledByEnv } from "../settings/desktop-secret-store";
 import { getMainLogger } from "../log";

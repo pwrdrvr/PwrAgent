@@ -118,6 +118,13 @@ vi.mock("node:child_process", () => ({
   execFile: childProcessMocks.execFile,
   spawn: childProcessMocks.spawn,
 }));
+// @pwrdrvr/codex-discovery's bundled dist imports the un-prefixed
+// "child_process" specifier; mock it too so the kit's CodexLoginManager spawn
+// (Codex login now runs through the package) hits the same fake.
+vi.mock("child_process", () => ({
+  execFile: childProcessMocks.execFile,
+  spawn: childProcessMocks.spawn,
+}));
 
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
 vi.mock("../acp/acp-runtime-discovery", () => acpRuntimeDiscoveryMock);

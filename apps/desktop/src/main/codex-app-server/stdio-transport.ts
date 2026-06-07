@@ -3,12 +3,12 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import readline from "node:readline";
-import type { JsonRpcTransport } from "./json-rpc";
+import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
-} from "../settings/codex-discovery";
+} from "@pwrdrvr/codex-discovery";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 

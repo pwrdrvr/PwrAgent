@@ -31,7 +31,7 @@ import type {
   AcpRolloutRecord,
   AcpRolloutStoreAppendParams,
 } from "./acp-rollout-store.js";
-import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
+import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
