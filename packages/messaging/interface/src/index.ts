@@ -5,6 +5,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
+  CodexEnvironmentExecutionTarget,
   MessagingDeliveryScope,
   MessagingToolUpdateMode,
   ThreadIdentifier,
@@ -1171,6 +1172,10 @@ export type MessagingBrowseSessionRecord = {
   returnTo?: MessagingBrowseReturnTarget;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
+  codexEnvironmentId?: string | null;
+  codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  codexEnvironmentSetupEnabled?: boolean;
+  codexEnvironmentActionId?: string;
   selectedProject?: MessagingBrowseSelectedProject;
   surface?: MessagingSurfaceRef;
   textInputExpiresAt?: number;

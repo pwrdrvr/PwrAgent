@@ -283,8 +283,14 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Fix bug",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "codex",
         directoryKey: "directory:pwragent",
@@ -298,20 +304,9 @@ describe("MessagingController", () => {
         serviceTier: undefined,
         workMode: "local",
       }),
-    });
+    }));
     expect(harness.startThread).not.toHaveBeenCalled();
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "codex",
-        threadId: "new-thread-1",
-        input: [
-          {
-            type: "text",
-            text: "Fix bug",
-          },
-        ],
-      }),
-    );
+    expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toMatchObject({
@@ -457,8 +452,14 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
 
     expect(harness.startThread).not.toHaveBeenCalled();
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Fix bug in a worktree",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "codex",
         directoryKey: "directory:pwragent",
@@ -467,7 +468,7 @@ describe("MessagingController", () => {
         workMode: "worktree",
         branchName: "release/v2",
       }),
-    });
+    }));
   });
 
   it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
@@ -524,14 +525,20 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug locally"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Fix bug locally",
+        },
+      ],
       launchpad: expect.objectContaining({
         directoryKey: "directory:pwragent",
         directoryPath: "/repo/pwragent",
         workMode: "local",
       }),
-    });
+    }));
   });
 
   it("paginates the new-thread base branch picker", async () => {
@@ -627,14 +634,20 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Fix bug",
+        },
+      ],
       launchpad: expect.objectContaining({
         directoryKey: "directory:pwragent",
         directoryPath: "/repo/pwragent",
         workMode: "worktree",
       }),
-    });
+    }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Directory: /repo/pwragent"),
@@ -825,10 +838,8 @@ describe("MessagingController", () => {
     await vi.waitFor(() => {
       expect(harness.startThread).not.toHaveBeenCalled();
       expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
-      expect(harness.startTurn).toHaveBeenCalledWith(
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
         expect.objectContaining({
-          backend: "codex",
-          threadId: "new-thread-1",
           input: [
             {
               type: "text",
@@ -841,6 +852,7 @@ describe("MessagingController", () => {
           ],
         }),
       );
+      expect(harness.startTurn).not.toHaveBeenCalled();
     });
   });
 
@@ -920,18 +932,20 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("continue on the new thread"));
 
-    expect(harness.startTurn).toHaveBeenLastCalledWith(
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        backend: "codex",
-        threadId: "new-thread-1",
         input: [
           {
             type: "text",
             text: "continue on the new thread",
           },
         ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+        }),
       }),
     );
+    expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"))
       .resolves.toMatchObject({
         revokedAt: 1000,
@@ -1155,11 +1169,17 @@ describe("MessagingController", () => {
       buildCommandEvent("/resume").channel,
     );
     expect(binding?.preferences?.streamingResponses).toBe("disabled");
-    expect(harness.startTurn).toHaveBeenCalledWith(
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Start with streams off",
+          },
+        ],
       }),
     );
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("updates the resume picker and removes actions when selecting a thread", async () => {
@@ -2898,19 +2918,20 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Fix bug with Grok",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "grok",
         directoryKey: "directory:pwragent",
       }),
-    });
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "grok",
-        threadId: "new-thread-1",
-      }),
-    );
+    }));
+    expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
     ).resolves.toMatchObject({
@@ -2991,19 +3012,20 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Use Gemini",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "acp:gemini",
         directoryKey: "directory:pwragent",
       }),
-    });
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "acp:gemini",
-        threadId: "new-thread-1",
-      }),
-    );
+    }));
+    expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
     ).resolves.toMatchObject({
@@ -3075,19 +3097,20 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Use Gemini",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "acp:gemini",
         executionMode: "default",
       }),
-    });
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "acp:gemini",
-        threadId: "new-thread-1",
-      }),
-    );
+    }));
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("does not label ACP model config as runtime mode in the new-thread prompt", async () => {
@@ -3227,8 +3250,14 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use yolo"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
       directoryKey: expect.stringMatching(/^messaging:browse:/),
+      input: [
+        {
+          type: "text",
+          text: "Use yolo",
+        },
+      ],
       launchpad: expect.objectContaining({
         backend: "acp:gemini",
         executionMode: "full-access",
@@ -3236,7 +3265,7 @@ describe("MessagingController", () => {
           currentModeId: "yolo",
         }),
       }),
-    });
+    }));
   });
 
   it("uses inherited ACP runtime state when opening the new-thread picker", async () => {
@@ -3546,6 +3575,121 @@ describe("MessagingController", () => {
       title: "Ready to start",
       body: expect.stringContaining("Model: gpt-5.3-codex"),
     });
+  });
+
+  it("lets messaging choose a Codex environment before starting a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentOptions: [
+          {
+            id: "dev-env",
+            name: "Dev Environment",
+            sourcePath: "/repo/pwragent/.codex/environments/dev-env.toml",
+            setupScript: "pnpm install",
+            actions: [],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:environment",
+          label: "Env: none",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:environment" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select environment",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "Dev Environment",
+          value: { environmentId: "dev-env" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "dev-env" },
+      }),
+    );
+
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:pwragent",
+      stickySettingsChanged: true,
+      patch: expect.objectContaining({
+        codexEnvironmentId: "dev-env",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+      }),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: Dev Environment"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:environment",
+          label: "Env: Dev Environment",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Install deps and run tests"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Install deps and run tests",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          codexEnvironmentId: "dev-env",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentSetupEnabled: true,
+        }),
+      }),
+    );
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("clicking the New button on the help surface dispatches the new command", async () => {
@@ -7834,22 +7978,18 @@ describe("MessagingController", () => {
     );
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        launchpad: expect.objectContaining({
-          executionMode: "full-access",
-        }),
-      }),
-    );
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionMode: "full-access",
         input: [
           {
             type: "text",
             text: "fix bug",
           },
         ],
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
       }),
     );
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("starts a new thread from a directory launchpad Full Access default without a dismissable warning", async () => {
@@ -7891,16 +8031,18 @@ describe("MessagingController", () => {
     );
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
         launchpad: expect.objectContaining({
           executionMode: "full-access",
         }),
       }),
     );
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionMode: "full-access",
-      }),
-    );
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("posts the first-prompt Full Access warning as a direct response when always warning", async () => {
@@ -8037,17 +8179,20 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.startTurn).toHaveBeenCalledWith(
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        executionMode: "full-access",
         input: [
           {
             type: "text",
             text: "fix bug",
           },
         ],
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
       }),
     );
+    expect(harness.startTurn).not.toHaveBeenCalled();
     expect(harness.delivered).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -8113,17 +8258,20 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.startTurn).toHaveBeenCalledWith(
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        executionMode: "full-access",
         input: [
           {
             type: "text",
             text: "new thread prompt",
           },
         ],
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
       }),
     );
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("delivers the normal start failure if approved Full Access prompt startup throws", async () => {
@@ -9439,6 +9587,7 @@ async function createHarness(options?: {
       ) => ({
         backend: request.launchpad?.backend ?? "codex",
         threadId: "new-thread-1",
+        ...(request.input && request.input.length > 0 ? { turnId: "turn-1" } : {}),
         executionMode: request.launchpad?.executionMode ?? "default",
         ...(request.launchpad?.workMode === "worktree"
           ? {
