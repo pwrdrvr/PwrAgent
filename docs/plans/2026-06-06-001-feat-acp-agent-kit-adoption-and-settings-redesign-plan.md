@@ -106,14 +106,15 @@ install just feeds the existing launch descriptor.
   AcpAgentInstance[], activeCommand }`; `AcpAgentInstance { command, version?,
   source }`; `AcpAgentPreference { overridePath?, selectedPath? }`;
   `AcpSettings { enabledAgentIds, agents }`.
-- Persist preferences in the **settings substrate** (`ai.acp.*` analog),
-  **not** the SQLite store — matches PwrSnap and the PwrAgnt settings rules.
-- Decide the fate of the `acp_installed_agents` store + #643 freshness gate:
-  PwrSnap does **on-demand cheap discovery** (not cached) + a separate
-  **persisted model cache** (`acp-model-cache.ts`). Recommend converging:
-  drop the durable *discovery* cache, keep a persisted *model* cache (that's
-  what #643 was really protecting — the expensive probe). Document the schema
-  retirement/migration for `acp_installed_agents`.
+- Persist **user preferences** (enabled set, selectedPath, overridePath) in the
+  **settings substrate** (`ai.acp.*` analog) — matches the PwrAgnt settings
+  rules; these are user choices, not discovered facts.
+- **Keep the durable `acp_installed_agents` store + #643 freshness gate**
+  (Decision 1): discovered facts (installs, versions, model lists) stay cached,
+  polled rarely (48h gate), refreshed only intentionally via the "Refresh"
+  button. Phase A **extends** the store to the multi-install shape (multiple
+  instances per agent) rather than retiring it. The expensive model/capability
+  probe stays gated exactly as #643 designed.
 
 ### A5. Settings UI rebuild
 - Rebuild `AcpAgentsSettings.tsx` to the PwrSnap card shape:
@@ -218,11 +219,29 @@ losslessly). This is the crown jewel.
   `acp-approval-policy.ts`, `chat-controller-factory.ts` — adapt to PwrAgnt's
   chat layer + tool catalog.
 
-## Open decisions
+## Decisions (resolved 2026-06-06)
 
-1. Retire `acp_installed_agents` + the #643 freshness gate, or keep for
-   per-instance freshness? (Recommend retire discovery cache, keep model cache.)
-2. Phase B Codex path: full `CodexThreadClient` swap (true U5) vs. wrap the
-   existing Codex client behind `AgentBackend` (defer U5)?
-3. Target kit versions to pin (match PwrSnap's intended 0.9.2/0.6.0/0.1.3, or
-   latest published)?
+1. **KEEP the durable cache, don't retire it.** Goal is to *poll the ACP
+   versions/models less*, retain discovered info, and refresh **intentionally**
+   (e.g. re-pull the model list after changing your plan with a provider).
+   That is exactly #643's design — durable `acp_installed_agents` + the 48h
+   freshness gate + the force "Refresh" button. Phase A **retains** the store
+   and the gate; it only **extends** them to the multi-install shape and keeps
+   the intentional Refresh. (Earlier "retire / converge to PwrSnap's
+   poll-every-open" suggestion is rejected — wrong direction.)
+2. **Phase B Codex path — DEFERRED.** Decide before Phase B starts. *Action:*
+   write up the two options in detail then so the choice is informed:
+   - **Option B-full (true U5):** swap PwrAgnt's `codex-app-server/client.ts`
+     for the kit's `CodexThreadClient` (also an `AgentBackend`). One controller,
+     one client family, deletes the most code — but migrates the *Codex* chat
+     path too (bigger blast radius, more to verify).
+   - **Option B-wrap (defer U5):** keep PwrAgnt's existing Codex client, wrap it
+     behind an `AgentBackend` adapter so `ChatThreadController` can drive it.
+     Smaller blast radius (Codex path largely unchanged), at the cost of an
+     extra adapter and not yet realizing the full U5 simplification.
+   Present a head-to-head (blast radius, LOC delta, risk, what each leaves for
+   later) at Phase B kickoff.
+3. **Pin latest published: agent-acp `^0.9.2`, agent-client `^0.6.0`,
+   agent-core `^0.1.3`** (these *are* the latest; PwrSnap is current, only its
+   worktree install was stale). agent-kit can be re-published quickly if a gap
+   shows up during integration.
