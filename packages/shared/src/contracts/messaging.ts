@@ -19,6 +19,26 @@ export const MESSAGING_TOOL_UPDATE_MODES = [
 
 export type MessagingToolUpdateMode = (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
 
+export const MESSAGING_BINDING_TARGET_KINDS = ["thread", "agent_thread"] as const;
+
+export type MessagingBindingTargetKind =
+  (typeof MESSAGING_BINDING_TARGET_KINDS)[number];
+
+export function isMessagingBindingTargetKind(
+  value: unknown,
+): value is MessagingBindingTargetKind {
+  return (
+    typeof value === "string" &&
+    MESSAGING_BINDING_TARGET_KINDS.includes(value as MessagingBindingTargetKind)
+  );
+}
+
+export function normalizeMessagingBindingTargetKind(
+  value: unknown,
+): MessagingBindingTargetKind {
+  return isMessagingBindingTargetKind(value) ? value : "thread";
+}
+
 // String-literal primitives duplicated locally so shared/contracts/navigation.ts
 // can describe MessagingThreadBindingSummary without importing
 // @pwragent/messaging-interface (that would create a dependency
