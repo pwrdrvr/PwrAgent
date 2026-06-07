@@ -70,12 +70,11 @@ Test: `apps/desktop/src/main/__tests__/acp-normalizer-parity.test.ts`
       (below) — cataloged for B2. Fixed one adapter bug (the in-tree keeps tool
       status on the activity, not the detail; the adapter no longer sets
       `detail.status`). ✅
-- [x] **Increment 6 (started) — real captured transcript.** A redacted real
-      Gemini "build" turn from the smoke eval
-      (`fixtures/acp-transcripts/gemini-build.json`: available-commands, a
-      thought, 4 tool calls + 7 updates, 8 message chunks) asserts structural
-      parity. See "Real-data validation" below. ✅ (Grok/Kimi/Qwen fixtures
-      next.)
+- [x] **Increment 6 — real captured transcripts, all four ACP agents.**
+      Redacted real transcripts from the smoke eval
+      (`fixtures/acp-transcripts/{gemini,grok,kimi,qwen}-build.json`) assert
+      transcript-level parity per agent. This is what surfaced the broader
+      tool-detail divergence (below). See "Real-data validation". ✅
 - [ ] **Increment 3 — files, terminals + command output/exitCode.**
 - [ ] **Increment 4 — reasoning/thought chunks + the `surfaceThoughts` quirk**
       (Qwen=false, others=true) and per-agent quirks (`titleFrom`).
@@ -107,24 +106,35 @@ ordered `params.update` objects, and drop them into the harness (or derive via
 
 Anything else that differs is **drift to reconcile**, not an allowed divergence.
 
-## Real-data validation (the big result)
+## Real-data validation (the result, and a correction)
 
 Ran a **full-fidelity** parity check (every field, ids/timestamps aside) over
 the smoke eval's real captures — all four ACP agents, 3 sessions each, **11
-diverging sessions, 90 differing entries**:
+diverging sessions, 90 differing entries**. What holds and what doesn't:
 
-- **Zero entry-count mismatches.** Every session produced the same number +
-  order of entries through both pipelines.
+**Transcript-level parity holds across all four agents:**
+
+- **Zero entry-count mismatches.** Same number + order of entries everywhere.
 - **Zero message divergences.** Every assistant/user message text is
   byte-identical.
-- **Every single divergence is an `activity` detail field** — i.e. *only* the
-  three cataloged tool-detail findings below. No new divergence classes, no
-  structural drift, no content loss.
+- **Every divergence is confined to a tool-call `activity`'s per-detail fields.**
+  Messages, plan steps, entry structure/order, and activity-level
+  summary/status all agree.
 
-So on real transcripts from Gemini / Grok / Kimi / Qwen, the kit normalizer
-reproduces the in-tree transcript **losslessly except for three bounded, known
-tool-detail fields**. That is the core KTD-P3 reassurance: Phase B's swap is
-safe once those three are reconciled.
+**Correction to an earlier note:** Gemini's transcripts (simple file reads) made
+the per-detail divergence look like just two fields (`path` + a conflated
+`command`). The richer agents (Grok/Kimi/Qwen) show it's broader — per
+tool-call **detail**, the two pipelines also disagree on `kind` (in-tree
+`toolDetailKind(kind, path)` vs kit `inferToolKind(name)`) and on the
+`command.displayCommand` formatting, in addition to the dropped `path`. So the
+reconciliation surface is the **whole tool-detail object**, not three tidy
+fields.
+
+The committed parity tests therefore assert **transcript-level** parity
+(messages, structure/order, activity summary + status + detail count) and scope
+out the per-detail fields, which are tracked below. This is still the core
+KTD-P3 reassurance — the user-visible transcript is reproduced losslessly; what
+needs reconciling is how each tool detail is *rendered*.
 
 ## Cataloged divergences (require reconciliation before B2 ships)
 
@@ -134,18 +144,25 @@ decision — accept the loss, fix the adapter, or fix the kit (`@pwrdrvr/agent-a
 is maintained in its own repo) — before the in-tree path is deleted. Until then
 the tool-detail comparison is scoped to **structural** parity (label + count).
 
-1. **`read` tool location path dropped.** In-tree detail carries
-   `path: "/repo/README.md"` (from the update's `locations[].path`); the kit's
-   `NormalizedToolCall` has no `locations`/`path` field, so the path is lost
-   (the title is folded into `command.displayCommand` instead). **Likely a kit
-   fix** (preserve locations on the normalized tool call) — read activities
-   otherwise lose their file path in the renderer.
-2. **Command conflation on non-command tools.** The kit sets
-   `command.displayCommand = <title>` even for `read`/`write` tools; the in-tree
-   only emits a command detail when there's a real command/output/exitCode.
+1. **`read`/file tool location path dropped.** In-tree detail carries
+   `path` (from the update's `locations[].path`); the kit's `NormalizedToolCall`
+   has no `locations`/`path` field, so the path is lost. **Needs a kit fix**
+   (preserve locations on the normalized tool call) — read activities otherwise
+   lose their file path in the renderer. Filed upstream:
+   [pwrdrvr/agent-kit#1](https://github.com/pwrdrvr/agent-kit/issues/1).
+2. **Command conflation on non-command tools — ADAPTER-SHIMMED.** The kit sets
+   `command.displayCommand = <title>` even for `read`/`write` tools.
+   `normalized-thread-to-replay.ts` now mirrors the in-tree rule (emit a command
+   detail only when there's real command evidence — `rawCommand`/`output`/
+   `exitCode`), so a conflated title no longer masquerades as a command.
 3. **Tool-kind inference differs.** For updates without an explicit `kind`, the
    in-tree (`toolDetailKind(kind, path)`) and the kit (`inferToolKind(name)`)
-   can land on different `read`/`write`/`command` classifications.
+   land on different `read`/`write`/`command` classifications (seen on
+   Grok/Kimi/Qwen, e.g. in-tree `command` vs kit `write`). Reconcile the mapping
+   (adapter or kit).
+4. **`command.displayCommand` formatting differs** for genuine command tools
+   (the two pipelines format the displayed command string differently).
+   Reconcile or accept.
 
 Tracking: these gate **B2** (adopt `AgentBackend`/the kit normalizer for the
 live ACP path). Resolve via a kit patch + republish, or a documented

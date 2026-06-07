@@ -1,0 +1,915 @@
+[
+  {
+    "sessionUpdate": "available_commands_update",
+    "availableCommands": [
+      {
+        "name": "status",
+        "description": "show version info",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "paths"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "tasks",
+        "description": "List background tasks (text dump — interactive dialog opens via the footer pill)",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "auth",
+        "description": "Connect an LLM provider",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "bug",
+        "description": "submit a bug report",
+        "input": {
+          "hint": "<description>"
+        },
+        "_meta": {
+          "argumentHint": "<description>",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "clear",
+        "description": "Clear conversation history and free up context",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "compress",
+        "description": "Compresses the context by replacing it with a summary.",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "context",
+        "description": "Show context window usage breakdown. Use \"/context detail\" for per-item breakdown.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "detail"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "diff",
+        "description": "Show working-tree change stats versus HEAD",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "docs",
+        "description": "open full Qwen Code documentation in your browser",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "doctor",
+        "description": "Run installation and environment diagnostics",
+        "input": {
+          "hint": "[memory|cpu-profile] [--sample] [--snapshot] [--duration]"
+        },
+        "_meta": {
+          "argumentHint": "[memory|cpu-profile] [--sample] [--snapshot] [--duration]",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "memory",
+            "cpu-profile"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "export",
+        "description": "Export current session message history to a file",
+        "input": {
+          "hint": "[md|html|json|jsonl] [path]"
+        },
+        "_meta": {
+          "argumentHint": "[md|html|json|jsonl] [path]",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "html",
+            "md",
+            "json",
+            "jsonl"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "init",
+        "description": "Analyzes the project and creates a tailored QWEN.md file.",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "language",
+        "description": "View or change the language setting",
+        "input": {
+          "hint": "ui|output <language>"
+        },
+        "_meta": {
+          "argumentHint": "ui|output <language>",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "ui",
+            "output"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "goal",
+        "description": "Set a goal — keep working until the condition is met",
+        "input": {
+          "hint": "[<condition> | clear]"
+        },
+        "_meta": {
+          "argumentHint": "[<condition> | clear]",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "model",
+        "description": "Switch the model for this session (--fast for suggestion model, [model-id] to switch immediately).",
+        "input": {
+          "hint": "[--fast] [<model-id>]"
+        },
+        "_meta": {
+          "argumentHint": "[--fast] [<model-id>]",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "skills",
+        "description": "List available skills.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "stats",
+        "description": "check session stats. Usage: /stats [model|tools]",
+        "input": {
+          "hint": "[model|tools]"
+        },
+        "_meta": {
+          "argumentHint": "[model|tools]",
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [
+            "model",
+            "tools"
+          ],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "summary",
+        "description": "Generate a project summary and save it to .qwen/PROJECT_SUMMARY.md",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "insight",
+        "description": "generate personalized programming insights from your chat history",
+        "input": null,
+        "_meta": {
+          "source": "builtin-command",
+          "sourceLabel": "Built-in",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": false
+        }
+      },
+      {
+        "name": "batch",
+        "description": "Execute batch operations on multiple files in parallel. Automatically discovers files, splits into chunks, and processes with parallel worker agents. Use `/batch` followed by operation and file pattern.",
+        "input": {
+          "hint": "'<operation> <file-pattern>'"
+        },
+        "_meta": {
+          "argumentHint": "'<operation> <file-pattern>'",
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "new-app",
+        "description": "Workflow for creating new applications from scratch. Covers requirements gathering, tech stack selection, scaffolding, implementation, and delivery of a functional prototype.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "qc-helper",
+        "description": "Answer any question about Qwen Code usage, features, configuration, and troubleshooting by referencing the official user documentation. Also helps users view or modify their settings.json. Invoke with `/qc-helper` followed by a question, e.g. `/qc-helper how do I configure MCP servers?` or `/qc-helper change approval mode to yolo`.",
+        "input": {
+          "hint": "'<question>'"
+        },
+        "_meta": {
+          "argumentHint": "'<question>'",
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "review",
+        "description": "Review changed code for correctness, security, code quality, and performance. Use when the user asks to review code changes, a PR, or specific files. Invoke with `/review`, `/review <pr-number>`, `/review <file-path>`, or `/review <pr-number> --comment` to post inline comments on the PR.",
+        "input": {
+          "hint": "'[pr-number|file-path] [--comment]'"
+        },
+        "_meta": {
+          "argumentHint": "'[pr-number|file-path] [--comment]'",
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "simplify",
+        "description": "Review recent code changes for reuse, code quality, and efficiency, then directly apply straightforward cleanup improvements. Use when the user wants a post-implementation cleanup pass, pre-PR polish, or asks to simplify/refine recent changes. Invoke with `/simplify` or `/simplify <focus>`.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "stuck",
+        "description": "Diagnose frozen, stuck, or slow Qwen Code sessions on this machine. Scans for problematic processes, high CPU/memory usage, hung subprocesses, and debug logs. Use /stuck or /stuck <PID> to focus on a specific process.",
+        "input": {
+          "hint": "'[PID or symptom]'"
+        },
+        "_meta": {
+          "argumentHint": "'[PID or symptom]'",
+          "source": "bundled-skill",
+          "sourceLabel": "Skill",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "agent-browser",
+        "description": "Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to \"open a website\", \"fill out a form\", \"click a button\", \"take a screenshot\", \"scrape data from a page\", \"test this web app\", \"login to a site\", \"automate browser actions\", or any task requiring programmatic web interaction.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "datadog-investigator",
+        "description": "Investigate Datadog alerts, incidents, and service behavior using a consistent evidence-first workflow. Use this when a user wants help triaging an alert, gathering logs and traces, or turning a Datadog signal into clear findings or follow-up actions.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "find-skills",
+        "description": "Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "remotion-best-practices",
+        "description": "Best practices for Remotion - Video creation in React",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "slidev",
+        "description": "Create and present web-based slidedecks for developers using Slidev with Markdown, Vue components, code highlighting, animations, and interactive features. Use when building technical presentations, conference talks, code walkthroughs, teaching materials, or developer decks.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "yes-flag-test-skill",
+        "description": "A test skill for -y flag testing",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "User",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "desktop-e2e-fixture-seeding",
+        "description": "Record, export, derive, and refresh desktop replay-backed E2E fixtures for PwrAgent. Use when Codex needs to seed or update `apps/desktop/e2e/fixtures/*` from a live desktop session with Computer Use, add a new capture recipe, promote `raw.capture.jsonl` into `replay.fixture.json`, or wire a replay-backed Electron spec around a captured scenario.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "Project",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "pwragent-dev-profile",
+        "description": "Start, stop, restart, and verify the local PwrAgent Electron development app with `PWRAGENT_PROFILE=dev` from the current checkout. Use when Codex needs to close any running dev-profile PwrAgent instance, launch `pnpm dev` in the current working directory, or confirm the dev-profile app came up.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "Project",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "pwragent-dev-restart",
+        "description": "Safely restart the local PwrAgent Electron development app after pulling, rebasing, or merging changes. Use when Codex is running inside or alongside the PwrAgent dev app and a normal restart could kill the current session before `pnpm dev` is relaunched.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "Project",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "release",
+        "description": "Prepare, validate, tag, publish, and monitor guarded PwrAgent desktop releases. Use when the user asks to release PwrAgent, prepare a vX.Y.Z or vX.Y.Z-prerelease tag, update release notes or CHANGELOG.md for a desktop release, verify package.json/tag/changelog alignment, trigger the macOS signed/notarized release workflow, or inspect release workflow status.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "Project",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      },
+      {
+        "name": "release-download-stats",
+        "description": "Check and summarize PwrAgent GitHub Release asset download statistics. Use when the user asks for download counts, bytes served, DMG or ZIP stats, updater ZIP traffic, per-release stats such as beta.22/beta.21/beta.20, or whether GitHub release downloads show any traffic.",
+        "input": {
+          "hint": ""
+        },
+        "_meta": {
+          "source": "skill-dir-command",
+          "sourceLabel": "Project",
+          "supportedModes": [
+            "interactive",
+            "non_interactive",
+            "acp"
+          ],
+          "subcommands": [],
+          "modelInvocable": true
+        }
+      }
+    ],
+    "_meta": {
+      "availableSkills": [
+        "agent-browser",
+        "batch",
+        "datadog-investigator",
+        "desktop-e2e-fixture-seeding",
+        "find-skills",
+        "loop",
+        "new-app",
+        "pwragent-dev-profile",
+        "pwragent-dev-restart",
+        "qc-helper",
+        "release",
+        "release-download-stats",
+        "remotion-best-practices",
+        "review",
+        "simplify",
+        "slidev",
+        "stuck",
+        "yes-flag-test-skill"
+      ]
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": "The"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " user wants a"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " one-sentence description"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " of the"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " project. Let me"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " quickly"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " check the README.md"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " and package.json to"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " understand what this project"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " is."
+    }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": ""
+    },
+    "_meta": {
+      "usage": {
+        "inputTokens": 23851,
+        "outputTokens": 222,
+        "totalTokens": 24073,
+        "thoughtTokens": 29,
+        "cachedReadTokens": 0
+      },
+      "durationMs": 7509
+    }
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_76b3f720a9b44d5296bba9f3",
+    "status": "in_progress",
+    "title": "ReadFile: /private/.../T/eval-tmp/PwrAgent-Test/README.md (first 30 lines)",
+    "content": [],
+    "locations": [
+      {
+        "path": "/repo/README.md",
+        "line": null
+      }
+    ],
+    "kind": "read",
+    "rawInput": {
+      "file_path": "/repo/README.md",
+      "limit": 30
+    },
+    "_meta": {
+      "toolName": "read_file"
+    }
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_76b3f720a9b44d5296bba9f3",
+    "status": "completed",
+    "content": [
+      {
+        "type": "content",
+        "content": {
+          "type": "text",
+          "text": "Showing lines 1-30 of 123 total lines.\n\n---\n\n# PwrAgent\n\n**Your coding agent runs on your laptop. You drive it from your phone.**\n\nAn open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.\n\n<p>\n  <a href=\"https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg\">\n    <img src=\"docs/assets/buttons/download-macos.png\" alt=\"Download for macOS\" width=\"440\">\n  </a>\n  &nbsp;\n  <a href=\"https://docs.pwragent.ai\">\n    <img src=\"docs/assets/buttons/read-the-docs.png\" alt=\"Read the docs\" width=\"440\">\n  </a>\n</p>\n\n![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)\n\n## Why you might want it\n\n- **Code keeps moving when you're away from the keyboard.** Approvals, follow-up prompts, \"what did you ship while I was at lunch\" check-ins — all from your phone. Cellular or hotel WiFi is fine; the agent is on your laptop, the messenger is just the steering wheel.\n- **Stack three asks and walk away.** `make a branch and PR for the OAuth refactor` → queue `/review main` → queue `squash and force-push`. The composer dispatches FIFO, one turn at a time. Come back: three things done.\n- **Isolated profiles for work and life.** As many PwrAgent windows as you want, each on its own profile, each bound to its own Codex identity. Auth and messaging credentials never cross.\n- **Works alongside Codex Desktop.** Shares thread state by default; start a thread in either, finish in the other. PwrAgent adds per-thread controls, worktree isolation with handoff, the Markdown composer, and the messaging surface — things Codex Desktop doesn't have today.\n- **No cloud, no account, no telemetry.** Everything runs on your machine. Bot tokens encrypted in the macOS Keychain. Closed-by-default messaging with two-keyed allowlists (see [Is this safe for work?](#is-this-safe-for-work)).\n- **Free, MIT, dogfooded.** The author uses PwrAgent as their primary coding environment. Hundreds of PRs in this repository and others were created or reviewed through it.\n\nThe longer-form pitch lives at **[pwragent.ai](https://pwragent.ai)**; the operator-facing setup walkthroughs live at **[docs.pwragent.ai](https://docs.pwragent.ai)**.\n\n## Take a look"
+        }
+      }
+    ],
+    "_meta": {
+      "toolName": "read_file"
+    },
+    "rawOutput": "Read lines 1-30 of 123 from ../../../../../../../repo/README.md"
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_14645e34d79d4718a590981c",
+    "status": "in_progress",
+    "title": "ReadFile: /private/.../T/eval-tmp/PwrAgent-Test/package.json (first 30 lines)",
+    "content": [],
+    "locations": [
+      {
+        "path": "/repo/package.json",
+        "line": null
+      }
+    ],
+    "kind": "read",
+    "rawInput": {
+      "file_path": "/repo/package.json",
+      "limit": 30
+    },
+    "_meta": {
+      "toolName": "read_file"
+    }
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_14645e34d79d4718a590981c",
+    "status": "completed",
+    "content": [
+      {
+        "type": "content",
+        "content": {
+          "type": "text",
+          "text": "Showing lines 1-30 of 55 total lines.\n\n---\n\n{\n  \"name\": \"pwragent-workspace\",\n  \"version\": \"1.0.0-alpha.0\",\n  \"private\": true,\n  \"description\": \"Thread-centric coding agent desktop app\",\n  \"author\": \"PwrDrvr LLC\",\n  \"license\": \"MIT\",\n  \"copyright\": \"Copyright © 2026 PwrDrvr LLC.\",\n  \"packageManager\": \"pnpm@10.33.0\",\n  \"scripts\": {\n    \"build\": \"pnpm --filter @pwragent/desktop build\",\n    \"dev\": \"pnpm --filter @pwragent/desktop dev\",\n    \"dev:dev\": \"pnpm --filter @pwragent/desktop dev:dev\",\n    \"dev:no-messaging\": \"PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging\",\n    \"dev:op\": \"node ./scripts/op-run.mjs dev\",\n    \"op:dev\": \"node ./scripts/op-run.mjs dev\",\n    \"op:run\": \"node ./scripts/op-run.mjs run\",\n    \"licenses:check\": \"node ./scripts/check-package-licenses.mjs && node ./scripts/generate-third-party-licenses.mjs --check\",\n    \"licenses:generate\": \"node ./scripts/generate-third-party-licenses.mjs\",\n    \"lint\": \"pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm licenses:check && pnpm typecheck && pnpm lint:boundaries\",\n    \"lint:boundaries\": \"depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/\",\n    \"lint:codex-storage\": \"node ./scripts/check-codex-storage-boundary.mjs\",\n    \"lint:colors\": \"node ./scripts/lint-renderer-colors.mjs\",\n    \"lint:sql\": \"node ./scripts/lint-sql-templates.mjs\",\n    \"release:check\": \"node ./scripts/check-desktop-release-metadata.mjs\",\n    \"test:desktop-e2e\": \"pnpm --filter @pwragent/desktop test:e2e\",\n    \"test:desktop-e2e:nice\": \"node ./scripts/nice-run.mjs pnpm test:desktop-e2e\",\n    \"eval:smoke\": \"pnpm --filter @pwragent/desktop eval:smoke\",\n    \"eval:smoke:build\": \"pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke\",\n    \"eval:smoke:ui\": \"pnpm --filter @pwragent/desktop eval:smoke:ui\","
+        }
+      }
+    ],
+    "_meta": {
+      "toolName": "read_file"
+    },
+    "rawOutput": "Read lines 1-30 of 55 from ../../../../../../../repo/package.json"
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": "Now"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " I have a"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " clear picture of what"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " this project is."
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " Let me summarize in"
+    }
+  },
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+      "type": "text",
+      "text": " one short sentence."
+    }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": "P"
+    }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": "wrAgent is an"
+    }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": " open-source, MIT"
+    }
+  }
+]

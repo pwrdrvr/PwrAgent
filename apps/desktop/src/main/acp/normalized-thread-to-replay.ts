@@ -95,11 +95,23 @@ function planEntryToReplay(entry: NormalizedPlanEntry): AppServerThreadEntry {
 function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDetail {
   // NOTE: the in-tree normalizer keeps tool status on the ACTIVITY entry, not
   // the detail (detail has no `status`), so we deliberately don't set it here.
+  //
+  // Command-detail shim (reconciles KTD-P3 finding #2): the kit sets
+  // `command.displayCommand = <title>` even for read/write tools, but the
+  // in-tree only emits a command detail when there's REAL command evidence
+  // (`command || output !== undefined || exitCode !== undefined`). Mirror that
+  // — surface a command detail only when the kit gives us a raw command, output,
+  // or exit code, so a conflated read title doesn't masquerade as a command.
+  const hasRealCommand =
+    tool.command !== undefined &&
+    (tool.command.rawCommand !== undefined ||
+      tool.command.output !== undefined ||
+      tool.command.exitCode !== undefined);
   return {
     id: tool.id,
     kind: detailKind(tool.kind),
     label: tool.label,
-    ...(tool.command
+    ...(hasRealCommand && tool.command
       ? {
           command: {
             displayCommand: tool.command.displayCommand,
