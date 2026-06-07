@@ -312,12 +312,14 @@ export class AcpAgentClient {
       parts: params.parts,
       turnId,
       receivedAt,
+      waitingForAgent: true,
     });
     this.appendHistoryUpdate(params.sessionId, receivedAt, {
       kind: "pwragent_user_prompt",
       prompt: params.prompt,
       ...(params.parts?.length ? { parts: params.parts } : {}),
       turnId,
+      waitingForAgent: true,
     });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     let result: unknown;
@@ -401,12 +403,14 @@ export class AcpAgentClient {
       parts: params.parts,
       turnId,
       receivedAt,
+      waitingForAgent: true,
     });
     this.appendHistoryUpdate(params.sessionId, receivedAt, {
       kind: "pwragent_user_prompt",
       prompt: params.prompt,
       ...(params.parts?.length ? { parts: params.parts } : {}),
       turnId,
+      waitingForAgent: true,
     });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);

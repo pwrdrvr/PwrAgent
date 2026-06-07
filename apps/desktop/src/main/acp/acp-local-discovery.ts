@@ -27,6 +27,7 @@ export type LocalAcpDiscoveryOptions = {
    * if it succeeds the bare command name probe is skipped.
    */
   overrides?: {
+    gemini?: string;
     grok?: string;
     qwen?: string;
     kimi?: string;
@@ -50,58 +51,65 @@ export async function discoverLocalAcpAgents(
 async function discoverLocalGemini(options?: {
   probe?: LocalAcpAgentProbe;
   now?: () => number;
+  overrides?: {
+    gemini?: string;
+  };
 }): Promise<AcpInstalledAgentRecord | undefined> {
   const probe = options?.probe ?? defaultProbe;
-  const [versionResult, helpResult] = await Promise.all([
-    probeCommand(probe, "gemini", ["--version"]),
-    probeCommand(probe, "gemini", ["--help"]),
-  ]);
-  if (!versionResult || !helpResult) {
-    return undefined;
-  }
+  const candidates = geminiCandidatePaths(options?.overrides?.gemini);
+  for (const command of candidates) {
+    const [versionResult, helpResult] = await Promise.all([
+      probeCommand(probe, command, ["--version"]),
+      probeCommand(probe, command, ["--help"]),
+    ]);
+    if (!versionResult || !helpResult) {
+      continue;
+    }
 
-  const helpText = resultText(helpResult);
-  if (!/(^|\s)--acp(\s|,|$)/.test(helpText)) {
-    return undefined;
-  }
+    const helpText = resultText(helpResult);
+    if (!/(^|\s)--acp(\s|,|$)/.test(helpText)) {
+      continue;
+    }
 
-  const now = options?.now?.() ?? Date.now();
-  const backendId = "acp:gemini" as AcpBackendId;
-  const version = parseGeminiVersion(resultText(versionResult));
-  return {
-    backendId,
-    registryId: "gemini",
-    name: "Gemini CLI",
-    version,
-    distributionKind: "local",
-    distributionSource: "gemini --acp --skip-trust",
-    installStatus: "installed",
-    authStatus: "not-required",
-    verificationStatus: "not-applicable",
-    allowlistRuleId: "local-gemini-cli",
-    installedAt: now,
-    updatedAt: now,
-    capabilities: acpAgentCapabilitiesForRegistryId("gemini"),
-    launchDescriptor: normalizeAcpLaunchDescriptor({
+    const now = options?.now?.() ?? Date.now();
+    const backendId = "acp:gemini" as AcpBackendId;
+    const version = parseGeminiVersion(resultText(versionResult));
+    return {
       backendId,
       registryId: "gemini",
-      distributionKind: "local",
-      command: "gemini",
-      args: ["--acp"],
-      env: {},
-    }),
-    registryAgent: {
-      id: "gemini",
-      backendId,
       name: "Gemini CLI",
       version,
-      authors: ["Google"],
-      distributions: [],
-      distributionKinds: ["local"],
-      auth: { required: false, methods: ["agent-managed"] },
-      raw: { source: "local-cli" },
-    },
-  };
+      distributionKind: "local",
+      distributionSource: `${command} --acp --skip-trust`,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-gemini-cli",
+      installedAt: now,
+      updatedAt: now,
+      capabilities: acpAgentCapabilitiesForRegistryId("gemini"),
+      launchDescriptor: normalizeAcpLaunchDescriptor({
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command,
+        args: ["--acp"],
+        env: {},
+      }),
+      registryAgent: {
+        id: "gemini",
+        backendId,
+        name: "Gemini CLI",
+        version,
+        authors: ["Google"],
+        distributions: [],
+        distributionKinds: ["local"],
+        auth: { required: false, methods: ["agent-managed"] },
+        raw: { source: "local-cli" },
+      },
+    };
+  }
+  return undefined;
 }
 
 async function discoverLocalKimi(
@@ -326,6 +334,19 @@ function qwenCandidatePaths(override?: string): string[] {
   candidates.push(path.join(homedir(), ".qwen", "bin", "qwen"));
   candidates.push("/opt/homebrew/bin/qwen");
   candidates.push("/usr/local/bin/qwen");
+  return Array.from(new Set(candidates));
+}
+
+function geminiCandidatePaths(override?: string): string[] {
+  const candidates: string[] = [];
+  if (override && override.trim().length > 0) {
+    candidates.push(override.trim());
+  }
+  candidates.push(path.join(homedir(), ".local", "bin", "gemini"));
+  candidates.push(path.join(homedir(), "bin", "gemini"));
+  candidates.push("/opt/homebrew/bin/gemini");
+  candidates.push("/usr/local/bin/gemini");
+  candidates.push("gemini");
   return Array.from(new Set(candidates));
 }
 

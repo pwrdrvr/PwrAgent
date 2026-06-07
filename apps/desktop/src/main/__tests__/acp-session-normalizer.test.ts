@@ -198,6 +198,94 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(idleReplay.threadStatus).toBe("idle");
   });
 
+  it("shows a waiting activity for live prompts until the agent responds", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const activeReplay = normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "hello",
+      turnId: "pending:session-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+
+    expect(activeReplay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "hello",
+      }),
+      expect.objectContaining({
+        type: "activity",
+        id: "agent-waiting:pending:session-1",
+        summary: "Waiting for agent response",
+        status: "in_progress",
+      }),
+    ]);
+
+    const respondedReplay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Hi." },
+      },
+    });
+
+    expect(respondedReplay.entries.map((entry) => entry.id)).not.toContain(
+      "agent-waiting:pending:session-1",
+    );
+    expect(respondedReplay.lastAssistantMessage).toBe("Hi.");
+  });
+
+  it("removes waiting activity when a provider finishes without a turn id", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "hello",
+      turnId: "pending:session-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+    const finishedReplay = normalizer.recordTurnFinished();
+
+    expect(finishedReplay.threadStatus).toBe("idle");
+    expect(finishedReplay.entries.map((entry) => entry.id)).not.toContain(
+      "agent-waiting:pending:session-1",
+    );
+  });
+
+  it("replaces waiting activity with the provider failure", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "hello",
+      turnId: "pending:session-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+    const failedReplay = normalizer.recordTurnFailed({
+      sessionId: "session-1",
+      turnId: "pending:session-1",
+      error: "json-rpc error (500): You have exhausted your capacity on this model.",
+      receivedAt: 1001,
+    });
+
+    expect(failedReplay.entries.map((entry) => entry.id)).not.toContain(
+      "agent-waiting:pending:session-1",
+    );
+    expect(failedReplay.entries).toContainEqual(
+      expect.objectContaining({
+        type: "activity",
+        id: "turn-failed:pending:session-1",
+        summary: "Turn failed",
+        status: "failed",
+      }),
+    );
+  });
+
   it("keeps persisted user prompt image parts out of transcript text", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     const imageUrl = "data:image/png;base64,aGVsbG8=";

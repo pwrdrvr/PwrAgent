@@ -41,6 +41,7 @@ export class AcpSessionReplayNormalizer {
     parts?: AppServerThreadMessagePart[];
     turnId: string;
     receivedAt?: number;
+    waitingForAgent?: boolean;
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     const id = `user:${params.turnId}`;
@@ -55,11 +56,19 @@ export class AcpSessionReplayNormalizer {
       ...(normalizedPrompt.parts?.length ? { parts: normalizedPrompt.parts } : {}),
       createdAt,
     });
+    if (params.waitingForAgent) {
+      this.upsertAgentWaitingActivity(params.turnId, createdAt);
+    }
     this.status = "active";
     return this.replay();
   }
 
   recordTurnFinished(turnId?: string): AppServerThreadReplay {
+    if (turnId) {
+      this.removeAgentWaitingActivity(turnId);
+    } else {
+      this.removeCurrentAgentWaitingActivity();
+    }
     if (!turnId || this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
     }
@@ -75,6 +84,7 @@ export class AcpSessionReplayNormalizer {
     receivedAt?: number;
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
+    this.removeAgentWaitingActivity(params.turnId);
     if (this.currentTurnId === params.turnId) {
       this.currentTurnId = undefined;
     }
@@ -113,6 +123,13 @@ export class AcpSessionReplayNormalizer {
     if (isAssistantTextUpdate) {
       // Consecutive ACP text chunks form one live bubble, but text after a tool
       // call should become a new bubble instead of overwriting earlier text.
+      const text =
+        readContentText(update.update, "content") ??
+        readString(update.update, "text") ??
+        "";
+      if (text && !isModeUpdateMarker(text) && this.currentTurnId) {
+        this.removeAgentWaitingActivity(this.currentTurnId);
+      }
       if (kind === "agent_message_chunk") {
         this.applyAgentMessageChunk(update, createdAt);
       } else {
@@ -130,10 +147,13 @@ export class AcpSessionReplayNormalizer {
     } else {
       this.activeAssistantMessageId = undefined;
       if (kind === "plan") {
+        this.removeCurrentAgentWaitingActivity();
         this.upsertPlan(update, createdAt);
       } else if (kind === "tool_call" || kind === "tool_call_update") {
+        this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "file" || kind === "terminal") {
+        this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "turn_started") {
         this.status = "active";
@@ -153,8 +173,10 @@ export class AcpSessionReplayNormalizer {
           parts: readMessageParts(update.update),
           turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
           receivedAt: createdAt,
+          waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
       } else {
+        this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(unknownActivity(update, kind, createdAt));
       }
     }
@@ -277,6 +299,41 @@ export class AcpSessionReplayNormalizer {
     this.entries[index] = mergeActivity(
       this.entries[index] as AppServerThreadActivityEntry,
       activity,
+    );
+  }
+
+  private upsertAgentWaitingActivity(turnId: string, createdAt: number): void {
+    this.upsertActivity({
+      type: "activity",
+      id: agentWaitingActivityId(turnId),
+      createdAt,
+      summary: "Waiting for agent response",
+      status: "in_progress",
+      turn: {
+        id: turnId,
+        status: "in_progress",
+        startedAt: createdAt,
+      },
+      details: [
+        {
+          id: `${agentWaitingActivityId(turnId)}:detail`,
+          kind: "read",
+          label: "The prompt was sent. Waiting for the agent provider to respond.",
+          status: "in_progress",
+        },
+      ],
+    });
+  }
+
+  private removeCurrentAgentWaitingActivity(): void {
+    if (this.currentTurnId) {
+      this.removeAgentWaitingActivity(this.currentTurnId);
+    }
+  }
+
+  private removeAgentWaitingActivity(turnId: string): void {
+    this.entries = this.entries.filter(
+      (entry) => entry.id !== agentWaitingActivityId(turnId),
     );
   }
 
@@ -425,6 +482,18 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readBoolean(
+  record: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function agentWaitingActivityId(turnId: string): string {
+  return `agent-waiting:${turnId}`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
