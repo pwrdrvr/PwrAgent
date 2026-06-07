@@ -138,31 +138,31 @@ needs reconciling is how each tool detail is *rendered*.
 
 ## Cataloged divergences (require reconciliation before B2 ships)
 
-Found by the harness (increment 2). These are kit-side behaviors that lose or
-change information the in-tree normalizer preserves. Each needs an explicit
-decision — accept the loss, fix the adapter, or fix the kit (`@pwrdrvr/agent-acp`
-is maintained in its own repo) — before the in-tree path is deleted. Until then
-the tool-detail comparison is scoped to **structural** parity (label + count).
+Found by the harness. The tool-detail comparison now asserts per-detail
+**`label` + `path`** (both match across all four agents' real transcripts); the
+remaining scoped-out fields (`kind`, `command`) are below.
 
-1. **`read`/file tool location path dropped.** In-tree detail carries
-   `path` (from the update's `locations[].path`); the kit's `NormalizedToolCall`
-   has no `locations`/`path` field, so the path is lost. **Needs a kit fix**
-   (preserve locations on the normalized tool call) — read activities otherwise
-   lose their file path in the renderer. Filed upstream:
-   [pwrdrvr/agent-kit#1](https://github.com/pwrdrvr/agent-kit/issues/1).
-2. **Command conflation on non-command tools — ADAPTER-SHIMMED.** The kit sets
-   `command.displayCommand = <title>` even for `read`/`write` tools.
-   `normalized-thread-to-replay.ts` now mirrors the in-tree rule (emit a command
-   detail only when there's real command evidence — `rawCommand`/`output`/
-   `exitCode`), so a conflated title no longer masquerades as a command.
-3. **Tool-kind inference differs.** For updates without an explicit `kind`, the
-   in-tree (`toolDetailKind(kind, path)`) and the kit (`inferToolKind(name)`)
-   land on different `read`/`write`/`command` classifications (seen on
-   Grok/Kimi/Qwen, e.g. in-tree `command` vs kit `write`). Reconcile the mapping
-   (adapter or kit).
-4. **`command.displayCommand` formatting differs** for genuine command tools
-   (the two pipelines format the displayed command string differently).
-   Reconcile or accept.
+1. **`read`/file tool location path dropped — ✅ RESOLVED.** Was: the kit's
+   `NormalizedToolCall` had no `locations`/`path`, so file paths were lost.
+   Fixed upstream in [pwrdrvr/agent-kit#1](https://github.com/pwrdrvr/agent-kit/issues/1)
+   (agent-core 0.2.0 adds `NormalizedToolCall.locations`); consumed here by
+   bumping `@pwrdrvr/agent-acp` → `^0.11.0` and reading
+   `tool.locations[0].path` in `normalized-thread-to-replay.ts`. **`path` is now
+   asserted in the parity canon** and matches on real data for all four agents.
+2. **Command conflation on non-command tools — ✅ RESOLVED.** agent-acp 0.11.0 no
+   longer folds a read's title into `command`, so the adapter surfaces the kit's
+   `command` faithfully (no shim needed).
+3. **Tool-kind inference differs — OPEN (scoped out).** The in-tree
+   (`toolDetailKind(kind, path)`) and the kit (`inferToolKind(name)`) land on
+   different classifications, e.g. Qwen's `ReadFile` → kit `write` vs in-tree
+   `command`. Neither is obviously "read"; reconcile the mapping (adapter or
+   kit) — not information-losing.
+4. **`command.displayCommand` differs — OPEN (scoped out).** The in-tree
+   synthesizes/derives a command string the kit doesn't (e.g. a running
+   `ls -d node_modules` from the label), and produces a **spurious** command
+   (`"tool call update"`) for Qwen's snake_case `tool_call_update` that the kit
+   correctly omits. The kit is arguably *more* correct here; likely an
+   accept-and-move-on, not a kit fix.
 
 Tracking: these gate **B2** (adopt `AgentBackend`/the kit normalizer for the
 live ACP path). Resolve via a kit patch + republish, or a documented
