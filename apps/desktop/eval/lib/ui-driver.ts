@@ -40,6 +40,20 @@ function accessLabel(mode: ExecutionMode): string {
   return mode === "full-access" ? "Full Access" : "Default Access";
 }
 
+/**
+ * Best-effort pick of the "most elevated" ACP agent-mode option for the
+ * full-access scenario. ACP agents express elevation as a named runtime mode
+ * (e.g. "Yolo", "Full Auto", "Accept edits") rather than a literal "Full
+ * Access", so match common elevated keywords; fall back to the last option,
+ * which is conventionally the most permissive.
+ */
+function pickElevatedAgentMode(offered: string[]): string {
+  const elevated = offered.find((o) =>
+    /yolo|full|auto|accept|all|danger|bypass|unrestricted/i.test(o),
+  );
+  return elevated ?? offered[offered.length - 1]!;
+}
+
 /** What the composer offered the user, recorded for the grid. */
 export type ControlAudit = {
   providerOffered: boolean;
@@ -111,34 +125,69 @@ export class UiDriver {
   }
 
   /**
-   * Assert the Access-mode dropdown offers both Default + Full Access, select
-   * `mode`, and accept the Full-Access risk dialog if it appears. Returns the
-   * offered option labels.
+   * Select the requested mode using whichever control the composer renders:
+   *  - "Access mode" dropdown (Default/Full Access) — codex, grok, and any
+   *    backend whose summary exposes executionModes.
+   *  - "Agent mode" dropdown — ACP agents (gemini/kimi/qwen) whose runtime
+   *    exposes a mode config option; full-access is implied by an elevated
+   *    agent mode rather than a literal "Full Access" entry.
+   *
+   * Returns which control was used + the option labels it offered (validating
+   * the options are actually presented). Accepts the Full-Access risk dialog if
+   * it appears. Throws (caller screenshots + fails the cell) if neither control
+   * is present.
    */
-  async selectAccessMode(mode: ExecutionMode): Promise<string[]> {
-    const offered = await this.openDropdownOptions("Access mode");
-    for (const expected of ["Default Access", "Full Access"]) {
-      if (!offered.some((o) => o.includes(expected))) {
-        await this.screenshot("access-mode-missing");
-        throw new Error(
-          `Access-mode dropdown did not offer "${expected}" (saw: ${offered.join(", ")})`,
-        );
+  async selectAccessMode(
+    mode: ExecutionMode,
+  ): Promise<{ control: "access" | "agent"; offered: string[]; selected: string }> {
+    const accessBtn = this.composer().getByRole("button", { name: "Access mode", exact: true });
+    const agentBtn = this.composer().getByRole("button", { name: "Agent mode", exact: true });
+    // After a provider switch the composer re-renders; wait for either control.
+    await Promise.race([
+      accessBtn.waitFor({ state: "visible", timeout: 12_000 }).catch(() => undefined),
+      agentBtn.waitFor({ state: "visible", timeout: 12_000 }).catch(() => undefined),
+    ]);
+
+    if (await accessBtn.isVisible().catch(() => false)) {
+      const offered = await this.openDropdownOptions("Access mode");
+      for (const expected of ["Default Access", "Full Access"]) {
+        if (!offered.some((o) => o.includes(expected))) {
+          throw new Error(
+            `Access-mode dropdown did not offer "${expected}" (saw: ${offered.join(", ")})`,
+          );
+        }
       }
+      const selected = accessLabel(mode);
+      await this.page.getByRole("option", { name: selected, exact: true }).first().click();
+      await this.acceptFullAccessDialogIfShown(mode);
+      return { control: "access", offered, selected };
     }
-    await this.page
-      .getByRole("option", { name: accessLabel(mode), exact: true })
-      .first()
-      .click();
-    if (mode === "full-access") {
-      const dialog = this.page.getByRole("dialog", { name: "Enable Full Access?" });
-      if (await dialog.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await dialog
-          .getByRole("button", { name: "I Understand and Accept the Risks" })
-          .click()
-          .catch(() => undefined);
+
+    if (await agentBtn.isVisible().catch(() => false)) {
+      const offered = await this.openDropdownOptions("Agent mode");
+      if (offered.length === 0) {
+        throw new Error("Agent-mode dropdown offered no options");
       }
+      // default → first (least-privileged) option; full-access → an elevated
+      // agent mode (best-effort by label, else the last/most-permissive entry).
+      const target = mode === "full-access" ? pickElevatedAgentMode(offered) : offered[0]!;
+      await this.page.getByRole("option", { name: target, exact: true }).first().click();
+      await this.acceptFullAccessDialogIfShown(mode);
+      return { control: "agent", offered, selected: target };
     }
-    return offered;
+
+    throw new Error("neither an Access-mode nor Agent-mode control is present");
+  }
+
+  private async acceptFullAccessDialogIfShown(mode: ExecutionMode): Promise<void> {
+    if (mode !== "full-access") return;
+    const dialog = this.page.getByRole("dialog", { name: "Enable Full Access?" });
+    if (await dialog.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await dialog
+        .getByRole("button", { name: "I Understand and Accept the Risks" })
+        .click()
+        .catch(() => undefined);
+    }
   }
 
   async typePrompt(text: string): Promise<void> {

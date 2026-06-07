@@ -154,7 +154,10 @@ async function main(): Promise<void> {
         const before = new Set(await driver.listThreadIds(backend));
         await ui.openLaunchpad(dirLabel);
         const providerOffered = await ui.selectProvider(backend);
-        const modes = await ui.selectAccessMode(mode);
+        // Switching the provider re-renders the composer (the mode control can
+        // change between "Access mode" and "Agent mode") — let it settle.
+        await app.page.waitForTimeout(750);
+        const access = await ui.selectAccessMode(mode);
         await ui.typePrompt(prompt);
         await ui.clickStart();
         // Discover the id of the thread the UI just created.
@@ -172,7 +175,8 @@ async function main(): Promise<void> {
           throw new Error("could not discover UI-created threadId via listThreads");
         }
         console.log(
-          `    ↳ UI: provider ${providerOffered ? "✓" : "(fixed)"}, modes [${modes.join(", ")}]`,
+          `    ↳ UI: provider ${providerOffered ? "✓" : "(fixed)"}, ` +
+            `${access.control}-mode → "${access.selected}" of [${access.offered.join(", ")}]`,
         );
         return { threadId, tag: "UI" };
       } catch (uiErr) {
