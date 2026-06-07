@@ -306,7 +306,7 @@ sequenceDiagram
 
 **Approach:** Add `/agent` to the channel-neutral command catalog. Reuse browse-session mechanics with a new mode or launch action that filters thread summaries to `thread.agent`. The Agent creation path should reuse messaging's existing new-thread backend/project flow, then call `setThreadAgent` after thread creation with the requested Agent name and optional instructions. Binding records persist `targetKind: "agent_thread"` and status cards label the binding as an Agent.
 
-**Progress 2026-06-07:** Added the `/agent` command, an Agent-only browse mode, stale-selection rejection for ordinary threads, and `targetKind: "agent_thread"` persistence through JSON and sqlite messaging stores. `/resume` keeps the existing all-thread behavior. Agent creation from messaging, status-card Agent labeling, provider-native slash command registration, and zero-Agent create affordances remain follow-up work.
+**Progress 2026-06-07:** Added the `/agent` command, an Agent-only browse mode, stale-selection rejection for ordinary threads, and `targetKind: "agent_thread"` persistence through JSON and sqlite messaging stores. `/resume` keeps the existing all-thread behavior. Discord and Mattermost native command registration now include `agent`, and status cards/confirmation text label Agent bindings. Agent creation from messaging and zero-Agent create affordances remain follow-up work.
 
 **Patterns to follow:** `/resume --new`, backend selection plan implementation, status-card action budgeting, and the automation editor's Agent-only picker.
 
