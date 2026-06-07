@@ -54,12 +54,23 @@ The next step is to make "talk to an Agent from Telegram, Discord, Slack, or Mat
 - R17. Approval-related tools must never bypass the current approval, execution-mode, or Full Access policy surfaces; when the decision is not already authorized, the tool must create a user-visible decision request instead of silently approving.
 - R18. Tool families must be individually enableable for an Agent thread so a low-trust Agent can inspect automations without receiving thread-control or approval tools.
 
+**Update Orchestration**
+
+- R19. App update availability must be deliverable to selected Agent threads as an event-driven notification, not only as the renderer update banner.
+- R20. A user authorized for the bound messaging surface may request `upgrade` from an Agent-bound conversation when an update is downloaded or available.
+- R21. Upgrade requests must inspect active and queued thread work before restarting. Threads attached to the initiating Agent do not block that Agent's requested restart; unrelated busy threads do.
+- R22. If unrelated threads are busy, PwrAgent must publish a sticky upgrade-status card to the initiating Agent and keep the waiting list current as threads start, finish, or are queued.
+- R23. When the waiting list reaches zero, PwrAgent must start the update install through the existing updater and quit/restart path, then post that the upgrade is starting.
+- R24. After restart, PwrAgent must synthesize a startup notification back to the initiating Agent that the requested upgrade completed or that the previous upgrade attempt did not complete cleanly.
+- R25. Upgrade orchestration state must persist across restart and must not depend on renderer-local toast state.
+
 ---
 
 ## Scope Boundaries
 
 - In scope: `/agent` messaging flow, Agent-only picker and creation path, Agent-target binding metadata, reusable dynamic-tool catalog abstraction, automation-tool migration, Codex dynamic-tool registration, ACP MCP registration, and initial PwrAgent thread/control tools.
 - In scope: tests proving same-Agent multi-surface queueing, Agent-only browsing, tool scoping, and parity between Codex dynamic tools and ACP MCP tools.
+- In scope as a follow-on phase: event-driven update notifications attached to Agent threads, authorized `upgrade` requests from messaging, sticky upgrade-status cards, busy-thread waiting, and post-restart completion notices.
 - Out of scope: full Bot/RBAC trust boundaries, import/export, marketplace sharing, per-actor capability differences, cross-machine Agent sync, cloud execution, and automatic bot-to-bot delegation.
 - Out of scope: making every unattached message surface automatically start an Agent thread by default.
 
@@ -86,6 +97,10 @@ The next step is to make "talk to an Agent from Telegram, Discord, Slack, or Mat
 - `apps/desktop/src/main/app-server/acp-backend-adapter.ts` passes automation MCP server configuration to ACP sessions when runtime capabilities allow it.
 - `apps/desktop/src/main/messaging/core/messaging-controller.ts`, `messaging-resume-browser.ts`, `messaging-status-card.ts`, and `messaging-command-catalog.ts` own slash commands, binding mutation, picker surfaces, and status cards.
 - `packages/messaging/interface/src/index.ts` and `apps/desktop/src/main/messaging/core/messaging-store.ts` define persisted binding and browse-session shapes that can carry an Agent target kind.
+- `apps/desktop/src/main/auto-updater.ts` tracks update availability, download progress, downloaded status, and install requests through `AppUpdateStatus`.
+- `apps/desktop/src/renderer/src/features/update/AppUpdateBanner.tsx` currently shows the downloaded-update toast and calls the update install IPC.
+- `apps/desktop/src/main/quit-manager.ts` already gates update installs through `requestQuit({ source: "update-install" })` and checks in-progress thread counts.
+- `apps/desktop/src/main/app-server/backend-registry.ts` exposes `getInProgressThreadSnapshotForQuit()` and emits `thread/turnQueue/updated` events that can drive a live waiting list.
 
 ### PwrSnap Patterns To Borrow
 
@@ -115,6 +130,8 @@ The next step is to make "talk to an Agent from Telegram, Discord, Slack, or Mat
 - **ACP is MCP-first with capability gates.** ACP runtime capabilities already report MCP support. PwrAgent should pass MCP server definitions only when supported and surface unavailable tool exposure instead of silently pretending parity exists.
 - **Start mutating tools narrow and audited.** Read-only inspection is safe to expose broadly. New thread/worktree creation, message enqueueing, and approval decisions cross product boundaries and must be logged, policy-checked, and test-covered.
 - **No default auto-bind in V1.** A future default Agent per messaging instance is useful, but automatic creation from plain unattached text would conflict with shared-channel behavior and trust-boundary work.
+- **Treat updates as event-driven Agent notifications.** Update availability is not a timer automation, but it should use the same Agent-attached reporting model: an app event creates a source-labeled card, the Agent/user can act, and PwrAgent keeps state outside the normal chat transcript.
+- **Persist upgrade intent through restart.** The initiating Agent, requested version, status card, and waiting-thread set must live in PwrAgent-owned state so the restarted process can report completion or failure.
 
 ---
 
@@ -446,6 +463,50 @@ sequenceDiagram
 
 **Verification:** Docs explain how to add a new Agent tool catalog without touching provider adapters or loosening dependency boundaries.
 
+### U10. Agent-Attached Update Notification And Deferred Upgrade Orchestration
+
+**Goal:** Deliver app-update availability to configured Agent threads and let an authorized Agent-bound user request a restart-safe upgrade that waits for unrelated busy threads.
+
+**Requirements:** R19, R20, R21, R22, R23, R24, R25.
+
+**Dependencies:** U1, U4, U5, U6, U7.
+
+**Files:**
+
+- Modify: `apps/desktop/src/main/auto-updater.ts`
+- Modify: `apps/desktop/src/main/quit-manager.ts`
+- Modify: `apps/desktop/src/main/app-server/backend-registry.ts`
+- Modify: `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts`
+- Modify: `apps/desktop/src/main/messaging/core/messaging-controller.ts`
+- Modify: `apps/desktop/src/main/messaging/core/messaging-status-card.ts`
+- Create: `packages/shared/src/contracts/update-orchestration.ts`
+- Create: `apps/desktop/src/main/updates/agent-update-orchestrator.ts`
+- Create: `apps/desktop/src/main/updates/update-orchestration-store.ts`
+- Test: `apps/desktop/src/main/__tests__/agent-update-orchestrator.test.ts`
+- Test: `apps/desktop/src/main/__tests__/auto-updater.test.ts`
+- Test: `apps/desktop/src/main/__tests__/messaging-controller.test.ts`
+- Test: `packages/shared/src/contracts/__tests__/update-orchestration.test.ts`
+
+**Approach:** Add an event-driven update orchestrator that subscribes to `AppUpdateStatus` transitions. When an update becomes available or downloaded, it posts a source-labeled card to configured Agent threads. Add an Agent/messaging upgrade intent path that accepts `upgrade` only from an authorized actor in an Agent-bound conversation. The orchestrator snapshots active and queued threads, subtracts threads attached to the initiating Agent, and either installs immediately or maintains a sticky waiting card. On `thread/turnQueue/updated` and turn completion, recompute the waiting list and update the card. When the list is empty, call the existing update install path through `requestQuit({ source: "update-install" })`, persist a "restart pending" marker, and post an "upgrade starting" card. On startup, consume that marker and publish a synthetic completion or recovery notification to the initiating Agent.
+
+**Patterns to follow:** Automation cards as Agent-attached event notifications, `AppUpdateBanner` status handling, `registerAppUpdateIpcHandlers`, quit-manager in-progress thread checks, and thread-turn queue lifecycle events.
+
+**Test scenarios:**
+
+- Happy path: a downloaded update posts an update-available card to an Agent configured for update notifications.
+- Happy path: an authorized messaging actor says `upgrade` in an Agent-bound conversation while no unrelated threads are busy; PwrAgent posts that upgrade is starting and calls the update install path.
+- Happy path: unrelated busy threads block upgrade, a sticky card lists them, and the list shrinks as those threads complete.
+- Happy path: only threads attached to the initiating Agent are busy; the upgrade proceeds because no unrelated threads are blocking.
+- Happy path: after restart, startup consumes the persisted pending-upgrade marker and posts a synthetic completion notice to the initiating Agent.
+- Edge case: an update is available but not downloaded; the sticky card reports waiting for download before it can restart.
+- Edge case: a new unrelated thread becomes busy while waiting; the sticky card grows to include it before restart starts.
+- Edge case: update status changes from available to downloaded while waiting; the card updates without creating a duplicate request.
+- Error path: an unauthorized actor says `upgrade` and receives the existing authorization failure behavior.
+- Error path: no downloaded update is ready; the Agent reports the current update state and does not restart.
+- Error path: update install is cancelled or fails; the sticky card records the failure and leaves the app running.
+
+**Verification:** Orchestrator tests prove update notifications are event-driven, restart intent is persisted, busy-thread waiting is computed from registry state, and post-restart Agent notification does not depend on renderer toast state.
+
 ---
 
 ## Acceptance Examples
@@ -456,6 +517,8 @@ sequenceDiagram
 - AE4. Given an Agent asks to inspect a non-Agent work thread, when it calls `pwragent_threads.get_thread_status`, then it receives status from PwrAgent-owned summaries without reading Codex storage.
 - AE5. Given an Agent asks to create a new PwrAgent worktree thread for issue 123, when it calls `pwragent_control.create_thread`, then PwrAgent uses the normal launchpad/worktree policy path and reports the new thread id or the required operator decision.
 - AE6. Given an Agent tries to approve a pending Full Access request where policy requires human confirmation, when it calls the approval tool, then PwrAgent posts a visible confirmation request instead of silently approving.
+- AE7. Given an update is downloaded and update notifications are attached to Jarvis, when the updater status changes to downloaded, then Jarvis receives an update-available card even if no renderer toast is visible.
+- AE8. Given an authorized Telegram actor says `upgrade` to Jarvis while unrelated threads are busy, when those threads finish, then the sticky upgrade card updates to zero waiting threads, PwrAgent starts the update restart, and Jarvis receives a startup completion notice after relaunch.
 
 ---
 
@@ -466,6 +529,7 @@ sequenceDiagram
 - **Tool exposure:** Automation inspection moves from a single hard-coded catalog to the first catalog on a general substrate. Future tool families should register through that substrate.
 - **Security posture:** This plan expands what an Agent can ask PwrAgent to do. Mutations must go through existing policy gates, audit logs, and approval surfaces.
 - **ACP parity:** ACP backends vary. Tool availability must reflect runtime capabilities instead of assuming every installed ACP agent accepts per-session MCP servers.
+- **Update lifecycle:** Update notifications become another Agent-attached event stream. They need durable state because the app intentionally exits during install.
 - **Dependency boundaries:** Renderer code imports only `@pwragent/shared`; messaging providers remain adapter-only and do not learn Agent workflow semantics.
 
 ---
@@ -481,6 +545,9 @@ sequenceDiagram
 | `/agent` and `/resume` duplicate too much picker code | Extend browse-session mode and shared rendering helpers instead of copying the resume browser. |
 | Tool results leak too much thread state | Use existing bounded summaries, explicit limits, and target ids; avoid raw transcript or Codex-owned storage reads. |
 | Shared Agent context surprises users across surfaces | Status cards should identify the Agent thread and say when messages are queued on that shared Agent. |
+| Upgrade restarts interrupt unrelated work | Compute a live waiting list from active and queued threads, ignore only threads attached to the initiating Agent, and install only when the unrelated list reaches zero. |
+| Upgrade completion notice is lost across restart | Persist initiating Agent and requested version before calling `quitAndInstall`, then consume that marker on startup. |
+| Sticky upgrade card becomes stale | Recompute it on update-status events and thread queue lifecycle events; include a recovery message if state cannot be reconciled. |
 
 ---
 
@@ -489,6 +556,7 @@ sequenceDiagram
 - Operator docs should describe `/agent` as "bind this conversation to a named Agent thread" and `/resume` as "bind this conversation to any PwrAgent thread."
 - Contributor docs should state that new Agent tool families must implement a catalog plus dispatcher and must be exposed through Codex dynamic tools and ACP MCP from the same definitions.
 - Release notes should call out that `/agent` is explicit and V1 does not auto-bind shared channels or create default Agents from plain text.
+- Update docs should describe Agent-attached update notifications as event-driven app lifecycle cards, not scheduled automations.
 
 ---
 
@@ -505,4 +573,7 @@ sequenceDiagram
 - Related GitHub issue: `https://github.com/pwrdrvr/PwrAgent/issues/293`
 - Related GitHub issue: `https://github.com/pwrdrvr/PwrAgent/issues/543`
 - Related GitHub issue: `https://github.com/pwrdrvr/PwrAgent/issues/646`
+- Related code: `apps/desktop/src/main/auto-updater.ts`
+- Related code: `apps/desktop/src/main/quit-manager.ts`
+- Related code: `apps/desktop/src/renderer/src/features/update/AppUpdateBanner.tsx`
 - PwrSnap reference patterns: `apps/desktop/src/main/ai/define-tool.ts`, `apps/desktop/src/main/ai/library-tool-catalog.ts`, `apps/desktop/src/main/ai/sizzle-tool-catalog.ts`, and `apps/desktop/src/main/ai/codex-thread-client.ts` in the PwrSnap checkout.
