@@ -169,14 +169,20 @@ async function main(): Promise<void> {
       for (const sc of scenarios) {
         const key = `${backend.kind}::${sc.id}`;
         process.stdout.write(`  • ${sc.column} … `);
+        // Track the IPC step so a thrown error names exactly what failed.
+        let step = "startThread";
         try {
           const threadId = await driver.startThread(backend.kind, app.clonePath, sc.mode);
           // Belt-and-suspenders: pin the mode explicitly post-create.
+          step = "setExecutionMode";
           await driver.setExecutionMode(backend.kind, threadId, sc.mode).catch(() => undefined);
           // Focus the thread so it renders live (transcript + approvals) and is
           // watchable — IPC thread creation doesn't auto-navigate the UI.
+          step = "focusThread";
           await app.focusThread(backend.kind, threadId);
+          step = "startTurn";
           const turnId = await driver.startTurn(backend.kind, threadId, sc.prompt, sc.mode);
+          step = "waitForTurn";
           const outcome = await driver.waitForTurn(backend.kind, threadId, turnId, {
             timeoutMs: sc.timeoutMs,
             onLog: (m) => console.log(m),
@@ -184,12 +190,34 @@ async function main(): Promise<void> {
           const graded = sc.grade(outcome);
           cells.set(key, graded);
           console.log(`${MARK_GLYPH[graded.mark]} ${graded.note}`);
+          // Surface diagnostics whenever the cell isn't a clean pass so the
+          // reason is visible (e.g. why codex requested no approval, or what a
+          // failed/timed-out turn actually did).
+          if (graded.mark !== "pass") {
+            console.log(
+              `    ↳ status=${outcome.status} approvals=${outcome.approvals}` +
+                (outcome.error ? ` error=${outcome.error}` : ""),
+            );
+            if (outcome.methods.length) {
+              console.log(
+                `    ↳ methods: ${[...new Set(outcome.methods)].join(", ")}`,
+              );
+            }
+          }
           if (sc.id === "whatis" && graded.mark === "fail") coreFailures += 1;
           if (graded.mark === "fail") strictFailures += 1;
         } catch (err) {
-          const note = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.message : String(err);
+          const note = `${step}: ${message}`;
           cells.set(key, { mark: "fail", note: truncate(note, 48) });
           console.log(`${MARK_GLYPH.fail} ${truncate(note, 48)}`);
+          // Full, untruncated error so IPC rejections (e.g. an unsupported
+          // mode for a backend) are actually diagnosable.
+          console.error(
+            `    ✖ ${step} threw for ${backend.kind} / ${sc.id}:\n      ${
+              err instanceof Error ? (err.stack ?? err.message) : String(err)
+            }`,
+          );
           if (sc.id === "whatis") coreFailures += 1;
           strictFailures += 1;
         }
