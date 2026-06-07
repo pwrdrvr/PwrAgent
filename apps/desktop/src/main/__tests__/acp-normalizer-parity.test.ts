@@ -19,6 +19,9 @@
  * activities, plans, files/terminals, reasoning, and titles land in follow-up
  * increments, each driven by a real captured transcript from the smoke eval.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AcpSessionNormalizer, defaultQuirks, type AcpAgentQuirks } from "@pwrdrvr/agent-acp";
 import type { NormalizedThreadEvent } from "@pwrdrvr/agent-core";
@@ -122,6 +125,22 @@ describe("KTD-P3 normalizer parity", () => {
       { kind: "plan", steps: [{ step: "Inspect files", status: "in_progress" }] },
       { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", path: "package.json" },
     ];
+    expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
+  });
+
+  // Real captured transcript from the smoke eval (redacted). A full Gemini
+  // "build" turn: available-commands, a thought chunk, 4 tool calls + 7 updates,
+  // 8 message chunks. The strongest form of the proof — structural parity on
+  // real data, where the only divergences are the cataloged tool-detail fields
+  // (path/command/kind), which `canon` scopes out. See the B1 plan doc.
+  it("real Gemini build transcript (captured)", () => {
+    const fixtureDir = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/acp-transcripts",
+    );
+    const updates = JSON.parse(
+      readFileSync(path.join(fixtureDir, "gemini-build.json"), "utf8"),
+    ) as Update[];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });
 });

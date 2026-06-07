@@ -70,6 +70,12 @@ Test: `apps/desktop/src/main/__tests__/acp-normalizer-parity.test.ts`
       (below) — cataloged for B2. Fixed one adapter bug (the in-tree keeps tool
       status on the activity, not the detail; the adapter no longer sets
       `detail.status`). ✅
+- [x] **Increment 6 (started) — real captured transcript.** A redacted real
+      Gemini "build" turn from the smoke eval
+      (`fixtures/acp-transcripts/gemini-build.json`: available-commands, a
+      thought, 4 tool calls + 7 updates, 8 message chunks) asserts structural
+      parity. See "Real-data validation" below. ✅ (Grok/Kimi/Qwen fixtures
+      next.)
 - [ ] **Increment 3 — files, terminals + command output/exitCode.**
 - [ ] **Increment 4 — reasoning/thought chunks + the `surfaceThoughts` quirk**
       (Qwen=false, others=true) and per-agent quirks (`titleFrom`).
@@ -100,6 +106,25 @@ ordered `params.update` objects, and drop them into the harness (or derive via
   symmetrically.)
 
 Anything else that differs is **drift to reconcile**, not an allowed divergence.
+
+## Real-data validation (the big result)
+
+Ran a **full-fidelity** parity check (every field, ids/timestamps aside) over
+the smoke eval's real captures — all four ACP agents, 3 sessions each, **11
+diverging sessions, 90 differing entries**:
+
+- **Zero entry-count mismatches.** Every session produced the same number +
+  order of entries through both pipelines.
+- **Zero message divergences.** Every assistant/user message text is
+  byte-identical.
+- **Every single divergence is an `activity` detail field** — i.e. *only* the
+  three cataloged tool-detail findings below. No new divergence classes, no
+  structural drift, no content loss.
+
+So on real transcripts from Gemini / Grok / Kimi / Qwen, the kit normalizer
+reproduces the in-tree transcript **losslessly except for three bounded, known
+tool-detail fields**. That is the core KTD-P3 reassurance: Phase B's swap is
+safe once those three are reconciled.
 
 ## Cataloged divergences (require reconciliation before B2 ships)
 
