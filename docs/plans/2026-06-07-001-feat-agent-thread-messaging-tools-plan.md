@@ -200,6 +200,8 @@ sequenceDiagram
 
 **Approach:** Add a small `MessagingBindingTargetKind` or equivalent union with `thread` and `agent_thread`. Add shared Agent tool catalog metadata that can name enabled catalog families without importing desktop implementation. Keep tool implementation details in desktop main; shared contracts should carry stable IDs, target kind, namespace, and serializable diagnostics only.
 
+**Progress 2026-06-07:** Added `MessagingBindingTargetKind` with safe legacy normalization, plus shared Agent tool catalog identifiers/summaries for the v1 `automation_inspection` catalog. Navigation summaries and persisted binding records still need to adopt the target kind when U4/U5 wire Agent-thread messaging bindings.
+
 **Patterns to follow:** Existing `ThreadAgentMetadata`, `AutomationInspectionOperationName`, and messaging capability-profile contracts.
 
 **Test scenarios:**
@@ -231,6 +233,8 @@ sequenceDiagram
 - Test: `apps/desktop/src/main/__tests__/automation-inspection-bus.test.ts`
 
 **Approach:** Borrow PwrSnap's catalog/dispatcher shape but adapt it to PwrAgent's dependency boundaries. Each tool definition owns namespace, name, description, JSON schema, annotations, scope guard, and dispatch. The router accepts caller context, validates namespace/tool/arguments, enforces live Agent-thread scope, runs the handler, and returns protocol-neutral content items plus structured data.
+
+**Progress 2026-06-07:** Added the desktop-main Agent tool definition/router substrate, Codex dynamic-tool projection, MCP projection, shared dispatch response formatting, and direct router tests. Automation inspection now defines its tools once and uses the router for both Codex dynamic tools and ACP MCP tools. A separate catalog registry and per-Agent catalog resolution remain for U3.
 
 **Patterns to follow:** PwrSnap `defineTool` and `dispatchLibraryToolCall`; current PwrAgent automation inspection bus and MCP adapter.
 
