@@ -96,22 +96,17 @@ function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDeta
   // NOTE: the in-tree normalizer keeps tool status on the ACTIVITY entry, not
   // the detail (detail has no `status`), so we deliberately don't set it here.
   //
-  // Command-detail shim (reconciles KTD-P3 finding #2): the kit sets
-  // `command.displayCommand = <title>` even for read/write tools, but the
-  // in-tree only emits a command detail when there's REAL command evidence
-  // (`command || output !== undefined || exitCode !== undefined`). Mirror that
-  // — surface a command detail only when the kit gives us a raw command, output,
-  // or exit code, so a conflated read title doesn't masquerade as a command.
-  const hasRealCommand =
-    tool.command !== undefined &&
-    (tool.command.rawCommand !== undefined ||
-      tool.command.output !== undefined ||
-      tool.command.exitCode !== undefined);
+  // The file the tool read/wrote/touched, from the kit's `locations` (added in
+  // agent-core 0.2.0 per agent-kit#1) — mirrors the in-tree detail `path`.
+  const path = tool.locations?.[0]?.path;
+  // Surface the command faithfully when the kit gives us one. agent-acp 0.11.0
+  // no longer conflates a read's title into `command`, so we can trust it.
   return {
     id: tool.id,
     kind: detailKind(tool.kind),
     label: tool.label,
-    ...(hasRealCommand && tool.command
+    ...(path !== undefined ? { path } : {}),
+    ...(tool.command
       ? {
           command: {
             displayCommand: tool.command.displayCommand,
