@@ -128,6 +128,12 @@ describe("MessagingController", () => {
       kind: "thread_picker",
       fallbackText: expect.stringContaining("Showing PwrAgent Agent threads."),
       page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
+        ]),
         items: [
           expect.objectContaining({
             id: "agent-thread",
@@ -136,6 +142,27 @@ describe("MessagingController", () => {
       },
     });
     expect(harness.delivered[0]?.fallbackText).not.toContain("Ordinary thread");
+  });
+
+  it("offers Agent creation when no Agent threads exist", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("No matching PwrAgent Agent threads found."),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
+        ]),
+      },
+    });
   });
 
   it("binds /agent selections as Agent-thread targets", async () => {
@@ -229,6 +256,22 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "new-thread-1",
       targetKind: "agent_thread",
+    });
+  });
+
+  it("starts a new Agent thread from the /agent picker New Agent action", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
     });
   });
 

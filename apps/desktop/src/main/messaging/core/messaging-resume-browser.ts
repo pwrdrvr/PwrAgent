@@ -484,6 +484,13 @@ function navigationActions(
       fallbackText: "recent",
       layout: { row: FOOTER_ROW },
     });
+    actions.push({
+      id: "browse:mode:new",
+      label: "New Agent",
+      style: "secondary",
+      fallbackText: "new",
+      layout: { row: FOOTER_ROW },
+    });
   } else if (session.mode !== "projects" && session.mode !== "new_project") {
     actions.push({
       id: "browse:mode:projects",
@@ -579,7 +586,7 @@ function threadPickerFallbackText(
     page.pageIndex < page.totalPages - 1 ? "next" : undefined,
     session.mode === "agents" ? "recent" : "projects",
     session.mode === "agents" ? undefined : "agents",
-    session.mode === "agents" ? undefined : "new",
+    "new",
     "cancel",
   ].filter(Boolean);
   return [

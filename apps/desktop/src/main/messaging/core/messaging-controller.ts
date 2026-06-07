@@ -3229,7 +3229,9 @@ export class MessagingController {
         {
           ...nextSession,
           backend: selectedBackend.kind,
-          launchAction: "start_new_thread",
+          launchAction: session.mode === "agents"
+            ? "start_new_agent_thread"
+            : "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
           returnTo: resumeReturnTargetForSession(nextSession),
