@@ -44,6 +44,7 @@
   "pnpm": {
     "overrides": {
       "@types/node": "^24.12.4",
+      "@pwrdrvr/agent-client": "file:/Users/huntharo/pwrdrvr/agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz",
       "axios": "^1.16.0",
       "protobufjs": "7.5.8",
       "qs": "6.15.2",
