@@ -4740,6 +4740,15 @@ export class MessagingController {
           navigation: NavigationSnapshot;
         }
       | undefined;
+    let browseSessionRetired = false;
+    const retireBrowseSession = async (): Promise<void> => {
+      if (browseSessionRetired) {
+        return;
+      }
+      browseSessionRetired = true;
+      this.pendingFullAccessNewThreadPrompts.delete(session.id);
+      await this.options.store.deleteBrowseSession(session.id);
+    };
     const bindStartedThread = async (
       started: StartedLaunchpadThread,
     ): Promise<{
@@ -4753,6 +4762,7 @@ export class MessagingController {
         backend: started.backend,
         threadId: started.threadId,
       });
+      await retireBrowseSession();
       let updatedBinding = preferences
         ? await this.updateBindingPreferences(binding, preferences)
         : binding;
@@ -4833,8 +4843,7 @@ export class MessagingController {
       binding: updatedBinding,
       navigation: optimisticNavigation,
     } = await bindStartedThread(started);
-    this.pendingFullAccessNewThreadPrompts.delete(session.id);
-    await this.options.store.deleteBrowseSession(session.id);
+    await retireBrowseSession();
     if (materialized?.codexEnvironmentStartupFailure) {
       await this.deliver(
         buildErrorIntent({
@@ -4851,6 +4860,11 @@ export class MessagingController {
       return;
     }
     if (materialized?.turnStartFailure) {
+      const activeTurn = this.getActiveTurn(updatedBinding);
+      if (activeTurn?.status === "failed") {
+        await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+        return;
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("turn-start-failed"),

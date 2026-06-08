@@ -981,6 +981,76 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not double-report materialized first-turn start failures that emitted backend failure events", async () => {
+    let harness: Awaited<ReturnType<typeof createHarness>>;
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/failed",
+            params: {
+              threadId: "new-thread-1",
+              turnId: "pending:new-thread-1",
+              turn: {
+                id: "pending:new-thread-1",
+                status: "failed",
+                error: {
+                  message: "invalid model",
+                },
+              },
+            },
+          },
+        } satisfies AgentEvent);
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          turnStartFailure: {
+            message: "invalid model",
+            phase: "turn" as const,
+          },
+        };
+      },
+    );
+    harness = await createHarness({ materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    const turnFailedNotices = harness.delivered.filter(
+      (intent) => intent.kind === "error" && intent.title === "Turn failed",
+    );
+    const turnStartFailedNotices = harness.delivered.filter(
+      (intent) => intent.kind === "error" && intent.title === "Turn could not start",
+    );
+    expect(turnFailedNotices).toHaveLength(1);
+    expect(turnFailedNotices[0]).toMatchObject({
+      body: "invalid model",
+    });
+    expect(turnStartFailedNotices).toHaveLength(0);
+  });
+
   it("binds a materialized thread before fast first-turn terminal events", async () => {
     let harness: Awaited<ReturnType<typeof createHarness>>;
     const materializeDirectoryLaunchpad = vi.fn(
@@ -1066,6 +1136,91 @@ describe("MessagingController", () => {
         state: "active",
       }),
     );
+  });
+
+  it("routes quick follow-ups to the materialized binding while the first turn starts", async () => {
+    let harness: Awaited<ReturnType<typeof createHarness>>;
+    let resolveMaterialized!: () => void;
+    let resolveFirstTurn!: () => void;
+    const materialized = new Promise<void>((resolve) => {
+      resolveMaterialized = resolve;
+    });
+    const firstTurnStarted = new Promise<void>((resolve) => {
+      resolveFirstTurn = resolve;
+    });
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "new-thread-1",
+              turnId: "pending:new-thread-1",
+              turn: {
+                id: "pending:new-thread-1",
+                status: "in_progress",
+              },
+            },
+          },
+        } satisfies AgentEvent);
+        resolveMaterialized();
+        await firstTurnStarted;
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          turnId: "turn-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+        };
+      },
+    );
+    harness = await createHarness({ materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    const firstPrompt = harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+    await materialized;
+
+    await expect(
+      harness.store.findActiveBrowseSessionForChannel({
+        actorId: "user-1",
+        channel: buildTextEvent("Fix bug").channel,
+        now: 1000,
+      }),
+    ).resolves.toBeUndefined();
+
+    await harness.controller.handleInboundEvent(buildTextEvent("also check logs"));
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Message queued",
+      }),
+    );
+
+    resolveFirstTurn();
+    await firstPrompt;
   });
 
   it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
