@@ -864,7 +864,11 @@ export class MessagingController {
       }
 
       if (isThreadNameUpdatedEvent(event)) {
-        await this.renderBindingStatus(binding);
+        await this.renderBindingStatus(
+          binding,
+          undefined,
+          await this.navigationSnapshotWithThreadNameFromEvent(event),
+        );
         continue;
       }
 
@@ -8331,6 +8335,39 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private async navigationSnapshotWithThreadNameFromEvent(
+    event: AgentEvent,
+  ): Promise<NavigationSnapshot> {
+    const snapshot = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const params = event.notification.params as {
+      threadId?: unknown;
+      threadName?: unknown;
+    };
+    if (
+      typeof params.threadId !== "string" ||
+      typeof params.threadName !== "string" ||
+      !params.threadName.trim()
+    ) {
+      return snapshot;
+    }
+    const threadId = params.threadId;
+    const threadName = params.threadName.trim();
+
+    return {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.source === event.backend && thread.id === threadId
+          ? {
+              ...thread,
+              title: threadName,
+            }
+          : thread,
+      ),
+    };
   }
 
   private async renderMonitorStatus(

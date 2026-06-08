@@ -2511,6 +2511,39 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("uses the thread rename event title when the navigation snapshot is stale", async () => {
+    const staleNavigation = buildNavigationSnapshot();
+    staleNavigation.threads[0] = {
+      ...staleNavigation.threads[0]!,
+      title: "Untitled thread",
+      titleSource: "fallback",
+    };
+    const harness = await createHarness({ navigation: staleNavigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "What is this project",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        text: expect.stringContaining("Binding: What is this project (codex)"),
+      }),
+    ]);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.not.stringContaining("Binding: Untitled thread (codex)"),
+    });
+  });
+
   it("does not restart typing from a stale assistant delivery after idle", async () => {
     let now = 1000;
     let resolveAssistantDelivery!: () => void;
