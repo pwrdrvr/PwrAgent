@@ -16,6 +16,14 @@ import {
   computeWorktreePath,
 } from "../app-server/git-directory-service";
 
+// The service forward-slashes the directory/worktree identifiers it returns
+// (no-op on POSIX; on Windows `C:\…` becomes `C:/…`). Expected path strings
+// derived from native temp dirs must be normalized the same way so the
+// comparisons hold on both platforms.
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 }
@@ -41,7 +49,13 @@ describe("GitDirectoryService", () => {
   const cleanupPaths: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(cleanupPaths.splice(0).map((target) => rm(target, { recursive: true, force: true })));
+    await Promise.all(
+      cleanupPaths
+        .splice(0)
+        .map((target) =>
+          rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+        ),
+    );
   });
 
   it("returns the original directory for local launchpads", async () => {
@@ -57,7 +71,7 @@ describe("GitDirectoryService", () => {
         workMode: "local",
       }),
     ).resolves.toEqual({
-      cwd: repoDir,
+      cwd: toForwardSlashes(repoDir),
       workMode: "local",
     });
   });
@@ -76,7 +90,7 @@ describe("GitDirectoryService", () => {
         branchName: "main",
       }),
     ).resolves.toEqual({
-      cwd: directory,
+      cwd: toForwardSlashes(directory),
       workMode: "local",
     });
   });
@@ -95,7 +109,7 @@ describe("GitDirectoryService", () => {
         workMode: "worktree",
       }),
     ).resolves.toEqual({
-      cwd: repoDir,
+      cwd: toForwardSlashes(repoDir),
       workMode: "local",
     });
   });
@@ -159,7 +173,7 @@ describe("GitDirectoryService", () => {
     });
 
     expect(workspace).toEqual({
-      cwd: repoDir,
+      cwd: toForwardSlashes(repoDir),
       workMode: "local",
     });
   });
@@ -276,7 +290,11 @@ describe("GitDirectoryService", () => {
     const projectName = path.basename(repoRealPath);
     const expectedRoot = path.join(repoRealPath, ".worktrees");
     expect(workspace.cwd).not.toBeUndefined();
-    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(
+      toForwardSlashes(workspace.cwd!).startsWith(
+        `${toForwardSlashes(expectedRoot)}/`,
+      ),
+    ).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(projectName);
     const hashSegment = path.basename(path.dirname(workspace.cwd!));
     expect(hashSegment).toMatch(/^[0-9a-z]+(?:-\d+)?$/);
@@ -488,7 +506,10 @@ describe("GitDirectoryService", () => {
         worktreeBranchMode: "attached",
       }),
     ).rejects.toThrow(
-      `Cannot move branch release to a destination worktree because ${await realpath(sourceWorktree)} has uncommitted changes.`,
+      // The product surfaces the worktree path from git's porcelain output, which
+      // is forward-slashed on Windows. Normalize the expected path the same way
+      // (no-op on POSIX) so the substring match holds on every platform.
+      `Cannot move branch release to a destination worktree because ${(await realpath(sourceWorktree)).replace(/\\/g, "/")} has uncommitted changes.`,
     );
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
   });
@@ -534,7 +555,14 @@ describe("GitDirectoryService", () => {
     });
 
     expect(workspace.workMode).toBe("worktree");
-    expect(calls).toEqual(
+    // The product passes the native worktree path to git, then forward-slashes it
+    // for the returned `workspace.cwd`. Normalize the recorded git path arg the
+    // same way (no-op on POSIX) so the comparison holds on Windows too.
+    const normalizedCalls = calls.map((call) => ({
+      ...call,
+      args: call.args.map((arg) => arg.replace(/\\/g, "/")),
+    }));
+    expect(normalizedCalls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           args: ["worktree", "add", "--detach", workspace.cwd, "main"],
@@ -565,7 +593,11 @@ describe("GitDirectoryService", () => {
     });
 
     const expectedRoot = path.join(homeDir, ".pwragent", "worktrees");
-    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(
+      toForwardSlashes(workspace.cwd!).startsWith(
+        `${toForwardSlashes(expectedRoot)}/`,
+      ),
+    ).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });
 
@@ -589,7 +621,11 @@ describe("GitDirectoryService", () => {
     });
 
     const expectedRoot = path.join(homeDir, ".codex", "worktrees");
-    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(
+      toForwardSlashes(workspace.cwd!).startsWith(
+        `${toForwardSlashes(expectedRoot)}/`,
+      ),
+    ).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });
 
@@ -615,7 +651,11 @@ describe("GitDirectoryService", () => {
     });
 
     const expectedRoot = path.join(codexHome, "worktrees");
-    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(
+      toForwardSlashes(workspace.cwd!).startsWith(
+        `${toForwardSlashes(expectedRoot)}/`,
+      ),
+    ).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });
 

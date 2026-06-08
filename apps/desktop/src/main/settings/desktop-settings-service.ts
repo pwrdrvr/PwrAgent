@@ -1,9 +1,12 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexProfileModel,
+  DesktopGitDiscoverySnapshot,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopOnboardingCompletedSource,
@@ -129,6 +132,34 @@ import { getMainLogger } from "../log";
 // (passed below) where the in-tree copy hardcoded `getMainLogger`.
 import { mergeLoginShellEnvIntoEnv } from "@pwrdrvr/agent-transport";
 
+// Codex home/profile paths come back from `@pwrdrvr/codex-discovery` via
+// `path.join`/`path.resolve`, which emit backslashes on Windows
+// (`C:\Users\…\.codex\profiles\work`). These strings are surfaced as
+// stable directory identifiers in the settings snapshot, so normalize them
+// to forward slashes on all platforms. No-op on POSIX (no backslashes to
+// replace); on Windows this keeps `effectiveCodexHome`/`profileRoot`/
+// per-profile `codexHome` identifiers consistent with the rest of the app's
+// forward-slashed directory ids. This only touches the returned identifier
+// strings — the discovery package still does its fs reads against the
+// native (possibly backslashed) paths internally.
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function normalizeCodexProfilesSnapshot(
+  snapshot: DesktopCodexAuthProfileDiscoverySnapshot,
+): DesktopCodexAuthProfileDiscoverySnapshot {
+  return {
+    ...snapshot,
+    profileRoot: toForwardSlashes(snapshot.profileRoot),
+    effectiveCodexHome: toForwardSlashes(snapshot.effectiveCodexHome),
+    profiles: snapshot.profiles.map((profile) => ({
+      ...profile,
+      codexHome: toForwardSlashes(profile.codexHome),
+    })),
+  };
+}
+
 type DesktopSettingsServiceOptions = {
   configPath?: string;
   defaultDeveloperMode?: boolean;
@@ -208,6 +239,25 @@ export class DesktopSettingsService {
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
   private loggedObsoleteComposerEnv = false;
+  // Per-instance memoization for executable discovery. Each discovery is a
+  // pure function of `this.env` (fixed at construction), the filesystem, and a
+  // handful of config strings — so re-running them on every readSettings() just
+  // re-spawns the same probe child processes. That's wasteful everywhere and,
+  // on Windows where process spawn is far slower, multiple readSettings() calls
+  // in a single unit test could blow past the 5s test timeout. Caching is
+  // behavior-preserving: git/applications are config-independent (cached as a
+  // single promise), while codex/gh are keyed on the exact config input they
+  // consume, so a test that changes that input still triggers a fresh probe.
+  private gitDiscoveryPromise?: Promise<DesktopGitDiscoverySnapshot>;
+  private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
+  private codexDiscoveryCache?: {
+    key: string;
+    promise: ReturnType<typeof discoverCodexCommands>;
+  };
+  private ghDiscoveryCache?: {
+    key: string;
+    promise: ReturnType<typeof discoverGhCommands>;
+  };
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -296,20 +346,20 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
-    const codexDiscovery = await discoverCodexCommands({
-      configuredCommand: config.models?.codex?.path,
-      env: this.env,
-    });
-    const codexProfiles = discoverCodexAuthProfiles({
-      configuredProfile: config.models?.codex?.profile,
-      env: this.env,
-    });
-    const ghDiscovery = await discoverGhCommands({
-      configuredCommand: config.applications?.gh?.path,
-      env: this.env,
-    });
-    const gitDiscovery = await discoverGitCommands({ env: this.env });
-    const applications = await discoverDesktopApplications({ env: this.env });
+    const codexDiscovery = await this.discoverCodexCommandsCached(
+      config.models?.codex?.path,
+    );
+    const codexProfiles = normalizeCodexProfilesSnapshot(
+      discoverCodexAuthProfiles({
+        configuredProfile: config.models?.codex?.profile,
+        env: this.env,
+      }),
+    );
+    const ghDiscovery = await this.discoverGhCommandsCached(
+      config.applications?.gh?.path,
+    );
+    const gitDiscovery = await this.discoverGitCommandsCached();
+    const applications = await this.discoverDesktopApplicationsCached();
     const preferredEditorId = this.resolveConfigString(
       config.applications?.editor?.preferredId,
     );
@@ -731,6 +781,51 @@ export class DesktopSettingsService {
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
+  }
+
+  // git/applications discovery is config-independent (depends only on this.env
+  // + filesystem), so memoize the promise per instance to avoid re-spawning the
+  // same probe child processes on every readSettings() call. See the cache
+  // field declarations for the Windows-timeout motivation.
+  private discoverGitCommandsCached(): Promise<DesktopGitDiscoverySnapshot> {
+    this.gitDiscoveryPromise ??= discoverGitCommands({ env: this.env });
+    return this.gitDiscoveryPromise;
+  }
+
+  private discoverDesktopApplicationsCached(): Promise<DesktopApplicationsSnapshot> {
+    this.applicationsDiscoveryPromise ??= discoverDesktopApplications({
+      env: this.env,
+    });
+    return this.applicationsDiscoveryPromise;
+  }
+
+  // codex/gh discovery depends on a single config string. Cache keyed on that
+  // string so repeated readSettings() with unchanged config skip the re-spawn,
+  // while a test that mutates the configured path re-probes (cache miss).
+  private discoverCodexCommandsCached(
+    configuredCommand: string | undefined,
+  ): ReturnType<typeof discoverCodexCommands> {
+    const key = configuredCommand ?? "";
+    if (this.codexDiscoveryCache?.key !== key) {
+      this.codexDiscoveryCache = {
+        key,
+        promise: discoverCodexCommands({ configuredCommand, env: this.env }),
+      };
+    }
+    return this.codexDiscoveryCache.promise;
+  }
+
+  private discoverGhCommandsCached(
+    configuredCommand: string | undefined,
+  ): ReturnType<typeof discoverGhCommands> {
+    const key = configuredCommand ?? "";
+    if (this.ghDiscoveryCache?.key !== key) {
+      this.ghDiscoveryCache = {
+        key,
+        promise: discoverGhCommands({ configuredCommand, env: this.env }),
+      };
+    }
+    return this.ghDiscoveryCache.promise;
   }
 
   resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
@@ -1442,7 +1537,7 @@ export class DesktopSettingsService {
       storage: resolved,
       effectivePath:
         resolved.value === "user-home"
-          ? userHomeWorktreesRoot()
+          ? toForwardSlashes(userHomeWorktreesRoot())
           : ".worktrees",
     };
   }

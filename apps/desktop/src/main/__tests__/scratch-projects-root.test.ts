@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolveScratchProjectsRoot,
@@ -12,7 +13,15 @@ describe("resolveScratchProjectsRoot", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.pwragent/profiles/default/projects");
+    ).toBe(
+      path.join(
+        "/Users/tester",
+        ".pwragent",
+        "profiles",
+        "default",
+        "projects",
+      ),
+    );
   });
 
   it("places the projects root under the active profile when PWRAGENT_HOME is set", () => {
@@ -23,7 +32,16 @@ describe("resolveScratchProjectsRoot", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/tmp/pwragent-home/profiles/default/projects");
+    ).toBe(
+      // The product `path.resolve`s PWRAGENT_HOME, so mirror that here to pick
+      // up the drive prefix on Windows.
+      path.join(
+        path.resolve("/tmp/pwragent-home"),
+        "profiles",
+        "default",
+        "projects",
+      ),
+    );
   });
 
   it("allows only the active profile workspace plus legacy scratch root", () => {
@@ -33,9 +51,9 @@ describe("resolveScratchProjectsRoot", () => {
         homeDir: "/Users/tester",
       }),
     ).toEqual([
-      "/Users/tester/.pwragent/profiles/default/projects",
-      "/Users/tester/.pwragent/projects",
-      "/Users/tester/.pwragnt/projects",
+      path.join("/Users/tester", ".pwragent", "profiles", "default", "projects"),
+      path.join("/Users/tester", ".pwragent", "projects"),
+      path.join("/Users/tester", ".pwragnt", "projects"),
     ]);
 
     expect(
@@ -45,6 +63,8 @@ describe("resolveScratchProjectsRoot", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toEqual(["/Users/tester/.pwragent/profiles/dev/projects"]);
+    ).toEqual([
+      path.join("/Users/tester", ".pwragent", "profiles", "dev", "projects"),
+    ]);
   });
 });

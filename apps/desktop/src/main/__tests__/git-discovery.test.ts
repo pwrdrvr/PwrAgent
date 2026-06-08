@@ -27,8 +27,9 @@ beforeEach(() => {
   execFileMock.mockReset();
 });
 
+// Many cases mock Unix git locations (/usr/bin, /opt/homebrew); those are gated off Windows. Windows git discovery coverage is tracked separately.
 describe("Git discovery", () => {
-  it("selects a working Homebrew git when Apple git is blocked by Xcode license", async () => {
+  it.skipIf(process.platform === "win32")("selects a working Homebrew git when Apple git is blocked by Xcode license", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     const xcodeError = new Error(
@@ -99,7 +100,7 @@ describe("Git discovery", () => {
     );
   });
 
-  it("uses user git paths in the app-server executor", async () => {
+  it.skipIf(process.platform === "win32")("uses user git paths in the app-server executor", async () => {
     const homeGit = "/Users/test/bin/git";
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
@@ -130,7 +131,7 @@ describe("Git discovery", () => {
     await expect(resolveGitExecutable()).resolves.toBe(homeGit);
   });
 
-  it("uses the supplied hydrated PATH when resolving app-server git", async () => {
+  it.skipIf(process.platform === "win32")("uses the supplied hydrated PATH when resolving app-server git", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     const hydratedEnv = {
@@ -177,7 +178,7 @@ describe("Git discovery", () => {
     );
   });
 
-  it("does not reuse app-server git resolution across different PATH values", async () => {
+  it.skipIf(process.platform === "win32")("does not reuse app-server git resolution across different PATH values", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     const finderEnv = { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv;
@@ -214,7 +215,7 @@ describe("Git discovery", () => {
     await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe("git");
   });
 
-  it("retries app-server git resolution after an initial failure", async () => {
+  it.skipIf(process.platform === "win32")("retries app-server git resolution after an initial failure", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     let failAll = true;

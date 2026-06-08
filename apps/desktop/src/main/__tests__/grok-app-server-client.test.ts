@@ -59,8 +59,13 @@ describe("GrokAppServerClient", () => {
         "launchpad-pwragent-main-moohzbj1",
         worktreePath,
       ]);
-      const repoRealPath = await fs.realpath(repoPath);
-      const worktreeRealPath = await fs.realpath(worktreePath);
+      // The directory enricher normalizes linked-directory ids/paths to
+      // forward slashes (toDirectoryId) so they read identically across hosts.
+      // fs.realpath returns native separators (backslashes on Windows), so
+      // normalize the expectations the same way (no-op on POSIX).
+      const toDirectoryId = (value: string): string => value.replace(/\\/g, "/");
+      const repoRealPath = toDirectoryId(await fs.realpath(repoPath));
+      const worktreeRealPath = toDirectoryId(await fs.realpath(worktreePath));
 
       const server = new CodexAppServer({
         provider: new FakeProvider(),
@@ -1377,9 +1382,12 @@ describe("GrokAppServerClient", () => {
           model: "grok-4.20-reasoning",
           linkedDirectories: [
             {
-              id: workspacePath,
+              // The default directory enricher path.resolves + forward-slashes
+              // the directory identifier on every platform; mirror that here
+              // (no-op on POSIX). projectKey stays the verbatim native cwd.
+              id: path.resolve(workspacePath).replace(/\\/g, "/"),
               label: "workspace",
-              path: workspacePath,
+              path: path.resolve(workspacePath).replace(/\\/g, "/"),
               kind: "local",
             },
           ],

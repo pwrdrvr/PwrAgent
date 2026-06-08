@@ -1,4 +1,11 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The enricher resolves project/worktree/repo paths then forward-slashes the
+// returned directory identifiers (toDirectoryId = path.resolve + slash flip).
+// `expectedDir` mirrors that so the expected ids match on both POSIX and
+// Windows (no-op on POSIX; on Windows `/Users/x` becomes `C:/Users/x`).
+const expectedDir = (p: string): string => path.resolve(p).replace(/\\/g, "/");
 
 describe("createThreadDirectoryEnricher", () => {
   beforeEach(() => {
@@ -8,8 +15,14 @@ describe("createThreadDirectoryEnricher", () => {
   it("resolves the home repo, preserves the worktree path, and caches repeated lookups", async () => {
     const projectPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps";
     const dotGitPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/.git";
+    // The enricher resolves currentPath (and joins ".git" onto the resolved
+    // path) before calling access, so compare against the resolved forms to
+    // match on Windows as well as POSIX.
     const accessMock = vi.fn(async (targetPath: string) => {
-      if (targetPath === projectPath || targetPath === dotGitPath) {
+      if (
+        targetPath === path.resolve(projectPath) ||
+        targetPath === path.resolve(dotGitPath)
+      ) {
         return undefined;
       }
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -74,9 +87,11 @@ describe("createThreadDirectoryEnricher", () => {
     expect(first).toEqual({
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
-          worktreePath: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
+          id: expectedDir("/Users/huntharo/pwrdrvr/PwrAgent"),
+          path: expectedDir("/Users/huntharo/pwrdrvr/PwrAgent"),
+          worktreePath: expectedDir(
+            "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
+          ),
           label: "PwrAgent",
           kind: "worktree",
         },
@@ -95,7 +110,12 @@ describe("createThreadDirectoryEnricher", () => {
     const dotGitPath = `${worktreePath}/.git`;
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
-        if (targetPath === projectPath || targetPath === dotGitPath) {
+        // Compare resolved forms so the mock matches the resolved paths the
+        // enricher passes to access on Windows as well as POSIX.
+        if (
+          targetPath === path.resolve(projectPath) ||
+          targetPath === path.resolve(dotGitPath)
+        ) {
           return undefined;
         }
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -132,9 +152,9 @@ describe("createThreadDirectoryEnricher", () => {
     await expect(enricher(projectPath)).resolves.toEqual({
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          worktreePath,
+          id: expectedDir("/Users/huntharo/pwrdrvr/PwrAgnt"),
+          path: expectedDir("/Users/huntharo/pwrdrvr/PwrAgnt"),
+          worktreePath: expectedDir(worktreePath),
           label: "PwrAgnt",
           kind: "worktree",
         },

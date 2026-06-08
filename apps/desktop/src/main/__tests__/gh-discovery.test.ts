@@ -21,8 +21,9 @@ vi.mock("node:child_process", () => ({
   },
 }));
 
+// Many cases mock Unix gh locations (/usr/bin, /opt/homebrew); those are gated off Windows. Windows gh discovery coverage is tracked separately (see the PATHEXT case below).
 describe("GitHub CLI discovery", () => {
-  it("returns usable candidates and selects a Homebrew gh outside PATH", async () => {
+  it.skipIf(process.platform === "win32")("returns usable candidates and selects a Homebrew gh outside PATH", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     accessMock.mockImplementation(async (candidate: string) => {
@@ -63,7 +64,7 @@ describe("GitHub CLI discovery", () => {
     ]);
   });
 
-  it("dedupes PATH and well-known candidates that resolve to the same gh", async () => {
+  it.skipIf(process.platform === "win32")("dedupes PATH and well-known candidates that resolve to the same gh", async () => {
     accessMock.mockResolvedValue(undefined);
     execFileMock.mockImplementation(
       (
@@ -95,7 +96,7 @@ describe("GitHub CLI discovery", () => {
     });
   });
 
-  it("shows checked well-known paths when no executable gh is found", async () => {
+  it.skipIf(process.platform === "win32")("shows checked well-known paths when no executable gh is found", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     accessMock.mockRejectedValue(missingError);
@@ -132,7 +133,7 @@ describe("GitHub CLI discovery", () => {
     );
   });
 
-  it("selects PWRAGENT_GH_COMMAND above config and auto discovery", async () => {
+  it.skipIf(process.platform === "win32")("selects PWRAGENT_GH_COMMAND above config and auto discovery", async () => {
     accessMock.mockResolvedValue(undefined);
     execFileMock.mockImplementation(
       (

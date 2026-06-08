@@ -19,6 +19,8 @@
  *                       without reinstalling dependencies or rerunning tests
  *       --linux       : build/package a Linux .deb for the current native
  *                       architecture (or PWRAGENT_LINUX_ARCH=x64|arm64)
+ *       --win         : build/package a Windows x64 NSIS installer (unsigned;
+ *                       no publish). Run on a Windows host/runner.
  *       (default)     : build + package signed/notarized + publish to the
  *                       channel configured in electron-builder.yml
  *   - In CI, the App Store Connect API key may arrive as a base64-encoded
@@ -28,11 +30,12 @@
  *     `APPLE_API_KEY=/path/to/AuthKey.p8` are passed through unchanged.
  */
 
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -56,6 +59,7 @@ const noPublish = args.includes("--no-publish");
 const prepareOnly = args.includes("--prepare-only");
 const signStageOnly = args.includes("--sign-stage-only");
 const linux = args.includes("--linux");
+const win = args.includes("--win");
 
 if (prepareOnly && signStageOnly) {
   throw new Error("--prepare-only and --sign-stage-only cannot be combined");
@@ -65,15 +69,18 @@ if (linux && signStageOnly) {
   throw new Error("--linux cannot be combined with --sign-stage-only");
 }
 
+if (win && signStageOnly) {
+  throw new Error("--win cannot be combined with --sign-stage-only");
+}
+
+if (win && linux) {
+  throw new Error("--win cannot be combined with --linux");
+}
+
 const publish = !dryrun && !noPublish && !prepareOnly;
 
 function step(label) {
   console.log(`\n→ ${label}`);
-}
-
-function run(cmd, opts = {}) {
-  console.log(`  $ ${cmd}`);
-  execSync(cmd, { stdio: "inherit", cwd: opts.cwd ?? desktopRoot, env: { ...process.env, ...opts.env } });
 }
 
 function runChecked(file, args, opts = {}) {
@@ -82,7 +89,15 @@ function runChecked(file, args, opts = {}) {
     stdio: "inherit",
     cwd: opts.cwd ?? desktopRoot,
     env: { ...process.env, ...opts.env },
+    // On Windows `pnpm` is a .cmd shim that spawnSync only resolves through a
+    // shell (and Node refuses to spawn .cmd without one). Repo/stage paths here
+    // contain no spaces, so unquoted shell args are safe.
+    shell: process.platform === "win32",
   });
+  if (result.error) {
+    console.error(`  ! failed to spawn ${file}: ${result.error.message}`);
+    process.exit(1);
+  }
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
@@ -150,6 +165,41 @@ function createLinuxStableAliases(distDir) {
 
 function writeLinuxChecksums(distDir) {
   const artifacts = linuxDebArtifacts(distDir);
+  const lines = artifacts
+    .map(({ name, path }) => {
+      const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+      return `${digest}  ${name}`;
+    })
+    .join("\n");
+  const checksumPath = join(distDir, "SHA256SUMS");
+  writeFileSync(checksumPath, `${lines}\n`);
+  return checksumPath;
+}
+
+function findWindowsUnpackedDir(distDir) {
+  const candidates = readdirSync(distDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^win(?:-.+)?-unpacked$/.test(entry.name))
+    .map((entry) => join(distDir, entry.name))
+    .sort();
+  if (candidates.length === 0) {
+    throw new Error(`No windows unpacked app directory found under ${distDir}`);
+  }
+  return candidates[0];
+}
+
+function windowsInstallerArtifacts(distDir) {
+  const artifacts = readdirSync(distDir)
+    .filter((entry) => entry.endsWith(".exe"))
+    .sort()
+    .map((name) => ({ name, path: join(distDir, name) }));
+  if (artifacts.length === 0) {
+    throw new Error(`No .exe installer artifacts found under ${distDir}`);
+  }
+  return artifacts;
+}
+
+function writeWindowsChecksums(distDir) {
+  const artifacts = windowsInstallerArtifacts(distDir);
   const lines = artifacts
     .map(({ name, path }) => {
       const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -275,11 +325,16 @@ if (!signStageOnly) {
     if (existsSync(target)) {
       rmSync(target, { recursive: true, force: true });
     }
-    run(`cp -R ${join(desktopRoot, dir)} ${target}`);
+    // Cross-platform copy (works on the Windows packaging runner too); target
+    // is removed first so cpSync mirrors the source dir without nesting.
+    cpSync(join(desktopRoot, dir), target, { recursive: true });
   }
-  run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
+  copyFileSync(
+    join(desktopRoot, "electron-builder.yml"),
+    join(stageDir, "electron-builder.yml"),
+  );
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
-    run(`cp ${join(repoRoot, file)} ${join(stageDir, file)}`);
+    copyFileSync(join(repoRoot, file), join(stageDir, file));
   }
 
   if (prepareOnly) {
@@ -293,7 +348,10 @@ if (!signStageOnly) {
 
 // 5. electron-builder.
 const builderArgs = [];
-if (linux) {
+if (win) {
+  step("electron-builder --win nsis --x64 (no builder publish)");
+  builderArgs.push("--win", "nsis", "--x64", "--publish=never");
+} else if (linux) {
   const linuxArch = currentLinuxBuilderArch();
   step(`electron-builder --linux deb --${linuxArch} (no builder publish)`);
   builderArgs.push("--linux", "deb", `--${linuxArch}`, "--publish=never");
@@ -320,6 +378,21 @@ runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
 //    bundle. Exclusions are configured in electron-builder.yml; this script
 //    is a belt-and-braces guard against accidental edits to that YAML.
 const dist = join(stageDir, "dist");
+
+if (win) {
+  const builtApp = findWindowsUnpackedDir(dist);
+
+  step("verify packaged asar contents");
+  runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+
+  step("write Windows checksums");
+  const checksumPath = writeWindowsChecksums(dist);
+  console.log(`  checksum: ${checksumPath}`);
+
+  step("done");
+  console.log(`  artifacts: ${dist}`);
+  process.exit(0);
+}
 
 if (linux) {
   const builtApp = findLinuxUnpackedDir(dist);

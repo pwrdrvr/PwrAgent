@@ -63,8 +63,18 @@ describe("AcpStdioJsonRpcTransport", () => {
       cwd: "/repo",
     });
     expect(options.env).toMatchObject({ ACP_TEST: "1" });
-    expect(String(options.env?.PATH)).toContain("/opt/homebrew/bin");
-    expect(String(options.env?.PATH)).toContain("/usr/local/bin");
+    if (process.platform === "win32") {
+      // The product only prepends the common Unix bin dirs to PATH on
+      // non-Windows platforms (appendExecutableSearchPaths short-circuits on
+      // win32), so assert those POSIX-only dirs are absent and the inherited
+      // PATH is preserved verbatim instead.
+      expect(String(options.env?.PATH)).not.toContain("/opt/homebrew/bin");
+      expect(String(options.env?.PATH)).not.toContain("/usr/local/bin");
+      expect(options.env?.PATH).toBe(process.env.PATH);
+    } else {
+      expect(String(options.env?.PATH)).toContain("/opt/homebrew/bin");
+      expect(String(options.env?.PATH)).toContain("/usr/local/bin");
+    }
 
     const envelope = JSON.parse(child.writes[0]) as { id: string; method: string };
     expect(child.writes[0]).toMatch(/\n$/);

@@ -2,8 +2,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  hashCwd,
+} from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
+
+// The product hashes `path.resolve(cwd)`, which on Windows gains a drive
+// prefix and backslash separators, so a hardcoded hex digest would only match
+// on POSIX. Computing the expectation through the product helper keeps this
+// platform-agnostic (and is a no-op on macOS/Linux, where it equals the
+// previous literal "c976f17804e892f9").
+const PWRAGNT_CWD_HASH = hashCwd("/Users/example/PwrAgnt");
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
@@ -45,7 +55,7 @@ describe("AppRuntimeInstanceStore", () => {
       profileName: "dev",
       processId: 123,
       cwdHint: "PwrAgnt",
-      cwdHash: "c976f17804e892f9",
+      cwdHash: PWRAGNT_CWD_HASH,
       startedAt: 1_000,
       heartbeatAt: 1_000,
       desiredMessagingEnabled: true,
@@ -340,7 +350,7 @@ describe("AppRuntimeInstanceStore", () => {
 
     expect(store.getInstance("instance-a")).toMatchObject({
       instanceId: "instance-a",
-      cwdHash: "c976f17804e892f9",
+      cwdHash: PWRAGNT_CWD_HASH,
     });
   });
 

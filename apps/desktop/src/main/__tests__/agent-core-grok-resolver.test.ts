@@ -24,9 +24,14 @@ describe("resolveAgentCoreGrokEnabled", () => {
     priorHomeEnv = process.env.HOME;
     priorProfileEnv = process.env[PWRAGENT_HOME_ENV];
     priorFlagEnv = process.env[AGENT_CORE_GROK_ENV];
-    // Pin HOME so resolveDesktopConfigPath finds our tmp config dir.
+    // Pin PWRAGENT_HOME (not HOME) so resolveDesktopConfigPath points at our
+    // tmp config dir on every platform. `os.homedir()` ignores HOME on Windows
+    // (it reads USERPROFILE), so the previous HOME-only override left the
+    // resolver pointed at the real user's config dir on Windows — a grok flag
+    // there would leak into the default-disabled assertion. PWRAGENT_HOME wins
+    // unconditionally in resolvePwragentRoot, keeping this hermetic.
     process.env.HOME = tmpHome;
-    delete process.env[PWRAGENT_HOME_ENV];
+    process.env[PWRAGENT_HOME_ENV] = tmpHome;
     delete process.env[AGENT_CORE_GROK_ENV];
     configPath = resolveDesktopConfigPath();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
