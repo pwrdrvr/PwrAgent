@@ -5,47 +5,186 @@ import { describe, expect, it } from "vitest";
 import { analyzeCodexThreadProtocolCapture } from "../testing/codex-thread-protocol-analysis";
 
 describe("analyzeCodexThreadProtocolCapture", () => {
-  it("characterizes thread list payloads and identity fields from a real codex capture", async () => {
-    const analysis = await analyzeCodexThreadProtocolCapture({
-      capturePath: path.resolve(
-        "apps/desktop/e2e/fixtures/codex-todo-list/raw.capture.jsonl",
-      ),
-    });
+  it("characterizes thread list payloads and identity fields", async () => {
+    const captureDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-"));
+    const capturePath = path.join(captureDir, "thread-list.jsonl");
+    try {
+      await fs.writeFile(
+        capturePath,
+        [
+          captureRecord({
+            direction: "outbound",
+            id: "rpc-1",
+            kind: "request",
+            method: "initialize",
+            raw: {
+              jsonrpc: "2.0",
+              id: "rpc-1",
+              method: "initialize",
+              params: {},
+            },
+            sequence: 1,
+            threadIds: [],
+          }),
+          captureRecord({
+            direction: "inbound",
+            id: "rpc-1",
+            kind: "response",
+            raw: {
+              id: "rpc-1",
+              result: {},
+            },
+            sequence: 2,
+            threadIds: [],
+          }),
+          captureRecord({
+            direction: "outbound",
+            id: "rpc-2",
+            kind: "request",
+            method: "thread/list",
+            raw: {
+              jsonrpc: "2.0",
+              id: "rpc-2",
+              method: "thread/list",
+              params: {
+                archived: false,
+                limit: 100,
+              },
+            },
+            sequence: 3,
+            threadIds: [],
+          }),
+          captureRecord({
+            direction: "inbound",
+            id: "rpc-2",
+            kind: "response",
+            raw: {
+              id: "rpc-2",
+              result: {
+                data: [
+                  {
+                    id: "thread-main",
+                    cwd: "/tmp/pwragent-main",
+                    gitInfo: {
+                      branch: "main",
+                    },
+                    path: "/tmp/pwragent-main/.codex/sessions/thread-main.jsonl",
+                    preview: "Implement thread list handling",
+                    status: {
+                      type: "idle",
+                    },
+                  },
+                  {
+                    id: "thread-worktree",
+                    projectKey: "/tmp/pwragent",
+                    session: {
+                      cwd: "/tmp/pwragent/.worktrees/feature-a",
+                    },
+                    git_info: {
+                      branch: "feature/a",
+                    },
+                    name: "Worktree thread",
+                  },
+                ],
+              },
+            },
+            sequence: 4,
+            threadIds: ["thread-main", "thread-worktree"],
+          }),
+          captureRecord({
+            direction: "outbound",
+            id: "rpc-3",
+            kind: "request",
+            method: "thread/list",
+            raw: {
+              jsonrpc: "2.0",
+              id: "rpc-3",
+              method: "thread/list",
+              params: {
+                archived: true,
+                limit: 100,
+              },
+            },
+            sequence: 5,
+            threadIds: [],
+          }),
+          captureRecord({
+            direction: "inbound",
+            id: "rpc-3",
+            kind: "response",
+            raw: {
+              id: "rpc-3",
+              result: {
+                data: [
+                  {
+                    id: "thread-archived",
+                    cwd: "/tmp/pwragent-archived",
+                    gitInfo: {
+                      branch: "archived",
+                    },
+                    path: "/tmp/pwragent-archived/.codex/sessions/thread-archived.jsonl",
+                    title: "Archived thread",
+                  },
+                ],
+              },
+            },
+            sequence: 6,
+            threadIds: ["thread-archived"],
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
 
-    expect(analysis.captureId).toBe("2026-04-19T01-40-27-292Z-codex");
-    expect(analysis.requestCounts.initialize).toBeGreaterThan(0);
-    expect(analysis.requestCounts["thread/list"]).toBeGreaterThan(0);
-    expect(analysis.threadList.requestMethods).toEqual(["thread/list"]);
-    expect(analysis.threadList.requestVariants).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "thread/list",
-          paramsKeys: ["archived", "limit"],
-          archived: false,
-          limit: 100,
-        }),
-        expect.objectContaining({
-          method: "thread/list",
-          paramsKeys: ["archived", "limit"],
-          archived: true,
-          limit: 100,
-        }),
-      ]),
-    );
-    expect(analysis.threadList.responseContainerKeys).toContain("data");
-    expect(analysis.threadList.responseResultKeys).toContain("data");
-    expect(analysis.threadList.identityFieldCounts.cwd).toBeGreaterThan(0);
-    expect(analysis.threadList.identityFieldCounts.path).toBeGreaterThan(0);
-    expect(analysis.threadList.identityFieldCounts.gitBranch).toBeGreaterThan(0);
-    expect(analysis.threadList.sampleThreads).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "019da321-9801-70f1-a2ba-103afa135831",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          gitBranch: "main",
-        }),
-      ]),
-    );
+      const analysis = await analyzeCodexThreadProtocolCapture({ capturePath });
+
+      expect(analysis.captureId).toBe("temporal-order-test");
+      expect(analysis.requestCounts.initialize).toBe(1);
+      expect(analysis.requestCounts["thread/list"]).toBe(2);
+      expect(analysis.threadList.requestMethods).toEqual(["thread/list"]);
+      expect(analysis.threadList.requestVariants).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "thread/list",
+            paramsKeys: ["archived", "limit"],
+            archived: false,
+            limit: 100,
+          }),
+          expect.objectContaining({
+            method: "thread/list",
+            paramsKeys: ["archived", "limit"],
+            archived: true,
+            limit: 100,
+          }),
+        ]),
+      );
+      expect(analysis.threadList.responseContainerKeys).toContain("data");
+      expect(analysis.threadList.responseResultKeys).toContain("data");
+      expect(analysis.threadList.activeRequestCount).toBe(1);
+      expect(analysis.threadList.archivedRequestCount).toBe(1);
+      expect(analysis.threadList.identityFieldCounts.cwd).toBe(2);
+      expect(analysis.threadList.identityFieldCounts.sessionCwd).toBe(1);
+      expect(analysis.threadList.identityFieldCounts.path).toBe(2);
+      expect(analysis.threadList.identityFieldCounts.projectKey).toBe(1);
+      expect(analysis.threadList.identityFieldCounts.gitBranch).toBe(3);
+      expect(analysis.threadList.identityFieldCounts.status).toBe(1);
+      expect(analysis.threadList.sampleThreads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "thread-main",
+            cwd: "/tmp/pwragent-main",
+            gitBranch: "main",
+          }),
+          expect.objectContaining({
+            id: "thread-worktree",
+            cwd: "/tmp/pwragent/.worktrees/feature-a",
+            gitBranch: "feature/a",
+            projectKey: "/tmp/pwragent",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(captureDir, { force: true, recursive: true });
+    }
   });
 
   it("reports chronological thread message and tool order from thread/read and notifications", async () => {

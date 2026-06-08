@@ -66,7 +66,7 @@ function optionalString(values: string[] | undefined): string | undefined {
 function printUsage(): void {
   console.log(`Usage:
   pnpm --filter @pwragent/desktop analyze:codex-thread-protocol -- \\
-    --input apps/desktop/e2e/fixtures/codex-todo-list/raw.capture.jsonl
+    --input /tmp/session.raw.capture.jsonl
 
 Optional:
   --output .local/codex-thread-protocol-analysis.json`);

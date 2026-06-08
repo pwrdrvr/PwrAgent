@@ -20,6 +20,8 @@ probe on April 18, 2026.
 
 The replay fixture trims that large live plan down to three stable steps from
 the same persisted entry so the assertion surface stays small and deterministic.
+Raw protocol captures are not checked in for this scenario because they may
+contain private thread previews, local paths, screenshots, or operational data.
 
 ## Launch
 
@@ -73,3 +75,6 @@ pnpm --filter @pwragent/desktop derive:replay-fixture -- \
   --start <sequence> \
   --end <sequence>
 ```
+
+Review and sanitize any raw capture before promoting replay changes. Do not
+commit `/tmp/codex-todo-list.raw.capture.jsonl`.
