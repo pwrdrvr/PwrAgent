@@ -6,11 +6,14 @@ on:
       - main
       - "releases/**"
   pull_request:
+    # Do not add `labeled` back here. Dependabot applies labels to dependency
+    # PRs, and label-triggered CI creates skipped check suites that can make
+    # those PRs appear to have no real status checks. If a label-gated path
+    # needs to run, add the label and push a commit or rerun CI.
     types:
       - opened
       - synchronize
       - reopened
-      - labeled
 
 permissions:
   contents: read
@@ -19,7 +22,6 @@ jobs:
   # Validation-only PR: rerun CI against pwrdrvr/configure-nodejs@v1 after v1 moved to v1.1.1.
   install-deps:
     name: Install Dependencies
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:live-agent-core' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,7 +37,6 @@ jobs:
 
   lint:
     name: Lint
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -85,7 +86,6 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -105,7 +105,6 @@ jobs:
 
   test:
     name: Test
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -129,7 +128,6 @@ jobs:
 
   windows:
     name: Windows (build + test)
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -218,7 +216,6 @@ jobs:
 
   desktop-e2e:
     name: Desktop E2E
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     timeout-minutes: 20
@@ -267,8 +264,7 @@ jobs:
         timeout-minutes: 10
         env:
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          EVENT_LABEL_NAME: ${{ github.event.label.name }}
+          FORCE_LIVE_AGENT_CORE: ${{ contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core') }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
@@ -291,9 +287,9 @@ jobs:
 
           relevant=false
           matched_path=""
-          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "labeled" && "$EVENT_LABEL_NAME" == "$live_agent_core_label" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" && "$FORCE_LIVE_AGENT_CORE" == "true" ]]; then
             relevant=true
-            matched_path="pull request label: $live_agent_core_label"
+            matched_path="pull request label present: $live_agent_core_label"
           else
             git diff --name-only "$base" "$head" > changed-files.txt
 
