@@ -89,11 +89,11 @@ describe("DesktopMessagingRuntime", () => {
     // This integration-style startup test imports the runtime module graph and
     // exercises the full adapter-start + inbound-routing path. On the slow
     // shared Windows CI runner that cold path can exceed 15s — not a hang, just
-    // slow. An explicit per-test timeout overrides the workspace default
-    // (30_000 on Windows; see vitest.workspace.ts), so the previous 15_000 was
-    // actively capping the budget below that default. Match the Windows default
-    // so the test gets the same headroom every other desktop-main test has.
-  }, 30_000);
+    // slow — so Windows gets the workspace default headroom (30_000; see
+    // vitest.workspace.ts). Other platforms keep the original tighter 15_000
+    // budget where the cold path is comfortably fast, so a genuine hang or
+    // regression there still fails fast instead of idling for the full 30s.
+  }, process.platform === "win32" ? 30_000 : 15_000);
 
   it("rehydrates enabled Monitor bindings after adapter startup", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
