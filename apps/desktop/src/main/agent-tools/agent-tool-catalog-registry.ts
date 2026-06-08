@@ -4,6 +4,7 @@ import type {
   ThreadAgentMetadata,
 } from "@pwragent/shared";
 import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_MESSAGING_TOOL_NAMESPACE } from "@pwragent/shared";
 import { PWRAGENT_THREAD_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
@@ -14,6 +15,10 @@ import {
   buildPwrAgentThreadToolRouter,
   type PwrAgentThreadInspectionHandler,
 } from "./pwragent-thread-agent-tools.js";
+import {
+  buildPwrAgentMessagingToolRouter,
+  type PwrAgentMessagingHandler,
+} from "./pwragent-messaging-agent-tools.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -24,6 +29,7 @@ export type ResolvedAgentToolCatalog = {
 export function resolveAgentToolCatalogs(params: {
   agent?: ThreadAgentMetadata | { name: string; instructions?: string } | null;
   automationInspectionHandler?: AutomationInspectionHandler;
+  messagingHandler?: PwrAgentMessagingHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
 }): ResolvedAgentToolCatalog[] {
   if (!params.agent) {
@@ -36,6 +42,8 @@ export function resolveAgentToolCatalogs(params: {
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
   const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
+  const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
+  const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -64,6 +72,21 @@ export function resolveAgentToolCatalogs(params: {
           id: "thread_inspection",
           namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
           tools: threadDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "messaging_context",
+      dynamicTools: messagingDynamicTools,
+      summary: {
+        id: "messaging_context",
+        namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: messagingDynamicTools.length,
+        fingerprint: buildCatalogFingerprint({
+          id: "messaging_context",
+          namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+          tools: messagingDynamicTools,
         }),
       },
     },

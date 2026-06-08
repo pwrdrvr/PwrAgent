@@ -270,6 +270,198 @@ describe("MessagingController", () => {
     });
   });
 
+  it("reports the current messaging location for an active Agent-thread turn", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      outcome: "unsupported" as const,
+      updatedAt: 1000,
+    }));
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      operations: [
+        {
+          operation: "create_child" as const,
+          supported: true,
+        },
+      ],
+      outcome: "ok" as const,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      getManagedConversationRights,
+    });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      displayName: "Hunt",
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_location",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          binding: {
+            backend: "codex",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "-1001",
+            kind: "channel",
+            title: "Ops",
+          },
+          managedConversation: {
+            canCreateChild: true,
+            providerSupportsCreation: true,
+          },
+        },
+      },
+    });
+    expect(getManagedConversationRights).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: event.actor,
+        channel: event.channel,
+        routingState: event.routingState,
+      }),
+    );
+  });
+
+  it("creates a native Telegram topic and attaches a target thread there", async () => {
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      operations: [
+        {
+          operation: "create_child" as const,
+          supported: true,
+        },
+      ],
+      outcome: "ok" as const,
+      updatedAt: 1000,
+    }));
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "500",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Telegram thread naming issue",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 500 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      getManagedConversationRights,
+    });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+          title: "Telegram thread naming issue",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        binding: {
+          backend: "codex",
+          targetKind: "thread",
+          threadId: "thread-2",
+        },
+        conversation: {
+          id: "500",
+          kind: "topic",
+          title: "Telegram thread naming issue",
+        },
+        outcome: "created_and_attached",
+        placement: "new_child",
+      },
+    });
+    expect(createManagedConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: event.actor,
+        parent: event.channel,
+        routingState: event.routingState,
+        title: "Telegram thread naming issue",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "500",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+          title: "Telegram thread naming issue",
+        },
+      }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      targetKind: "thread",
+      threadId: "thread-2",
+    });
+  });
+
   it("starts a new Agent thread from the /agent picker New Agent action", async () => {
     const harness = await createHarness();
 

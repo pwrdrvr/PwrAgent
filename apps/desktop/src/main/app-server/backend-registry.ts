@@ -129,6 +129,7 @@ import {
   isAppServerBackendKind,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
   PWRAGENT_THREAD_TOOL_NAMESPACE,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
@@ -191,6 +192,13 @@ import {
   readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
 import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
+import {
+  buildPwrAgentMessagingDynamicToolErrorResponse,
+  handlePwrAgentMessagingDynamicToolCall,
+  readPwrAgentMessagingDynamicToolCall,
+} from "../agent-tools/pwragent-messaging-codex-tools";
+import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
+import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { createScratchProjectDirectory } from "./scratch-projects";
@@ -2902,6 +2910,22 @@ export class DesktopBackendRegistry {
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
+  private messagingAgentToolService?: MessagingAgentToolService;
+  private readonly messagingHandler: PwrAgentMessagingHandler =
+    async (request) => {
+      if (!this.messagingAgentToolService) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "PwrAgent messaging context tools are not available.",
+          },
+        };
+      }
+      return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
+        request,
+      );
+    };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private readonly headlessAutomationTurns = new Map<
@@ -3332,6 +3356,12 @@ export class DesktopBackendRegistry {
     cleaner: MessagingArchiveCleaner | null | undefined,
   ): void {
     this.messagingArchiveCleaner = cleaner;
+  }
+
+  setMessagingAgentToolService(
+    service: MessagingAgentToolService | null | undefined,
+  ): void {
+    this.messagingAgentToolService = service ?? undefined;
   }
 
   setAutomationInspectionHandler(
@@ -5210,6 +5240,7 @@ export class DesktopBackendRegistry {
     const agentToolCatalogs = resolveAgentToolCatalogs({
       agent: request.agent,
       automationInspectionHandler: this.automationInspectionHandler,
+      messagingHandler: this.messagingHandler,
       threadInspectionHandler: this.threadInspectionHandler,
     });
     const resolvedDynamicTools =
@@ -10571,6 +10602,40 @@ export class DesktopBackendRegistry {
         backend,
         call: threadToolCall,
         handler: this.threadInspectionHandler,
+      });
+    }
+    const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (messagingToolCall?.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE) {
+      if (!this.isLiveAutomationInspectionToolCall(backend, messagingToolCall)) {
+        backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
+          backend,
+          callId: messagingToolCall.callId,
+          namespace: messagingToolCall.namespace,
+          threadId: messagingToolCall.threadId,
+          tool: messagingToolCall.tool,
+          turnId: messagingToolCall.turnId,
+        });
+        return buildPwrAgentMessagingDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Messaging context tool calls must originate from an active turn on the same Agent thread.",
+        });
+      }
+      backendRegistryLog.info("handling messaging context dynamic tool call", {
+        backend,
+        callId: messagingToolCall.callId,
+        namespace: messagingToolCall.namespace,
+        threadId: messagingToolCall.threadId,
+        tool: messagingToolCall.tool,
+        turnId: messagingToolCall.turnId,
+      });
+      return await handlePwrAgentMessagingDynamicToolCall({
+        backend,
+        call: messagingToolCall,
+        handler: this.messagingHandler,
       });
     }
 

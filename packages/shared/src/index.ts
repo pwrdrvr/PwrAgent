@@ -12,6 +12,7 @@ export * from "./contracts/branch-drift";
 export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
 export * from "./contracts/messaging";
+export * from "./contracts/messaging-tools";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
 export * from "./contracts/thread-tools";

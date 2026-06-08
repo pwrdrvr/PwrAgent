@@ -4,6 +4,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  isMessagingBindingTargetKind,
   parseCodexTurnErrorMessage,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
@@ -27,6 +28,10 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingToolUpdateMode,
+  PwrAgentMessagingLocationSummary,
+  PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -254,6 +259,15 @@ type AutomationTurnMessagingContext = {
   automationName?: string;
   automationRunId?: string;
 };
+
+type ActiveAgentMessagingOrigin = {
+  binding: MessagingBindingRecord;
+  event: MessagingInboundEvent;
+};
+
+type AgentMessagingOriginResolution =
+  | { ok: true; origin: ActiveAgentMessagingOrigin }
+  | Extract<PwrAgentMessagingResponse, { ok: false }>;
 
 type ExecutionModeResolution = {
   mode: ThreadExecutionMode | undefined;
@@ -533,6 +547,10 @@ export class MessagingController {
     string,
     AutomationTurnMessagingContext
   >();
+  private readonly activeAgentMessagingOriginsByTurnKey = new Map<
+    string,
+    ActiveAgentMessagingOrigin
+  >();
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
@@ -601,6 +619,27 @@ export class MessagingController {
         await this.deliverToolUpdateDelivery(delivery);
       },
     });
+  }
+
+  async handlePwrAgentMessagingRequest(
+    request: PwrAgentMessagingRequest,
+  ): Promise<PwrAgentMessagingResponse> {
+    switch (request.operation) {
+      case "get_current_location": {
+        const origin = await this.resolveAgentMessagingOrigin(request.context);
+        if (!origin.ok) {
+          return origin;
+        }
+        return {
+          ok: true,
+          data: {
+            location: await this.summarizeAgentMessagingLocation(origin.origin),
+          },
+        };
+      }
+      case "attach_thread_here":
+        return await this.attachThreadHereFromAgentMessagingOrigin(request);
+    }
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
@@ -948,6 +987,7 @@ export class MessagingController {
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
+      this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
     }
   }
 
@@ -1728,6 +1768,11 @@ export class MessagingController {
         updatedAt: this.now(),
       };
       this.setActiveTurn(params.binding, activeTurn);
+      this.rememberAgentMessagingOrigin({
+        binding: params.binding,
+        event: params.event,
+        turnId: started.turnId,
+      });
       await this.signalTurnActivity(params.binding, activeTurn, {
         force: true,
       });
@@ -1796,6 +1841,7 @@ export class MessagingController {
 
   private async adoptStartedTurn(params: {
     binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
     turnId: string;
   }): Promise<void> {
@@ -1814,6 +1860,11 @@ export class MessagingController {
       updatedAt: this.now(),
     };
     this.setActiveTurn(params.binding, activeTurn);
+    this.rememberAgentMessagingOrigin({
+      binding: params.binding,
+      event: params.event,
+      turnId: params.turnId,
+    });
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
@@ -5155,6 +5206,7 @@ export class MessagingController {
       });
       await this.adoptStartedTurn({
         binding: updatedBinding,
+        event,
         navigation: optimisticNavigation,
         turnId: materialized.turnId,
       });
@@ -9414,6 +9466,37 @@ export class MessagingController {
     );
   }
 
+  private rememberAgentMessagingOrigin(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    turnId: string;
+  }): void {
+    if (!params.event || params.binding.targetKind !== "agent_thread") {
+      return;
+    }
+    this.activeAgentMessagingOriginsByTurnKey.set(
+      agentMessagingTurnKey(
+        params.binding.backend,
+        params.binding.threadId,
+        params.turnId,
+      ),
+      {
+        binding: params.binding,
+        event: params.event,
+      },
+    );
+  }
+
+  private forgetAgentMessagingOrigin(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string,
+  ): void {
+    this.activeAgentMessagingOriginsByTurnKey.delete(
+      agentMessagingTurnKey(backend, threadId, turnId),
+    );
+  }
+
   private isAutomationTurnEvent(
     event: AgentEvent,
     binding: MessagingBindingRecord,
@@ -10095,6 +10178,292 @@ export class MessagingController {
             id: this.newIntentId("tool-update-batch"),
           });
     await this.deliver(intent, binding);
+  }
+
+  private async attachThreadHereFromAgentMessagingOrigin(
+    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_here" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const { args } = request;
+    if (
+      !args ||
+      !isAppServerBackendKind(args.backend) ||
+      typeof args.threadId !== "string" ||
+      args.threadId.trim().length === 0
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "attach_thread_here requires backend and threadId.",
+        },
+      };
+    }
+    const placement = args.placement ?? "auto";
+    if (
+      placement !== "auto" &&
+      placement !== "new_child" &&
+      placement !== "current_conversation"
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "placement must be auto, new_child, or current_conversation.",
+        },
+      };
+    }
+    const targetKind = args.targetKind ?? "thread";
+    if (!isMessagingBindingTargetKind(targetKind)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "targetKind must be thread or agent_thread.",
+        },
+      };
+    }
+
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+
+    const location = await this.summarizeAgentMessagingLocation(origin.origin);
+    const resolvedPlacement = this.resolveAttachPlacement({
+      location,
+      origin: origin.origin,
+      placement,
+    });
+    if (!resolvedPlacement.ok) {
+      return resolvedPlacement;
+    }
+
+    let attachEvent = origin.origin.event;
+    let createdConversation: MessagingChannelRef["conversation"] | undefined;
+    if (resolvedPlacement.placement === "new_child") {
+      if (!this.options.adapter.createManagedConversation) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "This messaging provider does not support creating a native child conversation from PwrAgent.",
+          },
+        };
+      }
+      const createResult = await this.options.adapter.createManagedConversation({
+        actor: origin.origin.event.actor,
+        parent: origin.origin.event.channel,
+        routingState: origin.origin.event.routingState,
+        title: sanitizeMessagingChildTitle(args.title),
+      });
+      if (createResult.outcome !== "created" || !createResult.conversation) {
+        return {
+          ok: false,
+          error: {
+            code: createResult.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              createResult.errorMessage ??
+              "The messaging provider could not create a native child conversation.",
+          },
+        };
+      }
+      createdConversation = createResult.conversation;
+      attachEvent = {
+        ...origin.origin.event,
+        id: `${origin.origin.event.id}:attach:${this.now()}`,
+        kind: "lifecycle",
+        lifecycle: "bound",
+        channel: {
+          channel: createResult.channel,
+          conversation: createResult.conversation,
+        },
+        routingState: createResult.routingState,
+        receivedAt: this.now(),
+      };
+    }
+
+    const binding = await this.bindChannelToThread(attachEvent, {
+      backend: args.backend,
+      threadId: args.threadId,
+      targetKind,
+    });
+    return {
+      ok: true,
+      data: {
+        binding: summarizeMessagingBinding(binding),
+        channel: binding.channel.channel,
+        conversation: summarizeMessagingConversation(binding.channel.conversation),
+        createdConversation: createdConversation
+          ? summarizeMessagingConversation(createdConversation)
+          : undefined,
+        location,
+        outcome: resolvedPlacement.placement === "new_child"
+          ? "created_and_attached"
+          : "attached",
+        placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private resolveAttachPlacement(params: {
+    location: PwrAgentMessagingLocationSummary;
+    origin: ActiveAgentMessagingOrigin;
+    placement: "auto" | "current_conversation" | "new_child";
+  }):
+    | { ok: true; placement: "current_conversation" | "new_child" }
+    | Extract<PwrAgentMessagingResponse, { ok: false }> {
+    if (params.placement !== "auto") {
+      if (
+        params.placement === "new_child" &&
+        !params.location.managedConversation.canCreateChild
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: managedConversationUnavailableMessage(
+              params.location.managedConversation,
+            ),
+          },
+        };
+      }
+      return { ok: true, placement: params.placement };
+    }
+
+    if (params.location.managedConversation.canCreateChild) {
+      return { ok: true, placement: "new_child" };
+    }
+
+    if (
+      params.origin.binding.targetKind !== "agent_thread" &&
+      (params.origin.event.channel.conversation.kind === "thread" ||
+        params.origin.event.channel.conversation.kind === "topic")
+    ) {
+      return { ok: true, placement: "current_conversation" };
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_operation",
+        message:
+          `${managedConversationUnavailableMessage(
+            params.location.managedConversation,
+          )} Pass placement=current_conversation only if replacing the current conversation binding is intended.`,
+      },
+    };
+  }
+
+  private async resolveAgentMessagingOrigin(
+    context: PwrAgentMessagingRequest["context"],
+  ): Promise<AgentMessagingOriginResolution> {
+    if (context.turnId) {
+      const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+        agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
+      );
+      if (!origin || !this.isChannelInScope(origin.binding.channel)) {
+        return {
+          ok: false,
+          error: {
+            code: "not_found",
+            message:
+              "No active messaging origin is recorded for this Agent turn.",
+          },
+        };
+      }
+      return { ok: true, origin };
+    }
+
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend: context.backend,
+        threadId: context.threadId,
+      }),
+    ).filter((binding) => binding.targetKind === "agent_thread");
+    if (bindings.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "No active messaging binding is attached to this Agent thread.",
+        },
+      };
+    }
+    if (bindings.length > 1) {
+      return {
+        ok: false,
+        error: {
+          code: "ambiguous_location",
+          message:
+            "This Agent thread is attached to more than one messaging surface; call from an active messaging turn so PwrAgent can resolve here.",
+        },
+      };
+    }
+    const binding = bindings[0]!;
+    return {
+      ok: true,
+      origin: {
+        binding,
+        event: eventFromBinding(binding, this.now()),
+      },
+    };
+  }
+
+  private async summarizeAgentMessagingLocation(
+    origin: ActiveAgentMessagingOrigin,
+  ): Promise<PwrAgentMessagingLocationSummary> {
+    return {
+      actor: summarizeMessagingActor(origin.event.actor),
+      binding: summarizeMessagingBinding(origin.binding),
+      channel: origin.event.channel.channel,
+      conversation: summarizeMessagingConversation(origin.event.channel.conversation),
+      managedConversation: await this.resolveManagedConversationSummary(origin),
+    };
+  }
+
+  private async resolveManagedConversationSummary(
+    origin: ActiveAgentMessagingOrigin,
+  ): Promise<PwrAgentMessagingManagedConversationSummary> {
+    const providerSupportsCreation = Boolean(
+      this.options.adapter.createManagedConversation,
+    );
+    if (!this.options.adapter.getManagedConversationRights) {
+      const operation = {
+        operation: "create_child" as const,
+        supported: providerSupportsCreation,
+        reason: providerSupportsCreation
+          ? "provider does not expose permission preflight"
+          : "provider does not support managed conversations",
+      };
+      return {
+        canCreateChild: providerSupportsCreation,
+        operation,
+        operations: [operation],
+        outcome: providerSupportsCreation ? "ok" : "unsupported",
+        providerSupportsCreation,
+      };
+    }
+
+    const rights = await this.options.adapter.getManagedConversationRights({
+      actor: origin.event.actor,
+      channel: origin.event.channel,
+      routingState: origin.event.routingState,
+    });
+    const operation = rights.operations.find(
+      (candidate) => candidate.operation === "create_child",
+    );
+    return {
+      canCreateChild: providerSupportsCreation && operation?.supported === true,
+      operation,
+      operations: rights.operations.map((candidate) => ({ ...candidate })),
+      outcome: rights.outcome,
+      errorMessage: rights.errorMessage,
+      providerSupportsCreation,
+      updatedAt: rights.updatedAt,
+    };
   }
 
   private filterBindingsForChannel(
@@ -11509,6 +11878,92 @@ function automationTurnKey(params: {
   turnId: string;
 }): string {
   return `${params.backend}:${params.threadId}:${params.turnId}`;
+}
+
+function agentMessagingTurnKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
+function summarizeMessagingConversation(
+  conversation: MessagingChannelRef["conversation"],
+): PwrAgentMessagingLocationSummary["conversation"] {
+  return {
+    id: conversation.id,
+    kind: conversation.kind,
+    parentId: conversation.parentId,
+    title: conversation.title,
+    parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
+  };
+}
+
+function summarizeMessagingActor(
+  actor: MessagingInboundEvent["actor"],
+): PwrAgentMessagingLocationSummary["actor"] {
+  return {
+    platformUserId: actor.platformUserId,
+    displayName: actor.displayName,
+    username: actor.username,
+    isBot: actor.isBot,
+  };
+}
+
+function summarizeMessagingBinding(
+  binding: MessagingBindingRecord,
+): PwrAgentMessagingLocationSummary["binding"] {
+  return {
+    id: binding.id,
+    backend: binding.backend,
+    threadId: binding.threadId,
+    targetKind: binding.targetKind ?? "thread",
+    displayName: binding.displayName,
+  };
+}
+
+function eventFromBinding(
+  binding: MessagingBindingRecord,
+  now: number,
+): MessagingInboundEvent {
+  return {
+    id: `agent-origin:${binding.id}`,
+    kind: "lifecycle",
+    lifecycle: "bound",
+    actor: {
+      platformUserId: binding.authorizedActorIds[0] ?? "unknown",
+      displayName: binding.displayName,
+    },
+    channel: binding.channel,
+    receivedAt: now,
+    routingState: binding.routingState,
+  };
+}
+
+function sanitizeMessagingChildTitle(title: string | undefined): string {
+  const normalized = (title ?? "PwrAgent thread").replace(/\s+/g, " ").trim();
+  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
+}
+
+function managedConversationUnavailableMessage(
+  summary: PwrAgentMessagingManagedConversationSummary,
+): string {
+  if (!summary.providerSupportsCreation) {
+    return "This messaging provider does not support creating native child conversations.";
+  }
+  const operation = summary.operation;
+  if (operation?.missingPermission) {
+    return `PwrAgent cannot create a native child conversation because the provider permission ${operation.missingPermission} is missing.`;
+  }
+  if (operation?.reason) {
+    return `PwrAgent cannot create a native child conversation: ${operation.reason}.`;
+  }
+  if (summary.errorMessage) {
+    return `PwrAgent cannot create a native child conversation: ${summary.errorMessage}.`;
+  }
+  return "PwrAgent cannot create a native child conversation in the current messaging location.";
 }
 
 function turnQueueUpdateForBackendEvent(event: AgentEvent): {
