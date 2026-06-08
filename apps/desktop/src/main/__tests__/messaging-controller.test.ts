@@ -2468,6 +2468,104 @@ describe("MessagingController", () => {
     });
   });
 
+  it("passes Codex backend metadata through to rendered status cards", async () => {
+    const harness = await createHarness({
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            account: {
+              type: "chatgpt",
+              email: "operator@example.com",
+              planType: "team",
+            },
+            rateLimits: [
+              {
+                name: "gpt-5.3-codex primary",
+                remaining: 76,
+                limit: 100,
+                usedPercent: 24,
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.splice(0);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          tokenUsage: {
+            last: {
+              inputTokens: 16_000,
+              cachedInputTokens: 4_000,
+              outputTokens: 2_000,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    const statusText = readDeliveredStatusText(harness.delivered.at(-1));
+    expect(statusText).toContain(
+      "Context usage: Latest request usage: 12,000 uncached in · 4,000 cached · 2,000 out",
+    );
+    expect(statusText).toContain("Account: operator@example.com (ChatGPT team)");
+    expect(statusText).toContain(
+      "Rate limits: gpt-5.3-codex primary: 76/100 remaining (24% used)",
+    );
+  });
+
+  it("refreshes pinned status cards when backend account metadata changes", async () => {
+    const harness = await createHarness({
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            account: {
+              type: "chatgpt",
+              email: "operator@example.com",
+              planType: "team",
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+    harness.delivered.splice(0);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "account/updated",
+        params: {
+          account: {
+            email: "operator@example.com",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "status",
+      delivery: {
+        mode: "update",
+      },
+      targetSurface: binding?.statusSurface,
+      text: expect.stringContaining("Account: operator@example.com (ChatGPT team)"),
+    });
+  });
+
   it("detaches a bound conversation, clears status actions, and unpins the status surface", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

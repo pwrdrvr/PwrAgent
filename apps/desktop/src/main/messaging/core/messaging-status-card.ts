@@ -55,6 +55,7 @@ export function buildBindingStatusIntent(params: {
   backendSummary?: BackendSummary;
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
+  contextUsageSummary?: string;
   createdAt: number;
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
@@ -78,6 +79,10 @@ export function buildBindingStatusIntent(params: {
     unavailable();
   const fastMode =
     params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
+  const fastModeLabel = formatFastModeStatus(fastMode, params.backendSummary);
+  const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
+  const accountLine = formatBackendAccountLine(params.backendSummary);
+  const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
   const permissionsMode =
     params.threadState.executionMode ??
     preferences?.permissionsMode ??
@@ -136,8 +141,7 @@ export function buildBindingStatusIntent(params: {
       mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
-      `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
-      "Plan mode: unavailable",
+      `Fast mode: ${fastModeLabel}`,
       acpRuntimeLabel
         ? `Runtime mode: ${acpRuntimeLabel}`
         : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
@@ -146,9 +150,9 @@ export function buildBindingStatusIntent(params: {
       params.binding.pendingSkillSelection
         ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
         : undefined,
-      "Context usage: unavailable",
-      "Account: unavailable",
-      "Rate limits: unavailable",
+      contextUsageLine,
+      accountLine,
+      rateLimitsLine,
       `Thread: ${params.binding.threadId}`,
       activeTurn ? `Turn: ${activeTurn.status} (${activeTurn.turnId})` : "Turn: idle",
     ]
@@ -169,6 +173,119 @@ export function buildBindingStatusIntent(params: {
       toolUpdateMode,
     }),
   };
+}
+
+function formatFastModeStatus(
+  fastMode: boolean | undefined,
+  backendSummary: BackendSummary | undefined,
+): string {
+  if (fastMode !== undefined) {
+    return fastMode ? "on" : "off";
+  }
+  if (backendSummary?.launchpadOptions?.supportsFastMode === false) {
+    return "unsupported";
+  }
+  return unavailable();
+}
+
+function formatContextUsageLine(summary: string | undefined): string | undefined {
+  if (!summary) {
+    return undefined;
+  }
+  return `Context usage: ${summary}`;
+}
+
+function formatBackendAccountLine(
+  backendSummary: BackendSummary | undefined,
+): string | undefined {
+  const account = backendSummary?.account;
+  if (!account) {
+    return undefined;
+  }
+
+  const kind =
+    account.type === "chatgpt"
+      ? "ChatGPT"
+      : account.type === "apiKey"
+        ? "API key"
+        : undefined;
+  const detail = [kind, account.planType].filter(Boolean).join(" ");
+  if (account.email && detail) {
+    return `Account: ${account.email} (${detail})`;
+  }
+  if (account.email) {
+    return `Account: ${account.email}`;
+  }
+  if (detail) {
+    return `Account: ${detail}`;
+  }
+  if (account.requiresOpenaiAuth) {
+    return "Account: OpenAI auth required";
+  }
+  return undefined;
+}
+
+function formatBackendRateLimitsLine(
+  backendSummary: BackendSummary | undefined,
+): string | undefined {
+  const rateLimits = backendSummary?.rateLimits?.filter((rateLimit) =>
+    Boolean(formatBackendRateLimit(rateLimit)),
+  );
+  if (!rateLimits || rateLimits.length === 0) {
+    return undefined;
+  }
+
+  return `Rate limits: ${rateLimits
+    .slice(0, 3)
+    .map((rateLimit) => formatBackendRateLimit(rateLimit))
+    .filter((line): line is string => Boolean(line))
+    .join("; ")}`;
+}
+
+function formatBackendRateLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): string | undefined {
+  const parts: string[] = [];
+  if (rateLimit.remaining !== undefined && rateLimit.limit !== undefined) {
+    parts.push(
+      `${formatWholeNumber(rateLimit.remaining)}/${formatWholeNumber(
+        rateLimit.limit,
+      )} remaining`,
+    );
+  } else if (rateLimit.remaining !== undefined) {
+    parts.push(`${formatWholeNumber(rateLimit.remaining)} remaining`);
+  } else if (rateLimit.used !== undefined && rateLimit.limit !== undefined) {
+    parts.push(
+      `${formatWholeNumber(rateLimit.used)}/${formatWholeNumber(
+        rateLimit.limit,
+      )} used`,
+    );
+  } else if (rateLimit.usedPercent !== undefined) {
+    parts.push(`${formatPercent(rateLimit.usedPercent)} used`);
+  }
+
+  if (
+    rateLimit.usedPercent !== undefined &&
+    !parts.some((part) => part.includes("used"))
+  ) {
+    parts.push(`${formatPercent(rateLimit.usedPercent)} used`);
+  }
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+  if (parts.length === 1) {
+    return `${rateLimit.name}: ${parts[0]}`;
+  }
+  return `${rateLimit.name}: ${parts[0]} (${parts.slice(1).join(", ")})`;
+}
+
+function formatWholeNumber(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value)}%`;
 }
 
 function mentionRequiredLine(
