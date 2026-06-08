@@ -53,7 +53,6 @@ import type {
   MessagingInboundTextEvent,
   MessagingAdapterState,
   MessagingJsonValue,
-  MessagingMessageIntent,
   MessagingManagedConversationActionResult,
   MessagingManagedConversationOperationSupport,
   MessagingManagedTopicRecord,
@@ -93,6 +92,7 @@ import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
 } from "./messaging-adapter.js";
+import type { MessagingActivityLog } from "../messaging-activity-log.js";
 import {
   buildActivityIntent,
   buildApprovalIntent,
@@ -487,6 +487,7 @@ export type MessagingControllerOptions = {
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   fullAccessControls?: MessagingFullAccessControlsResolver;
   deliveryBudget?: MessagingDeliveryBudget;
+  activityLog?: () => MessagingActivityLog;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
   onFullAccessPolicyViolation?: (event: {
     actorId: string;
@@ -9271,38 +9272,24 @@ export class MessagingController {
     binding: MessagingBindingRecord | undefined,
     result: MessagingDeliveryResult,
   ): void {
-    // Only log user-visible deliveries — status/typing/dismiss are
-    // every-tick noise and would drown the activity feed.
-    if (
-      intent.kind !== "message"
-      && intent.kind !== "approval"
-      && intent.kind !== "error"
-    ) {
+    // Only update provider-visible freshness. Typing activity, dismissals, and
+    // partial stream edits are control/noisy signals; the Activity window stays
+    // focused on operator-facing inbound, binding, pairing, and diagnostic rows.
+    if (!shouldRecordOutboundActivity(intent, result)) {
       return;
     }
     const channel = binding?.channel.channel ?? result.channel;
     if (!channel) return;
-    const conversation = binding?.channel.conversation;
-    const summary = describeOutboundIntent(intent);
     try {
-      this.desktopActivityLog().record({
+      const log = this.desktopActivityLog();
+      if (!log) return;
+      log.recordPlatformResponseActivity({
         platform: channel,
-        kind: "outbound",
-        backend: binding?.backend,
-        threadId: binding?.threadId,
-        bindingId: binding?.id,
-        conversationId: conversation?.id,
-        conversationTitle: conversation?.title,
-        summary,
-        payload: {
-          intentId: intent.id,
-          intentKind: intent.kind,
-          outcome: result.outcome,
-        },
+        createdAt: result.deliveredAt,
       });
     } catch {
       // Activity log is best-effort observability; never break delivery
-      // because the log threw.
+      // because the summary write threw.
     }
   }
 
@@ -9314,6 +9301,7 @@ export class MessagingController {
     try {
       const conversation = binding.channel.conversation;
       const log = this.desktopActivityLog();
+      if (!log) return;
       log.record({
         platform: binding.channel.channel,
         kind: "binding",
@@ -9337,15 +9325,8 @@ export class MessagingController {
     }
   }
 
-  private desktopActivityLog(): import("../messaging-activity-log").MessagingActivityLog {
-    // Lazy import keeps the controller free of a top-level dep on the
-    // desktop activity-log singleton (the controller is shared with
-    // other harnesses).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return (require(
-      "../desktop-messaging-activity-log",
-    ) as typeof import("../desktop-messaging-activity-log"))
-      .getDesktopMessagingActivityLog();
+  private desktopActivityLog(): MessagingActivityLog | undefined {
+    return this.options.activityLog?.();
   }
 
   private async deliver(
@@ -11289,6 +11270,24 @@ function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): bool
   );
 }
 
+function shouldRecordOutboundActivity(
+  intent: MessagingSurfaceIntent,
+  result: MessagingDeliveryResult,
+): boolean {
+  if (
+    result.outcome === "discarded" ||
+    result.outcome === "failed" ||
+    result.outcome === "unsupported" ||
+    result.outcome === "dismissed"
+  ) {
+    return false;
+  }
+  if (intent.kind === "stream_update" && !intent.stream.isFinal) {
+    return false;
+  }
+  return intent.kind !== "activity" && intent.kind !== "dismiss";
+}
+
 function assistantMessageDeliveryKey(
   event: AgentEvent,
   binding: MessagingBindingRecord,
@@ -11785,18 +11784,6 @@ function readAcpRuntimeOptionSource(
   return source === "mode" || source === "configOption" || source === "model"
     ? source
     : undefined;
-}
-
-function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
-  if (intent.kind === "message") {
-    const role = (intent as MessagingMessageIntent).role ?? "assistant";
-    return role === "assistant"
-      ? "Sent assistant reply"
-      : `Sent ${role} message`;
-  }
-  if (intent.kind === "approval") return "Sent approval request";
-  if (intent.kind === "error") return "Sent error notice";
-  return `Sent ${intent.kind}`;
 }
 
 function messagingAdapterStateEqual(

@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 11;
+export const CURRENT_STATE_DB_USER_VERSION = 12;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -385,6 +385,15 @@ CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
   ON automation_run_artifacts(automation_id, updated_at DESC);
 `;
 
+const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_activity_summary (
+  platform         TEXT PRIMARY KEY,
+  last_request_at  INTEGER,
+  last_response_at INTEGER,
+  updated_at       INTEGER NOT NULL
+);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -496,6 +505,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 11) {
       db.transaction(() => {
         db.exec(AUTOMATION_SCHEMA);
+        db.pragma("user_version = 11");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 12) {
+      db.transaction(() => {
+        db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -643,6 +658,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_AGENT_SCHEMA);
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
+    db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

@@ -5619,10 +5619,16 @@ describe("MessagingController", () => {
 
   it("coalesces assistant stream deltas and flushes the final turn text", async () => {
     let now = 1000;
+    const recordPlatformResponseActivity = vi.fn();
     const harness = await createHarness({
+      activityLog: () => ({
+        record: vi.fn(),
+        recordPlatformResponseActivity,
+      } as unknown as ReturnType<NonNullable<MessagingControllerOptions["activityLog"]>>),
       now: () => now,
     });
     await bindThread(harness);
+    recordPlatformResponseActivity.mockClear();
     harness.delivered.length = 0;
 
     await harness.controller.handleBackendEvent({
@@ -5651,6 +5657,7 @@ describe("MessagingController", () => {
         }),
       }),
     ]);
+    expect(recordPlatformResponseActivity).not.toHaveBeenCalled();
     const firstStream = harness.delivered[0];
     if (firstStream?.kind !== "stream_update") {
       throw new Error("expected first stream update");
@@ -5701,6 +5708,7 @@ describe("MessagingController", () => {
         sequence: 3,
       },
     });
+    expect(recordPlatformResponseActivity).not.toHaveBeenCalled();
 
     now += 100;
     await harness.controller.handleBackendEvent({
@@ -5747,6 +5755,11 @@ describe("MessagingController", () => {
         key: firstStream.stream.key,
         sequence: 4,
       },
+    });
+    expect(recordPlatformResponseActivity).toHaveBeenCalledTimes(1);
+    expect(recordPlatformResponseActivity).toHaveBeenCalledWith({
+      platform: "telegram",
+      createdAt: 1000,
     });
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
   });
@@ -9833,6 +9846,7 @@ async function createHarness(options?: {
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
   fullAccessControls?: MessagingControllerOptions["fullAccessControls"];
+  activityLog?: MessagingControllerOptions["activityLog"];
   onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
@@ -10208,6 +10222,7 @@ async function createHarness(options?: {
     backend,
     channel: options?.channel,
     deliveryBudget: options?.deliveryBudget,
+    activityLog: options?.activityLog,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
