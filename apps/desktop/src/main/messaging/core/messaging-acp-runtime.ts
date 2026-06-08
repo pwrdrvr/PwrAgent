@@ -35,6 +35,38 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
   }
 
   const runtimeCapabilities = backend.acp?.runtime;
+  const modeConfigOptions =
+    runtimeCapabilities?.configOptions?.filter(isRuntimeModeConfigOption) ?? [];
+  const configChoices = modeConfigOptions.flatMap((option) => {
+    const currentModeValue =
+      params.runtime?.currentModeId &&
+      option.values.some((value) => value.value === params.runtime?.currentModeId)
+        ? params.runtime.currentModeId
+        : undefined;
+    const currentValue =
+      currentModeValue ??
+      params.runtime?.configValues?.[option.id] ??
+      option.currentValue ??
+      defaultConfigOptionValue(option);
+    return option.values.map((value) => ({
+      description: value.description,
+      label: formatMessagingAcpRuntimeModeLabel(value.label || value.value),
+      optionId: option.id,
+      privileged: messagingAcpRuntimeValueLooksPrivileged(value.value),
+      selected: value.value === currentValue,
+      source: "configOption" as const,
+      value: value.value,
+    }));
+  });
+  if (configChoices.length > 0) {
+    const selected = configChoices.find((choice) => choice.selected);
+    return {
+      choices: configChoices,
+      currentLabel: selected?.label ?? "Agent default",
+      currentValue: selected?.value,
+    };
+  }
+
   const modeChoices =
     runtimeCapabilities?.modes?.availableModes.map((mode) => ({
       description: mode.description,
@@ -58,32 +90,6 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
       choices,
       currentLabel: labelForRuntimeValue(choices, currentValue),
       currentValue,
-    };
-  }
-
-  const modeConfigOptions =
-    runtimeCapabilities?.configOptions?.filter(isRuntimeModeConfigOption) ?? [];
-  const configChoices = modeConfigOptions.flatMap((option) => {
-    const currentValue =
-      params.runtime?.configValues?.[option.id] ??
-      option.currentValue ??
-      defaultConfigOptionValue(option);
-    return option.values.map((value) => ({
-      description: value.description,
-      label: formatMessagingAcpRuntimeModeLabel(value.label || value.value),
-      optionId: option.id,
-      privileged: messagingAcpRuntimeValueLooksPrivileged(value.value),
-      selected: value.value === currentValue,
-      source: "configOption" as const,
-      value: value.value,
-    }));
-  });
-  if (configChoices.length > 0) {
-    const selected = configChoices.find((choice) => choice.selected);
-    return {
-      choices: configChoices,
-      currentLabel: selected?.label ?? "Agent default",
-      currentValue: selected?.value,
     };
   }
 

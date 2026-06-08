@@ -9616,6 +9616,84 @@ describe("MessagingController", () => {
     });
   });
 
+  it("uses Kimi config-option permissions in the status picker", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:kimi",
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { mode: "default" },
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildKimiRuntimeBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:kimi:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:kimi",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Permissions",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-runtime-mode",
+          label: "Default (current)",
+          value: {
+            optionId: "mode",
+            source: "configOption",
+            value: "default",
+          },
+        }),
+        expect.objectContaining({
+          id: "status:set-runtime-mode",
+          label: "Plan",
+          value: {
+            optionId: "mode",
+            source: "configOption",
+            value: "plan",
+          },
+        }),
+        expect.objectContaining({
+          id: "status:set-runtime-mode",
+          label: "Auto",
+          value: {
+            optionId: "mode",
+            source: "configOption",
+            value: "auto",
+          },
+        }),
+        expect.objectContaining({
+          id: "status:set-runtime-mode",
+          label: "Yolo",
+          value: {
+            optionId: "mode",
+            source: "configOption",
+            value: "yolo",
+          },
+        }),
+      ]),
+    });
+  });
+
   it("shows ACP runtime and Full Access together on the status card", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -10824,6 +10902,69 @@ function buildAcpRuntimeBackendSummary(
     },
     launchpadOptions: {
       models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+      reasoningEfforts: [],
+      supportsFastMode: false,
+    },
+    ...overrides,
+  });
+}
+
+function buildKimiRuntimeBackendSummary(
+  overrides: Partial<BackendSummary> = {},
+): BackendSummary {
+  return buildBackendSummary({
+    kind: "acp:kimi",
+    label: "Kimi",
+    source: "acp",
+    executionModes: [],
+    acp: {
+      registryId: "kimi",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        configOptions: [
+          {
+            id: "mode",
+            label: "Mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              {
+                value: "default",
+                label: "Default",
+                description: "Manual approvals; tools execute normally.",
+              },
+              {
+                value: "plan",
+                label: "Plan",
+                description: "Read-only planning; no tool execution.",
+              },
+              {
+                value: "auto",
+                label: "Auto",
+                description: "Auto-approve safe operations.",
+              },
+              {
+                value: "yolo",
+                label: "YOLO",
+                description: "Auto-approve everything.",
+              },
+            ],
+          },
+        ],
+        modes: {
+          currentModeId: "default",
+          availableModes: [{ id: "default", label: "Default" }],
+        },
+      },
+    },
+    launchpadOptions: {
+      models: [{ id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" }],
       reasoningEfforts: [],
       supportsFastMode: false,
     },
