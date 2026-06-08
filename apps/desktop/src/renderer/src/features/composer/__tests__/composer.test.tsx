@@ -713,6 +713,87 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not leak environment Run busy state across thread changes", async () => {
+    vi.useFakeTimers();
+    const startDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      codexEnvironmentRuntime: {
+        environmentId: string;
+        environmentName: string;
+        executionTarget: "local";
+      };
+    }>();
+    const runCodexEnvironmentAction = vi.fn(() => startDeferred.promise);
+    const buildThread = (id: string, actionId: string): NavigationThreadSummary => ({
+      id,
+      title: id,
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local",
+        actions: [
+          {
+            id: actionId,
+            name: `Action ${actionId}`,
+            command: "pnpm test",
+          },
+        ],
+      },
+    });
+
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction }}
+        disabled={false}
+        skills={[]}
+        thread={buildThread("thread-a", "test-a")}
+      />,
+    );
+
+    const firstRunButton = screen.getByRole("button", { name: "Run" });
+    await act(async () => {
+      fireEvent.click(firstRunButton);
+      await Promise.resolve();
+    });
+    expect(firstRunButton).toBeDisabled();
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction }}
+        disabled={false}
+        skills={[]}
+        thread={buildThread("thread-b", "test-b")}
+      />,
+    );
+
+    const secondRunButton = screen.getByRole("button", { name: "Run" });
+    expect(secondRunButton).not.toBeDisabled();
+    expect(secondRunButton).toHaveTextContent("Run");
+
+    await act(async () => {
+      startDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-a",
+        codexEnvironmentRuntime: {
+          environmentId: "environment",
+          environmentName: "PwrAgnt",
+          executionTarget: "local",
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(secondRunButton).not.toBeDisabled();
+  });
+
   it("restores thread environment command selections from the per-env sticky map", () => {
     const buildThread = (
       id: string,

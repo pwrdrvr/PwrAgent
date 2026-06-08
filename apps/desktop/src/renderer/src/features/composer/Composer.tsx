@@ -574,6 +574,12 @@ type EnvActionOutputState = {
   nextChunkId: number;
 };
 
+type ThreadEnvActionStartingKey = {
+  actionId: string;
+  backend: NavigationThreadSummary["source"];
+  threadId: string;
+};
+
 function buildEnvActionOutputState(
   output: string,
   nextChunkId = 1,
@@ -593,6 +599,18 @@ function trimEnvActionOutputChunks(
   const trimmed = tailLines(text, ENV_ACTION_OUTPUT_MAX_LINES);
   if (trimmed === text) return chunks;
   return [{ id: chunks.at(-1)?.id ?? 0, text: trimmed }];
+}
+
+function sameThreadEnvActionStartingKey(
+  left: ThreadEnvActionStartingKey | undefined,
+  right: ThreadEnvActionStartingKey | undefined,
+): boolean {
+  if (!left || !right) return false;
+  return (
+    left.backend === right.backend &&
+    left.threadId === right.threadId &&
+    left.actionId === right.actionId
+  );
 }
 
 function elementContainsSelection(element: HTMLElement | null): boolean {
@@ -674,22 +692,6 @@ export function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
-  const hasStartedRun = useMemo(
-    () => runs.some((run) => run.status === "started"),
-    [runs],
-  );
-  const [, setElapsedTick] = useState(0);
-  useEffect(() => {
-    if (!hasStartedRun) return undefined;
-    const handle = setInterval(() => {
-      setElapsedTick((tick) => tick + 1);
-    }, 1_000);
-    return () => clearInterval(handle);
-  }, [hasStartedRun]);
-  // Bumped after dismissal to force a re-render (the dismissed-set lives
-  // outside React state).
-  const [, setDismissTick] = useState(0);
-
   const visible = runs.filter((run) => {
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
     const latestActivityAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
@@ -707,6 +709,19 @@ export function EnvActionAnchorList(props: {
     }
     return true;
   });
+  const hasVisibleStartedRun = visible.some((run) => run.status === "started");
+  const [, setElapsedTick] = useState(0);
+  useEffect(() => {
+    if (!hasVisibleStartedRun) return undefined;
+    const handle = setInterval(() => {
+      setElapsedTick((tick) => tick + 1);
+    }, 1_000);
+    return () => clearInterval(handle);
+  }, [hasVisibleStartedRun]);
+  // Bumped after dismissal to force a re-render (the dismissed-set lives
+  // outside React state).
+  const [, setDismissTick] = useState(0);
+
   if (visible.length === 0) return null;
 
   return (
@@ -1505,7 +1520,10 @@ export function Composer(props: ComposerProps) {
   );
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
-  const [threadEnvActionStarting, setThreadEnvActionStarting] = useState(false);
+  const [threadEnvActionStarting, setThreadEnvActionStartingState] =
+    useState<ThreadEnvActionStartingKey>();
+  const threadEnvActionStartingRef =
+    useRef<ThreadEnvActionStartingKey | undefined>(undefined);
   const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(undefined);
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
@@ -1522,35 +1540,58 @@ export function Composer(props: ComposerProps) {
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
-  const clearThreadEnvActionStarting = (): void => {
+  const setThreadEnvActionStarting = (
+    next: ThreadEnvActionStartingKey | undefined,
+  ): void => {
+    threadEnvActionStartingRef.current = next;
+    setThreadEnvActionStartingState(next);
+  };
+
+  const clearThreadEnvActionStarting = (
+    key?: ThreadEnvActionStartingKey,
+  ): void => {
+    if (key && !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+      return;
+    }
     if (threadEnvActionStartingTimeoutRef.current !== undefined) {
       window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
       threadEnvActionStartingTimeoutRef.current = undefined;
     }
-    setThreadEnvActionStarting(false);
+    setThreadEnvActionStarting(undefined);
   };
 
-  const showThreadEnvActionStarting = (): void => {
+  const showThreadEnvActionStarting = (
+    key: ThreadEnvActionStartingKey,
+  ): void => {
     if (threadEnvActionStartingTimeoutRef.current !== undefined) {
       window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
       threadEnvActionStartingTimeoutRef.current = undefined;
     }
-    setThreadEnvActionStarting(true);
+    setThreadEnvActionStarting(key);
   };
 
-  const finishThreadEnvActionStarting = (elapsedMs: number): void => {
+  const finishThreadEnvActionStarting = (
+    key: ThreadEnvActionStartingKey,
+    elapsedMs: number,
+  ): void => {
+    if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+      return;
+    }
     if (threadEnvActionStartingTimeoutRef.current !== undefined) {
       window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
     }
     const remainingMs = Math.max(0, ENV_ACTION_RUN_CONFIRMATION_MS - elapsedMs);
     if (remainingMs === 0) {
       threadEnvActionStartingTimeoutRef.current = undefined;
-      setThreadEnvActionStarting(false);
+      setThreadEnvActionStarting(undefined);
       return;
     }
     threadEnvActionStartingTimeoutRef.current = window.setTimeout(() => {
+      if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+        return;
+      }
       threadEnvActionStartingTimeoutRef.current = undefined;
-      setThreadEnvActionStarting(false);
+      setThreadEnvActionStarting(undefined);
     }, remainingMs);
   };
 
@@ -3778,29 +3819,34 @@ export function Composer(props: ComposerProps) {
     if (
       !props.thread ||
       !props.desktopApi?.runCodexEnvironmentAction ||
-      !selectedThreadCodexAction
+      !selectedThreadCodexAction ||
+      !currentThreadEnvActionStartingKey
     ) {
       return;
     }
 
+    const thread = props.thread;
+    const action = selectedThreadCodexAction;
+    const startingKey = currentThreadEnvActionStartingKey;
+    const cwd = workspaceOpenPath;
     setSendError(undefined);
-    props.onPendingStatusChange?.(`Starting ${selectedThreadCodexAction.name}`);
-    showThreadEnvActionStarting();
+    props.onPendingStatusChange?.(`Starting ${action.name}`);
+    showThreadEnvActionStarting(startingKey);
     const startedAt = Date.now();
     let actionStarted = false;
     try {
       await props.desktopApi.runCodexEnvironmentAction({
-        backend: props.thread.source,
-        threadId: props.thread.id,
-        actionId: selectedThreadCodexAction.id,
-        ...(workspaceOpenPath ? { cwd: workspaceOpenPath } : {}),
+        backend: thread.source,
+        threadId: thread.id,
+        actionId: action.id,
+        ...(cwd ? { cwd } : {}),
       });
       actionStarted = true;
-      finishThreadEnvActionStarting(Date.now() - startedAt);
+      finishThreadEnvActionStarting(startingKey, Date.now() - startedAt);
       await props.onRefreshNavigation?.();
     } catch (error) {
       if (!actionStarted) {
-        clearThreadEnvActionStarting();
+        clearThreadEnvActionStarting(startingKey);
       }
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -3993,6 +4039,18 @@ export function Composer(props: ComposerProps) {
     threadCodexEnvironmentActions.find(
       (action) => action.id === selectedThreadCodexActionId,
     ) ?? threadCodexEnvironmentActions[0];
+  const currentThreadEnvActionStartingKey =
+    props.thread && selectedThreadCodexAction
+      ? {
+          actionId: selectedThreadCodexAction.id,
+          backend: props.thread.source,
+          threadId: props.thread.id,
+        }
+      : undefined;
+  const currentThreadEnvActionStarting = sameThreadEnvActionStartingKey(
+    threadEnvActionStarting,
+    currentThreadEnvActionStartingKey,
+  );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
@@ -5660,12 +5718,12 @@ export function Composer(props: ComposerProps) {
                 <button
                   aria-label="Run"
                   className={
-                    threadEnvActionStarting
+                    currentThreadEnvActionStarting
                       ? "composer__action-button composer__action-button--busy"
                       : "composer__action-button"
                   }
                   disabled={
-                    threadEnvActionStarting ||
+                    currentThreadEnvActionStarting ||
                     !selectedThreadCodexAction ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }
@@ -5674,7 +5732,7 @@ export function Composer(props: ComposerProps) {
                     void runThreadCodexEnvironmentAction();
                   }}
                 >
-                  {threadEnvActionStarting ? (
+                  {currentThreadEnvActionStarting ? (
                     <span
                       aria-hidden="true"
                       className="composer__action-button-spinner"

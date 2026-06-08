@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -318,6 +318,38 @@ describe("EnvActionAnchorList", () => {
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
     } finally {
       setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("stops ticking after the only running anchor is dismissed", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    try {
+      render(
+        <EnvActionAnchorList
+          runtime={{
+            environmentName: "PwrAgnt",
+            actionRuns: [
+              buildRun({
+                runId: "dismissed-running-run",
+                startedAt: Date.now(),
+                status: "started",
+              }),
+            ],
+          }}
+        />,
+      );
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText("Env action running")).not.toBeInTheDocument();
+        expect(clearIntervalSpy).toHaveBeenCalled();
+      });
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
     }
   });
 });
