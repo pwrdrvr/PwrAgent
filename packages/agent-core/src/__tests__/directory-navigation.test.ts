@@ -908,6 +908,99 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("collapses a Windows repo into one row across path-separator representations", () => {
+    // Reproduces the Windows bug where one project surfaced as three "PwrAgent"
+    // rows: the main checkout linked once with forward slashes (how we normalize
+    // codex/git paths) and once with native backslashes, plus a codex worktree
+    // that then couldn't remap onto a now-ambiguous canonical repo path.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "main-fwd",
+          createdAt: 3_000,
+          linkedDirectories: [
+            {
+              id: "d1",
+              label: "PwrAgent",
+              path: "C:/Users/Administrator/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "main-bak",
+          createdAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "d2",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "worktree",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "d3",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\mq4ow4zb\\PwrAgent",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(1);
+    expect(directories[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:C:/Users/Administrator/PwrAgent",
+        label: "PwrAgent",
+        path: "C:/Users/Administrator/PwrAgent",
+      }),
+    );
+    expect(directories[0]?.threadKeys).toHaveLength(3);
+  });
+
+  it("does not duplicate a Windows codex worktree row across separator representations", () => {
+    // One thread linked to the same codex worktree via both forward and back
+    // slashes must surface as a single row, not appear twice.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "d-fwd",
+              label: "PwrAgent",
+              path: "C:/Users/Administrator/.codex/worktrees/mq4ow4zb/PwrAgent",
+              kind: "worktree",
+            },
+            {
+              id: "d-bak",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\mq4ow4zb\\PwrAgent",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(1);
+    expect(directories[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:C:/Users/Administrator/.codex/worktrees/mq4ow4zb/PwrAgent",
+        label: "PwrAgent",
+      }),
+    );
+    expect(directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
+  });
+
   it("groups PwrAgent-managed worktree paths under the stable same-label home repo row", () => {
     const directories = buildDirectorySummaries({
       threads: [

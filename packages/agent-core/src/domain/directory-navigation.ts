@@ -27,9 +27,20 @@ function pathBaseName(value?: string): string {
   return parts.at(-1) ?? normalized;
 }
 
+// Canonicalize a filesystem path for use as a stable navigation identity:
+// forward slashes and no trailing separator. This is what collapses a single
+// logical directory keyed via different representations into ONE row — on
+// Windows the same repo/worktree can arrive as `C:\…` (codex/git native) and as
+// `C:/…` (the forward slashes we normalize codex/git paths to elsewhere), and
+// without this they produce two `directory:` keys → duplicate folders. No-op on
+// already-POSIX paths (no backslashes, no trailing slash).
+function canonicalizeNavigationPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
 function normalizeComparablePath(value?: string): string | undefined {
-  const normalized = value?.trim().replace(/[\\/]+$/, "");
-  return normalized || undefined;
+  const normalized = value?.trim();
+  return normalized ? canonicalizeNavigationPath(normalized) || undefined : undefined;
 }
 
 function normalizeGitOriginUrl(value?: string): string | undefined {
@@ -104,9 +115,14 @@ function matchCodexChatsRoot(value: string): string | undefined {
 }
 
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
+  // Canonicalize separators up front so a directory keyed via different path
+  // representations (Windows `C:\…` vs the forward-slashed `C:/…` we normalize
+  // codex/git paths to) collapses to ONE directory row instead of duplicating.
+  const path = canonicalizeNavigationPath(directory.path);
+
   // Match both current ".pwragent" and legacy ".pwragnt" home directory names
   // so pre-rebrand thread data classifies correctly.
-  const scratchProjectsRoot = matchScratchProjectsRoot(directory.path);
+  const scratchProjectsRoot = matchScratchProjectsRoot(path);
   if (scratchProjectsRoot) {
     return {
       key: `workspace:${scratchProjectsRoot}`,
@@ -116,7 +132,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const codexChatsRoot = matchCodexChatsRoot(directory.path);
+  const codexChatsRoot = matchCodexChatsRoot(path);
   if (codexChatsRoot) {
     return {
       key: `directory:${codexChatsRoot}`,
@@ -126,7 +142,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const repoWorktreeMatch = directory.path.match(
+  const repoWorktreeMatch = path.match(
     /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/].*)?$/,
   );
   if (repoWorktreeMatch) {
@@ -139,28 +155,31 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const codexWorktreeMatch = directory.path.match(
-    /^[\\/].*[\\/]\.codex(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
+  // Leading `(?:[A-Za-z]:)?` accepts a Windows drive prefix (C:/…); without it
+  // the `^[\\/]` anchor only matched POSIX-absolute paths and codex worktrees
+  // on Windows fell through to the generic fallback (wrong label, and no
+  // chance to group by project name).
+  const codexWorktreeMatch = path.match(
+    /^(?:[A-Za-z]:)?[\\/].*[\\/]\.codex(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
   );
   if (codexWorktreeMatch) {
-    const canonicalPath = directory.path.replace(/[\\/]+$/, "");
     return {
-      key: `directory:${canonicalPath}`,
+      key: `directory:${path}`,
       kind: "directory",
       label: codexWorktreeMatch[1],
-      path: canonicalPath,
+      path,
     };
   }
 
   return {
-    key: `directory:${directory.path}`,
+    key: `directory:${path}`,
     kind: "directory",
     label: displayDirectoryLabel({
       kind: "directory",
       label: directory.label,
-      path: directory.path,
+      path,
     }),
-    path: directory.path,
+    path,
   };
 }
 
