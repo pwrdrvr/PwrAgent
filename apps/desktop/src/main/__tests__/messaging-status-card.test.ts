@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
   NavigationSnapshot,
@@ -16,8 +16,12 @@ import {
 } from "../messaging/core/messaging-status-card";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("buildBindingStatusIntent", () => {
-  it("renders binding, preference, project, and unavailable status fields", () => {
+  it("renders binding, preference, project, and available backend status fields", () => {
     const binding = {
       id: "binding-1",
       authorizedActorIds: ["user-1"],
@@ -43,7 +47,46 @@ describe("buildBindingStatusIntent", () => {
     const navigation = buildNavigationSnapshot();
     const intent = buildBindingStatusIntent({
       id: "status-1",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        account: {
+          type: "chatgpt",
+          email: "operator@example.com",
+          planType: "pro",
+        },
+        rateLimits: [
+          {
+            name: "gpt-5.3-codex primary",
+            remaining: 76,
+            limit: 100,
+            usedPercent: 24,
+          },
+        ],
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          supportsFastMode: true,
+        },
+      },
       createdAt: 1000,
+      contextUsageSummary:
+        "Latest request usage: 12,000 uncached in · 4,000 cached · 2,000 out",
       binding,
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
@@ -68,9 +111,16 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Model: gpt-5.3-codex");
     expect(intent.text).toContain("Reasoning: high");
     expect(intent.text).toContain("Fast mode: on");
+    expect(intent.text).not.toContain("Plan mode:");
     expect(intent.text).toContain("Permissions: Full Access");
     expect(intent.text).toContain("Streaming: Off");
-    expect(intent.text).toContain("Context usage: unavailable");
+    expect(intent.text).toContain(
+      "Context usage: Latest request usage: 12,000 uncached in · 4,000 cached · 2,000 out",
+    );
+    expect(intent.text).toContain("Account: operator@example.com (ChatGPT pro)");
+    expect(intent.text).toContain(
+      "Rate limits: gpt-5.3-codex primary: 76% left",
+    );
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
         id: "status:streaming",
@@ -78,6 +128,215 @@ describe("buildBindingStatusIntent", () => {
         fallbackText: "stream",
       }),
     );
+  });
+
+  it("omits unavailable-only backend metadata rows when no data exists", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-no-backend-metadata",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).not.toContain("Plan mode:");
+    expect(intent.text).not.toContain("Context usage:");
+    expect(intent.text).not.toContain("Account:");
+    expect(intent.text).not.toContain("Rate limits:");
+  });
+
+  it("redacts backend account email in shared conversations", () => {
+    const binding = {
+      ...buildBinding(),
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-shared-account",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        account: {
+          type: "chatgpt",
+          email: "operator@example.com",
+          planType: "pro",
+        },
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Account: ChatGPT pro");
+    expect(intent.text).not.toContain("operator@example.com");
+  });
+
+  it("formats Codex and Spark rate limits with normalized labels and reset text", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 8, 14, 0, 0));
+
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-rate-limits",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        rateLimits: [
+          {
+            name: "GPT-5.3-Codex-Spark 5h limit",
+            remaining: 100,
+            usedPercent: 0,
+            resetAt: new Date(2026, 5, 8, 19, 20, 0).getTime(),
+          },
+          {
+            name: "5h limit",
+            remaining: 95,
+            usedPercent: 5,
+            resetAt: new Date(2026, 5, 8, 18, 2, 0).getTime(),
+          },
+          {
+            name: "GPT-5.3-Codex-Spark Weekly limit",
+            remaining: 100,
+            usedPercent: 0,
+            resetAt: new Date(2026, 5, 12, 0, 0, 0).getTime(),
+          },
+          {
+            name: "Weekly limit",
+            remaining: 73,
+            usedPercent: 27,
+            resetAt: new Date(2026, 5, 10, 0, 0, 0).getTime(),
+          },
+        ],
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain(
+      "Rate limits: 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
+    );
+    expect(intent.text).not.toContain("GPT-5.3-Codex-Spark");
+    expect(intent.text).not.toContain("95 remaining");
+  });
+
+  it("reports Fast mode as unsupported when the backend says it is not available", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    delete navigation.launchpadDefaults.fastMode;
+    const intent = buildBindingStatusIntent({
+      id: "status-fast-unsupported",
+      backendSummary: {
+        kind: "acp:gemini",
+        source: "acp",
+        label: "Gemini CLI",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          supportsFastMode: false,
+        },
+      },
+      createdAt: 1000,
+      binding: {
+        ...binding,
+        backend: "acp:gemini",
+      },
+      threadState: resolveMessagingThreadState({
+        binding: {
+          ...binding,
+          backend: "acp:gemini",
+        },
+        navigation: {
+          ...navigation,
+          threads: [
+            {
+              ...navigation.threads[0]!,
+              source: "acp:gemini",
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(intent.text).toContain("Fast mode: unsupported");
   });
 
   it("renders a pending skill selection on the status card", () => {

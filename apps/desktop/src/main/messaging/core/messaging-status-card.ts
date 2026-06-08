@@ -55,6 +55,7 @@ export function buildBindingStatusIntent(params: {
   backendSummary?: BackendSummary;
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
+  contextUsageSummary?: string;
   createdAt: number;
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
@@ -78,6 +79,10 @@ export function buildBindingStatusIntent(params: {
     unavailable();
   const fastMode =
     params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
+  const fastModeLabel = formatFastModeStatus(fastMode, params.backendSummary);
+  const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
+  const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
+  const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
   const permissionsMode =
     params.threadState.executionMode ??
     preferences?.permissionsMode ??
@@ -136,8 +141,7 @@ export function buildBindingStatusIntent(params: {
       mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
-      `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
-      "Plan mode: unavailable",
+      `Fast mode: ${fastModeLabel}`,
       acpRuntimeLabel
         ? `Runtime mode: ${acpRuntimeLabel}`
         : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
@@ -146,9 +150,9 @@ export function buildBindingStatusIntent(params: {
       params.binding.pendingSkillSelection
         ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
         : undefined,
-      "Context usage: unavailable",
-      "Account: unavailable",
-      "Rate limits: unavailable",
+      contextUsageLine,
+      accountLine,
+      rateLimitsLine,
       `Thread: ${params.binding.threadId}`,
       activeTurn ? `Turn: ${activeTurn.status} (${activeTurn.turnId})` : "Turn: idle",
     ]
@@ -169,6 +173,195 @@ export function buildBindingStatusIntent(params: {
       toolUpdateMode,
     }),
   };
+}
+
+function formatFastModeStatus(
+  fastMode: boolean | undefined,
+  backendSummary: BackendSummary | undefined,
+): string {
+  if (fastMode !== undefined) {
+    return fastMode ? "on" : "off";
+  }
+  if (backendSummary?.launchpadOptions?.supportsFastMode === false) {
+    return "unsupported";
+  }
+  return unavailable();
+}
+
+function formatContextUsageLine(summary: string | undefined): string | undefined {
+  if (!summary) {
+    return undefined;
+  }
+  return `Context usage: ${summary}`;
+}
+
+function formatBackendAccountLine(
+  backendSummary: BackendSummary | undefined,
+  binding: MessagingBindingRecord,
+): string | undefined {
+  const account = backendSummary?.account;
+  if (!account) {
+    return undefined;
+  }
+
+  const kind =
+    account.type === "chatgpt"
+      ? "ChatGPT"
+      : account.type === "apiKey"
+        ? "API key"
+        : undefined;
+  const detail = [kind, account.planType].filter(Boolean).join(" ");
+  if (binding.channel.conversation.kind !== "dm") {
+    if (detail) {
+      return `Account: ${detail}`;
+    }
+    if (kind) {
+      return `Account: ${kind}`;
+    }
+    if (account.requiresOpenaiAuth) {
+      return "Account: OpenAI auth required";
+    }
+    return undefined;
+  }
+  if (account.email && detail) {
+    return `Account: ${account.email} (${detail})`;
+  }
+  if (account.email) {
+    return `Account: ${account.email}`;
+  }
+  if (detail) {
+    return `Account: ${detail}`;
+  }
+  if (account.requiresOpenaiAuth) {
+    return "Account: OpenAI auth required";
+  }
+  return undefined;
+}
+
+function formatBackendRateLimitsLine(
+  backendSummary: BackendSummary | undefined,
+): string | undefined {
+  const rateLimits = selectStatusRateLimits(backendSummary);
+  if (!rateLimits || rateLimits.length === 0) {
+    return undefined;
+  }
+
+  return `Rate limits: ${rateLimits
+    .map((rateLimit) => formatBackendRateLimit(rateLimit))
+    .filter((line): line is string => Boolean(line))
+    .join("; ")}`;
+}
+
+function selectStatusRateLimits(
+  backendSummary: BackendSummary | undefined,
+): NonNullable<BackendSummary["rateLimits"]> | undefined {
+  const limits = backendSummary?.rateLimits;
+  if (!limits || limits.length === 0) {
+    return undefined;
+  }
+  return [...limits].sort((left, right) => {
+    const leftName = splitRateLimitName(left.name);
+    const rightName = splitRateLimitName(right.name);
+    const leftFamilyOrder = isSparkRateLimit(left) ? 1 : 0;
+    const rightFamilyOrder = isSparkRateLimit(right) ? 1 : 0;
+    if (leftFamilyOrder !== rightFamilyOrder) {
+      return leftFamilyOrder - rightFamilyOrder;
+    }
+    if (leftName.labelOrder !== rightName.labelOrder) {
+      return leftName.labelOrder - rightName.labelOrder;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function formatBackendRateLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): string | undefined {
+  const { label } = splitRateLimitName(rateLimit.name);
+  const displayLabel = isSparkRateLimit(rateLimit) ? `Spark ${label}` : label;
+  const resetText = formatRateLimitReset(rateLimit.resetAt);
+  const suffix = resetText ? `, resets ${resetText}` : "";
+
+  if (rateLimit.usedPercent !== undefined) {
+    return `${displayLabel}: ${Math.max(
+      0,
+      Math.round(100 - rateLimit.usedPercent),
+    )}% left${suffix}`;
+  }
+  if (rateLimit.remaining !== undefined && rateLimit.limit !== undefined) {
+    if (rateLimit.limit === 100) {
+      return `${displayLabel}: ${Math.max(
+        0,
+        Math.round(rateLimit.remaining),
+      )}% left${suffix}`;
+    }
+    return `${displayLabel}: ${formatWholeNumber(
+      rateLimit.remaining,
+    )}/${formatWholeNumber(rateLimit.limit)} left${suffix}`;
+  } else if (rateLimit.remaining !== undefined) {
+    return `${displayLabel}: ${Math.max(
+      0,
+      Math.round(rateLimit.remaining),
+    )}% left${suffix}`;
+  } else if (rateLimit.used !== undefined && rateLimit.limit !== undefined) {
+    return `${displayLabel}: ${formatWholeNumber(rateLimit.used)}/${formatWholeNumber(
+      rateLimit.limit,
+    )} used${suffix}`;
+  }
+
+  return undefined;
+}
+
+function splitRateLimitName(name: string): {
+  label: string;
+  labelOrder: number;
+} {
+  const trimmed = name.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith("5h limit")) {
+    return { label: "5h limit", labelOrder: 0 };
+  }
+  if (lower.endsWith("weekly limit")) {
+    return { label: "Weekly limit", labelOrder: 1 };
+  }
+  return { label: trimmed, labelOrder: 99 };
+}
+
+function isSparkRateLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): boolean {
+  return isSparkRateLimitName(rateLimit.limitId) ||
+    isSparkRateLimitName(rateLimit.name);
+}
+
+function isSparkRateLimitName(value: string | undefined): boolean {
+  return value?.toLowerCase().includes("spark") ?? false;
+}
+
+function formatRateLimitReset(resetAt: number | undefined): string | undefined {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
+    return undefined;
+  }
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const now = Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  if (resetAt >= now && resetAt - now < oneDayMs) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+function formatWholeNumber(value: number): string {
+  return Math.round(value).toLocaleString();
 }
 
 function mentionRequiredLine(

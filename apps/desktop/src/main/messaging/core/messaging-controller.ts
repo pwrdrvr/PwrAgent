@@ -525,6 +525,7 @@ export class MessagingController {
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
+  private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
@@ -672,8 +673,18 @@ export class MessagingController {
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
     const threadId = threadIdForBackendEvent(event);
+    if (!threadId && isBackendAccountMetadataEvent(event)) {
+      await this.refreshStatusSurfacesForBackend(
+        event.backend,
+        event.notification.method,
+      );
+      return;
+    }
     if (!threadId) {
       return;
+    }
+    if (event.notification.method === "thread/tokenUsage/updated") {
+      this.rememberContextUsageSummary(event);
     }
     if (event.notification.method === "serverRequest/resolved") {
       await this.handleBackendRequestResolved(event);
@@ -703,6 +714,7 @@ export class MessagingController {
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
       event.notification.method === "thread/codexEnvironment/updated" ||
+      event.notification.method === "thread/tokenUsage/updated" ||
       event.notification.method === "thread/parent/set" ||
       event.notification.method === "thread/parent/cleared" ||
       event.notification.method === "thread/subthreadOrder/updated" ||
@@ -915,6 +927,37 @@ export class MessagingController {
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
+    }
+  }
+
+  private async refreshStatusSurfacesForBackend(
+    backend: AppServerBackendKind,
+    reason: string,
+  ): Promise<void> {
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForBackend({ backend }),
+    );
+    const renderableBindings = bindings.filter(
+      (binding) => binding.statusSurface || binding.pinnedStatusSurface,
+    );
+    if (renderableBindings.length === 0) {
+      return;
+    }
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    for (const binding of renderableBindings) {
+      try {
+        await this.renderBindingStatus(binding, undefined, navigation);
+      } catch (error) {
+        this.logger.debug?.("messaging backend status refresh failed", {
+          backend,
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          reason,
+          threadId: binding.threadId,
+        });
+      }
     }
   }
 
@@ -8042,6 +8085,32 @@ export class MessagingController {
     return response?.backends.find((candidate) => candidate.kind === backend);
   }
 
+  private rememberContextUsageSummary(event: AgentEvent): void {
+    const params = event.notification.params as {
+      threadId?: unknown;
+      tokenUsage?: unknown;
+    };
+    if (typeof params.threadId !== "string") {
+      return;
+    }
+    const summary = contextUsageSummaryFromValue(params.tokenUsage);
+    if (!summary) {
+      return;
+    }
+    this.contextUsageSummariesByThreadKey.set(
+      buildThreadIdentityKey(event.backend, params.threadId),
+      summary,
+    );
+  }
+
+  private contextUsageSummaryForBinding(
+    binding: MessagingBindingRecord,
+  ): string | undefined {
+    return this.contextUsageSummariesByThreadKey.get(
+      buildThreadIdentityKey(binding.backend, binding.threadId),
+    );
+  }
+
   private async deliverInvalidStatusSelection(
     event: MessagingInboundEvent,
   ): Promise<void> {
@@ -8237,6 +8306,7 @@ export class MessagingController {
             id: this.newIntentId("status-retire"),
             binding,
             capabilityProfile: this.capabilityProfile,
+            contextUsageSummary: this.contextUsageSummaryForBinding(binding),
             createdAt: this.now(),
             threadState: resolveMessagingThreadState({
               activeTurn: this.getActiveTurn(binding),
@@ -8313,9 +8383,7 @@ export class MessagingController {
       binding,
       "status_refresh",
     );
-    const backendSummary = isAcpBackendId(binding.backend)
-      ? await this.getBackendSummary(binding.backend)
-      : undefined;
+    const backendSummary = await this.getBackendSummary(binding.backend);
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       allowFullAccessEscalation: (await this.resolveFullAccessControls())
@@ -8323,6 +8391,7 @@ export class MessagingController {
       backendSummary,
       binding,
       capabilityProfile: this.capabilityProfile,
+      contextUsageSummary: this.contextUsageSummaryForBinding(binding),
       createdAt: this.now(),
       handoff: this.options.backend.handoffThreadWorkspace
         ? handoffContextForBinding(binding, snapshot)
@@ -10839,6 +10908,117 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
     return params.threadId;
   }
   return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
+}
+
+function isBackendAccountMetadataEvent(event: AgentEvent): boolean {
+  return event.notification.method === "account/updated" ||
+    event.notification.method === "account/rateLimits/updated";
+}
+
+function contextUsageSummaryFromValue(value: unknown): string | undefined {
+  const explicitSummary = findStringField(value, "summary");
+  if (explicitSummary) {
+    return explicitSummary;
+  }
+
+  const usage = findTokenUsageRecord(value);
+  if (!usage) {
+    return undefined;
+  }
+
+  const cachedInputTokens = Math.max(
+    0,
+    readNumberField(usage, "cachedInputTokens", "cached_input_tokens") ?? 0,
+  );
+  const inputTokens = Math.max(
+    0,
+    readNumberField(usage, "inputTokens", "input_tokens") ?? 0,
+  );
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = Math.max(
+    0,
+    readNumberField(usage, "outputTokens", "output_tokens") ?? 0,
+  );
+  const reasoningOutputTokens = Math.max(
+    0,
+    readNumberField(usage, "reasoningOutputTokens", "reasoning_output_tokens") ?? 0,
+  );
+  const outputLabel = reasoningOutputTokens > 0
+    ? `${formatContextUsageNumber(outputTokens)} out (${formatContextUsageNumber(
+        reasoningOutputTokens,
+      )} reasoning)`
+    : `${formatContextUsageNumber(outputTokens)} out`;
+
+  return [
+    `Latest request usage: ${formatContextUsageNumber(uncachedInputTokens)} uncached in`,
+    `${formatContextUsageNumber(cachedInputTokens)} cached`,
+    outputLabel,
+  ].join(" · ");
+}
+
+function findTokenUsageRecord(value: unknown): Record<string, unknown> | undefined {
+  const root = asPlainRecord(value);
+  if (!root) {
+    return undefined;
+  }
+  const container =
+    asPlainRecord(root.tokenUsage) ??
+    asPlainRecord(root.token_usage) ??
+    root;
+  const direct =
+    asPlainRecord(container.last) ??
+    asPlainRecord(container.last_token_usage) ??
+    asPlainRecord(container.total) ??
+    asPlainRecord(container.total_token_usage) ??
+    container;
+  if (
+    readNumberField(direct, "inputTokens", "input_tokens") !== undefined ||
+    readNumberField(direct, "cachedInputTokens", "cached_input_tokens") !== undefined ||
+    readNumberField(direct, "outputTokens", "output_tokens") !== undefined ||
+    readNumberField(
+      direct,
+      "reasoningOutputTokens",
+      "reasoning_output_tokens",
+    ) !== undefined
+  ) {
+    return direct;
+  }
+  for (const key of ["data", "payload", "info", "usage", "result"]) {
+    const nested = findTokenUsageRecord(root[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function findStringField(value: unknown, key: string): string | undefined {
+  const record = asPlainRecord(value);
+  const direct = record?.[key];
+  return typeof direct === "string" && direct.trim() ? direct.trim() : undefined;
+}
+
+function readNumberField(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function formatContextUsageNumber(value: number): string {
+  return Math.round(value).toLocaleString();
 }
 
 function turnIdForBackendEvent(event: AgentEvent): string | undefined {
