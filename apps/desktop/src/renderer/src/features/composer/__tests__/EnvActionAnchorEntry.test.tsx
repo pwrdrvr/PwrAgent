@@ -1,10 +1,16 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvActionAnchorEntry, formatDurationMs } from "../Composer";
+import {
+  EnvActionAnchorList,
+  EnvActionAnchorEntry,
+  formatDurationMs,
+  formatRunningDurationMs,
+} from "../Composer";
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
 });
 
@@ -30,6 +36,8 @@ function buildRun(
 describe("EnvActionAnchorEntry", () => {
   describe("status branches", () => {
     it("renders the running label with always-visible Dismiss while started", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(1_700_000_000_750));
       render(
         <EnvActionAnchorEntry
           run={buildRun({ status: "started", pid: 12345 })}
@@ -48,6 +56,8 @@ describe("EnvActionAnchorEntry", () => {
       ).toBeInTheDocument();
       // The pid meta and the command echo land in the same anchor.
       expect(screen.getByText(/pid 12345/)).toBeInTheDocument();
+      expect(screen.getByText(/running for 0s/)).toBeInTheDocument();
+      expect(screen.queryByText(/750ms/)).toBeNull();
       expect(screen.getByText(/\$ pnpm test/)).toBeInTheDocument();
     });
 
@@ -287,6 +297,63 @@ describe("EnvActionAnchorEntry", () => {
   });
 });
 
+describe("EnvActionAnchorList", () => {
+  it("ticks live running duration at most once per second", () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    try {
+      render(
+        <EnvActionAnchorList
+          runtime={{
+            environmentName: "PwrAgnt",
+            actionRuns: [
+              buildRun({
+                startedAt: Date.now(),
+                status: "started",
+              }),
+            ],
+          }}
+        />,
+      );
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("stops ticking after the only running anchor is dismissed", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    try {
+      render(
+        <EnvActionAnchorList
+          runtime={{
+            environmentName: "PwrAgnt",
+            actionRuns: [
+              buildRun({
+                runId: "dismissed-running-run",
+                startedAt: Date.now(),
+                status: "started",
+              }),
+            ],
+          }}
+        />,
+      );
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText("Env action running")).not.toBeInTheDocument();
+        expect(clearIntervalSpy).toHaveBeenCalled();
+      });
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+});
+
 describe("formatDurationMs", () => {
   it("returns empty for falsy / non-finite inputs", () => {
     expect(formatDurationMs(undefined)).toBe("");
@@ -334,9 +401,8 @@ describe("formatDurationMs", () => {
 
   describe("coarseAfterMinute", () => {
     it("drops the seconds portion entirely past 1 minute", () => {
-      // For the live "running for X" anchor meta, we want minute-only
-      // updates past the 1-minute mark to avoid distracting the user
-      // with a ticking sub-minute display.
+      // Static one-shot duration displays can opt into a coarser
+      // minute-only suffix after the first minute.
       expect(formatDurationMs(60_500, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(118_000, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(119_499, { coarseAfterMinute: true })).toBe("1m");
@@ -357,5 +423,29 @@ describe("formatDurationMs", () => {
       expect(formatDurationMs(60_500)).toBe("1m 1s");
       expect(formatDurationMs(6 * 60_000 + 23_000)).toBe("6m 23s");
     });
+  });
+});
+
+describe("formatRunningDurationMs", () => {
+  it("returns empty for missing, invalid, or negative inputs", () => {
+    expect(formatRunningDurationMs(undefined)).toBe("");
+    expect(formatRunningDurationMs(Number.NaN)).toBe("");
+    expect(formatRunningDurationMs(Number.POSITIVE_INFINITY)).toBe("");
+    expect(formatRunningDurationMs(-1)).toBe("");
+  });
+
+  it("formats live elapsed values in seconds without milliseconds", () => {
+    expect(formatRunningDurationMs(0)).toBe("0s");
+    expect(formatRunningDurationMs(1)).toBe("0s");
+    expect(formatRunningDurationMs(750)).toBe("0s");
+    expect(formatRunningDurationMs(999)).toBe("0s");
+    expect(formatRunningDurationMs(1_000)).toBe("1s");
+    expect(formatRunningDurationMs(59_999)).toBe("59s");
+  });
+
+  it("keeps long-running live values in seconds", () => {
+    expect(formatRunningDurationMs(60_000)).toBe("60s");
+    expect(formatRunningDurationMs(119_999)).toBe("119s");
+    expect(formatRunningDurationMs(6 * 60_000 + 23_000)).toBe("383s");
   });
 });
