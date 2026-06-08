@@ -1006,7 +1006,7 @@ describe("MessagingController", () => {
                 status: "completed",
                 output: [
                   {
-                    type: "agentMessage",
+                    type: "text",
                     text: "Fixed it.",
                   },
                 ],
