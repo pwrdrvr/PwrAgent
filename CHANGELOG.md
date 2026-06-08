@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.30 - 2026-06-08
+
+- Added the Windows port foundation with a Windows CI lane, NSIS installer packaging, Git-for-Windows bash command execution, process-tree cleanup, and cross-platform path handling. Windows installers are built as unsigned workflow artifacts while code signing is still pending.
+- Fixed directory/thread organization so the same thread never appears under multiple directory rows, ACP worktree threads group under their repository row, and pinned thread ordering works globally across Codex and ACP backends.
+- Fixed queued replies so they still dispatch after a completed turn changes branch state, while fresh sends continue to run the selected-thread branch-drift preflight.
+- Improved messaging-launched threads so the first message is materialized through the normal launchpad path, environment setup can run before the first turn, and partial launch failures bind the created thread instead of orphaning it.
+- Improved messaging status cards with real backend metadata for usage, account, and rate-limit state, while redacting OpenAI account email outside direct messages.
+- Made onboarding messaging setup safer by making Skip the default action and gating Continue behind the acknowledgement checkbox with clearer visual feedback.
+- Added clearer Env action feedback in the composer with immediate Run-button spinner state, second-granularity live durations, and a short success-confirmation window.
+- Added Codex and ACP parity gates that compare real captured turns against the shared agent-kit normalizers, including the resolved ACP tool path parity fix.
+- Updated desktop runtime, production, development, Tiptap/ProseMirror, Vite, and agent-kit dependencies; hardened CI/test behavior and purged raw protocol captures from fixtures.
+
 ## v1.0.0-beta.25 - 2026-06-07
 
 - Reworked ACP provider discovery around the shared agent-kit multi-install engine so Gemini, Grok, Kimi, and Qwen can find PATH installs, well-known install directories, and manual overrides through one consistent path.
