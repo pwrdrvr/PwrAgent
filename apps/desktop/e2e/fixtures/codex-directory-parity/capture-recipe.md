@@ -27,8 +27,8 @@ This fixture is seeded from a live Codex startup capture taken on April 19,
 - `sortKey: "updated_at"`
 - `sourceKinds: ["cli", "vscode"]`
 
-The checked-in replay fixture stays curated and normalized for Electron replay,
-but `raw.capture.jsonl` preserves the real Codex protocol evidence.
+The checked-in replay fixture stays curated and normalized for Electron replay.
+Keep raw protocol evidence outside the repository.
 
 ## Launch
 
@@ -73,5 +73,5 @@ pnpm --filter @pwragent/desktop export:session-capture -- \
 ```
 
 The replay fixture for this scenario is maintained as a curated contract
-fixture. Keep `raw.capture.jsonl` live-derived and update
+fixture. Keep raw captures live-derived outside the repository and update
 `replay.fixture.json` only as needed to reflect the normalized sidebar state.

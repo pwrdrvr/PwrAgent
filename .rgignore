@@ -14,3 +14,4 @@ docs/solutions/
 # Captured E2E protocol snippets — relevant only when debugging a
 # specific replay fixture. Mirrors the rule in the root AGENTS.md.
 apps/desktop/.local/protocol-captures/
+apps/desktop/e2e/fixtures/**/raw.capture.jsonl

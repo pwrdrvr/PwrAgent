@@ -9,13 +9,11 @@
 
 ## Promotion Notes
 
-The checked-in `raw.capture.jsonl` is a tight exported window from the source
-capture containing the terminal idle notification and `turn/completed` event.
-The full source capture also contains later idle `thread/read` responses, but
-those responses include the full historical transcript and embedded image data.
 The curated `replay.fixture.json` keeps the deterministic UI scenario small by
 using minimal startup and idle-read scaffolding with the captured terminal event
-ids and timing.
+ids and timing. Keep raw source captures outside the repository because full
+captures can include historical transcripts, embedded image data, and local
+paths.
 
 ## Reproduction Flow
 

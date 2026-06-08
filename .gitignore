@@ -17,6 +17,10 @@ excalidraw.log
 .claude/worktrees/
 .claude/worktrees/**
 
+# Raw protocol captures can include private thread previews, screenshots,
+# local paths, and operational data. Commit curated replay fixtures instead.
+apps/desktop/e2e/fixtures/**/raw.capture.jsonl
+
 # electron-builder output (signed/notarized DMG + ZIP land here)
 apps/desktop/dist/
 # pnpm deploy stage (release.mjs materializes a flat node_modules tree here)
