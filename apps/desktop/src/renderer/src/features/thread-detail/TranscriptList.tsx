@@ -293,14 +293,18 @@ function approvalDisplayCommand(params: Record<string, unknown>): string {
 }
 
 function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
-  if (typeof request.params.prompt === "string" && request.params.prompt.trim()) {
-    return request.params.prompt.trim();
-  }
-
+  const prompt =
+    typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   const command = approvalDisplayCommand(request.params);
   const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
 
+  if (prompt && commandBlock) {
+    return `${prompt}\n\n${commandBlock}`;
+  }
+  if (prompt) {
+    return prompt;
+  }
   if (reason && commandBlock) {
     return `${reason}\n\n${commandBlock}`;
   }

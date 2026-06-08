@@ -2958,6 +2958,34 @@ describe("TranscriptList", () => {
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 
+  it("shows command approval prompt and command when both are provided", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            prompt: "Kimi Code CLI wants to run Bash",
+            command: "node --version && pnpm --version",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Kimi Code CLI wants to run Bash/)).toBeInTheDocument();
+    expect(screen.getByText("Command:")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "node --version && pnpm --version"
+    );
+  });
+
   it("prefers parsed command actions for command approval display", () => {
     const { container } = render(
       <TranscriptList

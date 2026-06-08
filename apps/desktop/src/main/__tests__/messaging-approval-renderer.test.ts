@@ -36,6 +36,28 @@ describe("buildApprovalIntent", () => {
     expect(intent.body).toContain("```shell\npnpm test -- messaging-controller\n```");
   });
 
+  it("renders normalized Kimi shell approvals with the actual command", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-kimi",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-1",
+          prompt: "Kimi Code CLI wants to run Bash",
+          command: "node --version && pnpm --version",
+          displayCommand: "node --version && pnpm --version",
+        },
+      },
+    });
+
+    expect(intent.body).toContain("Kimi Code CLI wants to run Bash");
+    expect(intent.body).toContain("```shell\nnode --version && pnpm --version\n```");
+    expect(intent.body).not.toContain("```shell\nBash\n```");
+  });
+
   it("preserves backend-provided decision labels when they map to known decisions", () => {
     const intent = buildApprovalIntent({
       id: "approval-2",

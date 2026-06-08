@@ -696,6 +696,7 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
+    const command = permissionCommand(title, toolCall);
 
     return {
       method: "item/commandExecution/requestApproval",
@@ -705,8 +706,8 @@ export class AcpAgentClient {
         requestId,
         prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
         reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        command: title,
-        displayCommand: title,
+        command,
+        displayCommand: command,
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
@@ -1217,7 +1218,7 @@ function permissionPrompt(
   toolCall: Record<string, unknown>,
 ): string {
   const contentText = readToolCallText(toolCall.content);
-  if (contentText) {
+  if (contentText && !extractCommandFromText(contentText)) {
     return contentText;
   }
   const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
@@ -1227,19 +1228,83 @@ function permissionPrompt(
 }
 
 function readToolCallText(value: unknown): string | undefined {
-  if (!Array.isArray(value)) {
+  return readAcpContentText(value)?.trim() || undefined;
+}
+
+function permissionCommand(
+  title: string,
+  toolCall: Record<string, unknown>,
+): string {
+  return (
+    readDirectToolCommand(toolCall) ??
+    extractCommandFromText(readToolCallText(toolCall.content)) ??
+    title
+  );
+}
+
+function readDirectToolCommand(
+  toolCall: Record<string, unknown>,
+): string | undefined {
+  for (const key of [
+    "command",
+    "cmd",
+    "displayCommand",
+    "shellCommand",
+    "commandText",
+  ]) {
+    const value = toolCall[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function extractCommandFromText(text: string | undefined): string | undefined {
+  if (!text) {
     return undefined;
   }
-  const text = value
-    .flatMap((item) => {
-      const record = asRecord(item);
-      return record?.type === "text" && typeof record.text === "string"
-        ? [record.text.trim()]
-        : [];
-    })
-    .filter(Boolean)
-    .join("\n\n");
-  return text || undefined;
+  const trimmed = text.trim();
+  const parsedCommand = extractCommandFromJsonText(trimmed);
+  if (parsedCommand) {
+    return parsedCommand;
+  }
+  const match = /"command"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(trimmed);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return (
+      match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim() || undefined
+    );
+  }
+}
+
+function extractCommandFromJsonText(text: string): string | undefined {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    for (const key of [
+      "command",
+      "cmd",
+      "displayCommand",
+      "shellCommand",
+      "commandText",
+    ]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function permissionOutcomeFromResponse(
