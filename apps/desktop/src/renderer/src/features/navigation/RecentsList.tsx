@@ -1,6 +1,5 @@
 import { useState } from "react";
 import type {
-  AppServerBackendKind,
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
   PrSummary,
@@ -34,10 +33,7 @@ type RecentsListProps = {
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
-  onReorderThreadPins?: (
-    backend: AppServerBackendKind,
-    threadIds: string[],
-  ) => Promise<void>;
+  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
     threadIds: string[],
@@ -109,20 +105,10 @@ export function RecentsList(props: RecentsListProps) {
   );
   const unpinnedThreads = topLevelThreads.filter((thread) => !isPinnedThread(thread));
 
-  const pinnedThreadKeysForBackend = (backend: AppServerBackendKind): string[] =>
-    pinnedThreads
-      .filter((thread) => thread.source === backend)
-      .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
-
-  const reorderPins = (
-    backend: AppServerBackendKind,
-    nextThreadKeys: string[],
-  ): void => {
-    const ids = nextThreadKeys
-      .filter((threadKey) => threadByKey.get(threadKey)?.source === backend)
-      .map((threadKey) => parseThreadIdentityKey(threadKey)?.threadId)
-      .filter((threadId): threadId is string => Boolean(threadId));
-    void props.onReorderThreadPins?.(backend, ids);
+  // Pin order is global across backends, so reorder operates on the full
+  // pinned-thread key list and passes the complete new order through.
+  const reorderPins = (nextThreadKeys: string[]): void => {
+    void props.onReorderThreadPins?.(nextThreadKeys);
   };
 
   const movePinnedThreadByKeyboard = (
@@ -130,18 +116,16 @@ export function RecentsList(props: RecentsListProps) {
     direction: "up" | "down",
   ): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const backendPinnedThreadKeys = pinnedThreadKeysForBackend(thread.source);
-    const currentIndex = backendPinnedThreadKeys.indexOf(threadKey);
+    const currentIndex = pinnedThreadKeys.indexOf(threadKey);
     if (currentIndex === -1) return;
 
     const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    const targetKey = backendPinnedThreadKeys[targetIndex];
+    const targetKey = pinnedThreadKeys[targetIndex];
     if (!targetKey) return;
 
     reorderPins(
-      thread.source,
       moveThreadKey(
-        backendPinnedThreadKeys,
+        pinnedThreadKeys,
         threadKey,
         targetKey,
         direction === "up" ? "before" : "after",
@@ -326,22 +310,17 @@ export function RecentsList(props: RecentsListProps) {
                   const draggedKey = event.dataTransfer.getData("text/plain");
                   if (!draggedKey) return;
                   const draggedThread = threadByKey.get(draggedKey);
-                  if (
-                    !draggedThread ||
-                    draggedThread.source !== thread.source ||
-                    draggedThread.parentThreadId
-                  ) return;
-                  const backendPinnedThreadKeys = pinnedThreadKeysForBackend(thread.source);
+                  if (!draggedThread || draggedThread.parentThreadId) return;
                   const position = getDropIndicatorPosition(event);
-                  const nextKeys = backendPinnedThreadKeys.includes(draggedKey)
-                    ? moveThreadKey(backendPinnedThreadKeys, draggedKey, key, position)
+                  const nextKeys = pinnedThreadKeys.includes(draggedKey)
+                    ? moveThreadKey(pinnedThreadKeys, draggedKey, key, position)
                     : moveThreadKey(
-                        [...backendPinnedThreadKeys, draggedKey],
+                        [...pinnedThreadKeys, draggedKey],
                         draggedKey,
                         key,
                         position,
                       );
-                  reorderPins(thread.source, nextKeys);
+                  reorderPins(nextKeys);
                 }
               : undefined
           }
@@ -400,10 +379,7 @@ export function RecentsList(props: RecentsListProps) {
             const draggedKey = event.dataTransfer.getData("text/plain");
             const draggedThread = threadByKey.get(draggedKey);
             if (!draggedThread || draggedThread.parentThreadId || pinnedThreadKeys.includes(draggedKey)) return;
-            reorderPins(draggedThread.source, [
-              ...pinnedThreadKeysForBackend(draggedThread.source),
-              draggedKey,
-            ]);
+            reorderPins([...pinnedThreadKeys, draggedKey]);
           }}
         >
           <span>Recent threads</span>

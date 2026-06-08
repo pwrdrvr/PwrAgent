@@ -56,10 +56,7 @@ type DirectoriesListProps = {
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
-  onReorderThreadPins?: (
-    backend: AppServerBackendKind,
-    threadIds: string[],
-  ) => Promise<void>;
+  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
     threadIds: string[],
@@ -257,30 +254,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   };
 
-  const pinnedThreadKeysForBackend = (backend: AppServerBackendKind): string[] =>
-    pinnedThreads
-      .filter((thread) => thread.source === backend)
-      .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
-
-  const reorderPins = (
-    backend: AppServerBackendKind,
-    nextThreadKeys: string[],
-  ): void => {
-    const ids = nextThreadKeys
-      .filter((threadKey) => threadsByKey.get(threadKey)?.source === backend)
-      .map((threadKey) => threadsByKey.get(threadKey)?.id)
-      .filter((threadId): threadId is string => Boolean(threadId));
-    void props.onReorderThreadPins?.(backend, ids);
+  // Pin order is global across backends, so reorder submits the complete new
+  // order of pinned-thread keys (not a per-backend slice).
+  const reorderPins = (nextThreadKeys: string[]): void => {
+    void props.onReorderThreadPins?.(nextThreadKeys);
   };
 
+  // The directory's pinned thread keys (any backend), in global rank order.
   const buildDirectoryPinnedKeys = (
     directory: NavigationDirectorySummary,
-    backend: AppServerBackendKind,
   ): string[] =>
-    pinnedThreadKeys.filter(
-      (threadKey) =>
-        directory.threadKeys.includes(threadKey) &&
-        threadsByKey.get(threadKey)?.source === backend,
+    pinnedThreadKeys.filter((threadKey) =>
+      directory.threadKeys.includes(threadKey),
     );
 
   const moveDirectoryPin = (
@@ -293,18 +278,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
     const draggedThread = threadsByKey.get(draggedKey);
     const targetThread = threadsByKey.get(targetKey);
-    if (!draggedThread || !targetThread || draggedThread.source !== targetThread.source) {
+    if (!draggedThread || !targetThread) {
       return;
     }
 
-    const backendPinnedThreadKeys = pinnedThreadKeysForBackend(draggedThread.source);
-    const sourceKeys = backendPinnedThreadKeys.includes(draggedKey)
-      ? backendPinnedThreadKeys
-      : [...backendPinnedThreadKeys, draggedKey];
-    reorderPins(
-      draggedThread.source,
-      moveThreadKey(sourceKeys, draggedKey, targetKey, position),
-    );
+    // Reposition within the full pinned list (cross-backend allowed) and submit
+    // the complete new order.
+    const sourceKeys = pinnedThreadKeys.includes(draggedKey)
+      ? pinnedThreadKeys
+      : [...pinnedThreadKeys, draggedKey];
+    reorderPins(moveThreadKey(sourceKeys, draggedKey, targetKey, position));
   };
 
   const dropThreadAfterDirectoryPins = (
@@ -316,25 +299,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const draggedThread = threadsByKey.get(draggedKey);
     if (!draggedThread) return;
 
-    const backendPinnedThreadKeys = pinnedThreadKeysForBackend(draggedThread.source);
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(
-      directory,
-      draggedThread.source,
-    );
-    const targetKey = directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
+    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory);
+    const targetKey =
+      directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
 
     if (!targetKey) {
-      if (backendPinnedThreadKeys.includes(draggedKey)) return;
-      reorderPins(draggedThread.source, [...backendPinnedThreadKeys, draggedKey]);
+      if (pinnedThreadKeys.includes(draggedKey)) return;
+      reorderPins([...pinnedThreadKeys, draggedKey]);
       return;
     }
 
-    moveDirectoryPin(
-      directory,
-      draggedKey,
-      targetKey,
-      "after",
-    );
+    moveDirectoryPin(directory, draggedKey, targetKey, "after");
   };
 
   const movePinnedThreadByKeyboard = (
@@ -343,10 +318,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     direction: "up" | "down",
   ): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(
-      directory,
-      thread.source,
-    );
+    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory);
     const currentIndex = directoryPinnedThreadKeys.indexOf(threadKey);
     if (currentIndex === -1) return;
 
@@ -798,8 +770,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             if (
                               !draggedThreadKey ||
                               !draggedThread ||
-                              !directory.threadKeys.includes(draggedThreadKey) ||
-                              draggedThread.source !== thread.source
+                              !directory.threadKeys.includes(draggedThreadKey)
                             ) {
                               event.dataTransfer.dropEffect = "none";
                               setDropIndicator(undefined);

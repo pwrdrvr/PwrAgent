@@ -1308,9 +1308,9 @@ describe("Sidebar", () => {
 
     // Click Move Down on the top thread → swap order.
     await clickElement(moveDown);
-    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
-      pinnedBottom.id,
-      pinnedTop.id,
+    expect(onReorderThreadPins).toHaveBeenCalledWith([
+      `codex:${pinnedBottom.id}`,
+      `codex:${pinnedTop.id}`,
     ]);
   });
 
@@ -1466,9 +1466,9 @@ describe("Sidebar", () => {
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
 
-    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
-      "thread-updated",
-      "thread-1",
+    expect(onReorderThreadPins).toHaveBeenCalledWith([
+      "codex:thread-updated",
+      "codex:thread-1",
     ]);
   });
 
@@ -3076,32 +3076,32 @@ describe("Sidebar directory pinning", () => {
 });
 
 describe("Sidebar thread pinning Move items", () => {
-  it("disables Move Down on backend A's bottom pinned thread regardless of backend B's pinned count", async () => {
-    // Per-backend pin-rank invariant: reorder IPC is scoped to
-    // (backend, [threadId, threadId, ...]). Move Down on backend
-    // A's bottom thread must NOT promote into backend B's pinned
-    // slice. Lock the boundary so a future refactor that
-    // accidentally globalizes the sort can't slip past review.
-    const codexOnly = {
+  it("moves a pin across backends — pin order is global, not per-backend", async () => {
+    // Pin order is global across backends (mirrors directory pinning). The
+    // top global pin can Move Down past another backend's pins, producing an
+    // interleaved cross-backend order. This is exactly the behavior the old
+    // per-backend slice blocked.
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const codexTop = {
       ...sharedThread,
-      id: "codex-pinned-only",
-      title: "Codex sole pin",
+      id: "codex-top",
+      title: "Codex top pin",
       source: "codex" as const,
       pinnedRank: "1024",
     };
-    const grokTop = {
+    const grokMiddle = {
       ...sharedThread,
-      id: "grok-top",
-      title: "Grok top pin",
+      id: "grok-middle",
+      title: "Grok middle pin",
       source: "grok" as const,
-      pinnedRank: "1024",
+      pinnedRank: "2048",
     };
     const grokBottom = {
       ...sharedThread,
       id: "grok-bottom",
       title: "Grok bottom pin",
       source: "grok" as const,
-      pinnedRank: "2048",
+      pinnedRank: "3072",
     };
 
     render(
@@ -3115,20 +3115,20 @@ describe("Sidebar thread pinning Move items", () => {
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
-        threads={[codexOnly, grokTop, grokBottom]}
+        threads={[codexTop, grokMiddle, grokBottom]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
-        onReorderThreadPins={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
         onSetThreadPin={async () => undefined}
       />,
     );
 
-    // Open menu on codex's sole pin (it's at both top AND bottom
-    // of its backend's slice — but grok has TWO pins below).
+    // Codex's pin is the GLOBAL top (rank 1024). Move Up is disabled (nothing
+    // above it), but Move Down is enabled and crosses into grok's pins.
     const codexRow = screen
-      .getByRole("button", { name: /Codex sole pin/i })
+      .getByRole("button", { name: /Codex top pin/i })
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.click(
       codexRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
@@ -3138,10 +3138,16 @@ describe("Sidebar thread pinning Move items", () => {
     const moveDown = await screen.findByRole("menuitem", {
       name: /Move Down/i,
     });
-    // Per-backend slice has length 1 → both Up and Down disabled
-    // even though the global pin count is 3.
     expect(moveUp).toBeDisabled();
-    expect(moveDown).toBeDisabled();
+    expect(moveDown).toBeEnabled();
+
+    fireEvent.click(moveDown);
+    // Global, interleaved new order: grok-middle now above the codex pin.
+    expect(onReorderThreadPins).toHaveBeenCalledWith([
+      "grok:grok-middle",
+      "codex:codex-top",
+      "grok:grok-bottom",
+    ]);
   });
 
   it("invokes the reorder IPC on Cmd+Shift+ArrowDown on a focused pinned thread row", () => {
@@ -3197,9 +3203,9 @@ describe("Sidebar thread pinning Move items", () => {
       metaKey: true,
       shiftKey: true,
     });
-    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
-      pinnedBottom.id,
-      pinnedTop.id,
+    expect(onReorderThreadPins).toHaveBeenCalledWith([
+      `codex:${pinnedBottom.id}`,
+      `codex:${pinnedTop.id}`,
     ]);
   });
 });

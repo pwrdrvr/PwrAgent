@@ -443,14 +443,18 @@ export type SetThreadAgentResponse = {
 };
 
 export type ReorderThreadPinsRequest = {
-  backend?: AppServerBackendKind;
-  /** Complete pinned order for this backend, first item at the top. */
-  threadIds: ThreadIdentifier[];
+  /**
+   * Complete pinned order across ALL backends, first item at the top.
+   * Entries are thread identity keys (`buildThreadIdentityKey`), so a Codex
+   * pin and an ACP pin can be interleaved in any order — pin order is global,
+   * not per-backend (mirrors directory pinning).
+   */
+  threadKeys: string[];
 };
 
 export type ReorderThreadPinsResponse = {
-  backend: AppServerBackendKind;
-  pinnedRanks: Record<ThreadIdentifier, string>;
+  /** Thread identity key -> pin rank. */
+  pinnedRanks: Record<string, string>;
 };
 
 export type SetThreadParentRequest = {

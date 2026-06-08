@@ -16,6 +16,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   comparePinnedDirectories,
   comparePinnedThreads,
   isPinnedDirectory,
@@ -107,10 +108,7 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     pinned: boolean,
   ) => Promise<void>;
-  onReorderThreadPins?: (
-    backend: AppServerBackendKind,
-    threadIds: string[],
-  ) => Promise<void>;
+  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
@@ -492,23 +490,18 @@ export function Sidebar(props: SidebarProps) {
   };
 
   /**
-   * Pinned-thread order, grouped by backend. The thread reorder
-   * IPC is per-backend (mirrors per-backend pin ranks), so the
-   * "Move Up / Move Down" menu items have to compute per-backend
-   * adjacency to figure out whether the target row is at the top
-   * or bottom of its backend's pinned section.
+   * Pinned-thread identity keys in stable global order. Pin order is global
+   * across backends (mirrors directory pinning), so a single sorted array is
+   * enough to compute Move Up / Move Down adjacency for the context menu.
    */
-  const pinnedThreadIdsByBackend = useMemo(() => {
-    const byBackend = new Map<AppServerBackendKind, string[]>();
-    for (const thread of [...props.threads]
-      .filter(isPinnedThread)
-      .sort(comparePinnedThreads)) {
-      const list = byBackend.get(thread.source) ?? [];
-      list.push(thread.id);
-      byBackend.set(thread.source, list);
-    }
-    return byBackend;
-  }, [props.threads]);
+  const pinnedThreadKeysInOrder = useMemo(
+    () =>
+      [...props.threads]
+        .filter(isPinnedThread)
+        .sort(comparePinnedThreads)
+        .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+    [props.threads],
+  );
 
   /**
    * Pinned-directory keys in stable user-curated order. Directory
@@ -529,17 +522,18 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
     direction: "up" | "down",
   ): void => {
-    const ordered = pinnedThreadIdsByBackend.get(thread.source) ?? [];
-    const currentIndex = ordered.indexOf(thread.id);
+    const ordered = pinnedThreadKeysInOrder;
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const currentIndex = ordered.indexOf(threadKey);
     if (currentIndex === -1) return;
     const targetIndex =
       direction === "up" ? currentIndex - 1 : currentIndex + 1;
     if (targetIndex < 0 || targetIndex >= ordered.length) return;
-    const targetId = ordered[targetIndex]!;
-    const nextIds = moveThreadKey(
+    const targetKey = ordered[targetIndex]!;
+    const nextKeys = moveThreadKey(
       ordered,
-      thread.id,
-      targetId,
+      threadKey,
+      targetKey,
       direction === "up" ? "before" : "after",
     );
     // Intentionally do NOT dismiss the menu after a Move — the
@@ -550,7 +544,7 @@ export function Sidebar(props: SidebarProps) {
     // tick, so subsequent Move clicks see updated adjacency.
     // Pin / Unpin / Rename / Archive are terminal actions and
     // still dismiss the menu.
-    void props.onReorderThreadPins?.(thread.source, nextIds);
+    void props.onReorderThreadPins?.(nextKeys);
   };
 
   const moveDirectoryFromContextMenu = (
@@ -650,21 +644,19 @@ export function Sidebar(props: SidebarProps) {
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
    * section) AND the reorder IPC is wired. Each item is then
-   * disabled when the thread is at the top / bottom of its
-   * backend's pinned slice. We render the items even when disabled
+   * disabled when the thread is at the top / bottom of the global
+   * pinned section. We render the items even when disabled
    * so the menu layout doesn't jump as the user walks the list.
    */
   const contextMenuShowMoveItems = Boolean(
     contextMenu?.thread.pinnedRank && props.onReorderThreadPins,
   );
   const contextMenuPinnedThreadIndex = contextMenu
-    ? (pinnedThreadIdsByBackend.get(contextMenu.thread.source) ?? []).indexOf(
-        contextMenu.thread.id,
+    ? pinnedThreadKeysInOrder.indexOf(
+        buildThreadIdentityKey(contextMenu.thread.source, contextMenu.thread.id),
       )
     : -1;
-  const contextMenuPinnedThreadCount = contextMenu
-    ? (pinnedThreadIdsByBackend.get(contextMenu.thread.source) ?? []).length
-    : 0;
+  const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
   const contextMenuCanMoveUp =
     contextMenuShowMoveItems && contextMenuPinnedThreadIndex > 0;
   const contextMenuCanMoveDown =
