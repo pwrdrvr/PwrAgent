@@ -1633,7 +1633,11 @@ describe("CodexAppServerClient", () => {
     vi.resetModules();
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
-        if (targetPath === "/Users/huntharo/.codex/worktrees/0cb4/web-app") {
+        // The enricher resolves the worktree cwd before calling access; on
+        // Windows that turns the Unix literal into a drive-prefixed path.
+        // Compare against the resolved form so the mock matches on both
+        // platforms (path.resolve is a no-op for absolute POSIX paths).
+        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/0cb4/web-app")) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       })
@@ -1683,7 +1687,9 @@ describe("CodexAppServerClient", () => {
     });
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
-        if (targetPath === "/Users/huntharo/.codex/worktrees/be87/search-product") {
+        // Compare against the resolved form so the mock matches the path the
+        // enricher actually passes to access on both POSIX and Windows.
+        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/be87/search-product")) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       }),

@@ -541,6 +541,14 @@ export class MessagingController {
     string,
     ReturnType<typeof setTimeout>
   >();
+  // Set once dispose() runs. A monitor tick that was already in-flight when
+  // dispose() cleared the timer maps would otherwise re-arm a fresh recurring
+  // timer at the end of its run (the timer-map `has` guard is false post-clear),
+  // resurrecting a timer that keeps touching SQLite after the store is closed.
+  // On POSIX a lingering tick is harmless, but on Windows it keeps the WAL file
+  // handle open, which blocks the test harness from deleting the temp profile
+  // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
+  private disposed = false;
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -2802,6 +2810,7 @@ export class MessagingController {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.turnAdmission.dispose();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -8202,6 +8211,7 @@ export class MessagingController {
 
   private scheduleMonitorTick(binding: MessagingBindingRecord): void {
     if (
+      this.disposed ||
       binding.revokedAt ||
       !binding.monitor?.enabled ||
       this.monitorTimersByBindingId.has(binding.id)
@@ -8221,6 +8231,7 @@ export class MessagingController {
     subscription: MessagingMonitorSubscriptionRecord,
   ): void {
     if (
+      this.disposed ||
       subscription.revokedAt ||
       !subscription.monitor.enabled ||
       this.monitorTimersBySubscriptionId.has(subscription.id)

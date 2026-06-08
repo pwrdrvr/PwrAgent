@@ -156,15 +156,41 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
+// Strip a leading shell-interpreter wrapper so we show the command the agent
+// actually ran rather than the interpreter's full path. Handles POSIX login
+// shells (`/bin/sh -lc <cmd>`, `bash -lc <cmd>`) and Windows interpreters
+// (`"C:\...\powershell.exe" -Command <cmd>`, `cmd.exe /c <cmd>`,
+// `bash.exe -lc <cmd>`). The full, unmodified command is preserved separately
+// as `rawCommand` for the expanded details view.
+//
+// The Windows branch matches the interpreter path in two forms: quoted
+// (`"[^"]*…\.exe"`, which permits spaces — e.g. `"C:\Program Files\Git\bin\
+// bash.exe"`) and unquoted (`[^\s"]*…\.exe`, no spaces). A single
+// `[^\s"]*` couldn't span a spaced path inside quotes, so a quoted Git-bash
+// invocation under "Program Files" would otherwise show the full path.
+function stripShellWrapper(command: string): string {
+  return command
+    .trim()
+    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-lc\s+/i, "")
+    .replace(
+      /^(?:"[^"]*(?:powershell|pwsh|cmd|bash)\.exe"|[^\s"]*(?:powershell|pwsh|cmd|bash)\.exe)\s+(?:-Command|-lc|-c|\/d\s+\/s\s+\/c|\/c)\s+/i,
+      "",
+    )
+    .trim();
+}
+
+function normalizeCommandText(command: string): string {
+  return stripShellWrapper(command)
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function formatCommandLabel(command: string | undefined): string {
   if (!command) {
     return "Ran command";
   }
-
-  const stripped = command
-    .replace(/^\/bin\/[a-z]+ -lc /, "")
-    .replace(/^['"]|['"]$/g, "");
-  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  const collapsed = normalizeCommandText(command);
   if (!collapsed) {
     return "Ran command";
   }
@@ -176,12 +202,7 @@ function readDisplayCommand(command: string | undefined): string | undefined {
   if (!command) {
     return undefined;
   }
-
-  const stripped = command
-    .replace(/^\/bin\/[a-z]+ -lc /, "")
-    .replace(/^['"]|['"]$/g, "");
-  const collapsed = stripped.replace(/\s+/g, " ").trim();
-  return collapsed || undefined;
+  return normalizeCommandText(command) || undefined;
 }
 
 function buildLiveCommandDetail(
@@ -830,6 +851,19 @@ export function summarizeActivityStatus(
   return details.some((detail) => detail.status === "completed") ? "completed" : undefined;
 }
 
+// Derive a short tool/command name from an activity detail label for the
+// collapsed summary. Guards against Windows drive-letter paths: a label like
+// "C:\\...\\powershell.exe ..." must not be split on ":" (which yields "C") —
+// basename it instead.
+function commandSummaryName(label: string): string | undefined {
+  const trimmed = label.trim();
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+    const base = trimmed.split(/[\\/]/).pop() ?? trimmed;
+    return base.split(/\s+/)[0]?.trim() || undefined;
+  }
+  return trimmed.split(":")[0]?.split(" - ")[0]?.trim() || undefined;
+}
+
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
   const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
@@ -837,7 +871,7 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     ...new Set(
       primaryDetails
         .filter((detail) => detail.kind !== "read")
-        .map((detail) => detail.label.split(":")[0]?.split(" - ")[0]?.trim())
+        .map((detail) => commandSummaryName(detail.label))
         .filter(Boolean)
     ),
   ];

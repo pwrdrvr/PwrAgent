@@ -233,9 +233,9 @@ describe("createMainWindow", () => {
     createMainWindow();
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
-    expect(browserWindowState.options?.webPreferences?.preload).toContain(
-      "preload/index.cjs"
-    );
+    expect(
+      browserWindowState.options?.webPreferences?.preload?.replace(/\\/g, "/")
+    ).toContain("preload/index.cjs");
     expect(browserWindowState.options?.webPreferences?.contextIsolation).toBe(
       true
     );
@@ -438,9 +438,8 @@ describe("createMainWindow", () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();
 
-    expect(browserWindowState.loadFile).toHaveBeenCalledWith(
-      expect.stringContaining("renderer/index.html")
-    );
+    const loadedPath = browserWindowState.loadFile?.mock.calls[0]?.[0] ?? "";
+    expect(loadedPath.replace(/\\/g, "/")).toContain("renderer/index.html");
   });
 
   it("attaches startup CPU profiling before the first renderer navigation", async () => {

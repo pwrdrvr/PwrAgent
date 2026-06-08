@@ -127,6 +127,95 @@ jobs:
         timeout-minutes: 10
         run: pnpm run test
 
+  windows:
+    name: Windows (build + test)
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        timeout-minutes: 10
+
+      # The Linux configure-nodejs / install-ripgrep composite actions are
+      # POSIX-only, so set up Node + pnpm + ripgrep directly here. Git-for-Windows
+      # (bundling bash.exe, used by the agent's shell tools) is preinstalled on
+      # windows-latest runners.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        timeout-minutes: 5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        timeout-minutes: 10
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: pnpm install --frozen-lockfile
+
+      - name: Install ripgrep
+        timeout-minutes: 5
+        run: choco install ripgrep -y --no-progress
+
+      - name: Type check
+        timeout-minutes: 10
+        run: pnpm typecheck
+
+      - name: Build
+        timeout-minutes: 15
+        run: pnpm run build
+
+      - name: Test
+        timeout-minutes: 20
+        run: pnpm run test
+
+  windows-package:
+    name: Windows installer (label-gated)
+    # Opt-in only: add the `ci:windows-package` label to a PR to validate the
+    # Windows NSIS installer build. Off by default — never runs on normal
+    # PRs/pushes, so the ~15-minute packaging cost is paid only on demand.
+    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-package') }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        timeout-minutes: 10
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        timeout-minutes: 5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        timeout-minutes: 10
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: pnpm install --frozen-lockfile
+
+      - name: Package Windows installer (unsigned, no publish)
+        timeout-minutes: 25
+        run: node apps/desktop/scripts/release.mjs --win --no-publish
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: windows-installer-pr
+          path: |
+            apps/desktop/release-stage/dist/*.exe
+            apps/desktop/release-stage/dist/*.exe.blockmap
+            apps/desktop/release-stage/dist/SHA256SUMS
+          retention-days: 7
+
   desktop-e2e:
     name: Desktop E2E
     if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}

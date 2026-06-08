@@ -98,6 +98,15 @@ afterAll(() => {
 
 const execFileAsync = promisify(execFileCallback);
 
+// The registry resolves Codex worktree/project cwds and surfaces them as
+// forward-slashed directory identifiers (path.resolve + slash flip, matching
+// the enricher's toDirectoryId). `expectedDir` mirrors that so expected ids
+// match the received values on both POSIX and Windows: it is a no-op for an
+// absolute POSIX path, and on Windows turns `/Users/x` into `C:/Users/x`.
+function expectedDir(p: string): string {
+  return path.resolve(p).replace(/\\/g, "/");
+}
+
 async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -3614,11 +3623,13 @@ script = "echo setup"
         executionMode: "full-access",
         workMode: "worktree",
         linkedDirectory: {
-          id: root,
+          // Directory identifiers are forward-slash + path.resolve normalized by
+          // the product on every platform; expectedDir mirrors that (no-op on POSIX).
+          id: expectedDir(root),
           kind: "worktree",
           label: "app",
-          path: root,
-          worktreePath,
+          path: expectedDir(root),
+          worktreePath: expectedDir(worktreePath),
         },
       });
       expect(response.codexEnvironmentRuntime).toMatchObject({
@@ -3650,7 +3661,7 @@ script = "echo setup"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -5014,9 +5025,13 @@ script = "echo setup"
         updatedAt: 3_000,
         linkedDirectories: [
           {
-            id: projectA,
+            // The product resolves + forward-slashes the worktree threads'
+            // directory paths during backfill, so the local thread must carry
+            // the same normalized form for navigation grouping to collapse all
+            // three threads under one directory. expectedDir is a no-op on POSIX.
+            id: expectedDir(projectA),
             label: "ProjectA",
-            path: projectA,
+            path: expectedDir(projectA),
             kind: "local",
           },
         ],
@@ -5137,16 +5152,16 @@ script = "echo setup"
     expect(
       overlaysByThreadId["project-a-worktree-2"]?.extraLinkedDirectories[0],
     ).toMatchObject({
-      id: nestedWorktreeCwd,
-      path: projectA,
-      worktreePath: worktree2,
+      id: expectedDir(nestedWorktreeCwd),
+      path: expectedDir(projectA),
+      worktreePath: expectedDir(worktree2),
       kind: "worktree",
     });
     expect(snapshot.directories).toEqual([
       expect.objectContaining({
-        key: `directory:${projectA}`,
+        key: `directory:${expectedDir(projectA)}`,
         label: "ProjectA",
-        path: projectA,
+        path: expectedDir(projectA),
         threadKeys: [
           "codex:project-a-local",
           "codex:project-a-worktree-1",
@@ -5230,9 +5245,9 @@ script = "echo setup"
     ).resolves.toMatchObject({
       extraLinkedDirectories: [
         expect.objectContaining({
-          id: worktreePath,
-          path: projectA,
-          worktreePath,
+          id: expectedDir(worktreePath),
+          path: expectedDir(projectA),
+          worktreePath: expectedDir(worktreePath),
           kind: "worktree",
         }),
       ],
@@ -5299,9 +5314,9 @@ script = "echo setup"
     ).resolves.toMatchObject({
       extraLinkedDirectories: [
         {
-          id: projectA,
+          id: expectedDir(projectA),
           label: "ProjectA",
-          path: projectA,
+          path: expectedDir(projectA),
           kind: "local",
         },
       ],
@@ -5575,9 +5590,9 @@ script = "echo setup"
     ).resolves.toMatchObject({
       extraLinkedDirectories: [
         expect.objectContaining({
-          id: nestedWorktreeCwd,
-          path: projectA,
-          worktreePath,
+          id: expectedDir(nestedWorktreeCwd),
+          path: expectedDir(projectA),
+          worktreePath: expectedDir(worktreePath),
           kind: "worktree",
         }),
       ],
@@ -6091,7 +6106,7 @@ script = "pnpm install"
       ]);
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -6489,10 +6504,13 @@ script = "pnpm install"
         projectKey: "/repo-a",
         linkedDirectories: [
           {
-            id: "/repo-a",
+            // Directory identifiers are path.resolve + forward-slash normalized
+            // by the product on every platform; expectedDir mirrors that (no-op
+            // on POSIX). projectKey stays the raw cwd, which the product leaves verbatim.
+            id: expectedDir("/repo-a"),
             kind: "local",
             label: "repo-a",
-            path: "/repo-a",
+            path: expectedDir("/repo-a"),
           },
         ],
       }),
@@ -6539,10 +6557,10 @@ script = "pnpm install"
         projectKey: "/Users/test/.pwragent/projects",
         linkedDirectories: [
           {
-            id: "/Users/test/.pwragent/projects",
+            id: expectedDir("/Users/test/.pwragent/projects"),
             kind: "local",
             label: "projects",
-            path: "/Users/test/.pwragent/projects",
+            path: expectedDir("/Users/test/.pwragent/projects"),
           },
         ],
       }),
@@ -6720,7 +6738,7 @@ name = "Repo Environment"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -6790,7 +6808,7 @@ command = "pnpm dev:messaging"
       ]);
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -6848,7 +6866,7 @@ command = "pnpm dev:messaging"
       ]);
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -6967,7 +6985,7 @@ command = "pnpm dev:messaging"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7069,13 +7087,18 @@ command = "pnpm test"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
   it("refreshes stale thread environment actions before running a command", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
     const outputPath = path.join(root, "action.txt");
+    // The action command embeds this path unquoted into a shell redirection.
+    // On Windows the action runs through Git bash, which mangles unquoted
+    // backslash paths — forward-slash the path so the redirection target is
+    // valid in bash (no-op on POSIX, and Git bash accepts `C:/...`).
+    const shellOutputPath = outputPath.replace(/\\/g, "/");
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
       path.join(root, ".codex", "environments", "environment.toml"),
@@ -7085,7 +7108,7 @@ name = "PwrAgnt"
 
 [[actions]]
 name = "Dev - Messaging"
-command = '''printf action-ran > ${outputPath}'''
+command = '''printf action-ran > ${shellOutputPath}'''
 `,
       "utf8",
     );
@@ -7140,7 +7163,7 @@ command = '''printf action-ran > ${outputPath}'''
       await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7214,9 +7237,16 @@ command = '''printf action-ran > ${outputPath}'''
           ],
         },
       });
+      // The action writes process.cwd() (native separators on Windows). Compare
+      // both sides forward-slashed so a backslash/forward-slash difference
+      // doesn't fail the match — no-op on POSIX where there are no backslashes.
       await expectEventually(
-        async () => await readFile(outputPath, "utf8"),
-        await realpath(worktreePath),
+        async () =>
+          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
+            /\\/g,
+            "/",
+          ),
+        (await realpath(worktreePath)).replace(/\\/g, "/"),
       );
       await expect(
         overlayStore.getThreadOverlayState({
@@ -7230,7 +7260,7 @@ command = '''printf action-ran > ${outputPath}'''
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7303,13 +7333,19 @@ command = '''printf action-ran > ${outputPath}'''
           ],
         },
       });
+      // Compare both sides forward-slashed so native Windows separators in the
+      // captured process.cwd() don't fail the match — no-op on POSIX.
       await expectEventually(
-        async () => await readFile(outputPath, "utf8"),
-        await realpath(localPath),
+        async () =>
+          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
+            /\\/g,
+            "/",
+          ),
+        (await realpath(localPath)).replace(/\\/g, "/"),
       );
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7377,7 +7413,7 @@ command = '''printf action-ran > ${outputPath}'''
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7493,7 +7529,7 @@ command = '''printf action-ran > ${outputPath}'''
       );
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 15_000);
 
@@ -7761,7 +7797,10 @@ script = "printf setup-output"
     });
     const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
       expect(params).toMatchObject({
-        cwd: root,
+        // The real GitDirectoryService forward-slashes the prepared workspace
+        // cwd it returns (no-op on POSIX). The setup command runs from that
+        // normalized cwd, so the expected value must be slash-flipped too.
+        cwd: root.replace(/\\/g, "/"),
         command: "printf setup-output",
         mode: "wait",
       });
@@ -7826,7 +7865,7 @@ script = "printf setup-output"
       expect(commandRunner).toHaveBeenCalledTimes(1);
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7884,7 +7923,7 @@ script = "printf setup-output"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -7931,11 +7970,11 @@ script = "printf setup-output"
       threadId: "thread-1",
     });
     expect(response.linkedDirectory).toEqual({
-      id: "/repo/app",
+      id: expectedDir("/repo/app"),
       kind: "worktree",
       label: "app",
-      path: "/repo/app",
-      worktreePath: "/repo/app/.worktrees/thread-1/app",
+      path: expectedDir("/repo/app"),
+      worktreePath: expectedDir("/repo/app/.worktrees/thread-1/app"),
     });
 
     await registry.close();
@@ -7991,7 +8030,7 @@ script = "printf setup-output"
       workMode: "local",
       linkedDirectory: {
         kind: "local",
-        path: "/repo/app/.worktrees/parent/app",
+        path: expectedDir("/repo/app/.worktrees/parent/app"),
       },
     });
     await expect(
@@ -8272,7 +8311,7 @@ command = "pnpm dev"
       );
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -8325,11 +8364,11 @@ command = "pnpm dev"
       threadId: "thread-fork",
     });
     expect(response.linkedDirectory).toEqual({
-      id: "/repo/app",
+      id: expectedDir("/repo/app"),
       kind: "worktree",
       label: "app",
-      path: "/repo/app",
-      worktreePath: "/repo/app/.worktrees/thread-fork/app",
+      path: expectedDir("/repo/app"),
+      worktreePath: expectedDir("/repo/app/.worktrees/thread-fork/app"),
     });
 
     await registry.close();
@@ -8431,7 +8470,7 @@ script = "printf setup-failed && exit 42"
       expect(codexClient.lastStartTurnParams).toBeUndefined();
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -8512,7 +8551,7 @@ command = "pnpm dev"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -8560,11 +8599,11 @@ command = "pnpm dev"
         projectKey: "/repo/app/.worktrees/thread-1/app",
         linkedDirectories: [
           {
-            id: "/repo/app",
+            id: expectedDir("/repo/app"),
             kind: "worktree",
             label: "app",
-            path: "/repo/app",
-            worktreePath: "/repo/app/.worktrees/thread-1/app",
+            path: expectedDir("/repo/app"),
+            worktreePath: expectedDir("/repo/app/.worktrees/thread-1/app"),
           },
         ],
       }),
@@ -9704,7 +9743,7 @@ command = "pnpm dev"
       await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
       await registry.close();
-      await rm(tempHome, { recursive: true, force: true });
+      await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       if (previousHome === undefined) {
         delete process.env.PWRAGENT_HOME;
       } else {
@@ -11764,7 +11803,7 @@ command = "pnpm dev"
 
       await registry.close();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -12389,7 +12428,7 @@ command = "pnpm dev"
 
       await registry.close();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -13395,7 +13434,7 @@ command = "pnpm dev"
       });
     } finally {
       await registry.close();
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

@@ -178,6 +178,10 @@ export function disposeAppState(): void {
 export function resetAppStateForTests(): void {
   profileRuntimeHeartbeat?.stop();
   profileRuntimeHeartbeat = null;
+  // Close the sqlite handle before dropping the reference. On Windows an open
+  // better-sqlite3 file handle keeps a lock that blocks the test harness from
+  // removing its temp profile dir (EBUSY on unlink of state.db).
+  stateDb?.close();
   stateDb = null;
   messagingStore = null;
   overlayStore = null;

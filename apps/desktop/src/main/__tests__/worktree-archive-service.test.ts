@@ -39,6 +39,9 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test User"]);
+    // Keep restored file content LF on all platforms; Windows git otherwise applies CRLF.
+    await git(repoPath, ["config", "core.autocrlf", "false"]);
+    await git(repoPath, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
     await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n", "utf8");
     await git(repoPath, ["add", "."]);
@@ -101,6 +104,9 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test User"]);
+    // Keep restored file content LF on all platforms; Windows git otherwise applies CRLF.
+    await git(repoPath, ["config", "core.autocrlf", "false"]);
+    await git(repoPath, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
@@ -127,6 +133,9 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test User"]);
+    // Keep restored file content LF on all platforms; Windows git otherwise applies CRLF.
+    await git(repoPath, ["config", "core.autocrlf", "false"]);
+    await git(repoPath, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
@@ -172,6 +181,9 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test User"]);
+    // Keep restored file content LF on all platforms; Windows git otherwise applies CRLF.
+    await git(repoPath, ["config", "core.autocrlf", "false"]);
+    await git(repoPath, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);

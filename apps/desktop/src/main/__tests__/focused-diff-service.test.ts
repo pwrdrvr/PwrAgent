@@ -286,6 +286,7 @@ describe("FocusedDiffService", () => {
   it("uses the configured xAI key with the focused-diff runtime model and base URL", async () => {
     const temp = await createTemporaryTestDirectory();
     const originalHome = process.env.HOME;
+    const originalPwragentHome = process.env.PWRAGENT_HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     const originalXaiApiKey = process.env.XAI_API_KEY;
     const originalXaiBaseUrl = process.env.XAI_BASE_URL;
@@ -320,12 +321,22 @@ describe("FocusedDiffService", () => {
 
     try {
       process.env.HOME = temp.path;
+      // Pin PWRAGENT_HOME (not just HOME) so the runtime config resolver finds
+      // our tmp config dir on every platform. The product resolves config via
+      // resolveGrokAppServerRuntimeConfig() with no homeDir, falling back to
+      // os.homedir() — which ignores HOME on Windows (it reads USERPROFILE), so
+      // a HOME-only override left the resolver pointed at the real user's
+      // config dir and the configured xai_base_url was never read (base URL
+      // defaulted to https://api.x.ai/v1). PWRAGENT_HOME wins unconditionally
+      // in the resolver, keeping this hermetic. Both the write below and the
+      // product read go through PWRAGENT_HOME, so they target the same path.
+      process.env.PWRAGENT_HOME = temp.path;
       delete process.env.XDG_CONFIG_HOME;
       delete process.env.XAI_API_KEY;
       delete process.env.XAI_BASE_URL;
       delete process.env.GROK_MODEL;
 
-      const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+      const configPath = defaultGrokAppServerConfigPath({ pwragentHome: temp.path });
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -369,6 +380,11 @@ describe("FocusedDiffService", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = originalHome;
+      }
+      if (originalPwragentHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = originalPwragentHome;
       }
       if (originalXdgConfigHome === undefined) {
         delete process.env.XDG_CONFIG_HOME;

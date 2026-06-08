@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   accessSync,
@@ -21,6 +21,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import { windowsBashCandidates } from "../windows-shell";
 import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
@@ -509,6 +510,7 @@ function runShellCommand(
     let timedOut = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
+    let forceSettleHandle: NodeJS.Timeout | undefined;
 
     const appendOutput = (text: string) => {
       combinedOutput = `${combinedOutput}${text}`.slice(-32_000);
@@ -522,7 +524,13 @@ function runShellCommand(
         if (process.platform !== "win32") {
           process.kill(-child.pid, signal);
         } else {
-          child.kill(signal);
+          // child.kill only terminates the immediate bash.exe; its children
+          // (the actual command, e.g. `sleep`) linger, which keeps the `close`
+          // event from firing (timeouts hang) and holds handles on the
+          // workspace temp dir (EBUSY on cleanup). Kill the whole process tree.
+          spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+            stdio: "ignore",
+          });
         }
       } catch (error) {
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
@@ -546,8 +554,26 @@ function runShellCommand(
         clearTimeout(killHandle);
         killHandle = undefined;
       }
+      if (forceSettleHandle) {
+        clearTimeout(forceSettleHandle);
+        forceSettleHandle = undefined;
+      }
       cleanupShellEnvironmentCaptureTarget(capture);
       callback();
+    };
+
+    const rejectTimeout = () => {
+      settle(() => {
+        reject(
+          new CodexEnvironmentCommandError(
+            `Codex environment command timed out after ${params.timeoutMs}ms`,
+            {
+              durationMs: Date.now() - startedAt,
+              output: combinedOutput.trimEnd(),
+            },
+          ),
+        );
+      });
     };
 
     if (params.mode === "wait" && params.timeoutMs && params.timeoutMs > 0) {
@@ -566,6 +592,19 @@ function runShellCommand(
         killHandle = setTimeout(() => {
           if (!closed) {
             terminateChild("SIGKILL");
+            // The kill should make the child emit "close" and reject below. But
+            // if it doesn't (e.g. a Windows grandchild keeps a stdio pipe open
+            // after taskkill), force-settle the timeout anyway so the command
+            // never hangs the caller.
+            forceSettleHandle = setTimeout(() => {
+              if (!closed) {
+                environmentRuntimeLog.error(
+                  "codex-environment-command-timeout-force-settle",
+                  { processId, command: params.command, cwd: params.cwd },
+                );
+                rejectTimeout();
+              }
+            }, 3_000);
           }
         }, 2_000);
       }, params.timeoutMs);
@@ -957,12 +996,12 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
 
 function resolveCommandShell(env: NodeJS.ProcessEnv): string {
   const requested = env.SHELL?.trim() || process.env.SHELL?.trim();
-  const candidates = [
-    requested,
-    "/bin/zsh",
-    "/bin/bash",
-    "/bin/sh",
-  ];
+  // Windows has no /bin/sh; run the agent's bash scripts through
+  // Git-for-Windows bash (already a hard dependency) instead.
+  const candidates =
+    process.platform === "win32"
+      ? [requested, ...windowsBashCandidates()]
+      : [requested, "/bin/zsh", "/bin/bash", "/bin/sh"];
   const inspected: Array<{ shell: string; reason: string }> = [];
 
   for (const shell of [...new Set(candidates.filter(Boolean))] as string[]) {

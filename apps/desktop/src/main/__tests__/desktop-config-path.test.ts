@@ -13,7 +13,7 @@ describe("desktop config path", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.config/pwragent");
+    ).toBe(path.join("/Users/tester", ".config", "pwragent"));
   });
 
   it("prefers XDG_CONFIG_HOME when present", () => {
@@ -23,7 +23,7 @@ describe("desktop config path", () => {
         homeDir: "/Users/tester",
         xdgConfigHome: "/tmp/xdg-config",
       }),
-    ).toBe("/tmp/xdg-config/pwragent");
+    ).toBe(path.join("/tmp/xdg-config", "pwragent"));
   });
 
   it("places config under the active profile when PWRAGENT_HOME is set", () => {
@@ -34,7 +34,16 @@ describe("desktop config path", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe(path.join("/tmp/pwragent-home/profiles/default", "config.toml"));
+    ).toBe(
+      // The product `path.resolve`s PWRAGENT_HOME, so mirror that here to pick
+      // up the drive prefix on Windows.
+      path.join(
+        path.resolve("/tmp/pwragent-home"),
+        "profiles",
+        "default",
+        "config.toml",
+      ),
+    );
   });
 
   it("defaults to the profile path under ~/.pwragent/", () => {
@@ -43,7 +52,7 @@ describe("desktop config path", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.pwragent/profiles/default/config.toml");
+    ).toBe(path.join("/Users/tester", ".pwragent", "profiles", "default", "config.toml"));
   });
 
   it("uses --profile for the profile path", () => {
@@ -53,6 +62,6 @@ describe("desktop config path", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.pwragent/profiles/work/config.toml");
+    ).toBe(path.join("/Users/tester", ".pwragent", "profiles", "work", "config.toml"));
   });
 });

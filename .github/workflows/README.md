@@ -7,6 +7,7 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 |---|---|---|
 | `ci:build-preview` | `preview-build.yml` | Builds an unsigned macOS preview DMG and uploads it as a workflow artifact. Use for PRs that change release packaging, installer assets, or desktop distribution behavior. |
 | `ci:live-agent-core` | `ci.yml` | Runs the live agent-core smoke test even when the changed-file detector would otherwise skip it. |
+| `ci:windows-package` | `ci.yml` | Builds the unsigned Windows NSIS installer (`release.mjs --win`) and uploads it as a workflow artifact. Off by default — the normal Windows CI job is build + test only. Add this label to validate the installer build on a PR before tagging a release. The release workflow (`release.yml`) builds the Windows installer automatically on version tags. |
 
 If you add another label-triggered workflow path, document it here in the same
 change as the workflow update.

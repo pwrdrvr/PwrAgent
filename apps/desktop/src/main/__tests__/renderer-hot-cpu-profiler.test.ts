@@ -266,7 +266,10 @@ describe("RendererHotCpuProfiler", () => {
     await profiler.stop("test-complete");
 
     const snapshotFilenames = target.takeHeapSnapshot.mock.calls.map((call) =>
-      call[0].split("/").at(-1),
+      // The product builds snapshot paths with path.join, so on Windows they
+      // are backslash-separated. Normalize before extracting the basename so
+      // the split works on every platform (no-op on POSIX).
+      call[0].replace(/\\/g, "/").split("/").at(-1),
     );
     expect(snapshotFilenames).toEqual([
       "renderer-hot-0001-start.heapsnapshot",

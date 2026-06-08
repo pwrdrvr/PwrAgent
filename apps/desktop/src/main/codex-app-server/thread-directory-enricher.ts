@@ -9,6 +9,16 @@ import { getMainLogger } from "../log";
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
 
+/**
+ * Normalize a resolved filesystem path to forward slashes for use as a stable,
+ * cross-platform directory identifier. No-op on POSIX; on Windows this turns
+ * `C:\Users\…` into `C:/Users/…` so directory ids/keys read identically across
+ * hosts (and match how `computeWorktreePath` already emits worktree paths).
+ */
+function toDirectoryId(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 export type ThreadDirectoryEnrichment = {
   linkedDirectories: LinkedDirectorySummary[];
   observedGitBranch?: string;
@@ -132,9 +142,9 @@ async function buildLinkedDirectoryFromGitMetadata(
   return {
     evidence,
     directory: {
-      id: repositoryPath,
-      path: repositoryPath,
-      worktreePath,
+      id: toDirectoryId(repositoryPath),
+      path: toDirectoryId(repositoryPath),
+      worktreePath: toDirectoryId(worktreePath),
       label: path.basename(repositoryPath) || repositoryPath,
       kind: "worktree",
     },
@@ -212,9 +222,9 @@ async function loadThreadDirectoryEnrichment(
     return {
       linkedDirectories: [
         {
-          id: repositoryPath,
-          path: repositoryPath,
-          worktreePath: isWorktree ? currentWorktreePath : undefined,
+          id: toDirectoryId(repositoryPath),
+          path: toDirectoryId(repositoryPath),
+          worktreePath: isWorktree ? toDirectoryId(currentWorktreePath) : undefined,
           label: path.basename(repositoryPath) || repositoryPath,
           kind: isWorktree ? "worktree" : "local",
         },
@@ -249,8 +259,8 @@ async function loadThreadDirectoryEnrichment(
     return {
       linkedDirectories: [
         {
-          id: fallbackPath,
-          path: fallbackPath,
+          id: toDirectoryId(fallbackPath),
+          path: toDirectoryId(fallbackPath),
           label: path.basename(fallbackPath) || fallbackPath,
           kind: "local",
         },

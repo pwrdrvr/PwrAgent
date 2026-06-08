@@ -47,6 +47,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Many cases mock Unix executable layouts (#!/bin/sh launchers, chmod 0o755, macOS .app bundles, /Applications); those are gated off Windows. Windows application discovery coverage is tracked separately.
 describe("application discovery", () => {
   let tempDir: string;
 
@@ -87,7 +88,7 @@ describe("application discovery", () => {
     ]);
   });
 
-  it("opens VS Code source links with --goto line metadata", async () => {
+  it.skipIf(process.platform === "win32")("opens VS Code source links with --goto line metadata", async () => {
     const binDir = path.join(tempDir, "bin");
     const codePath = path.join(binDir, "code");
     const targetPath = path.join(tempDir, "source.ts");
@@ -122,7 +123,7 @@ describe("application discovery", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("discovers IntelliJ IDEA from the idea launcher on PATH", async () => {
+  it.skipIf(process.platform === "win32")("discovers IntelliJ IDEA from the idea launcher on PATH", async () => {
     blockHostIntelliJDiscoveryPaths();
     const binDir = path.join(tempDir, "bin");
     const ideaPath = path.join(binDir, "idea");
@@ -144,7 +145,7 @@ describe("application discovery", () => {
     );
   });
 
-  it("opens IntelliJ IDEA source links with JetBrains line metadata", async () => {
+  it.skipIf(process.platform === "win32")("opens IntelliJ IDEA source links with JetBrains line metadata", async () => {
     blockHostIntelliJDiscoveryPaths();
     const binDir = path.join(tempDir, "bin");
     const ideaPath = path.join(binDir, "idea");
@@ -191,7 +192,7 @@ describe("application discovery", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("resolves the bundled VS Code CLI from an app-only install", async () => {
+  it.skipIf(process.platform === "win32")("resolves the bundled VS Code CLI from an app-only install", async () => {
     const appPath = path.join(tempDir, "Visual Studio Code.app");
     const bundledCodePath = path.join(
       appPath,

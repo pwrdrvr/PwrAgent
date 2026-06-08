@@ -127,6 +127,21 @@ linux:
 deb:
   priority: optional
 
+win:
+  icon: build/icon.png
+  # Windows .ico is generated from the 512x512 build/icon.png by electron-builder.
+  artifactName: "${productName}-${version}-windows-${arch}.${ext}"
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: PwrAgent
+  artifactName: "${productName}-${version}-windows-${arch}-setup.${ext}"
+
 dmg:
   background: build/dmg-background.png
   window:

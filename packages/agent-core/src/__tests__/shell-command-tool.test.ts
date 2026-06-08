@@ -11,7 +11,8 @@ afterEach(async () => {
 });
 
 describe("shell_command tool", () => {
-  it("runs a safe shell read command without approval", async () => {
+  // Unix-only: relies on grep + the "search" command classification; Windows shell coverage is tracked separately.
+  it.skipIf(process.platform === "win32")("runs a safe shell read command without approval", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
     await fs.writeFile(path.join(workspace.path, "needle.txt"), "SAFE_NEEDLE\n", "utf8");
@@ -69,9 +70,10 @@ describe("shell_command tool", () => {
     cleanups.push(workspace.cleanup);
     const tool = createShellCommandTool();
     const requestApproval = vi.fn(async () => ({ decision: "approve" }));
+    const command = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('created.txt','x')"`;
 
     const result = await tool.execute(
-      tool.parseArguments({ command: "touch created.txt" }),
+      tool.parseArguments({ command }),
       {
         cwd: workspace.path,
         approvalPolicy: "on-request",
@@ -90,7 +92,7 @@ describe("shell_command tool", () => {
         }),
         commandAction: "unknown",
         itemType: "commandExecution",
-        command: "touch created.txt",
+        command,
       }),
     );
   });

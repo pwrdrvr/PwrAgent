@@ -20,7 +20,7 @@ describe("readPwragentHome", () => {
       readPwragentHome({
         env: { [PWRAGENT_HOME_ENV]: "/tmp/pwragent" } as NodeJS.ProcessEnv,
       }),
-    ).toBe("/tmp/pwragent");
+    ).toBe(path.resolve("/tmp/pwragent"));
   });
 
   it("trims surrounding whitespace before resolving", () => {
@@ -28,7 +28,7 @@ describe("readPwragentHome", () => {
       readPwragentHome({
         env: { [PWRAGENT_HOME_ENV]: "  /tmp/pwragent  " } as NodeJS.ProcessEnv,
       }),
-    ).toBe("/tmp/pwragent");
+    ).toBe(path.resolve("/tmp/pwragent"));
   });
 
   it("resolves relative paths against the current working directory", () => {

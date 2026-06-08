@@ -242,9 +242,8 @@ describe("RendererHeapMonitor", () => {
     await advance(1);
     await advance(5);
 
-    expect(takeHeapSnapshot).toHaveBeenCalledWith(
-      "/repo/.local/heap-2026-04-18-1702-abc123/heap-0001.heapsnapshot",
-    );
+    const snapPath = (takeHeapSnapshot.mock.calls.at(-1)?.[0] ?? "").replace(/\\/g, "/");
+    expect(snapPath).toBe("/repo/.local/heap-2026-04-18-1702-abc123/heap-0001.heapsnapshot");
     expect(session.snapshotFiles).toEqual(["heap-0001.heapsnapshot"]);
     expect(session.events).toEqual(
       expect.arrayContaining([

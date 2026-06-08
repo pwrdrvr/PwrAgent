@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import type { ToolDefinition, ToolExecutionContext } from "./tool-contract.js";
+import type { ToolDefinition } from "./tool-contract.js";
 import {
   asObjectArguments,
   readOptionalPositiveInteger,
   readRequiredString,
 } from "./tool-contract.js";
 import { ToolExecutionFailure, InvalidToolArgumentsError } from "./tool-errors.js";
+import { resolveWorkspaceFilePath } from "./workspace-paths.js";
 
 const TOOL_NAME = "read_file";
 const DEFAULT_MAX_LINES = 200;
@@ -61,7 +61,7 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
       };
     },
     async execute(arguments_, context) {
-      const resolved = resolveWorkspacePath(context, arguments_.path);
+      const resolved = resolveWorkspaceFilePath(context, TOOL_NAME, arguments_.path);
       let content: string;
       try {
         content = await fs.readFile(resolved.absolutePath, "utf8");
@@ -114,29 +114,5 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
         commandAction: "read",
       };
     },
-  };
-}
-
-function resolveWorkspacePath(context: ToolExecutionContext, targetPath: string) {
-  const cwd = context.cwd?.trim();
-  if (!cwd) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      "thread cwd is required for repository tools",
-      "missing_cwd",
-    );
-  }
-  const absolutePath = path.resolve(cwd, targetPath);
-  const relativePath = path.relative(cwd, absolutePath);
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      `path escapes workspace: ${targetPath}`,
-      "path_outside_workspace",
-    );
-  }
-  return {
-    absolutePath,
-    relativePath: relativePath || path.basename(absolutePath),
   };
 }

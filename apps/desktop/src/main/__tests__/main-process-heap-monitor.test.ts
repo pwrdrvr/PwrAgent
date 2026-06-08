@@ -250,7 +250,13 @@ describe("MainProcessHeapMonitor", () => {
     await advance(5);
 
     expect(writeSnapshot).toHaveBeenCalledWith(
-      "/repo/.local/heap-2026-04-18-1702-abc123/main-heap-0001.heapsnapshot",
+      // The monitor builds the snapshot path with path.join(directoryPath,
+      // filename), which uses native separators (backslashes on Windows), so
+      // build the expectation the same way instead of a forward-slash literal.
+      path.join(
+        session.session.directoryPath,
+        "main-heap-0001.heapsnapshot",
+      ),
     );
     expect(session.snapshotFiles).toEqual(["main-heap-0001.heapsnapshot"]);
     expect(session.events).toEqual(
