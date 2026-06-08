@@ -58,7 +58,9 @@ import {
   type ListBackendsResponse,
   type LinkedDirectorySummary,
   type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadOptions,
   type MaterializeDirectoryLaunchpadResponse,
+  type MaterializedDirectoryLaunchpadThread,
   type LaunchpadWorkMode,
   type NavigationDirectoryGitStatus,
   type NavigationDirectorySummary,
@@ -7460,11 +7462,7 @@ export class DesktopBackendRegistry {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: {
-      onCodexEnvironmentSetupProgress?: (
-        event: CodexEnvironmentSetupProgressEvent,
-      ) => void;
-    },
+    options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
       request.launchpad ??
@@ -7630,6 +7628,16 @@ export class DesktopBackendRegistry {
         worktreePath: workspace.cwd,
       });
     }
+    const materializedThread = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+      executionMode: startThreadResponse.executionMode,
+      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
+      workMode: workspace.workMode,
+      codexEnvironmentRuntime,
+      codexEnvironmentStartupFailure,
+    } satisfies MaterializedDirectoryLaunchpadThread;
+    await options?.onThreadMaterialized?.(materializedThread);
 
     const input =
       request.input ??
@@ -7637,28 +7645,45 @@ export class DesktopBackendRegistry {
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
+    let turnStartFailure:
+      | MaterializeDirectoryLaunchpadResponse["turnStartFailure"]
+      | undefined;
     if (codexEnvironmentStartupFailure) {
       turnId = undefined;
     } else if (request.reviewTarget) {
-      const reviewResponse = await this.startReview({
-        backend: launchpad.backend,
-        threadId: startThreadResponse.threadId,
-        target: request.reviewTarget,
-        delivery: "inline",
-      });
-      turnId = reviewResponse.turnId;
+      try {
+        const reviewResponse = await this.startReview({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          target: request.reviewTarget,
+          delivery: "inline",
+        });
+        turnId = reviewResponse.turnId;
+      } catch (error) {
+        turnStartFailure = {
+          message: error instanceof Error ? error.message : String(error),
+          phase: "review",
+        };
+      }
     } else if (input.length > 0) {
-      const turnResponse = await this.startTurn({
-        backend: launchpad.backend,
-        threadId: startThreadResponse.threadId,
-        input,
-        model: launchpad.model,
-        reasoningEffort: launchpad.reasoningEffort,
-        serviceTier: launchpad.serviceTier,
-        fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
-        collaborationMode: request.collaborationMode,
-      });
-      turnId = turnResponse.turnId;
+      try {
+        const turnResponse = await this.startTurn({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          input,
+          model: launchpad.model,
+          reasoningEffort: launchpad.reasoningEffort,
+          serviceTier: launchpad.serviceTier,
+          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+          collaborationMode: request.collaborationMode,
+        });
+        turnId = turnResponse.turnId;
+      } catch (error) {
+        turnStartFailure = {
+          message: error instanceof Error ? error.message : String(error),
+          phase: "turn",
+        };
+      }
     }
 
     await resetLaunchpadAfterMaterialize({
@@ -7671,14 +7696,9 @@ export class DesktopBackendRegistry {
     });
 
     return {
-      backend: startThreadResponse.backend,
-      threadId: startThreadResponse.threadId,
+      ...materializedThread,
       turnId,
-      executionMode: startThreadResponse.executionMode,
-      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
-      workMode: workspace.workMode,
-      codexEnvironmentRuntime,
-      codexEnvironmentStartupFailure,
+      turnStartFailure,
     };
   }
 

@@ -16,6 +16,7 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
@@ -139,8 +140,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    return await this.registry.materializeDirectoryLaunchpad(request);
+    return await this.registry.materializeDirectoryLaunchpad(request, options);
   }
 
   async updateDirectoryLaunchpad(

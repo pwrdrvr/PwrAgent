@@ -15,6 +15,7 @@ import type {
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
+  CodexEnvironmentOption,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
   DesktopAuthorizedContact,
@@ -23,6 +24,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   LaunchpadWorkMode,
+  MaterializedDirectoryLaunchpadThread,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -862,7 +864,11 @@ export class MessagingController {
       }
 
       if (isThreadNameUpdatedEvent(event)) {
-        await this.renderBindingStatus(binding);
+        await this.renderBindingStatus(
+          binding,
+          undefined,
+          await this.navigationSnapshotWithThreadNameFromEvent(event),
+        );
         continue;
       }
 
@@ -1706,6 +1712,32 @@ export class MessagingController {
       threadId: binding.threadId,
     });
     return threadStatus === "active";
+  }
+
+  private async adoptStartedTurn(params: {
+    binding: MessagingBindingRecord;
+    navigation: NavigationSnapshot;
+    turnId: string;
+  }): Promise<void> {
+    const currentTurn = this.getActiveTurn(params.binding);
+    if (
+      currentTurn?.turnId === params.turnId &&
+      isTerminalTurnLifecycle(currentTurn)
+    ) {
+      await this.renderBindingStatus(params.binding, undefined, params.navigation);
+      return;
+    }
+    const activeTurn: MessagingActiveTurnSummary = {
+      turnId: params.turnId,
+      status: "working",
+      startedAt: this.now(),
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(params.binding, activeTurn);
+    await this.signalTurnActivity(params.binding, activeTurn, {
+      force: true,
+    });
+    await this.renderBindingStatus(params.binding, undefined, params.navigation);
   }
 
   private async queuePreparedInput(params: {
@@ -3309,6 +3341,14 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:environment") {
+      await this.presentNewThreadEnvironmentPicker(nextSession, navigation, event);
+      return;
+    }
+    if (actionId === "browse:new:set-environment") {
+      await this.setNewThreadEnvironment(nextSession, navigation, event);
+      return;
+    }
     if (actionId === "browse:new:backend") {
       await this.presentNewThreadBackendPicker(nextSession, event, navigation);
       return;
@@ -3813,6 +3853,7 @@ export class MessagingController {
       Boolean(
         selectedBackend.launchpadOptions?.models?.some((model) => model.supportsFast),
       );
+    const codexEnvironmentOptions = codexEnvironmentOptionsForDirectory(directory);
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
       options.executionMode === "full-access";
@@ -3917,6 +3958,18 @@ export class MessagingController {
           style: "secondary",
           fallbackText: "stream",
         },
+        ...(codexEnvironmentOptions.length > 0
+          ? [
+              {
+                id: "browse:new:environment",
+                label: options.codexEnvironmentName
+                  ? `Env: ${options.codexEnvironmentName}`
+                  : "Env: none",
+                style: "secondary" as const,
+                fallbackText: "environment",
+              },
+            ]
+          : []),
         ...(supportsModel
           ? [
               {
@@ -4187,6 +4240,126 @@ export class MessagingController {
         updatedAt: this.now(),
       });
     }
+  }
+
+  private async presentNewThreadEnvironmentPicker(
+    session: MessagingBrowseSessionRecord,
+    navigation: NavigationSnapshot,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const environments = codexEnvironmentOptionsForDirectory(directory);
+    if (environments.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-environments-unavailable"),
+          createdAt: this.now(),
+          title: "Environments unavailable",
+          body: "This project did not report Codex environment choices.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const selected = selectedCodexEnvironmentForSession(session, directory);
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-environment"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Select environment",
+      body: "Choose the Codex environment for the new thread.",
+      fallbackText: "Choose an environment, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        {
+          id: "browse:new:set-environment",
+          label: selected ? "No environment" : "No environment ✓",
+          style: selected ? "secondary" as const : "primary" as const,
+          fallbackText: "0",
+          priority: 9,
+          value: { environmentId: "" },
+        },
+        ...environments.map((environment, index) => ({
+          id: "browse:new:set-environment",
+          label: `${environment.name}${environment.id === selected?.id ? " ✓" : ""}`,
+          style: environment.id === selected?.id
+            ? "primary" as const
+            : "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { environmentId: environment.id },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async setNewThreadEnvironment(
+    session: MessagingBrowseSessionRecord,
+    navigation: NavigationSnapshot,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const environmentId = readStringValue(event.value, "environmentId");
+    if (environmentId === undefined) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const environments = codexEnvironmentOptionsForDirectory(directory);
+    const environment = environmentId
+      ? environments.find((candidate) => candidate.id === environmentId)
+      : undefined;
+    if (environmentId && !environment) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+
+    await this.updateNewThreadStickySettings(session, {
+      codexEnvironmentId: environment?.id,
+      codexEnvironmentExecutionTarget: environment ? "local" : undefined,
+      codexEnvironmentSetupEnabled: Boolean(environment?.setupScript),
+      codexEnvironmentActionId: undefined,
+    });
+    await this.presentNewThreadPromptGate(
+      {
+        ...session,
+        codexEnvironmentId: environment?.id ?? null,
+        codexEnvironmentExecutionTarget: environment ? "local" : undefined,
+        codexEnvironmentSetupEnabled: Boolean(environment?.setupScript),
+        codexEnvironmentActionId: undefined,
+        updatedAt: this.now(),
+      },
+      event,
+      navigation,
+    );
   }
 
   private async presentNewThreadAcpRuntimeModePicker(
@@ -4551,21 +4724,104 @@ export class MessagingController {
         return;
       }
     }
+    type StartedLaunchpadThread = Pick<
+      MaterializedDirectoryLaunchpadThread,
+      "backend" | "threadId" | "executionMode"
+    > &
+      Partial<
+        Pick<
+          MaterializedDirectoryLaunchpadThread,
+          "linkedDirectory" | "workMode"
+        >
+      >;
+    let boundThread:
+      | {
+          binding: MessagingBindingRecord;
+          navigation: NavigationSnapshot;
+        }
+      | undefined;
+    let browseSessionRetired = false;
+    const retireBrowseSession = async (): Promise<void> => {
+      if (browseSessionRetired) {
+        return;
+      }
+      browseSessionRetired = true;
+      this.pendingFullAccessNewThreadPrompts.delete(session.id);
+      await this.options.store.deleteBrowseSession(session.id);
+    };
+    const bindStartedThread = async (
+      started: StartedLaunchpadThread,
+    ): Promise<{
+      binding: MessagingBindingRecord;
+      navigation: NavigationSnapshot;
+    }> => {
+      if (boundThread) {
+        return boundThread;
+      }
+      const binding = await this.bindChannelToThread(event, {
+        backend: started.backend,
+        threadId: started.threadId,
+      });
+      await retireBrowseSession();
+      let updatedBinding = preferences
+        ? await this.updateBindingPreferences(binding, preferences)
+        : binding;
+      if (bundle.session.surface) {
+        updatedBinding = await this.options.store.upsertBinding({
+          ...updatedBinding,
+          statusSurface: bundle.session.surface,
+          updatedAt: this.now(),
+        });
+      }
+      const optimisticNavigation = navigationWithStartedThread({
+        backend: started.backend,
+        directory,
+        executionMode: started.executionMode,
+        linkedDirectory: started.linkedDirectory,
+        navigation,
+        now: this.now(),
+        model: options.supportsModel ? options.model : undefined,
+        reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
+        serviceTier: preferences?.serviceTier,
+        fastMode: options.supportsFast ? options.fastMode : undefined,
+        acpRuntime: options.acpRuntime,
+        preferences,
+        project,
+        threadId: started.threadId,
+        worktreePath: started.linkedDirectory?.worktreePath,
+        workMode: started.workMode ?? options.workMode,
+      });
+      boundThread = {
+        binding: updatedBinding,
+        navigation: optimisticNavigation,
+      };
+      return boundThread;
+    };
+    const launchpad = launchpadForMessagingProject({
+      backend: selectedBackend.kind,
+      directory,
+      navigation,
+      preferences,
+      project,
+      session,
+      now: this.now(),
+      workMode: options.workMode,
+      branchName: options.branchName,
+      acpRuntime: options.acpRuntime,
+    });
     const materialized = this.options.backend.materializeDirectoryLaunchpad
-      ? await this.options.backend.materializeDirectoryLaunchpad({
-          directoryKey: messagingLaunchpadMaterializationKey(session),
-          launchpad: launchpadForMessagingProject({
-            backend: selectedBackend.kind,
-            directory,
-            navigation,
-            preferences,
-            project,
-            now: this.now(),
-            workMode: options.workMode,
-            branchName: options.branchName,
-            acpRuntime: options.acpRuntime,
-          }),
-        })
+      ? await this.options.backend.materializeDirectoryLaunchpad(
+          {
+            directoryKey: messagingLaunchpadMaterializationKey(session),
+            launchpad,
+            input: prepared.input,
+          },
+          {
+            onThreadMaterialized: async (started) => {
+              await bindStartedThread(started);
+            },
+          },
+        )
       : undefined;
     const started = materialized ?? (await this.options.backend.startThread!({
       backend: selectedBackend.kind,
@@ -4583,40 +4839,65 @@ export class MessagingController {
           }
         : {}),
     }));
-    const binding = await this.bindChannelToThread(event, {
-      backend: started.backend,
-      threadId: started.threadId,
-    });
-    let updatedBinding = preferences
-      ? await this.updateBindingPreferences(binding, preferences)
-      : binding;
-    if (bundle.session.surface) {
-      updatedBinding = await this.options.store.upsertBinding({
-        ...updatedBinding,
-        statusSurface: bundle.session.surface,
-        updatedAt: this.now(),
+    const {
+      binding: updatedBinding,
+      navigation: optimisticNavigation,
+    } = await bindStartedThread(started);
+    await retireBrowseSession();
+    if (materialized?.codexEnvironmentStartupFailure) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("environment-startup-failed"),
+          createdAt: this.now(),
+          title: "Environment startup failed",
+          body: materialized.codexEnvironmentStartupFailure.message,
+          recoverable: true,
+        }),
+        updatedBinding,
+        event,
+      );
+      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      return;
+    }
+    if (materialized?.turnStartFailure) {
+      const activeTurn = this.getActiveTurn(updatedBinding);
+      if (activeTurn?.status === "failed") {
+        await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+        return;
+      }
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("turn-start-failed"),
+          createdAt: this.now(),
+          title: "Turn could not start",
+          body: materialized.turnStartFailure.message,
+          recoverable: true,
+        }),
+        updatedBinding,
+        event,
+      );
+      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      return;
+    }
+    if (materialized?.turnId) {
+      this.logger.info?.("messaging materialized launchpad turn started", {
+        bindingId: updatedBinding.id,
+        threadId: started.threadId,
+        turnId: materialized.turnId,
+      });
+      await this.adoptStartedTurn({
+        binding: updatedBinding,
+        navigation: optimisticNavigation,
+        turnId: materialized.turnId,
+      });
+      return;
+    }
+    if (materialized) {
+      this.logger.debug?.("messaging materialized launchpad without turn id", {
+        bindingId: updatedBinding.id,
+        threadId: started.threadId,
       });
     }
-    const optimisticNavigation = navigationWithStartedThread({
-      backend: started.backend,
-      directory,
-      executionMode: started.executionMode,
-      linkedDirectory: materialized?.linkedDirectory,
-      navigation,
-      now: this.now(),
-      model: options.supportsModel ? options.model : undefined,
-      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-      serviceTier: preferences?.serviceTier,
-      fastMode: options.supportsFast ? options.fastMode : undefined,
-      acpRuntime: options.acpRuntime,
-      preferences,
-      project,
-      threadId: started.threadId,
-      worktreePath: materialized?.linkedDirectory?.worktreePath,
-      workMode: materialized?.workMode ?? options.workMode,
-    });
-    this.pendingFullAccessNewThreadPrompts.delete(session.id);
-    await this.options.store.deleteBrowseSession(session.id);
     await this.startPreparedInput({
       binding: updatedBinding,
       input: prepared.input,
@@ -8070,6 +8351,39 @@ export class MessagingController {
     });
   }
 
+  private async navigationSnapshotWithThreadNameFromEvent(
+    event: AgentEvent,
+  ): Promise<NavigationSnapshot> {
+    const snapshot = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const params = event.notification.params as {
+      threadId?: unknown;
+      threadName?: unknown;
+    };
+    if (
+      typeof params.threadId !== "string" ||
+      typeof params.threadName !== "string" ||
+      !params.threadName.trim()
+    ) {
+      return snapshot;
+    }
+    const threadId = params.threadId;
+    const threadName = params.threadName.trim();
+
+    return {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) =>
+        thread.source === event.backend && thread.id === threadId
+          ? {
+              ...thread,
+              title: threadName,
+            }
+          : thread,
+      ),
+    };
+  }
+
   private async renderMonitorStatus(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
@@ -10272,6 +10586,7 @@ type NewThreadOptionsSummary = {
   backend: AppServerBackendKind;
   backendLabel: string;
   branchName: string;
+  codexEnvironmentName?: string;
   executionMode: ThreadExecutionMode;
   executionModeSource: "session" | "directory-launchpad" | "launchpad-defaults";
   fastMode: boolean;
@@ -10334,11 +10649,16 @@ function newThreadOptionsForSession(
     : directory?.launchpad?.executionMode
       ? "directory-launchpad"
       : "launchpad-defaults";
+  const selectedCodexEnvironment = selectedCodexEnvironmentForSession(
+    session,
+    directory,
+  );
   return {
     backend: backend.kind,
     backendLabel: backend.label,
     acpRuntime,
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
+    codexEnvironmentName: selectedCodexEnvironment?.name,
     executionMode,
     executionModeSource,
     fastMode:
@@ -10408,6 +10728,9 @@ function newThreadPromptGateBody(
       : undefined,
     options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
     `Streaming: ${options.streamingResponses ? "on" : "off"}`,
+    options.codexEnvironmentName
+      ? `Environment: ${options.codexEnvironmentName}`
+      : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -11206,10 +11529,15 @@ function launchpadForMessagingProject(params: {
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
+  session: MessagingBrowseSessionRecord;
   workMode: LaunchpadWorkMode;
 }): NavigationLaunchpadDraft {
   const defaults = params.navigation.launchpadDefaults;
   const directoryPath = params.directory?.path ?? params.project.path;
+  const selectedCodexEnvironment = selectedCodexEnvironmentForSession(
+    params.session,
+    params.directory,
+  );
   const base: NavigationLaunchpadDraft = params.directory?.launchpad ?? {
     directoryKey:
       params.directory?.key ??
@@ -11244,8 +11572,44 @@ function launchpadForMessagingProject(params: {
     prompt: "",
     workMode: params.workMode,
     branchName: params.branchName,
+    codexEnvironmentId: selectedCodexEnvironment?.id,
+    codexEnvironmentExecutionTarget: selectedCodexEnvironment
+      ? params.session.codexEnvironmentExecutionTarget ??
+        base.codexEnvironmentExecutionTarget ??
+        "local"
+      : undefined,
+    codexEnvironmentSetupEnabled: selectedCodexEnvironment
+      ? params.session.codexEnvironmentSetupEnabled ??
+        base.codexEnvironmentSetupEnabled ??
+        Boolean(selectedCodexEnvironment.setupScript)
+      : false,
+    codexEnvironmentActionId: selectedCodexEnvironment
+      ? params.session.codexEnvironmentActionId ?? base.codexEnvironmentActionId
+      : undefined,
+    codexEnvironmentOptions: base.codexEnvironmentOptions,
     updatedAt: params.now,
   };
+}
+
+function codexEnvironmentOptionsForDirectory(
+  directory: NavigationDirectorySummary | undefined,
+): CodexEnvironmentOption[] {
+  return directory?.launchpad?.codexEnvironmentOptions ?? [];
+}
+
+function selectedCodexEnvironmentForSession(
+  session: MessagingBrowseSessionRecord,
+  directory: NavigationDirectorySummary | undefined,
+): CodexEnvironmentOption | undefined {
+  const environments = codexEnvironmentOptionsForDirectory(directory);
+  const selectedId =
+    session.codexEnvironmentId === null
+      ? undefined
+      : session.codexEnvironmentId ?? directory?.launchpad?.codexEnvironmentId;
+  if (!selectedId) {
+    return undefined;
+  }
+  return environments.find((environment) => environment.id === selectedId);
 }
 
 function messagingLaunchpadMaterializationKey(

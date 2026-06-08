@@ -3580,7 +3580,9 @@ export function useThreadNavigation(
         executionMode: response.executionMode,
         workMode: response.workMode,
         codexEnvironmentRuntime: response.codexEnvironmentRuntime,
-        optimisticUserMessage: buildOptimisticUserMessage(input),
+        optimisticUserMessage: response.turnStartFailure
+          ? undefined
+          : buildOptimisticUserMessage(input),
         parentThreadId: materializeParentThreadId,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
@@ -3595,6 +3597,9 @@ export function useThreadNavigation(
       setOptimisticThread(optimisticMaterializedThread);
       setSelectedItemKey(nextThreadKey);
       setPendingSeenThreadKey(nextThreadKey);
+      if (response.turnStartFailure) {
+        setLaunchpadError(response.turnStartFailure.message);
+      }
       setState((current) => ({
         ...current,
         response: current.response
