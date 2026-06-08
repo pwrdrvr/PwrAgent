@@ -1118,6 +1118,43 @@ describe("buildDirectorySummaries", () => {
     );
   });
 
+  it("never lists the same thread under more than one parent directory row (Windows paths)", () => {
+    // Same invariant as above, but the linked directories arrive with native
+    // Windows backslashes + a drive letter. classifyDirectory canonicalizes
+    // separators first, so the home selection that follows behaves identically
+    // to POSIX — the thread still lands in exactly one row.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "wt-a",
+              label: "PwrAgnt",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\aaaa\\PwrAgnt",
+              kind: "worktree",
+            },
+            {
+              id: "wt-b",
+              label: "PwrAgnt",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\bbbb\\PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const rowsWithThread = directories.filter((directory) =>
+      directory.threadKeys.includes("codex:thread-1"),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    expect(rowsWithThread[0]?.key).toBe(
+      "directory:C:/Users/Administrator/.codex/worktrees/aaaa/PwrAgnt",
+    );
+  });
+
   it("homes a thread on its repo row, not an unrelated worktree row", () => {
     const directories = buildDirectorySummaries({
       threads: [
