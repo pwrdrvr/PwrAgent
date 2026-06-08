@@ -66,6 +66,9 @@ importers:
       '@pwrdrvr/agent-acp':
         specifier: ^0.12.0
         version: 0.12.0
+      '@pwrdrvr/agent-client':
+        specifier: ^0.6.1
+        version: 0.6.1
       '@pwrdrvr/agent-core':
         specifier: ^0.2.0
         version: 0.2.0
@@ -1155,6 +1158,9 @@ packages:
   '@pwrdrvr/agent-acp@0.12.0':
     resolution: {integrity: sha512-79B0dhU6XTitgYEkQjY0t8bEcOTjfvD2wcjoArVB/uxFr9hvUz3KCb4Y7BHOHtOcIC36P6UUfarwlFh+gahDsw==}
 
+  '@pwrdrvr/agent-client@0.6.1':
+    resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
+
   '@pwrdrvr/agent-core@0.1.3':
     resolution: {integrity: sha512-4yN246yJvMvupOd1R3Z/wo2QfpfpP7WWX3RvATklZVWthrjJgmVSoHn0J8emvJdySJAvvG0eE6TkQB7VNAnqVw==}
 
@@ -1170,6 +1176,9 @@ packages:
 
   '@pwrdrvr/codex-discovery@0.1.2':
     resolution: {integrity: sha512-9jt+tdNcos6q22ObiRqDf94jCO6l/Z7RsELVXRssY3WXPJPAUXpuSpPFj9K1PkFUAXsDIRwr169iGbUBbeKmJw==}
+
+  '@pwrdrvr/codex-discovery@0.1.3':
+    resolution: {integrity: sha512-9i6ZuDujKougP3JP+KRFf/V/wLmCxd73vLVwld4YTPqihQtlygjFHyqMCopTcDoIhMkSPogFcv5jzBxyAcX8qg==}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.15':
     resolution: {integrity: sha512-YYe6aWruPZDtHNpwu7+qAHEMbQ/yRl6atqb/AhznLTnD3UY99Q1jE7ihLSahNWkF4EqRPVC4SiR4O0UkLK02tA==}
@@ -4787,6 +4796,14 @@ snapshots:
       '@pwrdrvr/agent-transport': 0.1.6
       '@zed-industries/agent-client-protocol': 0.4.5
 
+  '@pwrdrvr/agent-client@0.6.1':
+    dependencies:
+      '@pwrdrvr/agent-core': 0.2.0
+      '@pwrdrvr/agent-transport': 0.1.6
+      '@pwrdrvr/codex-app-server-protocol': 0.133.0
+      '@pwrdrvr/codex-discovery': 0.1.3
+      zod: 4.3.6
+
   '@pwrdrvr/agent-core@0.1.3': {}
 
   '@pwrdrvr/agent-core@0.2.0': {}
@@ -4800,6 +4817,10 @@ snapshots:
   '@pwrdrvr/codex-discovery@0.1.2':
     dependencies:
       '@pwrdrvr/agent-core': 0.1.3
+
+  '@pwrdrvr/codex-discovery@0.1.3':
+    dependencies:
+      '@pwrdrvr/agent-core': 0.2.0
 
   '@rolldown/binding-android-arm64@1.0.0-rc.15':
     optional: true
