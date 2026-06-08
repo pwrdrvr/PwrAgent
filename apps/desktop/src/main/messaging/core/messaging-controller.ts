@@ -130,6 +130,8 @@ import {
   buildStatusReasoningPickerIntent,
   buildStatusToolUpdateModePickerIntent,
   formatExecutionModeLabel,
+  formatPermissionsActionDisplayLabel,
+  formatPermissionsLineDisplayLabel,
   handoffRequestFromValue,
   messagingToolUpdateModeChoices,
   nextMessagingStreamingResponseMode,
@@ -3906,6 +3908,10 @@ export class MessagingController {
           runtime: options.acpRuntime,
         })
       : undefined;
+    const permissionsLabel = formatPermissionsActionDisplayLabel({
+      acpRuntimeLabel: acpRuntimeMode?.currentLabel,
+      current: options.executionMode,
+    });
     const environmentLabel = formatNewThreadEnvironmentLabel(options);
     const supportsEnvironment =
       options.codexEnvironmentOptions.length > 0 ||
@@ -3974,10 +3980,7 @@ export class MessagingController {
           ? [
               {
                 id: "browse:new:permissions",
-                label: `Permissions: ${
-                  acpRuntimeMode?.currentLabel ??
-                  formatPermissionsShortLabel(options.executionMode)
-                }`,
+                label: `Permissions: ${permissionsLabel}`,
                 style: "secondary" as const,
                 fallbackText: "permissions",
               },
@@ -4538,13 +4541,15 @@ export class MessagingController {
         ? directory.launchpad.codexEnvironmentSetupEnabled ?? Boolean(environment.setupScript)
         : Boolean(environment.setupScript)
       : false;
+    const codexEnvironmentActionId =
+      environment && directory?.launchpad?.codexEnvironmentId === environment.id
+        ? directory.launchpad.codexEnvironmentActionId
+        : undefined;
     await this.updateNewThreadStickySettings(session, {
       codexEnvironmentId: environment?.id,
       codexEnvironmentExecutionTarget: environment ? "local" : undefined,
       codexEnvironmentSetupEnabled,
-      codexEnvironmentActionId: environment
-        ? directory?.launchpad?.codexEnvironmentActionId
-        : undefined,
+      codexEnvironmentActionId,
     });
     await this.presentNewThreadPromptGate(
       {
@@ -4554,9 +4559,7 @@ export class MessagingController {
           codexEnvironmentId: environment?.id ?? null,
           codexEnvironmentExecutionTarget: environment ? "local" : undefined,
           codexEnvironmentSetupEnabled,
-          codexEnvironmentActionId: environment
-            ? directory?.launchpad?.codexEnvironmentActionId ?? null
-            : null,
+          codexEnvironmentActionId: codexEnvironmentActionId ?? null,
           updatedAt: this.now(),
         },
       },
@@ -10963,17 +10966,19 @@ function newThreadPromptGateBody(
         runtime: options.acpRuntime,
       })
     : undefined;
+  const permissionsLabel = formatPermissionsLineDisplayLabel({
+    acpRuntimeLabel: acpRuntimeMode?.currentLabel,
+    current: options.executionMode,
+  });
   return [
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    acpRuntimeMode
-      ? `Permissions: ${acpRuntimeMode.currentLabel}`
-      : !isAcpBackendId(options.backend) || options.executionMode === "full-access"
-        ? `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`
-        : undefined,
+    acpRuntimeMode || !isAcpBackendId(options.backend) || options.executionMode === "full-access"
+      ? `Permissions: ${permissionsLabel}`
+      : undefined,
     options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId
       ? `Environment: ${formatNewThreadEnvironmentLabel(options)}`
       : undefined,
@@ -10986,10 +10991,6 @@ function newThreadPromptGateBody(
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
-}
-
-function formatPermissionsShortLabel(mode: ThreadExecutionMode): string {
-  return mode === "full-access" ? "Full" : "Default";
 }
 
 function resolveNewThreadCodexEnvironmentId(

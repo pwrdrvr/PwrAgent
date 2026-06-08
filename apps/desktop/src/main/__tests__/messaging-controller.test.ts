@@ -3641,11 +3641,11 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Permissions: Agent default"),
+      body: expect.stringContaining("Permissions: Agent default + Full Access"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:permissions",
-          label: "Permissions: Agent default",
+          label: "Permissions: Agent default + Full Access",
         }),
       ]),
     });
@@ -3961,11 +3961,11 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Permissions: Default"),
+      body: expect.stringContaining("Permissions: Default + Full Access"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:permissions",
-          label: "Permissions: Default",
+          label: "Permissions: Default + Full Access",
         }),
       ]),
     });
@@ -4273,6 +4273,85 @@ describe("MessagingController", () => {
       expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("clears a saved Codex environment action when switching environments", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentId: "repo",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+        codexEnvironmentActionId: "repo-setup",
+        codexEnvironmentOptions: [
+          {
+            id: "repo",
+            name: "Repo Env",
+            sourcePath: "/repo/pwragent/.codex/environments/repo.toml",
+            setupScript: "pnpm install",
+            actions: [{ id: "repo-setup", name: "Repo Setup", command: "pnpm install" }],
+          },
+          {
+            id: "ci",
+            name: "CI Env",
+            sourcePath: "/repo/pwragent/.codex/environments/ci.toml",
+            setupScript: "pnpm test",
+            actions: [{ id: "ci-setup", name: "CI Setup", command: "pnpm test" }],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "ci" },
+      }),
+    );
+
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:pwragent",
+      stickySettingsChanged: true,
+      patch: expect.objectContaining({
+        codexEnvironmentId: "ci",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+        codexEnvironmentActionId: undefined,
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use CI environment"));
+
+    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    expect(materializeRequest?.launchpad).toMatchObject({
+      codexEnvironmentId: "ci",
+      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentSetupEnabled: true,
+    });
+    expect(materializeRequest?.launchpad.codexEnvironmentActionId).toBeUndefined();
   });
 
   it("clicking the New button on the help surface dispatches the new command", async () => {
@@ -9534,6 +9613,48 @@ describe("MessagingController", () => {
       source: "mode",
       optionId: "mode",
       value: "yolo",
+    });
+  });
+
+  it("shows ACP runtime and Full Access together on the status card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      executionMode: "full-access",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:gemini:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:gemini",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Default + Full Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:permissions",
+          label: "Permissions: Default + Full Access",
+        }),
+      ]),
     });
   });
 

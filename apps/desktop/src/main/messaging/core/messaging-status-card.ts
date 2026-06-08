@@ -115,6 +115,16 @@ export function buildBindingStatusIntent(params: {
     : undefined;
   const acpRuntimeLabel = acpRuntimeMode?.currentLabel;
   const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
+  const permissionsLineLabel = formatPermissionsLineDisplayLabel({
+    acpRuntimeLabel,
+    current: permissionsMode,
+    queued: queuedExecutionMode,
+  });
+  const permissionsActionLabel = formatPermissionsActionDisplayLabel({
+    acpRuntimeLabel,
+    current: permissionsMode,
+    queued: queuedExecutionMode,
+  });
 
   return {
     id: params.id,
@@ -139,10 +149,7 @@ export function buildBindingStatusIntent(params: {
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastModeLabel}`,
-      `Permissions: ${
-        acpRuntimeLabel ??
-        formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)
-      }`,
+      `Permissions: ${permissionsLineLabel}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
       params.binding.pendingSkillSelection
@@ -162,6 +169,7 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
+      permissionsActionLabel,
       permissionsChoices: acpRuntimeChoices,
       supportsLegacyPermissionsAction:
         !isAcpBackendId(params.binding.backend) ||
@@ -384,6 +392,7 @@ function buildStatusActions(params: {
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
+  permissionsActionLabel: string;
   permissionsChoices?: MessagingAcpRuntimeModeChoice[];
   supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
@@ -406,15 +415,7 @@ function buildStatusActions(params: {
         params.allowFullAccessEscalation !== false))
       ? {
           id: "status:permissions",
-          label: params.permissionsChoices?.length
-            ? `Permissions: ${
-                params.permissionsChoices.find((choice) => choice.selected)?.label ??
-                "Agent default"
-              }`
-            : formatPermissionsActionLabel(
-                params.permissionsMode,
-                params.queuedExecutionMode,
-              ),
+          label: `Permissions: ${params.permissionsActionLabel}`,
           style: "secondary",
           fallbackText: "permissions",
           priority: 7,
@@ -1427,6 +1428,50 @@ export function formatPermissionsActionLabel(
   }
   const queuedLabel = queued === "full-access" ? "Full Access" : "Default";
   return `Permissions: ${currentLabel} → ${queuedLabel} (queued)`;
+}
+
+export function formatPermissionsActionDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  return formatPermissionsDisplayLabel({
+    acpRuntimeLabel: params.acpRuntimeLabel,
+    executionLabel: formatPermissionsActionLabel(params.current, params.queued).replace(
+      /^Permissions:\s*/,
+      "",
+    ),
+    current: params.current,
+    queued: params.queued,
+  });
+}
+
+export function formatPermissionsLineDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  return formatPermissionsDisplayLabel({
+    acpRuntimeLabel: params.acpRuntimeLabel,
+    executionLabel: formatPermissionsLineLabel(params.current, params.queued),
+    current: params.current,
+    queued: params.queued,
+  });
+}
+
+function formatPermissionsDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  executionLabel: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  if (!params.acpRuntimeLabel) {
+    return params.executionLabel;
+  }
+  if (params.current === "default" && !params.queued) {
+    return params.acpRuntimeLabel;
+  }
+  return `${params.acpRuntimeLabel} + ${params.executionLabel}`;
 }
 
 /**
