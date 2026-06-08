@@ -3226,6 +3226,103 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("returns the materialized thread when the first launchpad turn fails", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [],
+        startTurnError: new Error("invalid model"),
+      }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/project",
+          workMode: "local" as const,
+        })),
+      } as never,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+      launchpad: {
+        directoryKey: "directory:/repo/project",
+        directoryKind: "directory",
+        directoryLabel: "project",
+        directoryPath: "/repo/project",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+      input: [{ type: "text", text: "Fix bug" }],
+    });
+
+    expect(response).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      turnStartFailure: {
+        message: "invalid model",
+        phase: "turn",
+      },
+    });
+    expect(response.turnId).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("notifies when a launchpad thread is materialized before starting input", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/project",
+          workMode: "local" as const,
+        })),
+      } as never,
+    });
+    const observed: string[] = [];
+
+    const response = await registry.materializeDirectoryLaunchpad(
+      {
+        directoryKey: "directory:/repo/project",
+        launchpad: {
+          directoryKey: "directory:/repo/project",
+          directoryKind: "directory",
+          directoryLabel: "project",
+          directoryPath: "/repo/project",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1000,
+          updatedAt: 2000,
+        },
+        input: [{ type: "text", text: "Fix bug" }],
+      },
+      {
+        onThreadMaterialized: (thread) => {
+          observed.push(`${thread.threadId}:${codexClient.startTurnCallCount}`);
+        },
+      },
+    );
+
+    expect(observed).toEqual(["thread-1:0"]);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(response).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    await registry.close();
+  });
+
   it("auto-approves ACP permission requests for Yolo runtime sessions", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const registry = new DesktopBackendRegistry({

@@ -472,10 +472,9 @@ export type MaterializeDirectoryLaunchpadRequest = {
   parentThreadId?: ThreadIdentifier;
 };
 
-export type MaterializeDirectoryLaunchpadResponse = {
+export type MaterializedDirectoryLaunchpadThread = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  turnId?: string;
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
@@ -484,6 +483,23 @@ export type MaterializeDirectoryLaunchpadResponse = {
     message: string;
     phase: "setup" | "action";
     worktreeCleanupAvailable: boolean;
+  };
+};
+
+export type MaterializeDirectoryLaunchpadOptions = {
+  onCodexEnvironmentSetupProgress?: (
+    event: CodexEnvironmentSetupProgressEvent,
+  ) => void;
+  onThreadMaterialized?: (
+    thread: MaterializedDirectoryLaunchpadThread,
+  ) => void | Promise<void>;
+};
+
+export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchpadThread & {
+  turnId?: string;
+  turnStartFailure?: {
+    message: string;
+    phase: "turn" | "review";
   };
 };
 

@@ -15,6 +15,7 @@ import type {
   GetNavigationSnapshotRequest,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
@@ -137,6 +138,7 @@ export type MessagingBackendBridge = {
   ): Promise<HandoffThreadWorkspaceResponse>;
   materializeDirectoryLaunchpad?(
     request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
   updateDirectoryLaunchpad?(
     request: UpdateDirectoryLaunchpadRequest,
