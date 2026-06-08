@@ -551,6 +551,7 @@ function QueuedImageAttachments(props: {
 }
 
 const ENV_ACTION_OUTPUT_MAX_LINES = 500;
+const ENV_ACTION_RUN_CONFIRMATION_MS = 5_000;
 
 function tailLines(text: string, maxLines: number): string {
   const lines = text.split("\n");
@@ -642,6 +643,12 @@ export function formatDurationMs(
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
+export function formatRunningDurationMs(ms?: number): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
+  const totalSeconds = Math.floor(ms / 1_000);
+  return `${totalSeconds}s`;
+}
+
 /**
  * Set of run identities the user has explicitly dismissed in this session.
  * Module-level so it survives Composer remounts (thread switches), but
@@ -667,39 +674,18 @@ export function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
-  // Tiered tick cadence for the per-run "running for X" meta:
-  //   < 1 min → tick every 1s   (seconds digit moves every second;
-  //                              format prints "Xs")
-  //   ≥ 1 min → tick every 30s  (display switches to coarse "Xm" with
-  //                              no seconds; we only need the tick to
-  //                              catch each minute boundary within
-  //                              ~30s, which is below user-perceived
-  //                              staleness for a minute-granularity
-  //                              display. Avoids the "distracting
-  //                              every-5s text-change" issue.)
-  // Single shared timer across all started runs on the thread; the
-  // interval re-arms when the longest-running run crosses the 1-min
-  // boundary.
-  const tickIntervalMs = useMemo(() => {
-    let maxElapsed = -1;
-    for (const run of runs) {
-      if (run.status !== "started") continue;
-      const startedAt = run.startedAt ?? Date.now();
-      const elapsed = Date.now() - startedAt;
-      if (elapsed > maxElapsed) maxElapsed = elapsed;
-    }
-    if (maxElapsed < 0) return 0; // no running runs → no timer
-    if (maxElapsed < 60_000) return 1_000;
-    return 30_000;
-  }, [runs]);
+  const hasStartedRun = useMemo(
+    () => runs.some((run) => run.status === "started"),
+    [runs],
+  );
   const [, setElapsedTick] = useState(0);
   useEffect(() => {
-    if (!tickIntervalMs) return undefined;
+    if (!hasStartedRun) return undefined;
     const handle = setInterval(() => {
       setElapsedTick((tick) => tick + 1);
-    }, tickIntervalMs);
+    }, 1_000);
     return () => clearInterval(handle);
-  }, [tickIntervalMs]);
+  }, [hasStartedRun]);
   // Bumped after dismissal to force a re-render (the dismissed-set lives
   // outside React state).
   const [, setDismissTick] = useState(0);
@@ -758,9 +744,9 @@ export function EnvActionAnchorEntry(props: {
 
   const meta: string[] = [];
   if (run.pid) meta.push(`pid ${run.pid}`);
-  if (status === "started" && run.startedAt) {
+  if (status === "started" && typeof run.startedAt === "number") {
     meta.push(
-      `running for ${formatDurationMs(Date.now() - run.startedAt, { coarseAfterMinute: true })}`,
+      `running for ${formatRunningDurationMs(Date.now() - run.startedAt)}`,
     );
   }
   if (status !== "started") {
@@ -1519,6 +1505,8 @@ export function Composer(props: ComposerProps) {
   );
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
+  const [threadEnvActionStarting, setThreadEnvActionStarting] = useState(false);
+  const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(undefined);
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
@@ -1533,6 +1521,47 @@ export function Composer(props: ComposerProps) {
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+
+  const clearThreadEnvActionStarting = (): void => {
+    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+      threadEnvActionStartingTimeoutRef.current = undefined;
+    }
+    setThreadEnvActionStarting(false);
+  };
+
+  const showThreadEnvActionStarting = (): void => {
+    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+      threadEnvActionStartingTimeoutRef.current = undefined;
+    }
+    setThreadEnvActionStarting(true);
+  };
+
+  const finishThreadEnvActionStarting = (elapsedMs: number): void => {
+    if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+      window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+    }
+    const remainingMs = Math.max(0, ENV_ACTION_RUN_CONFIRMATION_MS - elapsedMs);
+    if (remainingMs === 0) {
+      threadEnvActionStartingTimeoutRef.current = undefined;
+      setThreadEnvActionStarting(false);
+      return;
+    }
+    threadEnvActionStartingTimeoutRef.current = window.setTimeout(() => {
+      threadEnvActionStartingTimeoutRef.current = undefined;
+      setThreadEnvActionStarting(false);
+    }, remainingMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (threadEnvActionStartingTimeoutRef.current !== undefined) {
+        window.clearTimeout(threadEnvActionStartingTimeoutRef.current);
+        threadEnvActionStartingTimeoutRef.current = undefined;
+      }
+    };
+  }, []);
   const [fullAccessRiskDialogOpen, setFullAccessRiskDialogOpen] =
     useState(false);
   const [fullAccessRiskDontWarnAgain, setFullAccessRiskDontWarnAgain] =
@@ -3756,6 +3785,9 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     props.onPendingStatusChange?.(`Starting ${selectedThreadCodexAction.name}`);
+    showThreadEnvActionStarting();
+    const startedAt = Date.now();
+    let actionStarted = false;
     try {
       await props.desktopApi.runCodexEnvironmentAction({
         backend: props.thread.source,
@@ -3763,8 +3795,13 @@ export function Composer(props: ComposerProps) {
         actionId: selectedThreadCodexAction.id,
         ...(workspaceOpenPath ? { cwd: workspaceOpenPath } : {}),
       });
+      actionStarted = true;
+      finishThreadEnvActionStarting(Date.now() - startedAt);
       await props.onRefreshNavigation?.();
     } catch (error) {
+      if (!actionStarted) {
+        clearThreadEnvActionStarting();
+      }
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
       props.onPendingStatusChange?.(undefined);
@@ -5621,8 +5658,14 @@ export function Composer(props: ComposerProps) {
                   }}
                 />
                 <button
-                  className="composer__action-button"
+                  aria-label="Run"
+                  className={
+                    threadEnvActionStarting
+                      ? "composer__action-button composer__action-button--busy"
+                      : "composer__action-button"
+                  }
                   disabled={
+                    threadEnvActionStarting ||
                     !selectedThreadCodexAction ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }
@@ -5631,7 +5674,14 @@ export function Composer(props: ComposerProps) {
                     void runThreadCodexEnvironmentAction();
                   }}
                 >
-                  Run
+                  {threadEnvActionStarting ? (
+                    <span
+                      aria-hidden="true"
+                      className="composer__action-button-spinner"
+                    />
+                  ) : (
+                    "Run"
+                  )}
                 </button>
               </>
             ) : null}
