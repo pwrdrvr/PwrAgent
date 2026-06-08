@@ -266,6 +266,42 @@ function normalizeDirectoryDescriptor(
   };
 }
 
+// INVARIANT: a thread is listed under exactly ONE parent directory row.
+// When a thread's linked directories resolve to multiple distinct rows — e.g.
+// a tool-managed worktree that couldn't be remapped onto its repo (no stable
+// path, no shared git origin), a thread linked to genuinely different repos, or
+// a stale backfilled relationship whose path drifted from the live one — we must
+// NOT add the thread to every row. Doing so makes the same thread appear (and
+// highlight as "selected") under two/three parent folders at once, which the
+// product forbids. Pick a single canonical "home" row instead.
+//
+// Preference order:
+//   1. A stable repo/local/workspace row over an ephemeral tool-managed
+//      worktree row, so the thread groups under its project (the main checkout)
+//      rather than a throwaway worktree folder.
+//   2. Deterministic tiebreak by key, so the choice is stable across snapshots,
+//      backends, and platforms (no flicker between rows on re-render).
+function pickHomeDirectory(
+  descriptors: DirectoryDescriptor[],
+): DirectoryDescriptor | undefined {
+  if (descriptors.length <= 1) {
+    return descriptors[0];
+  }
+
+  return [...descriptors].sort((left, right) => {
+    const leftIsWorktree = left.path
+      ? isToolManagedWorktreePath(left.path)
+      : false;
+    const rightIsWorktree = right.path
+      ? isToolManagedWorktreePath(right.path)
+      : false;
+    if (leftIsWorktree !== rightIsWorktree) {
+      return leftIsWorktree ? 1 : -1;
+    }
+    return left.key.localeCompare(right.key);
+  })[0];
+}
+
 function ensureSummary(
   summaries: Map<string, NavigationDirectorySummary>,
   descriptor: DirectoryDescriptor,
@@ -491,7 +527,11 @@ export function buildDirectorySummaries(params: {
       continue;
     }
 
-    const seenDescriptors = new Set<string>();
+    // Resolve every linked directory to its normalized row descriptor, deduped
+    // by key. A thread linked to the same row via several representations
+    // (repo + its own worktree, forward/back slashes, stale backfill) collapses
+    // to one entry here.
+    const descriptorsByKey = new Map<string, DirectoryDescriptor>();
     for (const directory of thread.linkedDirectories) {
       const descriptor = classifyDirectory(directory);
       const stablePath = stablePathByLabel.get(descriptor.label);
@@ -507,19 +547,28 @@ export function buildDirectorySummaries(params: {
       if (!isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)) {
         continue;
       }
-      if (seenDescriptors.has(normalizedDescriptor.key)) {
-        continue;
+      if (!descriptorsByKey.has(normalizedDescriptor.key)) {
+        descriptorsByKey.set(normalizedDescriptor.key, normalizedDescriptor);
       }
-      seenDescriptors.add(normalizedDescriptor.key);
-      const summary = ensureSummary(summaries, normalizedDescriptor);
-      if (!summary.threadKeys.includes(threadKey)) {
-        summary.threadKeys.push(threadKey);
-      }
-      if (thread.inbox.inInbox) {
-        summary.needsAttentionCount += 1;
-      }
-      summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
     }
+
+    // Enforce the one-row-per-thread invariant: even when the descriptors above
+    // resolve to multiple distinct rows, the thread is added to exactly one.
+    const homeDescriptor = pickHomeDirectory([...descriptorsByKey.values()]);
+    if (!homeDescriptor) {
+      continue;
+    }
+    const summary = ensureSummary(summaries, homeDescriptor);
+    if (!summary.threadKeys.includes(threadKey)) {
+      summary.threadKeys.push(threadKey);
+    }
+    if (thread.inbox.inInbox) {
+      summary.needsAttentionCount += 1;
+    }
+    summary.latestUpdatedAt = Math.max(
+      summary.latestUpdatedAt ?? 0,
+      thread.updatedAt ?? 0,
+    );
   }
 
   for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
