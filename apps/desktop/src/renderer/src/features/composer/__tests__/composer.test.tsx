@@ -3720,7 +3720,7 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
-  it("restores a claimed queued turn when preflight blocks sending", async () => {
+  it("dispatches a queued turn even when selected-thread preflight would block a new send", async () => {
     const draftStore = createComposerDraftStore();
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
@@ -3769,16 +3769,21 @@ describe("Composer", () => {
     );
 
     await waitFor(() => {
-      expect(onBeforeStartTurn).toHaveBeenCalled();
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Queued preflight block" }],
+        })
+      );
     });
     await waitFor(() => {
-      expect(screen.getByText("Queued preflight block")).toBeInTheDocument();
+      expect(screen.queryByText("Queued preflight block")).not.toBeInTheDocument();
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1")?.text,
-    ).toBe("Queued preflight block");
-    expect(onBeforeStartTurn).toHaveBeenCalledTimes(1);
-    expect(startTurn).not.toHaveBeenCalled();
+      draftStore.getQueuedTurn("thread:codex:thread-1"),
+    ).toBeUndefined();
+    expect(onBeforeStartTurn).not.toHaveBeenCalled();
   });
 
   it("updates model settings without crashing when fast-mode support changes", async () => {
