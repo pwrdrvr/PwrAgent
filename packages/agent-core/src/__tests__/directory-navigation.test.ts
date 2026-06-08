@@ -908,6 +908,99 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("collapses a Windows repo into one row across path-separator representations", () => {
+    // Reproduces the Windows bug where one project surfaced as three "PwrAgent"
+    // rows: the main checkout linked once with forward slashes (how we normalize
+    // codex/git paths) and once with native backslashes, plus a codex worktree
+    // that then couldn't remap onto a now-ambiguous canonical repo path.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "main-fwd",
+          createdAt: 3_000,
+          linkedDirectories: [
+            {
+              id: "d1",
+              label: "PwrAgent",
+              path: "C:/Users/Administrator/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "main-bak",
+          createdAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "d2",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "worktree",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "d3",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\mq4ow4zb\\PwrAgent",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(1);
+    expect(directories[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:C:/Users/Administrator/PwrAgent",
+        label: "PwrAgent",
+        path: "C:/Users/Administrator/PwrAgent",
+      }),
+    );
+    expect(directories[0]?.threadKeys).toHaveLength(3);
+  });
+
+  it("does not duplicate a Windows codex worktree row across separator representations", () => {
+    // One thread linked to the same codex worktree via both forward and back
+    // slashes must surface as a single row, not appear twice.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "d-fwd",
+              label: "PwrAgent",
+              path: "C:/Users/Administrator/.codex/worktrees/mq4ow4zb/PwrAgent",
+              kind: "worktree",
+            },
+            {
+              id: "d-bak",
+              label: "PwrAgent",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\mq4ow4zb\\PwrAgent",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(1);
+    expect(directories[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:C:/Users/Administrator/.codex/worktrees/mq4ow4zb/PwrAgent",
+        label: "PwrAgent",
+      }),
+    );
+    expect(directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
+  });
+
   it("groups PwrAgent-managed worktree paths under the stable same-label home repo row", () => {
     const directories = buildDirectorySummaries({
       threads: [
@@ -980,6 +1073,174 @@ describe("buildDirectorySummaries", () => {
         threadKeys: ["codex:thread-1"],
       }),
     ]);
+  });
+
+  // The one-row-per-thread invariant. This is platform-independent: on macOS
+  // (all forward slashes) the same thread was surfacing under two/three
+  // "PwrAgnt" parent folders at once, all highlighting as selected. A thread
+  // must appear under exactly one parent directory row no matter how many
+  // distinct rows its linked directories resolve to.
+  it("never lists the same thread under more than one parent directory row", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          // Two managed worktrees of the same project, different hashes, no
+          // canonical repo path and no shared git origin to remap onto — so
+          // they classify to two distinct rows that cannot be collapsed.
+          linkedDirectories: [
+            {
+              id: "wt-a",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/aaaa/PwrAgnt",
+              kind: "worktree",
+            },
+            {
+              id: "wt-b",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/bbbb/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const rowsWithThread = directories.filter((directory) =>
+      directory.threadKeys.includes("codex:thread-1"),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    // Deterministic home: lexicographically smallest key when no row is more
+    // canonical than another.
+    expect(rowsWithThread[0]?.key).toBe(
+      "directory:/Users/huntharo/.codex/worktrees/aaaa/PwrAgnt",
+    );
+  });
+
+  it("never lists the same thread under more than one parent directory row (Windows paths)", () => {
+    // Same invariant as above, but the linked directories arrive with native
+    // Windows backslashes + a drive letter. classifyDirectory canonicalizes
+    // separators first, so the home selection that follows behaves identically
+    // to POSIX — the thread still lands in exactly one row.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "wt-a",
+              label: "PwrAgnt",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\aaaa\\PwrAgnt",
+              kind: "worktree",
+            },
+            {
+              id: "wt-b",
+              label: "PwrAgnt",
+              path: "C:\\Users\\Administrator\\.codex\\worktrees\\bbbb\\PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const rowsWithThread = directories.filter((directory) =>
+      directory.threadKeys.includes("codex:thread-1"),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    expect(rowsWithThread[0]?.key).toBe(
+      "directory:C:/Users/Administrator/.codex/worktrees/aaaa/PwrAgnt",
+    );
+  });
+
+  it("homes a thread on its repo row, not an unrelated worktree row", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "repo",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              kind: "local",
+            },
+            {
+              id: "stray-worktree",
+              label: "Other",
+              path: "/Users/huntharo/.codex/worktrees/zzzz/Other",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const rowsWithThread = directories.filter((directory) =>
+      directory.threadKeys.includes("codex:thread-1"),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    expect(rowsWithThread[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      }),
+    );
+  });
+
+  it("does not duplicate a worktree thread when the same-label stable repo path is ambiguous", () => {
+    // Reproduces the macOS report (thread surfacing under two parent folders at
+    // once). thread-1 carries a live worktree-rooted directory plus a backfilled
+    // repo relationship. A sibling thread checked out the same project under a
+    // different absolute path, so the per-label stable path is ambiguous and the
+    // worktree descriptor can no longer remap onto the repo — leaving thread-1
+    // with two distinct rows. The invariant must still home it on exactly one.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "019ea569-b29b-78c3-8b2a-3fc135e4af1f",
+          createdAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "live",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/mq4ow4zb/PwrAgnt",
+              kind: "worktree",
+            },
+            {
+              id: "backfill",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              worktreePath: "/Users/huntharo/.codex/worktrees/mq4ow4zb/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+        buildThread({
+          id: "sibling",
+          createdAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "sibling-repo",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr-old/PwrAgnt",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const threadKey = "codex:019ea569-b29b-78c3-8b2a-3fc135e4af1f";
+    const rowsWithThread = directories.filter((directory) =>
+      directory.threadKeys.includes(threadKey),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    // The repo row (a real checkout) wins over the worktree row.
+    expect(rowsWithThread[0]?.key).toBe("directory:/Users/huntharo/pwrdrvr/PwrAgnt");
   });
 });
 

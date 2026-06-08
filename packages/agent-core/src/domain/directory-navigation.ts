@@ -27,9 +27,20 @@ function pathBaseName(value?: string): string {
   return parts.at(-1) ?? normalized;
 }
 
+// Canonicalize a filesystem path for use as a stable navigation identity:
+// forward slashes and no trailing separator. This is what collapses a single
+// logical directory keyed via different representations into ONE row — on
+// Windows the same repo/worktree can arrive as `C:\…` (codex/git native) and as
+// `C:/…` (the forward slashes we normalize codex/git paths to elsewhere), and
+// without this they produce two `directory:` keys → duplicate folders. No-op on
+// already-POSIX paths (no backslashes, no trailing slash).
+function canonicalizeNavigationPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
 function normalizeComparablePath(value?: string): string | undefined {
-  const normalized = value?.trim().replace(/[\\/]+$/, "");
-  return normalized || undefined;
+  const normalized = value?.trim();
+  return normalized ? canonicalizeNavigationPath(normalized) || undefined : undefined;
 }
 
 function normalizeGitOriginUrl(value?: string): string | undefined {
@@ -104,9 +115,14 @@ function matchCodexChatsRoot(value: string): string | undefined {
 }
 
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
+  // Canonicalize separators up front so a directory keyed via different path
+  // representations (Windows `C:\…` vs the forward-slashed `C:/…` we normalize
+  // codex/git paths to) collapses to ONE directory row instead of duplicating.
+  const path = canonicalizeNavigationPath(directory.path);
+
   // Match both current ".pwragent" and legacy ".pwragnt" home directory names
   // so pre-rebrand thread data classifies correctly.
-  const scratchProjectsRoot = matchScratchProjectsRoot(directory.path);
+  const scratchProjectsRoot = matchScratchProjectsRoot(path);
   if (scratchProjectsRoot) {
     return {
       key: `workspace:${scratchProjectsRoot}`,
@@ -116,7 +132,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const codexChatsRoot = matchCodexChatsRoot(directory.path);
+  const codexChatsRoot = matchCodexChatsRoot(path);
   if (codexChatsRoot) {
     return {
       key: `directory:${codexChatsRoot}`,
@@ -126,7 +142,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const repoWorktreeMatch = directory.path.match(
+  const repoWorktreeMatch = path.match(
     /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/].*)?$/,
   );
   if (repoWorktreeMatch) {
@@ -139,28 +155,31 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     };
   }
 
-  const codexWorktreeMatch = directory.path.match(
-    /^[\\/].*[\\/]\.codex(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
+  // Leading `(?:[A-Za-z]:)?` accepts a Windows drive prefix (C:/…); without it
+  // the `^[\\/]` anchor only matched POSIX-absolute paths and codex worktrees
+  // on Windows fell through to the generic fallback (wrong label, and no
+  // chance to group by project name).
+  const codexWorktreeMatch = path.match(
+    /^(?:[A-Za-z]:)?[\\/].*[\\/]\.codex(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
   );
   if (codexWorktreeMatch) {
-    const canonicalPath = directory.path.replace(/[\\/]+$/, "");
     return {
-      key: `directory:${canonicalPath}`,
+      key: `directory:${path}`,
       kind: "directory",
       label: codexWorktreeMatch[1],
-      path: canonicalPath,
+      path,
     };
   }
 
   return {
-    key: `directory:${directory.path}`,
+    key: `directory:${path}`,
     kind: "directory",
     label: displayDirectoryLabel({
       kind: "directory",
       label: directory.label,
-      path: directory.path,
+      path,
     }),
-    path: directory.path,
+    path,
   };
 }
 
@@ -245,6 +264,42 @@ function normalizeDirectoryDescriptor(
     key: `directory:${params.stablePath}`,
     path: params.stablePath,
   };
+}
+
+// INVARIANT: a thread is listed under exactly ONE parent directory row.
+// When a thread's linked directories resolve to multiple distinct rows — e.g.
+// a tool-managed worktree that couldn't be remapped onto its repo (no stable
+// path, no shared git origin), a thread linked to genuinely different repos, or
+// a stale backfilled relationship whose path drifted from the live one — we must
+// NOT add the thread to every row. Doing so makes the same thread appear (and
+// highlight as "selected") under two/three parent folders at once, which the
+// product forbids. Pick a single canonical "home" row instead.
+//
+// Preference order:
+//   1. A stable repo/local/workspace row over an ephemeral tool-managed
+//      worktree row, so the thread groups under its project (the main checkout)
+//      rather than a throwaway worktree folder.
+//   2. Deterministic tiebreak by key, so the choice is stable across snapshots,
+//      backends, and platforms (no flicker between rows on re-render).
+function pickHomeDirectory(
+  descriptors: DirectoryDescriptor[],
+): DirectoryDescriptor | undefined {
+  if (descriptors.length <= 1) {
+    return descriptors[0];
+  }
+
+  return [...descriptors].sort((left, right) => {
+    const leftIsWorktree = left.path
+      ? isToolManagedWorktreePath(left.path)
+      : false;
+    const rightIsWorktree = right.path
+      ? isToolManagedWorktreePath(right.path)
+      : false;
+    if (leftIsWorktree !== rightIsWorktree) {
+      return leftIsWorktree ? 1 : -1;
+    }
+    return left.key.localeCompare(right.key);
+  })[0];
 }
 
 function ensureSummary(
@@ -472,7 +527,11 @@ export function buildDirectorySummaries(params: {
       continue;
     }
 
-    const seenDescriptors = new Set<string>();
+    // Resolve every linked directory to its normalized row descriptor, deduped
+    // by key. A thread linked to the same row via several representations
+    // (repo + its own worktree, forward/back slashes, stale backfill) collapses
+    // to one entry here.
+    const descriptorsByKey = new Map<string, DirectoryDescriptor>();
     for (const directory of thread.linkedDirectories) {
       const descriptor = classifyDirectory(directory);
       const stablePath = stablePathByLabel.get(descriptor.label);
@@ -488,19 +547,28 @@ export function buildDirectorySummaries(params: {
       if (!isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)) {
         continue;
       }
-      if (seenDescriptors.has(normalizedDescriptor.key)) {
-        continue;
+      if (!descriptorsByKey.has(normalizedDescriptor.key)) {
+        descriptorsByKey.set(normalizedDescriptor.key, normalizedDescriptor);
       }
-      seenDescriptors.add(normalizedDescriptor.key);
-      const summary = ensureSummary(summaries, normalizedDescriptor);
-      if (!summary.threadKeys.includes(threadKey)) {
-        summary.threadKeys.push(threadKey);
-      }
-      if (thread.inbox.inInbox) {
-        summary.needsAttentionCount += 1;
-      }
-      summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
     }
+
+    // Enforce the one-row-per-thread invariant: even when the descriptors above
+    // resolve to multiple distinct rows, the thread is added to exactly one.
+    const homeDescriptor = pickHomeDirectory([...descriptorsByKey.values()]);
+    if (!homeDescriptor) {
+      continue;
+    }
+    const summary = ensureSummary(summaries, homeDescriptor);
+    if (!summary.threadKeys.includes(threadKey)) {
+      summary.threadKeys.push(threadKey);
+    }
+    if (thread.inbox.inInbox) {
+      summary.needsAttentionCount += 1;
+    }
+    summary.latestUpdatedAt = Math.max(
+      summary.latestUpdatedAt ?? 0,
+      thread.updatedAt ?? 0,
+    );
   }
 
   for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
