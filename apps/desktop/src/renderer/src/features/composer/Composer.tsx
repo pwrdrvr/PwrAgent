@@ -2970,7 +2970,7 @@ export function Composer(props: ComposerProps) {
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
 
-    if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
+    if (!queued && props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
       updateSending(false);
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
