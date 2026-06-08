@@ -170,6 +170,11 @@ test.describe("Onboarding wizard", () => {
         name: /Continue with messaging/i,
       });
       await expect(continueBtn).toHaveAttribute("aria-disabled", "true");
+      // Locked Continue points screen readers at the gate requirement.
+      await expect(continueBtn).toHaveAttribute(
+        "aria-describedby",
+        "onboarding-messaging-gate-hint",
+      );
       const flash = app.window.locator(".onboarding-wizard__safety-ack-flash");
       await expect(flash).toHaveCount(0);
 
@@ -184,6 +189,11 @@ test.describe("Onboarding wizard", () => {
       // Tick the acknowledgement card → Continue unlocks.
       await app.window.locator(".onboarding-wizard__safety-ack").click();
       await expect(continueBtn).not.toHaveAttribute("aria-disabled", "true");
+      // Unlocking also drops the screen-reader gate hint.
+      await expect(continueBtn).not.toHaveAttribute(
+        "aria-describedby",
+        "onboarding-messaging-gate-hint",
+      );
 
       // Now Continue advances to the provider picker.
       await continueBtn.click();
@@ -192,6 +202,57 @@ test.describe("Onboarding wizard", () => {
           name: /Pick the messaging platforms you want to connect/i,
         }),
       ).toBeVisible();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("messaging-safety flash does not replay when navigating back to the step", async () => {
+    const app = await launchElectronApp(wizardLaunchOptions);
+    try {
+      // Walk to the messaging-safety step (same Shared-mode path).
+      await app.window.getByRole("button", { name: /Get started/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .locator('input[type="password"]')
+        .first()
+        .fill("xai-e2e-test-key");
+      await app.window.getByRole("button", { name: /Use this key/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .getByText("Reuse your existing Codex login", { exact: false })
+        .click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .getByRole("button", { name: /I.ll log in later/i })
+        .click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+
+      await expect(
+        app.window.getByRole("heading", { name: /Messaging is optional/i }),
+      ).toBeVisible();
+
+      const continueBtn = app.window.getByRole("button", {
+        name: /Continue with messaging/i,
+      });
+      const flash = app.window.locator(".onboarding-wizard__safety-ack-flash");
+
+      // Force a flash (box still unchecked), then leave and return.
+      await continueBtn.click({ force: true });
+      await expect(flash).toHaveCount(1);
+
+      await app.window.getByRole("button", { name: /Back/i }).click();
+      // Back lands on the shared Codex login step (login already deferred,
+      // so its Continue is live); Continue returns to messaging-safety.
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await expect(
+        app.window.getByRole("heading", { name: /Messaging is optional/i }),
+      ).toBeVisible();
+
+      // Re-entry must NOT replay the ring — the box is still unchecked and
+      // the operator never re-clicked the locked button.
+      await expect(flash).toHaveCount(0);
+      await expect(continueBtn).toHaveAttribute("aria-disabled", "true");
     } finally {
       await app.close();
     }

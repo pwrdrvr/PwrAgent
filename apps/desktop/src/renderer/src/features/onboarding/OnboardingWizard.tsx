@@ -1360,6 +1360,17 @@ function WizardRail(props: {
   );
 }
 
+/** id of the visually-hidden hint that explains why "Continue with
+ *  messaging" is locked. The footer button points at it via
+ *  `aria-describedby` while locked so screen readers announce the gate
+ *  on focus; the messaging-safety step renders the element. */
+const MESSAGING_GATE_HINT_ID = "onboarding-messaging-gate-hint";
+/** Single source of truth for the gate-requirement sentence, shared by
+ *  the `aria-describedby` hint (announced on focus) and the assertive
+ *  live region (announced when the locked button is clicked). */
+const MESSAGING_GATE_REQUIREMENT =
+  'Select the "I understand" checkbox to continue with messaging setup.';
+
 function WizardFooter(props: {
   step: WizardStep;
   submitting: boolean;
@@ -1570,6 +1581,9 @@ function WizardFooter(props: {
             continueLocked ? " is-soft-disabled" : ""
           }`}
           aria-disabled={continueLocked || undefined}
+          aria-describedby={
+            continueLocked ? MESSAGING_GATE_HINT_ID : undefined
+          }
           onClick={() => {
             if (props.submitting) return;
             if (!props.acknowledged) {
@@ -2191,6 +2205,23 @@ function MessagingSafetyStep(props: {
    */
   multiProfileTarget?: { firstProfileName: string; otherProfileNames: readonly string[] };
 }) {
+  // Replay the attention ring ONLY when the parent's nonce actually
+  // changes during this step's lifetime — i.e. the operator clicked the
+  // locked "Continue with messaging" button (the parent bumps the nonce
+  // only while the box is unchecked). Seeding the ref from the nonce
+  // present at mount means returning to this step (Back → forward) with a
+  // stale non-zero nonce does NOT replay the flash. `flashKey` is local
+  // state, so it resets to 0 on unmount; each genuine bump increments it
+  // and remounts both the visual ring and the live-region announcement.
+  const [flashKey, setFlashKey] = useState(0);
+  const lastFlashNonce = useRef(props.flashNonce);
+  useEffect(() => {
+    if (props.flashNonce !== lastFlashNonce.current) {
+      lastFlashNonce.current = props.flashNonce;
+      setFlashKey((key) => key + 1);
+    }
+  }, [props.flashNonce]);
+
   return (
     <div className="onboarding-wizard__safety">
       <div className="onboarding-wizard__safety-icon">
@@ -2260,18 +2291,40 @@ function MessagingSafetyStep(props: {
           hold PwrDrvr LLC and all PwrAgent contributors harmless for the
           outcomes of any actions I take here.
         </span>
-        {props.flashNonce > 0 ? (
-          // Keyed on the nonce so each Continue-while-unchecked click
-          // remounts the element and restarts the one-shot flash-then-fade
-          // animation. aria-hidden + pointer-events:none keep it purely
-          // decorative — it never intercepts the checkbox click.
+        {flashKey > 0 ? (
+          // Keyed on the local flash counter so each genuine
+          // Continue-while-unchecked click remounts the element and
+          // restarts the one-shot flash-then-fade animation. aria-hidden +
+          // pointer-events:none keep it purely decorative — it never
+          // intercepts the checkbox click.
           <span
-            key={props.flashNonce}
+            key={flashKey}
             className="onboarding-wizard__safety-ack-flash"
             aria-hidden
           />
         ) : null}
       </label>
+      {/* Screen-reader affordances for the soft-locked Continue button.
+          The hint (referenced by the footer button's aria-describedby)
+          explains the gate on focus; the assertive live region mirrors the
+          visual flash by announcing the same requirement when the locked
+          button is clicked. The inner span is keyed on flashKey so a
+          repeat click replaces the text node and forces re-announcement. */}
+      <span
+        id={MESSAGING_GATE_HINT_ID}
+        className="onboarding-wizard__visually-hidden"
+      >
+        {MESSAGING_GATE_REQUIREMENT}
+      </span>
+      <span
+        role="status"
+        aria-live="assertive"
+        className="onboarding-wizard__visually-hidden"
+      >
+        {flashKey > 0 ? (
+          <span key={flashKey}>{MESSAGING_GATE_REQUIREMENT}</span>
+        ) : null}
+      </span>
       <p className="onboarding-wizard__safety-fork-hint">
         You can always add or change messaging providers later from
         Settings → Messaging.

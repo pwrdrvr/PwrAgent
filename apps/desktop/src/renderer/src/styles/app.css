@@ -11918,12 +11918,14 @@ textarea,
 .onboarding-wizard__btn--accent-outline:hover:not(.is-soft-disabled) {
   background: var(--accent-soft);
 }
-/* Looks disabled but stays clickable: a click in this state replays
-   the acknowledgement flash instead of advancing. Not the native
-   `disabled` attribute, which would swallow the click. */
+/* Reads as not-yet-active but stays legible and clickable: a click in
+   this state replays the acknowledgement flash instead of advancing. Not
+   the native `disabled` attribute, which would swallow the click. Kept
+   below the full-strength outline (100% accent) so the locked vs. live
+   distinction stays visible, but dimmed only enough to signal "gated." */
 .onboarding-wizard__btn--accent-outline.is-soft-disabled {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-muted));
 }
 .onboarding-wizard__btn--link {
   color: var(--text-muted);
