@@ -50,17 +50,48 @@ describe("SqliteOverlayStore — thread pins", () => {
     });
 
     const ranks = await store.reorderThreadPins({
-      backend: "codex",
-      threadIds: ["thread-2", "thread-1"],
+      threadKeys: ["codex:thread-2", "codex:thread-1"],
     });
 
     expect(ranks).toEqual({
-      "thread-2": "1024",
-      "thread-1": "2048",
+      "codex:thread-2": "1024",
+      "codex:thread-1": "2048",
     });
     await expect(
       store.getThreadOverlayState({ backend: "codex", threadId: "thread-2" }),
     ).resolves.toMatchObject({ pinnedRank: "1024" });
+  });
+
+  it("orders pins globally across backends (interleaving Codex and ACP)", async () => {
+    // The whole point of global pin order: a Codex pin and an ACP pin can be
+    // interleaved in any order, with strictly increasing ranks assigned by the
+    // single global position — no per-backend rank collisions.
+    const ranks = await store.reorderThreadPins({
+      threadKeys: ["codex:c1", "acp%3Agemini:g1", "codex:c2"],
+    });
+
+    expect(ranks).toEqual({
+      "codex:c1": "1024",
+      "acp%3Agemini:g1": "2048",
+      "codex:c2": "3072",
+    });
+    await expect(
+      store.getThreadOverlayState({ backend: "acp:gemini", threadId: "g1" }),
+    ).resolves.toMatchObject({ backend: "acp:gemini", pinnedRank: "2048" });
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "c2" }),
+    ).resolves.toMatchObject({ backend: "codex", pinnedRank: "3072" });
+  });
+
+  it("skips unparseable thread keys without consuming a rank", async () => {
+    const ranks = await store.reorderThreadPins({
+      threadKeys: ["codex:c1", "not-a-valid-key-no-separator", "codex:c2"],
+    });
+
+    expect(ranks).toEqual({
+      "codex:c1": "1024",
+      "codex:c2": "2048",
+    });
   });
 
   it("persists pin state across sqlite handles", async () => {

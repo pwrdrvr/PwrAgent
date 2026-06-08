@@ -1171,20 +1171,19 @@ class DesktopAppServerService {
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
-    const backend = request.backend ?? "codex";
-
     const pinnedRanks = await this.getOverlayStore().reorderThreadPins({
-      backend,
-      threadIds: request.threadIds,
+      threadKeys: request.threadKeys,
     });
 
     logDebug("reorderThreadPins", {
-      backend,
-      pinCount: request.threadIds.length,
+      pinCount: request.threadKeys.length,
     });
 
+    // Pin order is global across backends, so this is a global notification.
+    // `backend` is required by publishLocalEvent but irrelevant here — use a
+    // fixed value (matches the directory/pin/reordered handler).
     await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
+      backend: "codex",
       notification: {
         method: "thread/pin/reordered",
         params: {
@@ -1193,7 +1192,7 @@ class DesktopAppServerService {
       },
     });
 
-    return { backend, pinnedRanks };
+    return { pinnedRanks };
   }
 
   async setThreadParent(

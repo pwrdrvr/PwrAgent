@@ -24,6 +24,7 @@ import {
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
+  parseThreadIdentityKey,
 } from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
@@ -449,27 +450,37 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  /**
+   * Reorder pinned threads globally across backends. `threadKeys` is the
+   * complete pinned order (thread identity keys); ranks are assigned by global
+   * index so Codex and ACP pins interleave in any order. Unparseable keys are
+   * skipped without consuming a rank.
+   */
   async reorderThreadPins(params: {
-    backend: ThreadOverlayState["backend"];
-    threadIds: string[];
+    threadKeys: string[];
   }): Promise<Record<string, string>> {
     const pinnedRanks: Record<string, string> = {};
     const write = this.stateDb.raw.transaction(() => {
-      params.threadIds.forEach((threadId, index) => {
-        const threadKey = buildThreadIdentityKey(params.backend, threadId);
+      let rankIndex = 0;
+      for (const threadKey of params.threadKeys) {
+        const parts = parseThreadIdentityKey(threadKey);
+        if (!parts) {
+          continue;
+        }
         const current = this.getThread(threadKey) ?? {
-          backend: params.backend,
-          threadId,
+          backend: parts.backend,
+          threadId: parts.threadId,
           executionMode: "default" as const,
           extraLinkedDirectories: [],
         };
-        const pinnedRank = String((index + 1) * 1024);
-        pinnedRanks[threadId] = pinnedRank;
+        rankIndex += 1;
+        const pinnedRank = String(rankIndex * 1024);
+        pinnedRanks[threadKey] = pinnedRank;
         this.putThread(threadKey, {
           ...current,
           pinnedRank,
         });
-      });
+      }
     });
     write();
     return pinnedRanks;

@@ -733,8 +733,8 @@ function updateThreadAgentInSnapshot(
 function updateThreadPinsInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
-    backend: AppServerBackendKind;
-    pinnedRanks: Record<string, string>;
+    /** Thread identity key -> pin rank. Pin order is global across backends. */
+    pinnedRanksByThreadKey: Record<string, string>;
   },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
@@ -743,10 +743,10 @@ function updateThreadPinsInSnapshot(
 
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend) {
-      return thread;
-    }
-    const pinnedRank = params.pinnedRanks[thread.id];
+    const pinnedRank =
+      params.pinnedRanksByThreadKey[
+        buildThreadIdentityKey(thread.source, thread.id)
+      ];
     if (!pinnedRank || thread.pinnedRank === pinnedRank) {
       return thread;
     }
@@ -1853,10 +1853,11 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     agent: Parameters<NonNullable<DesktopApi["setThreadAgent"]>>[0]["agent"],
   ) => Promise<void>;
-  reorderThreadPins: (
-    backend: AppServerBackendKind,
-    threadIds: string[],
-  ) => Promise<void>;
+  /**
+   * Reorder pinned threads globally. `orderedThreadKeys` is the complete
+   * pinned order across all backends (thread identity keys), top first.
+   */
+  reorderThreadPins: (orderedThreadKeys: string[]) => Promise<void>;
   setThreadParent: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
@@ -2546,8 +2547,7 @@ export function useThreadNavigation(
         setState((current) => ({
           ...current,
           response: updateThreadPinsInSnapshot(current.response, {
-            backend: event.backend,
-            pinnedRanks,
+            pinnedRanksByThreadKey: pinnedRanks,
           }),
         }));
         return;
@@ -3926,11 +3926,13 @@ export function useThreadNavigation(
         return;
       }
 
+      // Append above ALL existing pins (across backends), not just this
+      // thread's backend — pin order is global.
       const pinnedRank = pinned
         ? thread.pinnedRank ?? buildAppendPinRank(
-            (state.response?.threads ?? [])
-              .filter((candidate) => candidate.source === thread.source)
-              .map((candidate) => candidate.pinnedRank),
+            (state.response?.threads ?? []).map(
+              (candidate) => candidate.pinnedRank,
+            ),
           )
         : undefined;
 
@@ -3965,33 +3967,27 @@ export function useThreadNavigation(
   );
 
   const reorderThreadPins = useCallback(
-    async (
-      backend: AppServerBackendKind,
-      threadIds: string[],
-    ): Promise<void> => {
+    async (orderedThreadKeys: string[]): Promise<void> => {
       if (!reorderThreadPinsRequest) {
         return;
       }
 
-      const pinnedRanks = buildPinnedRanks(threadIds);
+      const pinnedRanksByThreadKey = buildPinnedRanks(orderedThreadKeys);
       setState((current) => ({
         ...current,
         response: updateThreadPinsInSnapshot(current.response, {
-          backend,
-          pinnedRanks,
+          pinnedRanksByThreadKey,
         }),
       }));
 
       try {
         const result = await reorderThreadPinsRequest({
-          backend,
-          threadIds,
+          threadKeys: orderedThreadKeys,
         });
         setState((current) => ({
           ...current,
           response: updateThreadPinsInSnapshot(current.response, {
-            backend: result.backend,
-            pinnedRanks: result.pinnedRanks,
+            pinnedRanksByThreadKey: result.pinnedRanks,
           }),
         }));
       } catch {
