@@ -11908,6 +11908,23 @@ textarea,
   border-color: var(--accent-border);
   color: var(--text-primary);
 }
+/* Non-default accent action: orange outline, transparent fill. Pairs
+   with an adjacent --primary button as the deliberate alternative. */
+.onboarding-wizard__btn--accent-outline {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+.onboarding-wizard__btn--accent-outline:hover:not(.is-soft-disabled) {
+  background: var(--accent-soft);
+}
+/* Looks disabled but stays clickable: a click in this state replays
+   the acknowledgement flash instead of advancing. Not the native
+   `disabled` attribute, which would swallow the click. */
+.onboarding-wizard__btn--accent-outline.is-soft-disabled {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+}
 .onboarding-wizard__btn--link {
   color: var(--text-muted);
   padding: 8px 6px;
@@ -12501,6 +12518,7 @@ textarea,
   color: var(--text-primary);
 }
 .onboarding-wizard__safety-ack {
+  position: relative;
   background: var(--bg-panel-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
@@ -12511,6 +12529,47 @@ textarea,
   align-items: flex-start;
   width: 100%;
   cursor: pointer;
+}
+/* One-shot attention ring replayed when the operator clicks the
+   locked "Continue with messaging" button before ticking the box.
+   Snaps to full opacity (the flash) then eases away to nothing over
+   5s, leaving an inert opacity:0 overlay until the next replay. */
+.onboarding-wizard__safety-ack-flash {
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 14px 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: onboardingAckFlash 5s ease-out forwards;
+}
+@keyframes onboardingAckFlash {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Hold a steady ring for the same window, then drop it — no fade
+     motion, just a non-animated appear/disappear. */
+  .onboarding-wizard__safety-ack-flash {
+    animation: onboardingAckFlashReduced 5s steps(1, end) forwards;
+  }
+  @keyframes onboardingAckFlashReduced {
+    0% {
+      opacity: 1;
+    }
+    99% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
 }
 .onboarding-wizard__safety-ack.is-checked {
   border-color: var(--accent-border);
@@ -12547,18 +12606,6 @@ textarea,
 }
 .onboarding-wizard__safety-ack-text strong {
   color: var(--text-primary);
-}
-.onboarding-wizard__safety-fork {
-  display: flex;
-  gap: 12px;
-  width: 100%;
-  margin-top: 4px;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.onboarding-wizard__safety-fork .onboarding-wizard__btn--primary {
-  margin-left: auto;
 }
 .onboarding-wizard__safety-fork-hint {
   font: 400 12px/1.5 var(--font-sans, sans-serif);

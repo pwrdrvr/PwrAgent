@@ -211,6 +211,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       : ["personal", "work"];
   });
   const [acknowledged, setAcknowledged] = useState(false);
+  // Nonce bumped each time the operator clicks "Continue with
+  // messaging" while the acknowledgement box is still unchecked. The
+  // messaging-safety step watches this value and, on every change,
+  // replays a one-shot orange ring around the acknowledgement card —
+  // flashing then fading over 5s — to point the operator at the
+  // checkbox they have to tick before the Continue button unlocks.
+  const [ackFlashNonce, setAckFlashNonce] = useState(0);
   // Buffered secrets (xAI API key + messaging tokens). The wizard
   // collects values in renderer memory rather than writing them
   // through `replaceSecret` on input change. At Finish, the
@@ -503,6 +510,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const skipMessaging = useCallback(() => {
     setSelectedProviders(new Set());
     setStep("done");
+  }, []);
+
+  // Fired by the footer's "Continue with messaging" button when the
+  // operator clicks it before acknowledging. Bumping the nonce replays
+  // the attention flash on the messaging-safety acknowledgement card.
+  const flashAcknowledgement = useCallback(() => {
+    setAckFlashNonce((nonce) => nonce + 1);
   }, []);
 
   /**
@@ -1050,9 +1064,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             <MessagingSafetyStep
               acknowledged={acknowledged}
               onAcknowledgedChange={setAcknowledged}
-              onSkipMessaging={skipMessaging}
-              onContinue={goNext}
-              submitting={submitting}
+              flashNonce={ackFlashNonce}
               // Multi-profile context: in Multiple / Isolated modes the
               // wizard provisions N profiles and lands the operator
               // inside the first one. Messaging is configured for that
@@ -1130,6 +1142,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           codexProfileModel={codexProfileModel}
           onBack={goPrev}
           onSkip={handleSkip}
+          onSkipMessaging={skipMessaging}
+          onRequestAcknowledge={flashAcknowledgement}
           onNext={goNext}
           onFinish={() => void persistAndComplete()}
         />
@@ -1378,6 +1392,12 @@ function WizardFooter(props: {
   codexProfileModel: DesktopCodexProfileModel;
   onBack: () => void;
   onSkip: () => void;
+  /** messaging-safety: clears provider selection and jumps to Done.
+   *  Distinct from `onSkip` (which exits the wizard entirely). */
+  onSkipMessaging: () => void;
+  /** messaging-safety: replay the attention flash on the
+   *  acknowledgement card when Continue is clicked while unchecked. */
+  onRequestAcknowledge: () => void;
   onNext: () => void;
   onFinish: () => void;
 }) {
@@ -1533,6 +1553,43 @@ function WizardFooter(props: {
       >
         Open my workspace →
       </button>
+    );
+  } else if (props.step === "messaging-safety") {
+    // Skip is the default action (filled accent, far right). Continue
+    // is the deliberate, non-default choice (accent outline, to its
+    // left). Continue is NOT natively `disabled` so it can still take a
+    // click while the box is unchecked — that click flashes the
+    // acknowledgement card instead of advancing, pointing the operator
+    // at the gate. Ticking the box flips it to a live outline button.
+    const continueLocked = !props.acknowledged || props.submitting;
+    primary = (
+      <>
+        <button
+          type="button"
+          className={`onboarding-wizard__btn onboarding-wizard__btn--accent-outline${
+            continueLocked ? " is-soft-disabled" : ""
+          }`}
+          aria-disabled={continueLocked || undefined}
+          onClick={() => {
+            if (props.submitting) return;
+            if (!props.acknowledged) {
+              props.onRequestAcknowledge();
+              return;
+            }
+            props.onNext();
+          }}
+        >
+          Continue with messaging →
+        </button>
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+          disabled={props.submitting}
+          onClick={props.onSkipMessaging}
+        >
+          Skip messaging for now
+        </button>
+      </>
     );
   }
 
@@ -2113,9 +2170,14 @@ function CodexProfileStep(props: {
 function MessagingSafetyStep(props: {
   acknowledged: boolean;
   onAcknowledgedChange: (next: boolean) => void;
-  onSkipMessaging: () => void;
-  onContinue: () => void;
-  submitting: boolean;
+  /**
+   * Counter bumped by the parent every time the operator clicks the
+   * footer's "Continue with messaging" button while still unchecked.
+   * Each change remounts the flash overlay (keyed on this value) so the
+   * one-shot orange ring replays from the top. `0` is the initial value
+   * — no flash on first render.
+   */
+  flashNonce: number;
   /**
    * In Multiple / Isolated modes, identifies the profile messaging
    * will be configured for during this wizard (always the first
@@ -2198,25 +2260,18 @@ function MessagingSafetyStep(props: {
           hold PwrDrvr LLC and all PwrAgent contributors harmless for the
           outcomes of any actions I take here.
         </span>
+        {props.flashNonce > 0 ? (
+          // Keyed on the nonce so each Continue-while-unchecked click
+          // remounts the element and restarts the one-shot flash-then-fade
+          // animation. aria-hidden + pointer-events:none keep it purely
+          // decorative — it never intercepts the checkbox click.
+          <span
+            key={props.flashNonce}
+            className="onboarding-wizard__safety-ack-flash"
+            aria-hidden
+          />
+        ) : null}
       </label>
-      <div className="onboarding-wizard__safety-fork">
-        <button
-          type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={props.submitting}
-          onClick={props.onSkipMessaging}
-        >
-          Skip messaging for now
-        </button>
-        <button
-          type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-          disabled={!props.acknowledged || props.submitting}
-          onClick={props.onContinue}
-        >
-          Continue to messaging setup →
-        </button>
-      </div>
       <p className="onboarding-wizard__safety-fork-hint">
         You can always add or change messaging providers later from
         Settings → Messaging.
