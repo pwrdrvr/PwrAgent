@@ -318,6 +318,36 @@ export class SqliteOverlayStore {
     return this.getThread(threadKey);
   }
 
+  /**
+   * Persist the immutable repository resolution for an ACP worktree thread.
+   * The mapping from a tool-managed worktree cwd to its parent repository is
+   * derived once (by following the worktree's `.git` link — no git process)
+   * and stored here so later thread-list reads reuse it instead of re-touching
+   * the filesystem. `cwd` is retained so a session rebind to a different
+   * workspace invalidates the cache. See `acpWorktreeDirectory` on
+   * `ThreadOverlayState`.
+   */
+  async setAcpWorktreeDirectory(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    cwd: string;
+    directory: LinkedDirectorySummary;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      acpWorktreeDirectory: { cwd: params.cwd, directory: params.directory },
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async persistThreadUsageActivity(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -1197,6 +1227,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadExecutionMode"
   | "getThreadOverlayState"
   | "getThreadOverlayStates"
+  | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
   | "setThreadReaction"
   | "setThreadPin"
