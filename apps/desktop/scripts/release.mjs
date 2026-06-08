@@ -89,10 +89,12 @@ function runChecked(file, args, opts = {}) {
     stdio: "inherit",
     cwd: opts.cwd ?? desktopRoot,
     env: { ...process.env, ...opts.env },
-    // On Windows `pnpm` is a .cmd shim that spawnSync only resolves through a
-    // shell (and Node refuses to spawn .cmd without one). Repo/stage paths here
-    // contain no spaces, so unquoted shell args are safe.
-    shell: process.platform === "win32",
+    // On Windows only `pnpm` needs a shell (it's a .cmd shim that spawnSync
+    // can't resolve directly). `node`/`gh` are real .exe's found without a
+    // shell — and NOT using a shell for them keeps args with spaces (e.g. the
+    // Azure signing `--config.win.azureSignOptions.publisherName=PwrDrvr LLC`
+    // override) intact, since shell:true would word-split them.
+    shell: process.platform === "win32" && file === "pnpm",
   });
   if (result.error) {
     console.error(`  ! failed to spawn ${file}: ${result.error.message}`);
@@ -101,6 +103,34 @@ function runChecked(file, args, opts = {}) {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+// Windows Authenticode signing via Azure Trusted Signing. Active only when the
+// account config (WIN_AZURE_SIGN_*) AND the Microsoft Entra service-principal
+// credentials (AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET, which
+// electron-builder's bundled TrustedSigning module reads from the environment)
+// are all present. Otherwise we build an UNSIGNED installer so local, sandbox,
+// and label-gated PR builds still work without secrets.
+function resolveWindowsAzureSigning() {
+  const publisherName = process.env.WIN_AZURE_SIGN_PUBLISHER_NAME?.trim();
+  const endpoint = process.env.WIN_AZURE_SIGN_ENDPOINT?.trim();
+  const accountName = process.env.WIN_AZURE_SIGN_ACCOUNT?.trim();
+  const profileName = process.env.WIN_AZURE_SIGN_PROFILE?.trim();
+  if (!publisherName || !endpoint || !accountName || !profileName) {
+    return undefined;
+  }
+  const credentialsPresent = Boolean(
+    process.env.AZURE_TENANT_ID &&
+      process.env.AZURE_CLIENT_ID &&
+      process.env.AZURE_CLIENT_SECRET,
+  );
+  if (!credentialsPresent) {
+    console.warn(
+      "  Windows signing config is set but AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET are missing — building UNSIGNED",
+    );
+    return undefined;
+  }
+  return { publisherName, endpoint, accountName, profileName };
 }
 
 function electronBuilderCli() {
@@ -349,8 +379,19 @@ if (!signStageOnly) {
 // 5. electron-builder.
 const builderArgs = [];
 if (win) {
-  step("electron-builder --win nsis --x64 (no builder publish)");
+  const azureSign = resolveWindowsAzureSigning();
+  step(
+    `electron-builder --win nsis --x64 (${azureSign ? "Azure Trusted Signing" : "UNSIGNED"}, no builder publish)`,
+  );
   builderArgs.push("--win", "nsis", "--x64", "--publish=never");
+  if (azureSign) {
+    builderArgs.push(
+      `--config.win.azureSignOptions.publisherName=${azureSign.publisherName}`,
+      `--config.win.azureSignOptions.endpoint=${azureSign.endpoint}`,
+      `--config.win.azureSignOptions.codeSigningAccountName=${azureSign.accountName}`,
+      `--config.win.azureSignOptions.certificateProfileName=${azureSign.profileName}`,
+    );
+  }
 } else if (linux) {
   const linuxArch = currentLinuxBuilderArch();
   step(`electron-builder --linux deb --${linuxArch} (no builder publish)`);

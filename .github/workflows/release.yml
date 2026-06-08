@@ -236,10 +236,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # NSIS installer is currently unsigned (no Windows code-signing identity
-      # yet). Uploaded as a workflow artifact, not published to the GitHub
-      # Release, until signing is in place.
-      - name: Package Windows installer (unsigned, no publish)
+      # Signs via Azure Trusted Signing when the repo provides the signing
+      # config (vars.WIN_AZURE_SIGN_*) and the Entra service-principal secrets
+      # (AZURE_*). Until those are set, release.mjs builds an UNSIGNED installer.
+      # See docs/desktop-windows-signing.md. Not published to the GitHub Release
+      # yet — uploaded as a workflow artifact below.
+      - name: Package Windows installer
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: node apps/desktop/scripts/release.mjs --win --no-publish
 
       - name: Upload Windows installer artifact
