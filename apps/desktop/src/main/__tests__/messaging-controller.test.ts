@@ -11,6 +11,7 @@ import type {
   CancelThreadExecutionModeQueueRequest,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MessagingToolUpdateMode,
   NavigationSnapshot,
@@ -283,28 +284,31 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Fix bug",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "codex",
-        directoryKey: "directory:pwragent",
-        directoryLabel: "PwrAgent",
-        directoryPath: "/repo/pwragent",
-        executionMode: "default",
-        fastMode: undefined,
-        model: undefined,
-        prompt: "",
-        reasoningEffort: undefined,
-        serviceTier: undefined,
-        workMode: "local",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Fix bug",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+          executionMode: "default",
+          fastMode: undefined,
+          model: undefined,
+          prompt: "",
+          reasoningEffort: undefined,
+          serviceTier: undefined,
+          workMode: "local",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
@@ -452,23 +456,26 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
 
     expect(harness.startThread).not.toHaveBeenCalled();
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Fix bug in a worktree",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "codex",
-        directoryKey: "directory:pwragent",
-        directoryPath: "/repo/pwragent",
-        executionMode: "default",
-        workMode: "worktree",
-        branchName: "release/v2",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Fix bug in a worktree",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryPath: "/repo/pwragent",
+          executionMode: "default",
+          workMode: "worktree",
+          branchName: "release/v2",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
   });
 
   it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
@@ -525,20 +532,23 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug locally"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Fix bug locally",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        directoryKey: "directory:pwragent",
-        directoryPath: "/repo/pwragent",
-        workMode: "local",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Fix bug locally",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          directoryKey: "directory:pwragent",
+          directoryPath: "/repo/pwragent",
+          workMode: "local",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
   });
 
   it("paginates the new-thread base branch picker", async () => {
@@ -634,20 +644,23 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Fix bug",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        directoryKey: "directory:pwragent",
-        directoryPath: "/repo/pwragent",
-        workMode: "worktree",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Fix bug",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          directoryKey: "directory:pwragent",
+          directoryPath: "/repo/pwragent",
+          workMode: "worktree",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Directory: /repo/pwragent"),
@@ -851,6 +864,7 @@ describe("MessagingController", () => {
             },
           ],
         }),
+        expectMaterializeOptions(),
       );
       expect(harness.startTurn).not.toHaveBeenCalled();
     });
@@ -948,6 +962,7 @@ describe("MessagingController", () => {
           },
         ],
       }),
+      expectMaterializeOptions(),
     );
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
@@ -964,6 +979,93 @@ describe("MessagingController", () => {
       kind: "status",
       text: expect.stringContaining("Binding: new-thread-1"),
     });
+  });
+
+  it("binds a materialized thread before fast first-turn terminal events", async () => {
+    let harness: Awaited<ReturnType<typeof createHarness>>;
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "new-thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [
+                  {
+                    type: "agentMessage",
+                    text: "Fixed it.",
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies AgentEvent);
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          turnId: "turn-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+        };
+      },
+    );
+    harness = await createHarness({ materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+    });
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: "Fixed it.",
+            markdown: "markdown",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+    );
   });
 
   it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
@@ -1003,6 +1105,7 @@ describe("MessagingController", () => {
           backend: "codex",
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"))
@@ -1237,6 +1340,7 @@ describe("MessagingController", () => {
           },
         ],
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
@@ -2977,19 +3081,22 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Fix bug with Grok",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "grok",
-        directoryKey: "directory:pwragent",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Fix bug with Grok",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "grok",
+          directoryKey: "directory:pwragent",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
@@ -3071,19 +3178,22 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Use Gemini",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "acp:gemini",
-        directoryKey: "directory:pwragent",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Use Gemini",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "acp:gemini",
+          directoryKey: "directory:pwragent",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
@@ -3156,19 +3266,22 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Use Gemini",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "acp:gemini",
-        executionMode: "default",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Use Gemini",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "acp:gemini",
+          executionMode: "default",
+        }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
@@ -3309,22 +3422,25 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use yolo"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      input: [
-        {
-          type: "text",
-          text: "Use yolo",
-        },
-      ],
-      launchpad: expect.objectContaining({
-        backend: "acp:gemini",
-        executionMode: "full-access",
-        acpRuntime: expect.objectContaining({
-          currentModeId: "yolo",
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        input: [
+          {
+            type: "text",
+            text: "Use yolo",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "acp:gemini",
+          executionMode: "full-access",
+          acpRuntime: expect.objectContaining({
+            currentModeId: "yolo",
+          }),
         }),
       }),
-    }));
+      expectMaterializeOptions(),
+    );
   });
 
   it("uses inherited ACP runtime state when opening the new-thread picker", async () => {
@@ -3747,6 +3863,7 @@ describe("MessagingController", () => {
           codexEnvironmentSetupEnabled: true,
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
@@ -8047,6 +8164,7 @@ describe("MessagingController", () => {
           executionMode: "full-access",
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
@@ -8100,6 +8218,7 @@ describe("MessagingController", () => {
           executionMode: "full-access",
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
@@ -8250,6 +8369,7 @@ describe("MessagingController", () => {
           executionMode: "full-access",
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
     expect(harness.delivered).not.toEqual(
@@ -8329,6 +8449,7 @@ describe("MessagingController", () => {
           executionMode: "full-access",
         }),
       }),
+      expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
@@ -10027,6 +10148,12 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
     executionModes: overrides.executionModes ?? base.executionModes,
     launchpadOptions: overrides.launchpadOptions ?? base.launchpadOptions,
   };
+}
+
+function expectMaterializeOptions() {
+  return expect.objectContaining({
+    onThreadMaterialized: expect.any(Function),
+  });
 }
 
 function buildAcpRuntimeBackendSummary(

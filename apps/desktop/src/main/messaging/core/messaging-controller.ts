@@ -24,6 +24,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   LaunchpadWorkMode,
+  MaterializedDirectoryLaunchpadThread,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -1714,6 +1715,14 @@ export class MessagingController {
     navigation: NavigationSnapshot;
     turnId: string;
   }): Promise<void> {
+    const currentTurn = this.getActiveTurn(params.binding);
+    if (
+      currentTurn?.turnId === params.turnId &&
+      isTerminalTurnLifecycle(currentTurn)
+    ) {
+      await this.renderBindingStatus(params.binding, undefined, params.navigation);
+      return;
+    }
     const activeTurn: MessagingActiveTurnSummary = {
       turnId: params.turnId,
       status: "working",
@@ -4711,23 +4720,94 @@ export class MessagingController {
         return;
       }
     }
+    type StartedLaunchpadThread = Pick<
+      MaterializedDirectoryLaunchpadThread,
+      "backend" | "threadId" | "executionMode"
+    > &
+      Partial<
+        Pick<
+          MaterializedDirectoryLaunchpadThread,
+          "linkedDirectory" | "workMode"
+        >
+      >;
+    let boundThread:
+      | {
+          binding: MessagingBindingRecord;
+          navigation: NavigationSnapshot;
+        }
+      | undefined;
+    const bindStartedThread = async (
+      started: StartedLaunchpadThread,
+    ): Promise<{
+      binding: MessagingBindingRecord;
+      navigation: NavigationSnapshot;
+    }> => {
+      if (boundThread) {
+        return boundThread;
+      }
+      const binding = await this.bindChannelToThread(event, {
+        backend: started.backend,
+        threadId: started.threadId,
+      });
+      let updatedBinding = preferences
+        ? await this.updateBindingPreferences(binding, preferences)
+        : binding;
+      if (bundle.session.surface) {
+        updatedBinding = await this.options.store.upsertBinding({
+          ...updatedBinding,
+          statusSurface: bundle.session.surface,
+          updatedAt: this.now(),
+        });
+      }
+      const optimisticNavigation = navigationWithStartedThread({
+        backend: started.backend,
+        directory,
+        executionMode: started.executionMode,
+        linkedDirectory: started.linkedDirectory,
+        navigation,
+        now: this.now(),
+        model: options.supportsModel ? options.model : undefined,
+        reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
+        serviceTier: preferences?.serviceTier,
+        fastMode: options.supportsFast ? options.fastMode : undefined,
+        acpRuntime: options.acpRuntime,
+        preferences,
+        project,
+        threadId: started.threadId,
+        worktreePath: started.linkedDirectory?.worktreePath,
+        workMode: started.workMode ?? options.workMode,
+      });
+      boundThread = {
+        binding: updatedBinding,
+        navigation: optimisticNavigation,
+      };
+      return boundThread;
+    };
+    const launchpad = launchpadForMessagingProject({
+      backend: selectedBackend.kind,
+      directory,
+      navigation,
+      preferences,
+      project,
+      session,
+      now: this.now(),
+      workMode: options.workMode,
+      branchName: options.branchName,
+      acpRuntime: options.acpRuntime,
+    });
     const materialized = this.options.backend.materializeDirectoryLaunchpad
-      ? await this.options.backend.materializeDirectoryLaunchpad({
-          directoryKey: messagingLaunchpadMaterializationKey(session),
-          launchpad: launchpadForMessagingProject({
-            backend: selectedBackend.kind,
-            directory,
-            navigation,
-            preferences,
-            project,
-            session,
-            now: this.now(),
-            workMode: options.workMode,
-            branchName: options.branchName,
-            acpRuntime: options.acpRuntime,
-          }),
-          input: prepared.input,
-        })
+      ? await this.options.backend.materializeDirectoryLaunchpad(
+          {
+            directoryKey: messagingLaunchpadMaterializationKey(session),
+            launchpad,
+            input: prepared.input,
+          },
+          {
+            onThreadMaterialized: async (started) => {
+              await bindStartedThread(started);
+            },
+          },
+        )
       : undefined;
     const started = materialized ?? (await this.options.backend.startThread!({
       backend: selectedBackend.kind,
@@ -4745,38 +4825,10 @@ export class MessagingController {
           }
         : {}),
     }));
-    const binding = await this.bindChannelToThread(event, {
-      backend: started.backend,
-      threadId: started.threadId,
-    });
-    let updatedBinding = preferences
-      ? await this.updateBindingPreferences(binding, preferences)
-      : binding;
-    if (bundle.session.surface) {
-      updatedBinding = await this.options.store.upsertBinding({
-        ...updatedBinding,
-        statusSurface: bundle.session.surface,
-        updatedAt: this.now(),
-      });
-    }
-    const optimisticNavigation = navigationWithStartedThread({
-      backend: started.backend,
-      directory,
-      executionMode: started.executionMode,
-      linkedDirectory: materialized?.linkedDirectory,
-      navigation,
-      now: this.now(),
-      model: options.supportsModel ? options.model : undefined,
-      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-      serviceTier: preferences?.serviceTier,
-      fastMode: options.supportsFast ? options.fastMode : undefined,
-      acpRuntime: options.acpRuntime,
-      preferences,
-      project,
-      threadId: started.threadId,
-      worktreePath: materialized?.linkedDirectory?.worktreePath,
-      workMode: materialized?.workMode ?? options.workMode,
-    });
+    const {
+      binding: updatedBinding,
+      navigation: optimisticNavigation,
+    } = await bindStartedThread(started);
     this.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
     if (materialized?.codexEnvironmentStartupFailure) {

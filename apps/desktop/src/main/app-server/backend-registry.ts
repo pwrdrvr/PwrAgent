@@ -58,7 +58,9 @@ import {
   type ListBackendsResponse,
   type LinkedDirectorySummary,
   type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadOptions,
   type MaterializeDirectoryLaunchpadResponse,
+  type MaterializedDirectoryLaunchpadThread,
   type LaunchpadWorkMode,
   type NavigationDirectoryGitStatus,
   type NavigationDirectorySummary,
@@ -7373,11 +7375,7 @@ export class DesktopBackendRegistry {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: {
-      onCodexEnvironmentSetupProgress?: (
-        event: CodexEnvironmentSetupProgressEvent,
-      ) => void;
-    },
+    options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
       request.launchpad ??
@@ -7543,6 +7541,16 @@ export class DesktopBackendRegistry {
         worktreePath: workspace.cwd,
       });
     }
+    const materializedThread = {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+      executionMode: startThreadResponse.executionMode,
+      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
+      workMode: workspace.workMode,
+      codexEnvironmentRuntime,
+      codexEnvironmentStartupFailure,
+    } satisfies MaterializedDirectoryLaunchpadThread;
+    await options?.onThreadMaterialized?.(materializedThread);
 
     const input =
       request.input ??
@@ -7601,14 +7609,8 @@ export class DesktopBackendRegistry {
     });
 
     return {
-      backend: startThreadResponse.backend,
-      threadId: startThreadResponse.threadId,
+      ...materializedThread,
       turnId,
-      executionMode: startThreadResponse.executionMode,
-      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
-      workMode: workspace.workMode,
-      codexEnvironmentRuntime,
-      codexEnvironmentStartupFailure,
       turnStartFailure,
     };
   }
