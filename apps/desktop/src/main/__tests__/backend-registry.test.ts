@@ -21,6 +21,7 @@ import type {
   BackendAcpSessionRuntimeState,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   ThreadExecutionMode,
@@ -218,6 +219,29 @@ function createOverlayStoreMock(params?: {
     }) => overlays.get(`${backend}:${threadId}`),
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, overlays.get(`codex:${threadId}`)])),
+    setAcpWorktreeDirectory: async ({
+      backend,
+      threadId,
+      cwd,
+      directory,
+    }: {
+      backend: string;
+      threadId: string;
+      cwd: string;
+      directory: LinkedDirectorySummary;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend,
+        threadId,
+        executionMode: overlays.get(key)?.executionMode ?? "default",
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+        acpWorktreeDirectory: { cwd, directory },
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     persistThreadUsageActivity: async ({
       backend,
       threadId,
@@ -1241,9 +1265,9 @@ function createKimiAcpRegistry(options?: {
   codexClient?: MockBackendClient;
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
-  acpDirectoryEnricher?: (
-    projectKey?: string,
-  ) => Promise<{ linkedDirectories: AppServerThreadSummary["linkedDirectories"] }>;
+  acpWorktreeRepositoryResolver?: (
+    cwd: string,
+  ) => Promise<LinkedDirectorySummary | undefined>;
 }) {
   const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
   const sessions = options?.sessions ?? [];
@@ -1310,7 +1334,7 @@ function createKimiAcpRegistry(options?: {
     createAcpClient: () => acpClient,
     codexEnvironmentCommandRunner: options?.codexEnvironmentCommandRunner,
     gitDirectoryService: options?.gitDirectoryService as never,
-    acpDirectoryEnricher: options?.acpDirectoryEnricher,
+    acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
   });
   return {
     acpBackendId,
@@ -15314,6 +15338,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
   const worktreeCwd = "/Users/me/.codex/worktrees/abcd/PwrAgnt";
   const repoPath = "/Users/me/pwrdrvr/PwrAgnt";
 
+  const resolvedDirectory: LinkedDirectorySummary = {
+    id: repoPath,
+    label: "PwrAgnt",
+    path: repoPath,
+    worktreePath: worktreeCwd,
+    kind: "worktree",
+  };
+
   function acpSessionWithCwd(cwd: string): AcpSessionMetadata {
     return {
       backendId: acpBackendId,
@@ -15327,73 +15359,101 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     };
   }
 
-  it("resolves a managed-worktree ACP thread onto its repository checkout", async () => {
-    // ACP sessions only know their cwd; for a worktree cwd we enrich it to a
-    // repo-rooted linked directory so the thread groups under the repo row
-    // (path = repo, worktreePath = cwd) instead of getting its own folder.
-    const enricher = vi.fn(async () => ({
-      linkedDirectories: [
-        {
-          id: repoPath,
-          label: "PwrAgnt",
-          path: repoPath,
-          worktreePath: worktreeCwd,
-          kind: "worktree" as const,
-        },
-      ],
-    }));
+  it("resolves a managed-worktree ACP thread onto its repository checkout and caches it", async () => {
+    // ACP sessions only know their cwd. For a worktree cwd we follow the
+    // worktree's `.git` link (filesystem only, no git process) to a repo-rooted
+    // linked directory so the thread groups under the repo row (path = repo,
+    // worktreePath = cwd) instead of getting its own folder — then persist the
+    // result on the overlay so it is never re-resolved.
+    const resolver = vi.fn(async () => resolvedDirectory);
+    const overlayStore = createOverlayStoreMock();
+    const setSpy = vi.spyOn(overlayStore, "setAcpWorktreeDirectory");
     const { registry } = createKimiAcpRegistry({
       acpBackendId,
       sessionId: "s1",
       sessions: [acpSessionWithCwd(worktreeCwd)],
-      acpDirectoryEnricher: enricher,
+      overlayStore,
+      acpWorktreeRepositoryResolver: resolver,
     });
 
     const threads = await registry.listThreads({ backend: acpBackendId });
 
-    expect(enricher).toHaveBeenCalledWith(worktreeCwd);
-    expect(threads[0]?.linkedDirectories).toEqual([
-      {
-        id: repoPath,
-        label: "PwrAgnt",
-        path: repoPath,
-        worktreePath: worktreeCwd,
-        kind: "worktree",
-      },
-    ]);
+    expect(resolver).toHaveBeenCalledWith(worktreeCwd);
+    expect(threads[0]?.linkedDirectories).toEqual([resolvedDirectory]);
+    expect(setSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "s1",
+      cwd: worktreeCwd,
+      directory: resolvedDirectory,
+    });
   });
 
-  it("does not enrich a plain local ACP thread's directory", async () => {
-    const enricher = vi.fn(async () => ({ linkedDirectories: [] }));
+  it("reuses the cached resolution from the overlay without touching the filesystem", async () => {
+    // The repo↔worktree mapping is immutable, so a thread that already carries
+    // a cached `acpWorktreeDirectory` for its cwd must short-circuit the
+    // resolver entirely.
+    const resolver = vi.fn(async () => resolvedDirectory);
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "acp:kimi:s1": {
+          backend: acpBackendId,
+          threadId: "s1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          acpWorktreeDirectory: { cwd: worktreeCwd, directory: resolvedDirectory },
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "s1",
+      sessions: [acpSessionWithCwd(worktreeCwd)],
+      overlayStore,
+      acpWorktreeRepositoryResolver: resolver,
+    });
+
+    const threads = await registry.listThreads({ backend: acpBackendId });
+
+    expect(resolver).not.toHaveBeenCalled();
+    expect(threads[0]?.linkedDirectories).toEqual([resolvedDirectory]);
+  });
+
+  it("does not resolve a plain local ACP thread's directory", async () => {
+    const resolver = vi.fn(async () => resolvedDirectory);
     const { registry } = createKimiAcpRegistry({
       acpBackendId,
       sessionId: "s1",
       sessions: [acpSessionWithCwd(repoPath)],
-      acpDirectoryEnricher: enricher,
+      acpWorktreeRepositoryResolver: resolver,
     });
 
     const threads = await registry.listThreads({ backend: acpBackendId });
 
-    expect(enricher).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
     expect(threads[0]?.linkedDirectories).toEqual([
       { id: repoPath, label: "PwrAgnt", path: repoPath, kind: "local" },
     ]);
   });
 
-  it("keeps the session directory when worktree enrichment yields nothing", async () => {
+  it("keeps the session directory when the worktree cannot be resolved and does not cache the miss", async () => {
     // A vanished/unresolvable worktree must not drop the thread to "unlinked";
-    // fall back to the session's own cwd-rooted directory.
-    const enricher = vi.fn(async () => ({ linkedDirectories: [] }));
+    // fall back to the session's own cwd-rooted directory and leave the miss
+    // uncached so a later refresh retries cheaply.
+    const resolver = vi.fn(async () => undefined);
+    const overlayStore = createOverlayStoreMock();
+    const setSpy = vi.spyOn(overlayStore, "setAcpWorktreeDirectory");
     const { registry } = createKimiAcpRegistry({
       acpBackendId,
       sessionId: "s1",
       sessions: [acpSessionWithCwd(worktreeCwd)],
-      acpDirectoryEnricher: enricher,
+      overlayStore,
+      acpWorktreeRepositoryResolver: resolver,
     });
 
     const threads = await registry.listThreads({ backend: acpBackendId });
 
-    expect(enricher).toHaveBeenCalledWith(worktreeCwd);
+    expect(resolver).toHaveBeenCalledWith(worktreeCwd);
+    expect(setSpy).not.toHaveBeenCalled();
     expect(threads[0]?.linkedDirectories).toEqual([
       { id: worktreeCwd, label: "PwrAgnt", path: worktreeCwd, kind: "local" },
     ]);

@@ -156,10 +156,7 @@ import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
 import type { DirectoryGitStatusEntry } from "./git-directory-service";
-import {
-  createThreadDirectoryEnricher,
-  type ThreadDirectoryEnrichment,
-} from "./thread-directory-enricher";
+import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -2439,11 +2436,14 @@ export class DesktopBackendRegistry {
   // (e.g. Grok) worktree threads group under the same directory row as their
   // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
   // linked directory from their own enricher; ACP sessions only know their cwd,
-  // so without this every ACP worktree session lands in its own folder. Cached
-  // (per cwd, short TTL) inside the enricher. Injectable for deterministic tests.
-  private readonly acpDirectoryEnricher: (
-    projectKey?: string,
-  ) => Promise<ThreadDirectoryEnrichment>;
+  // so without this every ACP worktree session lands in its own folder. Pure
+  // filesystem — follows the worktree's `.git` link and NEVER spawns git. The
+  // repo↔worktree mapping is immutable, so the result is cached durably on the
+  // thread overlay (`acpWorktreeDirectory`) and this resolver only runs on the
+  // first sighting of a given cwd. Injectable for deterministic tests.
+  private readonly acpWorktreeRepositoryResolver: (
+    cwd: string,
+  ) => Promise<LinkedDirectorySummary | undefined>;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -2596,9 +2596,9 @@ export class DesktopBackendRegistry {
     threadTitleGenerationService?: ThreadTitleService | null;
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
-    acpDirectoryEnricher?: (
-      projectKey?: string,
-    ) => Promise<ThreadDirectoryEnrichment>;
+    acpWorktreeRepositoryResolver?: (
+      cwd: string,
+    ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -2683,8 +2683,9 @@ export class DesktopBackendRegistry {
         apiKey: grokApiKey,
         connectionObserver: grokObserver,
       });
-    this.acpDirectoryEnricher =
-      options?.acpDirectoryEnricher ?? createThreadDirectoryEnricher();
+    this.acpWorktreeRepositoryResolver =
+      options?.acpWorktreeRepositoryResolver ??
+      resolveWorktreeRepositoryDirectory;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -3504,6 +3505,8 @@ export class DesktopBackendRegistry {
         const linkedDirectories = await this.resolveAcpLinkedDirectories(
           thread,
           cwd,
+          overlay,
+          backendId,
         );
         const codexEnvironmentOptions = cwd
           ? await listCodexEnvironmentOptions(cwd).catch(() => [])
@@ -3527,33 +3530,54 @@ export class DesktopBackendRegistry {
   /**
    * ACP sessions only know their working directory. When that cwd is a
    * tool-managed worktree (`.codex/.../worktrees/...`, `.pwragent/.../worktrees/...`,
-   * `<repo>/.worktrees/...`), resolve the underlying repository checkout via git
-   * so the thread's linked directory is repo-rooted (`path` = repo,
+   * `<repo>/.worktrees/...`), resolve the underlying repository checkout by
+   * following the worktree's `.git` link (filesystem only — this NEVER spawns
+   * git) so the thread's linked directory is repo-rooted (`path` = repo,
    * `worktreePath` = cwd). That makes ACP worktree threads group under the same
    * directory row as their repo — matching Codex — instead of each worktree
    * getting its own folder.
    *
+   * The repo↔worktree mapping is immutable for a given worktree path, so a
+   * successful resolution is cached durably on the thread overlay
+   * (`acpWorktreeDirectory`, keyed by cwd) and reused on every later list read
+   * without touching the filesystem again. The resolver therefore runs at most
+   * once per worktree thread, not once per refresh.
+   *
    * Falls back to the session's own linked directories when the cwd is a plain
-   * local checkout (already repo-rooted), when it is not a managed worktree, or
-   * when enrichment yields nothing (e.g. the worktree was deleted). The fallback
-   * is what keeps a vanished worktree's thread grouped (or at least not dropped
-   * to "unlinked") rather than disappearing from its row.
+   * local checkout (already repo-rooted), is not a managed worktree, or resolves
+   * to nothing (e.g. the worktree was deleted). A miss is deliberately left
+   * uncached so a transient failure is retried cheaply, and a vanished
+   * worktree's thread stays on its row rather than dropping to "unlinked".
    */
   private async resolveAcpLinkedDirectories(
     thread: AppServerThreadSummary,
     cwd: string | undefined,
+    overlay: ThreadOverlayState | undefined,
+    backendId: AppServerBackendKind,
   ): Promise<AppServerThreadSummary["linkedDirectories"]> {
     if (!cwd || !isLikelyToolManagedWorktreePath(cwd)) {
       return thread.linkedDirectories;
     }
 
+    // Reuse the durably-cached resolution while the session cwd is unchanged.
+    const cached = overlay?.acpWorktreeDirectory;
+    if (cached && cached.cwd === cwd) {
+      return [cached.directory];
+    }
+
     try {
-      const enrichment = await this.acpDirectoryEnricher(cwd);
-      if (enrichment.linkedDirectories.length > 0) {
-        return enrichment.linkedDirectories;
+      const directory = await this.acpWorktreeRepositoryResolver(cwd);
+      if (directory) {
+        await this.overlayStore.setAcpWorktreeDirectory({
+          backend: backendId,
+          threadId: thread.id,
+          cwd,
+          directory,
+        });
+        return [directory];
       }
     } catch (error) {
-      backendRegistryLog.warn("ACP worktree directory enrichment failed", {
+      backendRegistryLog.warn("ACP worktree repository resolution failed", {
         threadId: thread.id,
         backend: thread.source,
         cwd,
