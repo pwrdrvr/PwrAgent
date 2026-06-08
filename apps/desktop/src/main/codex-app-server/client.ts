@@ -3448,7 +3448,7 @@ function extractReplayPagination(value: unknown): AppServerThreadReplayPaginatio
   };
 }
 
-function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
+export function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
   const entries = extractThreadEntries(value);
   const messages = extractConversationMessages(value);
   let lastUserMessage: string | undefined;

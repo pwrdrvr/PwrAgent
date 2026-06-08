@@ -1,0 +1,915 @@
+{
+  "notifications": [
+    {
+      "method": "thread/started",
+      "params": {
+        "thread": {
+          "id": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+          "sessionId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+          "forkedFromId": null,
+          "parentThreadId": null,
+          "preview": "",
+          "ephemeral": false,
+          "modelProvider": "openai",
+          "createdAt": 1780847089,
+          "updatedAt": 1780847089,
+          "status": {
+            "type": "idle"
+          },
+          "path": "/Users/user/.codex/sessions/2026/06/07/rollout-2026-06-07T11-44-49-019ea2c2-15c4-71d2-8f5c-bc27e697786f.jsonl",
+          "cwd": "/repo",
+          "cliVersion": "0.137.0-alpha.4",
+          "source": "vscode",
+          "threadSource": null,
+          "agentNickname": null,
+          "agentRole": null,
+          "gitInfo": null,
+          "name": null,
+          "turns": []
+        }
+      }
+    },
+    {
+      "method": "thread/name/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "threadName": "Untitled thread"
+      }
+    },
+    {
+      "method": "thread/name/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "threadName": "Untitled thread"
+      }
+    },
+    {
+      "method": "thread/settings/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "threadSettings": {
+          "cwd": "/repo",
+          "approvalPolicy": "on-request",
+          "approvalsReviewer": "user",
+          "sandboxPolicy": {
+            "type": "workspaceWrite",
+            "writableRoots": [],
+            "networkAccess": false,
+            "excludeTmpdirEnvVar": false,
+            "excludeSlashTmp": false
+          },
+          "activePermissionProfile": null,
+          "model": "gpt-5.5",
+          "modelProvider": "openai",
+          "serviceTier": null,
+          "effort": "medium",
+          "summary": null,
+          "collaborationMode": {
+            "mode": "default",
+            "settings": {
+              "model": "gpt-5.5",
+              "reasoning_effort": "medium",
+              "developer_instructions": null
+            }
+          },
+          "personality": "pragmatic"
+        }
+      }
+    },
+    {
+      "method": "thread/status/changed",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "status": {
+          "type": "active",
+          "activeFlags": []
+        }
+      }
+    },
+    {
+      "method": "turn/started",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turn": {
+          "id": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1780847090,
+          "completedAt": null,
+          "durationMs": null
+        }
+      }
+    },
+    {
+      "method": "thread/name/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "threadName": "What is this project? Answer in one short sentence based on the files in..."
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "4b44ea00-e3de-46ad-a474-906c0b664ac2",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "What is this project? Answer in one short sentence based on the files in the working directory.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847093131
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "4b44ea00-e3de-46ad-a474-906c0b664ac2",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "What is this project? Answer in one short sentence based on the files in the working directory.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847093131
+      }
+    },
+    {
+      "method": "thread/name/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "threadName": "Project overview"
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_eZJQWQQaVeY7AITI2UqPcclO",
+          "command": "/bin/zsh -lc pwd",
+          "cwd": "/repo",
+          "processId": "19270",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "pwd"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847098529
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_eZJQWQQaVeY7AITI2UqPcclO",
+          "command": "/bin/zsh -lc pwd",
+          "cwd": "/repo",
+          "processId": "19270",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "pwd"
+            }
+          ],
+          "aggregatedOutput": "/repo\n",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847098529
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_VYtr5rzgfmCF6HvzXusqfJ6e",
+          "command": "/bin/zsh -lc \"rg --files -g 'README*' -g 'package.json' -g 'pnpm-workspace.yaml' -g 'docs/**'\"",
+          "cwd": "/repo",
+          "processId": "91682",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "listFiles",
+              "command": "rg --files -g 'README*' -g package.json -g pnpm-workspace.yaml -g 'docs/**'",
+              "path": null
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847098550
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_VYtr5rzgfmCF6HvzXusqfJ6e",
+          "command": "/bin/zsh -lc \"rg --files -g 'README*' -g 'package.json' -g 'pnpm-workspace.yaml' -g 'docs/**'\"",
+          "cwd": "/repo",
+          "processId": "91682",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "listFiles",
+              "command": "rg --files -g 'README*' -g package.json -g pnpm-workspace.yaml -g 'docs/**'",
+              "path": null
+            }
+          ],
+          "aggregatedOutput": "pnpm-workspace.yaml\napps/desktop/package.json\npackages/pwragent/package.json\npackages/pwragent/README.md\napps/desktop/eval/README.md\nREADME.md\npackage.json\ndocs/UI-THEME.md\ndocs/thread-history-persistence.md\ndocs/messaging-architecture.md\ndocs/acp-registry-backends.md\ndocs/assets/social/github-social-preview.png\ndocs/assets/social/github-social-preview-1280x640.png\ndocs/solutions/2026-05-07-codex-permission-mode-state-machine.md\ndocs/state-layout.md\ndocs/messaging-platform-integration.md\ndocs/config-file-evolution.md\ndocs/messaging-adapter-contract.md\ndocs/automation-scheduling.md\ndocs/desktop-distribution-phase-2-runbook.md\ndocs/third-party-license-notices.md\ndocs/messaging-sqlite-input-audit.md\ndocs/desktop-release-runbook.md\ndocs/messaging-adding-a-provider.md\npackages/shared/package.json\ndocs/assets/buttons/download-macos.png\ndocs/assets/buttons/read-the-docs.png\ndocs/assets/screenshots/screenshot-pairing.gif\ndocs/assets/screenshots/screenshot-recents-hero.png\ndocs/assets/screenshots/screenshot-install.png\ndocs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md\ndocs/brainstorms/2026-05-13-codex-via-messaging-docs-requirements.md\ndocs/brainstorms/2026-05-02-transcript-temporal-order-invariant-requirements.md\ndocs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md\ndocs/brainstorms/2026-05-05-dependency-boundary-enforcement-requirements.md\ndocs/brainstorms/2026-05-04-messaging-capability-discovery-requirements.md\ndocs/brainstorms/2026-05-13-automation-scheduling-requirements.md\ndocs/brainstorms/2026-05-22-messaging-full-access-approval-requirements.md\ndocs/brainstorms/2026-04-20-desktop-provider-thread-model-selectors-requirements.md\ndocs/brainstorms/2026-05-22-messaging-new-thread-backend-selection-requirements.md\ndocs/brainstorms/2026-04-22-default-mode-questionnaire-elicitation-requirements.md\ndocs/brainstorms/2026-05-22-agent-thread-attached-automations-requirements.md\ndocs/brainstorms/2026-04-18-directories-launchpad-requirements.md\ndocs/brainstorms/2026-04-30-desktop-settings-config-requirements.md\ndocs/brainstorms/2026-05-28-desktop-native-attention-notifications-requirements.md\ndocs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md\ndocs/brainstorms/2026-05-02-config-and-state-relocation-requirements.md\ndocs/brainstorms/2026-05-22-telegram-topic-ownership-requirements.md\ndocs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md\ndocs/brainstorms/2026-05-04-thread-branch-drift-detection-requirements.md\ndocs/brainstorms/2026-04-30-openclaw-codex-conversation-ui-intent-interface-source.md\ndocs/brainstorms/2026-05-17-acp-registry-backends-requirements.md\ndocs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md\ndocs/brainstorms/2026-05-02-desktop-composer-draft-persistence-regression-requirements.md\ndocs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md\ndocs/brainstorms/2026-05-23-linux-packaging-distribution-requirements.md\ndocs/brainstorms/2026-04-30-transcript-bottom-glue-requirements.md\ndocs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md\ndocs/brainstorms/2026-04-20-desktop-tangerine-terminal-visual-system-requirements.md\ndocs/assets/screenshots/screenshot-pairing-frame-3.png\ndocs/assets/screenshots/screenshot-bound-thread.png\ndocs/assets/screenshots/screenshot-closed-by-default.png\ndocs/assets/screenshots/screenshot-pairing-frame-1.png\ndocs/assets/screenshots/screenshot-pairing-frame-2.png\ndocs/assets/screenshots/README.md\ndocs/assets/screenshots/screenshot-messenger-status.png\ndocs/design/onboarding-wizard-v1/SOURCE.md\ndocs/design/onboarding-wizard-v1/index.html\npackages/messaging/providers/mattermost/package.json\ndocs/plans/2026-05-02-004-fix-messaging-handoff-branch-picker-plan.md\ndocs/plans/2026-05-02-001-fix-messaging-typing-indicator-plan.md\ndocs/plans/2026-05-06-001-feat-settings-screens-design-alignment-plan.md\ndocs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md\ndocs/plans/2026-06-02-002-feat-consume-agent-kit-plan.md\ndocs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md\ndocs/plans/2026-05-06-001-feat-repo-wide-dependency-boundary-enforcement-plan.md\ndocs/plans/2026-06-05-001-feat-acp-durable-capability-cache-plan.md\ndocs/plans/2026-04-20-002-feat-macos-tool-sandboxing-plan.md\ndocs/plans/2026-04-29-001-feat-thread-workspace-handoff-plan.md\ndocs/plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md\ndocs/plans/AGENTS.md\ndocs/plans/2026-04-17-001-feat-desktop-plan-rendering-plan.md\ndocs/plans/2026-05-07-001-feat-codex-single-instance-queued-permissions-plan.md\ndocs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md\ndocs/plans/2026-04-18-003-fix-desktop-thread-refresh-model-plan.md\ndocs/plans/2026-05-13-001-docs-codex-via-messaging-guide-plan.md\ndocs/plans/2026-04-18-001-feat-desktop-replay-harness-plan.md\ndocs/plans/2026-05-02-001-fix-skill-autocomplete-regression-plan.md\ndocs/plans/2026-06-02-001-feat-sidebar-masthead-tooltips-plan.md\ndocs/plans/2026-04-18-001-feat-directories-launchpad-plan.md\ndocs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md\ndocs/plans/2026-05-09-002-feat-directory-pinning-plan.md\ndocs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md\ndocs/plans/2026-05-02-001-refactor-messaging-live-thread-state-plan.md\ndocs/plans/2026-05-02-002-feat-messaging-attachments-plan.md\ndocs/plans/2026-05-12-001-feat-messaging-mention-help-new-plan.md\ndocs/plans/2026-04-30-004-feat-messaging-provider-replay-harness-plan.md\ndocs/plans/2026-04-18-002-feat-desktop-e2e-ci-seeding-plan.md\ndocs/plans/2026-04-20-001-feat-provider-thread-model-selectors-plan.md\ndocs/plans/2026-06-06-001-feat-acp-agent-kit-adoption-and-settings-redesign-plan.md\ndocs/plans/2026-05-12-001-feat-messaging-skills-browser-plan.md\ndocs/plans/2026-04-19-002-feat-desktop-startup-cpu-profiling-plan.md\ndocs/plans/2026-05-23-001-feat-acp-messaging-runtime-modes-plan.md\ndocs/plans/2026-04-17-001-feat-thread-detail-markdown-rendering-plan.md\ndocs/plans/2026-04-28-001-feat-desktop-mcp-request-support-plan.md\ndocs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md\ndocs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md\ndocs/plans/2026-04-21-002-feat-thread-rename-actions-plan.md\ndocs/plans/2026-05-04-001-refactor-codex-protocol-package-plan.md\ndocs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md\ndocs/plans/2026-05-04-001-feat-desktop-design-overhaul-plan.md\ndocs/plans/2026-04-22-002-feat-review-command-parity-plan.md\ndocs/plans/2026-05-22-001-feat-messaging-new-thread-backend-selection-plan.md\ndocs/plans/2026-04-20-001-feat-plan-questionnaire-navigation-plan.md\ndocs/plans/2026-05-02-002-fix-grok-tool-update-summaries-plan.md\ndocs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md\ndocs/plans/2026-04-21-001-feat-thread-archive-ui-worktree-cleanup-plan.md\ndocs/plans/2026-04-30-002-fix-stale-thinking-indicator-plan.md\ndocs/plans/2026-05-02-002-fix-grok-messaging-thread-workspaces-plan.md\ndocs/plans/2026-04-28-001-feat-desktop-out-of-band-thread-naming-plan.md\ndocs/plans/2026-04-16-004-feat-grok-thread-storage-plan.md\ndocs/plans/2026-04-30-003-refactor-desktop-hosted-messaging-plan.md\ndocs/plans/2026-05-31-001-feat-thread-profile-migration-plan.md\ndocs/plans/2026-04-30-001-fix-transcript-bottom-glue-plan.md\ndocs/plans/2026-05-23-001-feat-linux-deb-distribution-plan.md\ndocs/plans/2026-05-13-001-feat-thread-automation-scheduling-plan.md\ndocs/plans/2026-05-17-001-feat-acp-registry-backends-plan.md\ndocs/plans/2026-04-20-001-feat-tangerine-terminal-visual-system-plan.md\ndocs/plans/2026-05-21-001-feat-acp-runtime-capability-discovery-plan.md\ndocs/plans/2026-05-03-001-fix-messaging-turn-admission-plan.md\ndocs/plans/2026-04-22-001-feat-archive-restore-safety-parity-plan.md\ndocs/plans/2026-04-30-001-fix-composer-skill-autocomplete-plan.md\ndocs/plans/2026-04-20-002-refactor-codex-style-exec-search-plan.md\ndocs/plans/2026-04-21-001-feat-electron-image-normalization-plan.md\ndocs/plans/2026-04-22-001-feat-message-phase-eliding-plan.md\ndocs/plans/2026-05-09-001-feat-messaging-rate-limit-slow-mode-plan.md\ndocs/plans/2026-05-07-001-feat-mattermost-settings-and-connection-test-plan.md\ndocs/plans/2026-05-22-001-fix-messaging-full-access-approval-plan.md\ndocs/plans/2026-04-16-004-feat-thread-naming-parity-plan.md\ndocs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md\ndocs/plans/2026-04-16-002-feat-grok-app-server-tests-plan.md\ndocs/plans/2026-05-22-001-feat-telegram-topic-ownership-monitor-plan.md\ndocs/plans/2026-04-30-001-fix-live-transcript-ordering-plan.md\ndocs/plans/2026-04-19-003-fix-codex-desktop-protocol-parity-plan.md\ndocs/plans/2026-04-16-004-feat-grok-focused-diff-view-plan.md\ndocs/plans/2026-05-02-002-fix-grok-startup-model-chatter-plan.md\ndocs/plans/2026-05-24-001-feat-automation-agent-tool-bridge-plan.md\ndocs/plans/2026-04-29-001-feat-rich-command-transcripts-plan.md\ndocs/plans/2026-04-16-001-feat-thread-centric-agent-desktop-plan.md\ndocs/plans/2026-05-14-001-fix-composer-draft-recovery-history-plan.md\ndocs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md\ndocs/plans/2026-05-05-003-fix-thread-row-unified-chip-flow-plan.md\ndocs/plans/2026-05-02-004-feat-config-and-state-relocation-plan.md\ndocs/plans/2026-05-02-001-feat-messaging-handoff-surface-plan.md\ndocs/plans/2026-05-02-001-fix-chat-markdown-autolinks-plan.md\ndocs/plans/2026-05-02-004-feat-configurable-worktree-storage-plan.md\ndocs/plans/2026-05-02-003-fix-composer-draft-persistence-plan.md\ndocs/plans/2026-04-17-001-fix-transcript-image-preview-plan.md\ndocs/plans/2026-05-11-001-feat-messaging-monitor-command-plan.md\ndocs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md\ndocs/plans/2026-05-23-001-feat-agent-attached-automation-delta-plan.md\ndocs/plans/2026-05-12-001-feat-dev-profile-messaging-leases-plan.md\ndocs/plans/2026-05-28-001-feat-desktop-native-attention-notifications-plan.md\ndocs/plans/2026-05-02-001-fix-transcript-temporal-order-invariant-plan.md\ndocs/plans/2026-04-22-003-feat-thread-worktree-archive-restore-plan.md\ndocs/plans/2026-05-04-002-fix-thread-branch-drift-detection-plan.md\ndocs/plans/2026-04-20-002-refactor-grok-ai-sdk-provider-plan.md\ndocs/plans/2026-05-11-001-docs-open-source-readme-architecture-split-plan.md\ndocs/plans/2026-05-16-001-docs-composer-draft-recovery-behavior-plan.md\ndocs/plans/2026-05-02-002-feat-messaging-streaming-responses-plan.md\ndocs/plans/2026-05-05-001-feat-thread-state-update-bus-plan.md\ndocs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md\ndocs/design/onboarding-wizard-v1/screenshots/welcome.png\ndocs/design/onboarding-wizard-v1/screenshots/done.png\ndocs/design/onboarding-wizard-v1/screenshots/step3a.png\ndocs/design/onboarding-wizard-v1/screenshots/step3b.png\ndocs/design/onboarding-wizard-v1/screenshots/step3c.png\ndocs/design/onboarding-wizard-v1/screenshots/step1.png\ndocs/design/onboarding-wizard-v1/screenshots/settings.png\ndocs/design/onboarding-wizard-v1/screenshots/step2.png\ndocs/design/desktop-style-guide.md\npackages/messaging/providers/slack/package.json\npackages/messaging/providers/telegram/package.json\npackages/messaging/interface/package.json\npackages/messaging/providers/feishu/package.json\npackages/messaging/providers/line/package.json\npackages/agent-core/package.json\ndocs/design/pwragent-v2/project/titlebar.jsx\ndocs/design/pwragent-v2/project/tweaks-panel.jsx\ndocs/design/pwragent-v2/project/assets/logo-pwrdrvr.svg\ndocs/design/pwragent-v2/project/assets/logo-pwragnt.svg\ndocs/design/pwragent-v2/project/settings.jsx\napps/desktop/src/renderer/src/assets/feishu/README.md\ndocs/design/pwragent-v2/project/lib/colors_and_type.css\ndocs/design/pwragent-v2/project/newthread.jsx\ndocs/design/pwragent-v2/project/sidebar.jsx\ndocs/design/pwragent-v2/project/PwrAgnt v2.html\ndocs/design/pwragent-v2/project/newthread.css\ndocs/design/pwragent-v2/project/rightrail.jsx\ndocs/design/pwragent-v2/project/threadview.jsx\ndocs/design/pwragent-v2/project/activity.jsx\ndocs/design/pwragent-v2/project/styles.css\ndocs/design/pwragent-v2/project/icons.jsx\ndocs/design/pwragent-v2/README.md\ndocs/design/pwragent-v2/SOURCE.md\napps/desktop/e2e/fixtures/README.md\npackages/messaging/providers/discord/package.json\napps/desktop/src/renderer/src/assets/discord/README.md\napps/desktop/src/renderer/src/assets/mattermost/README.md\napps/desktop/src/renderer/src/assets/telegram/README.md\napps/desktop/e2e/fixtures/transcript-temporal-order/README.md\napps/desktop/src/renderer/src/assets/line/README.md\napps/desktop/src/renderer/src/assets/slack/README.md\n",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847098550
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 21900,
+            "inputTokens": 21695,
+            "cachedInputTokens": 3456,
+            "outputTokens": 205,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 21900,
+            "inputTokens": 21695,
+            "cachedInputTokens": 3456,
+            "outputTokens": 205,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_2TEfJfWdoPYMH6aopakFqSzT",
+          "command": "/bin/zsh -lc \"sed -n '1,80p' README.md\"",
+          "cwd": "/repo",
+          "processId": "51304",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "read",
+              "command": "sed -n '1,80p' README.md",
+              "name": "README.md",
+              "path": "/repo/README.md"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847103621
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_2TEfJfWdoPYMH6aopakFqSzT",
+          "command": "/bin/zsh -lc \"sed -n '1,80p' README.md\"",
+          "cwd": "/repo",
+          "processId": "51304",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "read",
+              "command": "sed -n '1,80p' README.md",
+              "name": "README.md",
+              "path": "/repo/README.md"
+            }
+          ],
+          "aggregatedOutput": "# PwrAgent\n\n**Your coding agent runs on your laptop. You drive it from your phone.**\n\nAn open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.\n\n<p>\n  <a href=\"https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg\">\n    <img src=\"docs/assets/buttons/download-macos.png\" alt=\"Download for macOS\" width=\"440\">\n  </a>\n  &nbsp;\n  <a href=\"https://docs.pwragent.ai\">\n    <img src=\"docs/assets/buttons/read-the-docs.png\" alt=\"Read the docs\" width=\"440\">\n  </a>\n</p>\n\n![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)\n\n## Why you might want it\n\n- **Code keeps moving when you're away from the keyboard.** Approvals, follow-up prompts, \"what did you ship while I was at lunch\" check-ins — all from your phone. Cellular or hotel WiFi is fine; the agent is on your laptop, the messenger is just the steering wheel.\n- **Stack three asks and walk away.** `make a branch and PR for the OAuth refactor` → queue `/review main` → queue `squash and force-push`. The composer dispatches FIFO, one turn at a time. Come back: three things done.\n- **Isolated profiles for work and life.** As many PwrAgent windows as you want, each on its own profile, each bound to its own Codex identity. Auth and messaging credentials never cross.\n- **Works alongside Codex Desktop.** Shares thread state by default; start a thread in either, finish in the other. PwrAgent adds per-thread controls, worktree isolation with handoff, the Markdown composer, and the messaging surface — things Codex Desktop doesn't have today.\n- **No cloud, no account, no telemetry.** Everything runs on your machine. Bot tokens encrypted in the macOS Keychain. Closed-by-default messaging with two-keyed allowlists (see [Is this safe for work?](#is-this-safe-for-work)).\n- **Free, MIT, dogfooded.** The author uses PwrAgent as their primary coding environment. Hundreds of PRs in this repository and others were created or reviewed through it.\n\nThe longer-form pitch lives at **[pwragent.ai](https://pwragent.ai)**; the operator-facing setup walkthroughs live at **[docs.pwragent.ai](https://docs.pwragent.ai)**.\n\n## Take a look\n\n| | |\n|---|---|\n| ![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png) <br/>*Bound thread — desktop and messenger stay in sync* | ![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png) <br/>*Messenger status at a glance* |\n| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.gif) <br/>*Paste-token pairing with in-app connection test* | ![Messaging activity with denied unauthorized users](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — only allowlisted users can reach the bot* |\n\nScreenshots are produced by a Playwright spec that drives the real UI surfaces against deterministic replay fixtures, then shells out to a Swift script for native window capture (stoplights + drop-shadow + retina). See [`apps/desktop/AGENTS.md`](apps/desktop/AGENTS.md) → \"Capturing README Screenshots\" for regen.\n\n## Get it\n\n### Just want to use it\n\n1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg). Universal binary — runs natively on Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance).\n2. **Install** by opening the DMG and dragging PwrAgent into Applications.\n3. **(Optional) Pair a messenger** from **Settings → Messaging → \\<your platform\\>**. End-to-end walkthroughs at **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**; the usage guide (bound threads, slash commands, queue/steer, monitor cards, detach) lives at **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.\n\nConfig + state live under `~/.pwragent/profiles/<name>/` ([on-disk layout](docs/state-layout.md)). Multiple profiles via `--profile <name>` at launch.\n\n### Want to hack on it\n\n```bash\ngit clone https://github.com/pwrdrvr/PwrAgent.git\ncd PwrAgent\npnpm install\npnpm dev:no-messaging   # full UI, no live messaging adapters\n# or\npnpm dev                # full UI + live messaging\n```\n\nCodex App Server credentials live in `~/.config/grok-app-server/config.toml` or the equivalent env vars. Full dev workflow, test strategy, replay fixtures, and diagnostics in **[CONTRIBUTING.md](CONTRIBUTING.md)**.\n\n## How it's built\n\n| Layer | Stack | Where it lives |\n|---|---|---|\n| Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |\n| Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |\n| Agent core | Provider-agnostic coding-agent runtime (currently Grok / xAI) | `packages/agent-core/` |\n| Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |\n| Messaging providers | Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE | `packages/messaging/providers/*/` |\n| Shared types | Cross-package contracts and helpers | `packages/shared/` |\n| Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/`, `packages/agent-core/src/persistence/` |\n\nThe dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`, `agent-core`) → top (`apps/desktop`). The renderer can only import `@pwragent/shared`; everything else crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).\n\nArchitecture deep-dive: **[ARCHITECTURE.md](ARCHITECTURE.md)**.\n\n## Is this safe for work?\n\n**Research and comply with your company's policies before installing PwrAgent on a work machine or connecting it to a work messaging platform.** That responsibility is yours, not the project's.\n",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847103621
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_sP7TpEba2XkSqmjP6uiH0lgS",
+          "command": "/bin/zsh -lc \"sed -n '1,120p' package.json\"",
+          "cwd": "/repo",
+          "processId": "38079",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "read",
+              "command": "sed -n '1,120p' package.json",
+              "name": "package.json",
+              "path": "/repo/package.json"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847103651
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_sP7TpEba2XkSqmjP6uiH0lgS",
+          "command": "/bin/zsh -lc \"sed -n '1,120p' package.json\"",
+          "cwd": "/repo",
+          "processId": "38079",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "read",
+              "command": "sed -n '1,120p' package.json",
+              "name": "package.json",
+              "path": "/repo/package.json"
+            }
+          ],
+          "aggregatedOutput": "{\n  \"name\": \"pwragent-workspace\",\n  \"version\": \"1.0.0-alpha.0\",\n  \"private\": true,\n  \"description\": \"Thread-centric coding agent desktop app\",\n  \"author\": \"PwrDrvr LLC\",\n  \"license\": \"MIT\",\n  \"copyright\": \"Copyright © 2026 PwrDrvr LLC.\",\n  \"packageManager\": \"pnpm@10.33.0\",\n  \"scripts\": {\n    \"build\": \"pnpm --filter @pwragent/desktop build\",\n    \"dev\": \"pnpm --filter @pwragent/desktop dev\",\n    \"dev:dev\": \"pnpm --filter @pwragent/desktop dev:dev\",\n    \"dev:no-messaging\": \"PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging\",\n    \"dev:op\": \"node ./scripts/op-run.mjs dev\",\n    \"op:dev\": \"node ./scripts/op-run.mjs dev\",\n    \"op:run\": \"node ./scripts/op-run.mjs run\",\n    \"licenses:check\": \"node ./scripts/check-package-licenses.mjs && node ./scripts/generate-third-party-licenses.mjs --check\",\n    \"licenses:generate\": \"node ./scripts/generate-third-party-licenses.mjs\",\n    \"lint\": \"pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm licenses:check && pnpm typecheck && pnpm lint:boundaries\",\n    \"lint:boundaries\": \"depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/\",\n    \"lint:codex-storage\": \"node ./scripts/check-codex-storage-boundary.mjs\",\n    \"lint:colors\": \"node ./scripts/lint-renderer-colors.mjs\",\n    \"lint:sql\": \"node ./scripts/lint-sql-templates.mjs\",\n    \"release:check\": \"node ./scripts/check-desktop-release-metadata.mjs\",\n    \"test:desktop-e2e\": \"pnpm --filter @pwragent/desktop test:e2e\",\n    \"test:desktop-e2e:nice\": \"node ./scripts/nice-run.mjs pnpm test:desktop-e2e\",\n    \"eval:smoke\": \"pnpm --filter @pwragent/desktop eval:smoke\",\n    \"eval:smoke:build\": \"pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke\",\n    \"test\": \"vitest run --config vitest.workspace.ts\",\n    \"test:nice\": \"node ./scripts/nice-run.mjs pnpm test\",\n    \"test:watch\": \"vitest --config vitest.workspace.ts\",\n    \"typecheck\": \"pnpm -r --if-present typecheck\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^24.12.4\",\n    \"dependency-cruiser\": \"^17.3.10\",\n    \"jsdom\": \"^29.0.2\",\n    \"typescript\": \"^6.0.2\",\n    \"vitest\": \"^4.1.4\"\n  },\n  \"pnpm\": {\n    \"overrides\": {\n      \"@types/node\": \"^24.12.4\",\n      \"axios\": \"^1.16.0\",\n      \"protobufjs\": \"7.5.8\",\n      \"qs\": \"6.15.2\",\n      \"tmp\": \"0.2.6\",\n      \"ws\": \"8.20.1\"\n    }\n  }\n}\n",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847103651
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 48026,
+            "inputTokens": 47625,
+            "cachedInputTokens": 24832,
+            "outputTokens": 401,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 26126,
+            "inputTokens": 25930,
+            "cachedInputTokens": 21376,
+            "outputTokens": 196,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+          "text": "",
+          "phase": "final_answer",
+          "memoryCitation": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "startedAtMs": 1780847105025
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "P"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "wr"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "Agent"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " is"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " an"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " open"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "-source"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Electron"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " desktop"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " coding"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "-agent"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " app"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " for"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " running"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " local"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " agent"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " threads"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " and"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " steering"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " them"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " from"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " messaging"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " platforms"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " like"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Telegram"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": ","
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Discord"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": ","
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Slack"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": ","
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Matter"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "most"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": ","
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " Fe"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "ishu"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": ","
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " or"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": " LINE"
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "itemId": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+        "delta": "."
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_048d374e52e47a6e016a25920109248195bf8828ac45ad5ff2",
+          "text": "PwrAgent is an open-source Electron desktop coding-agent app for running local agent threads and steering them from messaging platforms like Telegram, Discord, Slack, Mattermost, Feishu, or LINE.",
+          "phase": "final_answer",
+          "memoryCitation": null
+        },
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "completedAtMs": 1780847105839
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turnId": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 76599,
+            "inputTokens": 76155,
+            "cachedInputTokens": 28288,
+            "outputTokens": 444,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 28573,
+            "inputTokens": 28530,
+            "cachedInputTokens": 3456,
+            "outputTokens": 43,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "thread/status/changed",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "status": {
+          "type": "idle"
+        }
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+        "turn": {
+          "id": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1780847090,
+          "completedAt": 1780847105,
+          "durationMs": 15577
+        }
+      }
+    }
+  ],
+  "readThread": {
+    "id": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+    "sessionId": "019ea2c2-15c4-71d2-8f5c-bc27e697786f",
+    "forkedFromId": null,
+    "parentThreadId": null,
+    "preview": "What is this project? Answer in one short sentence based on the files in the working directory.",
+    "ephemeral": false,
+    "modelProvider": "openai",
+    "createdAt": 1780847089,
+    "updatedAt": 1780847089,
+    "status": {
+      "type": "idle"
+    },
+    "path": "/Users/user/.codex/sessions/2026/06/07/rollout-2026-06-07T11-44-49-019ea2c2-15c4-71d2-8f5c-bc27e697786f.jsonl",
+    "cwd": "/repo",
+    "cliVersion": "0.137.0-alpha.4",
+    "source": "vscode",
+    "threadSource": null,
+    "agentNickname": null,
+    "agentRole": null,
+    "gitInfo": {
+      "sha": "d32956a4d936c94e6dfc6f23198741a9eb2ff04a",
+      "branch": "HEAD",
+      "originUrl": "/Users/user/pwrdrvr/PwrAgnt/.claude/worktrees/eval-smoke-harness"
+    },
+    "name": "Project overview",
+    "turns": [
+      {
+        "id": "019ea2c2-1a74-75f0-a548-e2449bad577f",
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "item-1",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "What is this project? Answer in one short sentence based on the files in the working directory.",
+                "text_elements": []
+              }
+            ]
+          },
+          {
+            "type": "agentMessage",
+            "id": "item-2",
+            "text": "PwrAgent is an open-source Electron desktop coding-agent app for running local agent threads and steering them from messaging platforms like Telegram, Discord, Slack, Mattermost, Feishu, or LINE.",
+            "phase": "final_answer",
+            "memoryCitation": null
+          }
+        ],
+        "itemsView": "full",
+        "status": "completed",
+        "error": null,
+        "startedAt": 1780847090,
+        "completedAt": 1780847105,
+        "durationMs": 15577
+      }
+    ]
+  }
+}

@@ -59,11 +59,13 @@ MIT
 - @floating-ui/dom@1.7.6 | https://github.com/floating-ui/floating-ui
 - @floating-ui/utils@0.2.11 | https://github.com/floating-ui/floating-ui
 - @pwrdrvr/agent-acp@0.12.0 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-client@0.6.1 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.1.3 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-transport@0.1.6 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/codex-app-server-protocol@0.133.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-discovery@0.1.2 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/codex-discovery@0.1.3 | https://github.com/pwrdrvr/agent-kit
 - @shutterstock/p-map-iterable@1.1.2 | https://github.com/shutterstock/p-map-iterable
 - @tiptap/core@3.23.6 | https://github.com/ueberdosis/tiptap
 - @tiptap/extension-blockquote@3.23.6 | https://github.com/ueberdosis/tiptap
@@ -268,6 +270,7 @@ MIT
 - w3c-keyname@2.2.8 | https://github.com/marijnh/w3c-keyname
 - whatwg-url@5.0.0 | jsdom/whatwg-url
 - zod@3.25.76 | https://github.com/colinhacks/zod
+- zod@4.3.6 | https://github.com/colinhacks/zod
 - zwitch@2.0.4 | wooorm/zwitch
 
 Python-2.0
@@ -313,11 +316,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Applies to:
 - @pwrdrvr/agent-acp@0.12.0 (MIT)
+- @pwrdrvr/agent-client@0.6.1 (MIT)
 - @pwrdrvr/agent-core@0.1.3 (MIT)
 - @pwrdrvr/agent-core@0.2.0 (MIT)
 - @pwrdrvr/agent-transport@0.1.6 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.133.0 (MIT)
 - @pwrdrvr/codex-discovery@0.1.2 (MIT)
+- @pwrdrvr/codex-discovery@0.1.3 (MIT)
 
 Representative file: @pwrdrvr/agent-acp@0.12.0/LICENSE
 
@@ -3690,6 +3695,7 @@ zod@3.25.76 (MIT)
 
 Applies to:
 - zod@3.25.76 (MIT)
+- zod@4.3.6 (MIT)
 
 Representative file: zod@3.25.76/LICENSE
 
