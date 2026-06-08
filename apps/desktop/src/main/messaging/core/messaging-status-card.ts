@@ -81,7 +81,7 @@ export function buildBindingStatusIntent(params: {
     params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
   const fastModeLabel = formatFastModeStatus(fastMode, params.backendSummary);
   const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
-  const accountLine = formatBackendAccountLine(params.backendSummary);
+  const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
   const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
   const permissionsMode =
     params.threadState.executionMode ??
@@ -197,6 +197,7 @@ function formatContextUsageLine(summary: string | undefined): string | undefined
 
 function formatBackendAccountLine(
   backendSummary: BackendSummary | undefined,
+  binding: MessagingBindingRecord,
 ): string | undefined {
   const account = backendSummary?.account;
   if (!account) {
@@ -210,6 +211,18 @@ function formatBackendAccountLine(
         ? "API key"
         : undefined;
   const detail = [kind, account.planType].filter(Boolean).join(" ");
+  if (binding.channel.conversation.kind !== "dm") {
+    if (detail) {
+      return `Account: ${detail}`;
+    }
+    if (kind) {
+      return `Account: ${kind}`;
+    }
+    if (account.requiresOpenaiAuth) {
+      return "Account: OpenAI auth required";
+    }
+    return undefined;
+  }
   if (account.email && detail) {
     return `Account: ${account.email} (${detail})`;
   }

@@ -167,6 +167,55 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).not.toContain("Rate limits:");
   });
 
+  it("redacts backend account email in shared conversations", () => {
+    const binding = {
+      ...buildBinding(),
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-shared-account",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        account: {
+          type: "chatgpt",
+          email: "operator@example.com",
+          planType: "pro",
+        },
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Account: ChatGPT pro");
+    expect(intent.text).not.toContain("operator@example.com");
+  });
+
   it("formats Codex and Spark rate limits with normalized labels and reset text", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 5, 8, 14, 0, 0));
