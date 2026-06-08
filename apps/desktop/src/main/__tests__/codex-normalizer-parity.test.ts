@@ -58,6 +58,12 @@ function runInTree(fixture: CodexFixture): AppServerThreadReplay {
   return extractThreadReplayFromReadResult(fixture.readThread);
 }
 
+type CanonTranscript = {
+  assistantMessages: string[];
+  lastAssistantMessage: AppServerThreadReplay["lastAssistantMessage"];
+  threadStatus: AppServerThreadReplay["threadStatus"];
+};
+
 /**
  * Assistant-side transcript essentials, ids/timestamps stripped. We compare the
  * AGENT output, not user messages: the kit's normalizer emits assistant content
@@ -65,7 +71,7 @@ function runInTree(fixture: CodexFixture): AppServerThreadReplay {
  * the user turn (which, in the kit architecture, the ChatThreadController adds —
  * not the normalizer). Same controller-vs-normalizer boundary as the ACP gate.
  */
-function canon(replay: AppServerThreadReplay): unknown {
+function canon(replay: AppServerThreadReplay): CanonTranscript {
   return {
     assistantMessages: replay.messages
       .filter((m) => m.role === "assistant")
@@ -78,6 +84,15 @@ function canon(replay: AppServerThreadReplay): unknown {
 describe("Codex KTD-P3 parity (B2a)", () => {
   it("real Codex turn — message transcript matches (read result vs kit replay)", () => {
     const fixture = loadFixture("codex-thread-1.json");
-    expect(canon(runKit(fixture))).toEqual(canon(runInTree(fixture)));
+    const inTree = canon(runInTree(fixture));
+    const kit = canon(runKit(fixture));
+    // Anchor the gate to real content. The in-tree side reconstructs the
+    // captured turn's assistant text from the thread/read snapshot, so this
+    // guards against a vacuous empty-vs-empty pass — e.g. if a future
+    // kit-normalizer regression dropped the agent message, the bare `toEqual`
+    // would still pass only if BOTH sides went empty. This makes the gate's
+    // core claim ("real reconstructed content matches") load-bearing.
+    expect(inTree.assistantMessages.join("")).not.toHaveLength(0);
+    expect(kit).toEqual(inTree);
   });
 });
