@@ -234,22 +234,33 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
 
-    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: expect.stringMatching(/^messaging:browse:/),
-      agent: {
-        name: "Messaging Agent",
-        instructions: expect.stringContaining("created from messaging"),
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      {
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+        input: [
+          {
+            type: "text",
+            text: "Check the queue",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+        }),
       },
-      launchpad: expect.objectContaining({
-        backend: "codex",
-        directoryKey: "directory:pwragent",
-        directoryLabel: "PwrAgent",
-        directoryPath: "/repo/pwragent",
-        executionMode: "default",
-        prompt: "",
-        workMode: "local",
+      expect.objectContaining({
+        onThreadMaterialized: expect.any(Function),
       }),
-    });
+    );
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
     ).resolves.toMatchObject({
