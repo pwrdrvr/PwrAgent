@@ -4,11 +4,13 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBrowseSessionRecord,
+  MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import {
   buildResumeIntent,
   parseResumeCommandArgs,
   RESUME_BROWSER_PAGE_SIZE,
+  resumeBrowserPageSize,
 } from "../messaging/core/messaging-resume-browser";
 
 describe("messaging resume browser", () => {
@@ -68,6 +70,48 @@ describe("messaging resume browser", () => {
     expect(intent.prompt).not.toContain("1. Thread one");
     expect(intent.fallbackText).toContain("1. Thread one");
     expect(intent.fallbackText).toContain("Reply with a number");
+  });
+
+  it("fits middle-page resume controls within LINE action budgets", () => {
+    const lineProfile = buildLineLikeCapabilityProfile();
+    const pageSize = resumeBrowserPageSize(lineProfile);
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: Array.from({ length: 20 }, (_, index) =>
+          buildThread({
+            id: `thread-${index + 1}`,
+            title: `Thread ${index + 1}`,
+            updatedAt: 2000 - index,
+          }),
+        ),
+      }),
+      session: buildBrowseSession({
+        mode: "recents",
+        pageIndex: 1,
+        pageSize,
+      }),
+    });
+
+    expect(pageSize).toBe(7);
+    expect(intent.kind).toBe("thread_picker");
+    expect(intent.page.actions).toHaveLength(lineProfile.actions!.maxActions);
+    expect(intent.page.actions.map((action) => action.id)).toEqual([
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:page:prev",
+      "browse:page:next",
+      "browse:mode:projects",
+      "browse:mode:agents",
+      "browse:mode:new",
+      "browse:cancel",
+    ]);
   });
 
   it("renders project-specific thread context after selecting a project", () => {
@@ -335,6 +379,31 @@ function buildBrowseSession(
     pageIndex: 0,
     pageSize: RESUME_BROWSER_PAGE_SIZE,
     ...overrides,
+  };
+}
+
+function buildLineLikeCapabilityProfile(): MessagingCapabilityProfile {
+  return {
+    actions: {
+      maxActions: 13,
+      maxActionsPerRow: 4,
+      maxCallbackPayloadBytes: 300,
+      maxLabelLength: 20,
+      supportsDisabled: false,
+      supportsLayoutHints: true,
+      supportsStyles: false,
+    },
+    text: {
+      encoding: "utf8-bytes",
+      markdownDialect: "plain",
+      maxLength: 5000,
+      supportsBold: false,
+      supportsCodeBlocks: false,
+      supportsItalic: false,
+      supportsInlineCode: false,
+      supportsLinks: false,
+      supportsMessageEdit: false,
+    },
   };
 }
 

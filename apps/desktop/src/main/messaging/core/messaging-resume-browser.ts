@@ -22,7 +22,7 @@ import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
-const RESUME_BROWSER_NAV_ACTION_COUNT = 5;
+const RESUME_BROWSER_NAV_ACTION_COUNT = 6;
 const WORKSPACES_SCRATCHPAD_LABEL = "Workspaces Scratchpad";
 
 export function resumeBrowserPageSize(
