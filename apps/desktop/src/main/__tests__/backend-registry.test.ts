@@ -1241,6 +1241,9 @@ function createKimiAcpRegistry(options?: {
   codexClient?: MockBackendClient;
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
+  acpDirectoryEnricher?: (
+    projectKey?: string,
+  ) => Promise<{ linkedDirectories: AppServerThreadSummary["linkedDirectories"] }>;
 }) {
   const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
   const sessions = options?.sessions ?? [];
@@ -1307,6 +1310,7 @@ function createKimiAcpRegistry(options?: {
     createAcpClient: () => acpClient,
     codexEnvironmentCommandRunner: options?.codexEnvironmentCommandRunner,
     gitDirectoryService: options?.gitDirectoryService as never,
+    acpDirectoryEnricher: options?.acpDirectoryEnricher,
   });
   return {
     acpBackendId,
@@ -15302,5 +15306,96 @@ command = "pnpm dev"
 
       await registry.close();
     });
+  });
+});
+
+describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
+  const acpBackendId = "acp:kimi" as AcpBackendId;
+  const worktreeCwd = "/Users/me/.codex/worktrees/abcd/PwrAgnt";
+  const repoPath = "/Users/me/pwrdrvr/PwrAgnt";
+
+  function acpSessionWithCwd(cwd: string): AcpSessionMetadata {
+    return {
+      backendId: acpBackendId,
+      sessionId: "s1",
+      title: "ACP session",
+      cwd,
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    };
+  }
+
+  it("resolves a managed-worktree ACP thread onto its repository checkout", async () => {
+    // ACP sessions only know their cwd; for a worktree cwd we enrich it to a
+    // repo-rooted linked directory so the thread groups under the repo row
+    // (path = repo, worktreePath = cwd) instead of getting its own folder.
+    const enricher = vi.fn(async () => ({
+      linkedDirectories: [
+        {
+          id: repoPath,
+          label: "PwrAgnt",
+          path: repoPath,
+          worktreePath: worktreeCwd,
+          kind: "worktree" as const,
+        },
+      ],
+    }));
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "s1",
+      sessions: [acpSessionWithCwd(worktreeCwd)],
+      acpDirectoryEnricher: enricher,
+    });
+
+    const threads = await registry.listThreads({ backend: acpBackendId });
+
+    expect(enricher).toHaveBeenCalledWith(worktreeCwd);
+    expect(threads[0]?.linkedDirectories).toEqual([
+      {
+        id: repoPath,
+        label: "PwrAgnt",
+        path: repoPath,
+        worktreePath: worktreeCwd,
+        kind: "worktree",
+      },
+    ]);
+  });
+
+  it("does not enrich a plain local ACP thread's directory", async () => {
+    const enricher = vi.fn(async () => ({ linkedDirectories: [] }));
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "s1",
+      sessions: [acpSessionWithCwd(repoPath)],
+      acpDirectoryEnricher: enricher,
+    });
+
+    const threads = await registry.listThreads({ backend: acpBackendId });
+
+    expect(enricher).not.toHaveBeenCalled();
+    expect(threads[0]?.linkedDirectories).toEqual([
+      { id: repoPath, label: "PwrAgnt", path: repoPath, kind: "local" },
+    ]);
+  });
+
+  it("keeps the session directory when worktree enrichment yields nothing", async () => {
+    // A vanished/unresolvable worktree must not drop the thread to "unlinked";
+    // fall back to the session's own cwd-rooted directory.
+    const enricher = vi.fn(async () => ({ linkedDirectories: [] }));
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "s1",
+      sessions: [acpSessionWithCwd(worktreeCwd)],
+      acpDirectoryEnricher: enricher,
+    });
+
+    const threads = await registry.listThreads({ backend: acpBackendId });
+
+    expect(enricher).toHaveBeenCalledWith(worktreeCwd);
+    expect(threads[0]?.linkedDirectories).toEqual([
+      { id: worktreeCwd, label: "PwrAgnt", path: worktreeCwd, kind: "local" },
+    ]);
   });
 });
