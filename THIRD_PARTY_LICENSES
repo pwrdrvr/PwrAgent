@@ -116,7 +116,7 @@ MIT
 - bindings@1.5.0 | https://github.com/TooTallNate/node-bindings
 - bl@4.1.0 | https://github.com/rvagg/bl
 - buffer@5.7.1 | https://github.com/feross/buffer
-- builder-util-runtime@9.6.3 | https://github.com/electron-userland/electron-builder
+- builder-util-runtime@9.5.1 | https://github.com/electron-userland/electron-builder
 - ccount@2.0.1 | wooorm/ccount
 - character-entities@2.0.2 | wooorm/character-entities
 - character-entities-html4@2.1.0 | wooorm/character-entities-html4
@@ -133,7 +133,7 @@ MIT
 - devlop@1.1.0 | wooorm/devlop
 - electron@41.7.1 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
-- electron-updater@6.8.8 | https://github.com/electron-userland/electron-builder
+- electron-updater@6.8.3 | https://github.com/electron-userland/electron-builder
 - encoding@0.1.13 | https://github.com/andris9/encoding
 - end-of-stream@1.4.5 | https://github.com/mafintosh/end-of-stream
 - escape-string-regexp@5.0.0 | sindresorhus/escape-string-regexp
@@ -1231,14 +1231,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-builder-util-runtime@9.6.3 (MIT)
+builder-util-runtime@9.5.1 (MIT)
 --------------------------------
 
 Applies to:
-- builder-util-runtime@9.6.3 (MIT)
-- electron-updater@6.8.8 (MIT)
+- builder-util-runtime@9.5.1 (MIT)
+- electron-updater@6.8.3 (MIT)
 
-Representative file: builder-util-runtime@9.6.3/LICENSE
+Representative file: builder-util-runtime@9.5.1/LICENSE
 
 The MIT License (MIT)
 
