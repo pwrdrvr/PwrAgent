@@ -22,6 +22,7 @@ import {
   type Unsubscribe,
 } from "@pwrdrvr/agent-client";
 import type { NormalizedThreadEvent } from "@pwrdrvr/agent-core";
+import type { UserInput } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   AppServerNotification,
   AppServerThreadSummary,
@@ -139,6 +140,84 @@ export class CodexKitBackendClient {
   }): Promise<{ threadId: string; turnId: string }> {
     await this.client.interruptTurn(params.threadId);
     return params;
+  }
+
+  // ── BackendClient: rich Codex features (ported into the kit) ──────────────
+  /** Inject input into the in-flight turn (kit `turn/steer`). */
+  async steerTurn(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    expectedTurnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    return this.client.steerTurn({
+      threadId: params.threadId,
+      input: params.input.map(toKitUserInput),
+      expectedTurnId: params.expectedTurnId,
+    });
+  }
+
+  /** Summarize thread history (kit `thread/compact/start`). */
+  async compactThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
+    return this.client.compactThread(params.threadId);
+  }
+
+  /** Start a code review (kit `review/start`). */
+  async startReview(params: {
+    threadId: string;
+    target: unknown;
+    delivery?: unknown;
+    cwd?: string;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    return this.client.startReview({
+      threadId: params.threadId,
+      target: params.target as Parameters<CodexThreadClient["startReview"]>[0]["target"],
+      ...(params.delivery !== undefined
+        ? {
+            delivery: params.delivery as Parameters<
+              CodexThreadClient["startReview"]
+            >[0]["delivery"],
+          }
+        : {}),
+      ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+    });
+  }
+
+  /** Re-apply per-thread permissions via resume overlay (kit `thread/resume`). */
+  async setThreadPermissions(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    return this.client.setThreadPermissions({
+      threadId: params.threadId,
+      ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+      ...(params.model !== undefined ? { model: params.model } : {}),
+      ...(params.approvalPolicy !== undefined
+        ? { approvalPolicy: params.approvalPolicy }
+        : {}),
+      ...(params.sandbox !== undefined ? { sandbox: params.sandbox } : {}),
+      ...(params.serviceTier !== undefined ? { serviceTier: params.serviceTier } : {}),
+      ...(params.reasoningEffort !== undefined
+        ? { reasoningEffort: params.reasoningEffort }
+        : {}),
+    });
+  }
+
+  /** Mark a project directory trusted (kit `config/value/write`). */
+  async trustProject(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }> {
+    return this.client.trustProject({
+      projectPath: params.projectPath,
+      ...(params.configPath !== undefined ? { configPath: params.configPath } : {}),
+    });
   }
 
   async close(): Promise<void> {
@@ -288,4 +367,12 @@ export function codexEventToNotifications(
 
 function codexItemType(kind: string): string {
   return kind === "command" ? "commandExecution" : "fileChange";
+}
+
+/** Map a PwrAgent turn-input item onto the kit's Codex `UserInput` shape. */
+function toKitUserInput(item: AppServerTurnInputItem): UserInput {
+  if (item.type === "text") {
+    return { type: "text", text: item.text, text_elements: [] };
+  }
+  return item as unknown as UserInput;
 }
