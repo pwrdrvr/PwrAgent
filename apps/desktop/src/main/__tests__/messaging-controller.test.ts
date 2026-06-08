@@ -2518,7 +2518,7 @@ describe("MessagingController", () => {
     );
     expect(statusText).toContain("Account: operator@example.com (ChatGPT team)");
     expect(statusText).toContain(
-      "Rate limits: gpt-5.3-codex primary: 76/100 remaining (24% used)",
+      "Rate limits: gpt-5.3-codex primary: 76% left",
     );
   });
 

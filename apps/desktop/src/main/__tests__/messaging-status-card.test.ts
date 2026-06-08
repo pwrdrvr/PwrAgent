@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
   NavigationSnapshot,
@@ -15,6 +15,10 @@ import {
   type MessagingWorkspaceHandoffContext,
 } from "../messaging/core/messaging-status-card";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("buildBindingStatusIntent", () => {
   it("renders binding, preference, project, and available backend status fields", () => {
@@ -115,7 +119,7 @@ describe("buildBindingStatusIntent", () => {
     );
     expect(intent.text).toContain("Account: operator@example.com (ChatGPT pro)");
     expect(intent.text).toContain(
-      "Rate limits: gpt-5.3-codex primary: 76/100 remaining (24% used)",
+      "Rate limits: gpt-5.3-codex primary: 76% left",
     );
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
@@ -161,6 +165,73 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).not.toContain("Context usage:");
     expect(intent.text).not.toContain("Account:");
     expect(intent.text).not.toContain("Rate limits:");
+  });
+
+  it("formats Codex and Spark rate limits with normalized labels and reset text", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 8, 14, 0, 0));
+
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-rate-limits",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        rateLimits: [
+          {
+            name: "GPT-5.3-Codex-Spark 5h limit",
+            remaining: 100,
+            usedPercent: 0,
+            resetAt: new Date(2026, 5, 8, 19, 20, 0).getTime(),
+          },
+          {
+            name: "5h limit",
+            remaining: 95,
+            usedPercent: 5,
+            resetAt: new Date(2026, 5, 8, 18, 2, 0).getTime(),
+          },
+          {
+            name: "GPT-5.3-Codex-Spark Weekly limit",
+            remaining: 100,
+            usedPercent: 0,
+            resetAt: new Date(2026, 5, 12, 0, 0, 0).getTime(),
+          },
+          {
+            name: "Weekly limit",
+            remaining: 73,
+            usedPercent: 27,
+            resetAt: new Date(2026, 5, 10, 0, 0, 0).getTime(),
+          },
+        ],
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain(
+      "Rate limits: 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
+    );
+    expect(intent.text).not.toContain("GPT-5.3-Codex-Spark");
+    expect(intent.text).not.toContain("95 remaining");
   });
 
   it("reports Fast mode as unsupported when the backend says it is not available", () => {

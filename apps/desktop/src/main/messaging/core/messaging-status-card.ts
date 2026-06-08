@@ -228,64 +228,127 @@ function formatBackendAccountLine(
 function formatBackendRateLimitsLine(
   backendSummary: BackendSummary | undefined,
 ): string | undefined {
-  const rateLimits = backendSummary?.rateLimits?.filter((rateLimit) =>
-    Boolean(formatBackendRateLimit(rateLimit)),
-  );
+  const rateLimits = selectStatusRateLimits(backendSummary);
   if (!rateLimits || rateLimits.length === 0) {
     return undefined;
   }
 
   return `Rate limits: ${rateLimits
-    .slice(0, 3)
     .map((rateLimit) => formatBackendRateLimit(rateLimit))
     .filter((line): line is string => Boolean(line))
     .join("; ")}`;
 }
 
+function selectStatusRateLimits(
+  backendSummary: BackendSummary | undefined,
+): NonNullable<BackendSummary["rateLimits"]> | undefined {
+  const limits = backendSummary?.rateLimits;
+  if (!limits || limits.length === 0) {
+    return undefined;
+  }
+  return [...limits].sort((left, right) => {
+    const leftName = splitRateLimitName(left.name);
+    const rightName = splitRateLimitName(right.name);
+    const leftFamilyOrder = isSparkRateLimit(left) ? 1 : 0;
+    const rightFamilyOrder = isSparkRateLimit(right) ? 1 : 0;
+    if (leftFamilyOrder !== rightFamilyOrder) {
+      return leftFamilyOrder - rightFamilyOrder;
+    }
+    if (leftName.labelOrder !== rightName.labelOrder) {
+      return leftName.labelOrder - rightName.labelOrder;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
 function formatBackendRateLimit(
   rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
 ): string | undefined {
-  const parts: string[] = [];
+  const { label } = splitRateLimitName(rateLimit.name);
+  const displayLabel = isSparkRateLimit(rateLimit) ? `Spark ${label}` : label;
+  const resetText = formatRateLimitReset(rateLimit.resetAt);
+  const suffix = resetText ? `, resets ${resetText}` : "";
+
+  if (rateLimit.usedPercent !== undefined) {
+    return `${displayLabel}: ${Math.max(
+      0,
+      Math.round(100 - rateLimit.usedPercent),
+    )}% left${suffix}`;
+  }
   if (rateLimit.remaining !== undefined && rateLimit.limit !== undefined) {
-    parts.push(
-      `${formatWholeNumber(rateLimit.remaining)}/${formatWholeNumber(
-        rateLimit.limit,
-      )} remaining`,
-    );
+    if (rateLimit.limit === 100) {
+      return `${displayLabel}: ${Math.max(
+        0,
+        Math.round(rateLimit.remaining),
+      )}% left${suffix}`;
+    }
+    return `${displayLabel}: ${formatWholeNumber(
+      rateLimit.remaining,
+    )}/${formatWholeNumber(rateLimit.limit)} left${suffix}`;
   } else if (rateLimit.remaining !== undefined) {
-    parts.push(`${formatWholeNumber(rateLimit.remaining)} remaining`);
+    return `${displayLabel}: ${Math.max(
+      0,
+      Math.round(rateLimit.remaining),
+    )}% left${suffix}`;
   } else if (rateLimit.used !== undefined && rateLimit.limit !== undefined) {
-    parts.push(
-      `${formatWholeNumber(rateLimit.used)}/${formatWholeNumber(
-        rateLimit.limit,
-      )} used`,
-    );
-  } else if (rateLimit.usedPercent !== undefined) {
-    parts.push(`${formatPercent(rateLimit.usedPercent)} used`);
+    return `${displayLabel}: ${formatWholeNumber(rateLimit.used)}/${formatWholeNumber(
+      rateLimit.limit,
+    )} used${suffix}`;
   }
 
-  if (
-    rateLimit.usedPercent !== undefined &&
-    !parts.some((part) => part.includes("used"))
-  ) {
-    parts.push(`${formatPercent(rateLimit.usedPercent)} used`);
-  }
+  return undefined;
+}
 
-  if (parts.length === 0) {
+function splitRateLimitName(name: string): {
+  label: string;
+  labelOrder: number;
+} {
+  const trimmed = name.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith("5h limit")) {
+    return { label: "5h limit", labelOrder: 0 };
+  }
+  if (lower.endsWith("weekly limit")) {
+    return { label: "Weekly limit", labelOrder: 1 };
+  }
+  return { label: trimmed, labelOrder: 99 };
+}
+
+function isSparkRateLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): boolean {
+  return isSparkRateLimitName(rateLimit.limitId) ||
+    isSparkRateLimitName(rateLimit.name);
+}
+
+function isSparkRateLimitName(value: string | undefined): boolean {
+  return value?.toLowerCase().includes("spark") ?? false;
+}
+
+function formatRateLimitReset(resetAt: number | undefined): string | undefined {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
     return undefined;
   }
-  if (parts.length === 1) {
-    return `${rateLimit.name}: ${parts[0]}`;
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
   }
-  return `${rateLimit.name}: ${parts[0]} (${parts.slice(1).join(", ")})`;
+  const now = Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  if (resetAt >= now && resetAt - now < oneDayMs) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
 }
 
 function formatWholeNumber(value: number): string {
   return Math.round(value).toLocaleString();
-}
-
-function formatPercent(value: number): string {
-  return `${Math.round(value)}%`;
 }
 
 function mentionRequiredLine(
