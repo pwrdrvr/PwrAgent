@@ -1,3 +1,11 @@
+# Normalize line endings to LF on checkout for every text file. The codebase
+# is developed on macOS/Linux and assumes LF (e.g. theme-contract.test.tsx
+# regexes over app.css with embedded "\n"). Without this, Git for Windows'
+# default core.autocrlf=true rewrites text files to CRLF on checkout, which
+# breaks content-comparison tests. The binary overrides below take precedence
+# for the listed globs.
+* text=auto eol=lf
+
 # Binary asset handling.
 #
 # Tag image / icon / packaging artifacts as binary so git doesn't

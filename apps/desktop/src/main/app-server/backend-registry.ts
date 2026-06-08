@@ -461,6 +461,16 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   );
 }
 
+/**
+ * Normalize a resolved path to forward slashes for use as a cross-platform
+ * directory identifier. No-op on POSIX; on Windows turns `C:\Users\…` into
+ * `C:/Users/…` so ids/keys read identically across hosts and match the
+ * thread-directory-enricher's normalized identifiers.
+ */
+function toDirectoryId(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySummary[] {
   const normalized = cwd?.trim();
   if (!normalized) {
@@ -469,10 +479,10 @@ function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySumm
   const directoryPath = path.resolve(normalized);
   return [
     {
-      id: directoryPath,
+      id: toDirectoryId(directoryPath),
       kind: "local",
       label: path.basename(directoryPath) || directoryPath,
-      path: directoryPath,
+      path: toDirectoryId(directoryPath),
     },
   ];
 }
@@ -493,11 +503,11 @@ function buildWorktreeLinkedDirectory(params: {
 
   return [
     {
-      id: repositoryPath,
+      id: toDirectoryId(repositoryPath),
       kind: "worktree",
       label,
-      path: repositoryPath,
-      worktreePath,
+      path: toDirectoryId(repositoryPath),
+      worktreePath: toDirectoryId(worktreePath),
     },
   ];
 }
@@ -515,9 +525,12 @@ function hasCachedWorktreeDirectory(
   overlay: ThreadOverlayState | undefined,
   projectPath: string,
 ): boolean {
+  const resolvedProjectPath = path.resolve(projectPath);
   return Boolean(
     overlay?.extraLinkedDirectories.some((directory) => {
-      if (directory.id !== projectPath) {
+      // directory.id is forward-slash normalized; re-resolve both sides so the
+      // comparison is separator-agnostic across platforms.
+      if (path.resolve(directory.id) !== resolvedProjectPath) {
         return false;
       }
       return Boolean(directory.worktreePath?.trim());
@@ -588,11 +601,11 @@ function buildCachedWorktreeDirectory(
 
   return {
     ...directory,
-    id: projectPath,
+    id: toDirectoryId(projectPath),
     kind: "worktree",
     label: directory.label || path.basename(repositoryPath) || repositoryPath,
-    path: repositoryPath,
-    worktreePath,
+    path: toDirectoryId(repositoryPath),
+    worktreePath: toDirectoryId(worktreePath),
   };
 }
 
@@ -626,10 +639,10 @@ function buildCachedDirectoryRelationship(
 
   return {
     ...localDirectory,
-    id: projectPath,
+    id: toDirectoryId(projectPath),
     kind: "local",
     label: localDirectory.label || path.basename(projectPath) || projectPath,
-    path: projectPath,
+    path: toDirectoryId(projectPath),
     worktreePath: undefined,
   };
 }

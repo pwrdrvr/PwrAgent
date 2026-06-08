@@ -1,4 +1,6 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import os from "node:os";
+import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
@@ -360,6 +362,11 @@ class DesktopAppServerService {
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private threadMigrationService: ThreadMigrationService | null = null;
+  // Parent of the most recently picked directory, used as the "Add directory"
+  // dialog's defaultPath so it reopens where you last browsed instead of the
+  // OS default (Documents on a fresh Windows profile). Falls back to the home
+  // folder. In-memory: resets to home on app restart.
+  private lastPickedDirectoryParent: string | undefined;
 
   private getThreadMigrationService(): ThreadMigrationService {
     if (!this.threadMigrationService) {
@@ -1413,20 +1420,27 @@ class DesktopAppServerService {
     // pass one we fall back to the focused window.
     const window =
       parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    // Open where the user last browsed (the parent of their last pick), else the
+    // home folder — much friendlier than the OS default, which is Documents on a
+    // fresh Windows profile and looks like you can't escape it.
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
     const result = window
       ? await dialog.showOpenDialog(window, {
           title: "Add directory",
           buttonLabel: "Add directory",
+          defaultPath,
           properties: ["openDirectory", "createDirectory"],
         })
       : await dialog.showOpenDialog({
           title: "Add directory",
           buttonLabel: "Add directory",
+          defaultPath,
           properties: ["openDirectory", "createDirectory"],
         });
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
     }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
     return { canceled: false, path: result.filePaths[0] };
   }
 

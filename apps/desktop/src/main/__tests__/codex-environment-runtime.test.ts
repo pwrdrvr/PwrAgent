@@ -8,6 +8,23 @@ import {
   CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
   startLocalCodexEnvironmentAction,
 } from "../app-server/codex-environment-runtime";
+import { resolveWindowsBashShell } from "../windows-shell";
+
+const isWindows = process.platform === "win32";
+
+/**
+ * Several tests provide a hand-rolled POSIX `#!/bin/sh` script as the hydrated
+ * SHELL to exercise shell selection. Windows can't spawn a `.sh` shebang
+ * script directly (it raises `spawn EFTYPE`), and `/bin/sh` doesn't exist, so
+ * on Windows we substitute the same Git-for-Windows bash the product resolves
+ * via `windowsBashCandidates()`. The setup/action scripts only use POSIX
+ * features (`printf`, redirections, `set -e`, `&&`, `sleep`) that Git bash
+ * supports, so the assertions still hold. On POSIX this returns the original
+ * shell unchanged, keeping macOS/Linux behavior identical.
+ */
+function spawnableShell(posixShell: string): string {
+  return isWindows ? resolveWindowsBashShell() : posixShell;
+}
 
 describe("codex environment runtime", () => {
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
@@ -72,7 +89,7 @@ describe("codex environment runtime", () => {
         "hydrated",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 15_000);
 
@@ -121,7 +138,7 @@ describe("codex environment runtime", () => {
         ].join("\n"),
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 15_000);
 
@@ -151,7 +168,9 @@ describe("codex environment runtime", () => {
           ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
           ELECTRON_RUN_AS_NODE: "1",
           PWRAGENT_TEST_HYDRATED_ENV: "hydrated",
-          SHELL: shellPath,
+          // On Windows the `.sh` passthrough script isn't directly spawnable;
+          // use Git bash. Electron-var stripping is shell-independent.
+          SHELL: spawnableShell(shellPath),
           VITE_DEV_SERVER_URL: "http://127.0.0.1:5174",
         },
         runtime: {
@@ -194,7 +213,7 @@ describe("codex environment runtime", () => {
         }),
       ).resolves.toBe(expectedOutput);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -236,7 +255,7 @@ describe("codex environment runtime", () => {
         expectEventually(async () => await readFile(outputPath, "utf8")),
       ).resolves.toBe("fallback");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -278,7 +297,7 @@ describe("codex environment runtime", () => {
         expectEventually(async () => await readFile(outputPath, "utf8")),
       ).resolves.toBe("fallback");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -307,7 +326,11 @@ describe("codex environment runtime", () => {
           cwd: root,
           env: {
             ...process.env,
-            SHELL: shellPath,
+            // On Windows provide a real, spawnable Git bash as the hydrated
+            // SHELL. The custom `.sh` marker script can't be spawned directly
+            // there, so we assert the provided shell ran by its setup output
+            // (below) instead of the marker file.
+            SHELL: spawnableShell(shellPath),
           },
           selection: {
             environment: {
@@ -325,10 +348,16 @@ describe("codex environment runtime", () => {
         setupStatus: "completed",
       });
 
-      await expect(readFile(markerPath, "utf8")).resolves.toBe("shell-used");
+      if (!isWindows) {
+        // The custom `.sh` shell writes this marker to prove it was the shell
+        // that ran. On Windows we run real Git bash instead (the custom script
+        // isn't spawnable), so the marker isn't produced — the setup-output
+        // assertion below still proves the provided shell executed the script.
+        await expect(readFile(markerPath, "utf8")).resolves.toBe("shell-used");
+      }
       await expect(readFile(outputPath, "utf8")).resolves.toBe("setup");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -368,7 +397,10 @@ describe("codex environment runtime", () => {
           env: {
             ...process.env,
             NVM_DIR: nvmDir,
-            SHELL: shellPath,
+            // On Windows the custom `eval "$2"` shell isn't spawnable; Git bash
+            // runs the same wrapped command (which sources nvm.sh and defines
+            // the nvm function) via `-lc`, so the assertion still holds.
+            SHELL: spawnableShell(shellPath),
           },
           selection: {
             environment: {
@@ -393,7 +425,7 @@ describe("codex environment runtime", () => {
         "nvm:use --silent\ndone",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -438,7 +470,7 @@ describe("codex environment runtime", () => {
         "PWRAGENT_SHOULD_NOT_PERSIST",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -478,7 +510,7 @@ describe("codex environment runtime", () => {
       expect(runtime?.shellEnvironment).not.toHaveProperty("NPM_CONFIG_PROXY");
       expect(runtime?.shellEnvironment).not.toHaveProperty("npm_config_registry");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -516,7 +548,7 @@ describe("codex environment runtime", () => {
       });
       expect(runtime?.shellEnvironment?.PATH).toBe(toolPath);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -556,7 +588,7 @@ describe("codex environment runtime", () => {
 
       expect(runtime?.shellEnvironment).toEqual(cachedEnvironment);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -583,7 +615,9 @@ describe("codex environment runtime", () => {
           cwd: root,
           env: {
             ...process.env,
-            SHELL: shellPath,
+            // On Windows the custom `.sh` passthrough isn't spawnable; Git bash
+            // honors `set -e` identically so the early-exit assertion holds.
+            SHELL: spawnableShell(shellPath),
           },
           selection: {
             environment: {
@@ -611,7 +645,7 @@ describe("codex environment runtime", () => {
 
       await expect(readFile(outputPath, "utf8")).resolves.toBe("before");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -657,7 +691,7 @@ describe("codex environment runtime", () => {
         "ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -669,9 +703,19 @@ describe("codex environment runtime", () => {
       try {
         await applyLocalCodexEnvironmentSelection({
           cwd: root,
-          env: {
-            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "50",
-          },
+          // POSIX keeps the minimal env (the shell's compiled-in default PATH
+          // resolves `sleep`). On Windows, `sleep` is an external Git-bash
+          // binary that needs PATH, and the hydrated shell must be a real
+          // spawnable bash — so spread process.env (for PATH) and pin Git bash.
+          env: isWindows
+            ? {
+                ...process.env,
+                [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "50",
+                SHELL: resolveWindowsBashShell(),
+              }
+            : {
+                [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "50",
+              },
           selection: {
             environment: {
               id: "env",
@@ -699,7 +743,7 @@ describe("codex environment runtime", () => {
         ((error as { runtime?: { setupOutput?: string } }).runtime?.setupOutput ?? ""),
       ).not.toContain("after");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -754,7 +798,7 @@ describe("codex environment runtime", () => {
         "before\nterm\nafter-term\n",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 10_000);
 });

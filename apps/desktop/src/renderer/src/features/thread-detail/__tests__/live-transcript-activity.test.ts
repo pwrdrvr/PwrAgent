@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLiveToolDetails,
   buildTokenUsageActivityEntry,
+  summarizeLiveActivity,
 } from "../live-transcript-activity";
 
 describe("buildLiveToolDetails", () => {
@@ -108,5 +109,63 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost unavailable: no local pricing entry for custom-model",
     );
+  });
+});
+
+describe("Windows command rendering", () => {
+  it("strips the PowerShell interpreter wrapper from the command label", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "cmd-1",
+      command:
+        '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git status"',
+      status: "completed",
+    });
+
+    expect(details[0]?.label).toBe("git status");
+    expect(details[0]?.command?.displayCommand).toBe("git status");
+    // The full interpreter invocation is preserved for the details view.
+    expect(details[0]?.command?.rawCommand).toContain("powershell.exe");
+  });
+
+  it("strips a POSIX login-shell wrapper from the command label", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "cmd-2",
+      command: "/bin/zsh -lc 'git status'",
+      status: "completed",
+    });
+
+    expect(details[0]?.label).toBe("git status");
+  });
+
+  it("strips a quoted Git-bash wrapper whose path contains spaces", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "cmd-3",
+      command:
+        '"C:\\Program Files\\Git\\bin\\bash.exe" -lc "git status"',
+      status: "completed",
+    });
+
+    expect(details[0]?.label).toBe("git status");
+    expect(details[0]?.command?.displayCommand).toBe("git status");
+    // The full interpreter invocation is preserved for the details view.
+    expect(details[0]?.command?.rawCommand).toContain("bash.exe");
+  });
+
+  it("does not collapse a Windows drive-letter path label to 'C'", () => {
+    const summary = summarizeLiveActivity([
+      {
+        id: "cmd-1",
+        kind: "command",
+        label:
+          "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command git status",
+        status: "completed",
+      },
+    ]);
+
+    expect(summary).not.toBe("C");
+    expect(summary).toContain("powershell.exe");
   });
 });

@@ -206,6 +206,52 @@ jobs:
           path: apps/desktop/release-stage/dist/*.deb
           retention-days: 7
 
+  windows-package:
+    name: Package Windows installer (unsigned)
+    runs-on: windows-latest
+    needs: prepare
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      # pwrdrvr/configure-nodejs is POSIX-only, so set up Node + pnpm directly.
+      # Git-for-Windows (bash.exe, used by the agent's shell tools) is
+      # preinstalled on windows-latest runners.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # NSIS installer is currently unsigned (no Windows code-signing identity
+      # yet). Uploaded as a workflow artifact, not published to the GitHub
+      # Release, until signing is in place.
+      - name: Package Windows installer (unsigned, no publish)
+        run: node apps/desktop/scripts/release.mjs --win --no-publish
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-installer
+          path: |
+            apps/desktop/release-stage/dist/*.exe
+            apps/desktop/release-stage/dist/*.exe.blockmap
+            apps/desktop/release-stage/dist/SHA256SUMS
+          retention-days: 7
+
   linux-publish:
     name: Publish Linux DEB artifacts
     runs-on: ubuntu-24.04

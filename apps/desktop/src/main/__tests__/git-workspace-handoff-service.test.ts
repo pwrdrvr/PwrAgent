@@ -9,6 +9,14 @@ import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-
 const execFileAsync = promisify(execFile);
 const cleanupPaths: string[] = [];
 
+// The handoff service forward-slashes the directory/worktree identifiers it
+// returns (no-op on POSIX; on Windows `C:\…` becomes `C:/…`). Expected path
+// strings derived from native temp dirs must be normalized the same way so the
+// comparisons hold on both platforms.
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
@@ -37,6 +45,11 @@ async function createRepo(): Promise<string> {
   const repoPath = path.join(root, "PwrAgent");
   await mkdir(repoPath);
   await git(repoPath, ["init", "-b", "main"]);
+  // On Windows git defaults to autocrlf=true, which rewrites committed/restored
+  // file content to CRLF. Force LF so the `\n` expectations below hold on every
+  // platform (no-op on POSIX where these are already the effective defaults).
+  await git(repoPath, ["config", "core.autocrlf", "false"]);
+  await git(repoPath, ["config", "core.eol", "lf"]);
   await git(repoPath, ["config", "user.email", "test@example.com"]);
   await git(repoPath, ["config", "user.name", "Test User"]);
   await writeFile(path.join(repoPath, "README.md"), "main\n", "utf8");
@@ -52,7 +65,9 @@ async function createRepo(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(
-    cleanupPaths.splice(0).map((target) => rm(target, { recursive: true, force: true })),
+    cleanupPaths.splice(0).map((target) =>
+      rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+    ),
   );
 });
 
@@ -292,7 +307,7 @@ describe("GitWorkspaceHandoffService", () => {
     expect(result.archivedSourceWorktree).toMatchObject({
       state: "archived",
       worktreePath: await realpath(path.dirname(worktreePath)).then((root) =>
-        path.join(root, path.basename(worktreePath)),
+        toForwardSlashes(path.join(root, path.basename(worktreePath))),
       ),
     });
     expect(await pathExists(worktreePath)).toBe(false);

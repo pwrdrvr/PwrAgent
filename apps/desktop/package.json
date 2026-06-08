@@ -28,6 +28,7 @@
     "package:dryrun": "node ./scripts/release.mjs --dryrun",
     "package": "node ./scripts/release.mjs --no-publish",
     "package:linux": "node ./scripts/release.mjs --linux --no-publish",
+    "package:win": "node ./scripts/release.mjs --win --no-publish",
     "release": "node ./scripts/release.mjs",
     "release:linux": "node ./scripts/release.mjs --linux",
     "pretest:e2e": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && pnpm build",

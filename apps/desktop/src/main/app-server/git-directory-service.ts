@@ -22,6 +22,21 @@ type GitCommandRunner = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
+// Directory/worktree identifiers are surfaced to the rest of the app
+// (thread links, navigation, cleanup results) as stable string keys.
+// `path.resolve`/`path.join` emit backslashes on Windows, so normalize
+// these RETURNED identifier strings to forward slashes on every platform.
+// No-op on POSIX (no backslashes to replace). This must only touch the
+// identifier values placed into returned result objects — never the paths
+// passed to git/fs operations, which must stay native.
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function toForwardSlashesOptional(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : toForwardSlashes(value);
+}
+
 export type PreparedLaunchpadWorkspace = {
   cwd?: string;
   repositoryPath?: string;
@@ -657,6 +672,27 @@ export class GitDirectoryService {
         worktreeBranchMode?: "attached" | "detached";
       },
   ): Promise<PreparedLaunchpadWorkspace> {
+    const prepared = await this.prepareLaunchpadWorkspaceInternal(launchpad);
+    // Forward-slash the returned identifier fields (no-op on POSIX). The
+    // `rollback` closure captured the native worktree path internally, so
+    // it keeps operating on the real fs path regardless of this rewrite.
+    return {
+      ...prepared,
+      cwd: toForwardSlashesOptional(prepared.cwd),
+      repositoryPath: toForwardSlashesOptional(prepared.repositoryPath),
+    };
+  }
+
+  private async prepareLaunchpadWorkspaceInternal(
+    launchpad: Pick<
+      NavigationLaunchpadDraft,
+      "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
+    > &
+      Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
+        excludedWorktreePaths?: string[];
+        worktreeBranchMode?: "attached" | "detached";
+      },
+  ): Promise<PreparedLaunchpadWorkspace> {
     if (launchpad.directoryKind === "workspace") {
       return {
         cwd: undefined,
@@ -887,9 +923,11 @@ export class GitDirectoryService {
     const runGit = this.runGitCommand;
     const gitEnv = this.gitEnv;
     const repoPath = path.resolve(candidate.repoPath);
+    // Native path is used for the comparison + git/fs operations below; the
+    // returned identifier is forward-slashed (no-op on POSIX).
     const worktreePath = path.resolve(candidate.worktreePath);
     const base: ArchiveThreadCleanupResult = {
-      worktreePath,
+      worktreePath: toForwardSlashes(worktreePath),
       removedWorktree: false,
       deletedBranch: false,
     };

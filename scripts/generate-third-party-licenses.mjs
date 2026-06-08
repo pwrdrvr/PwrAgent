@@ -24,10 +24,18 @@ function runPnpmLicenses(args) {
     {
       cwd: repoRoot,
       encoding: "utf8",
+      // Windows resolves `pnpm` via the pnpm.cmd shim, which spawnSync only
+      // finds through a shell. Without this, spawn fails with ENOENT and
+      // result.status/stderr are null (crashing the undefined-stderr write).
+      shell: process.platform === "win32",
     },
   );
+  if (result.error) {
+    process.stderr.write(`failed to run pnpm licenses: ${result.error.message}\n`);
+    process.exit(1);
+  }
   if (result.status !== 0) {
-    process.stderr.write(result.stderr);
+    process.stderr.write(result.stderr ?? "pnpm licenses list failed\n");
     process.exit(result.status ?? 1);
   }
   return JSON.parse(result.stdout);

@@ -20,6 +20,47 @@ import { WorktreeArchiveService } from "./worktree-archive-service";
 const execFileAsync = promisify(execFile);
 const DETACHED_HEAD_LEAVE_LOCAL_BRANCH = "HEAD";
 
+// Directory/worktree identifiers surfaced in the handoff response are returned
+// as stable string keys. `path.resolve`/`computeWorktreePath` emit backslashes
+// on Windows, so forward-slash these RETURNED identifier strings on all
+// platforms (no-op on POSIX). This only touches the response object built at
+// the very end of each handoff path — the native paths used for git/fs
+// operations inside the handoff stay native.
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function toForwardSlashesOptional(
+  value: string | undefined,
+): string | undefined {
+  return value === undefined ? undefined : toForwardSlashes(value);
+}
+
+function normalizeHandoffResponseIdentifiers(
+  response: HandoffThreadWorkspaceResponse,
+): HandoffThreadWorkspaceResponse {
+  return {
+    ...response,
+    repositoryPath: toForwardSlashes(response.repositoryPath),
+    targetPath: toForwardSlashes(response.targetPath),
+    linkedDirectory: {
+      ...response.linkedDirectory,
+      path: toForwardSlashes(response.linkedDirectory.path),
+      worktreePath: toForwardSlashesOptional(
+        response.linkedDirectory.worktreePath,
+      ),
+    },
+    archivedSourceWorktree: response.archivedSourceWorktree
+      ? {
+          ...response.archivedSourceWorktree,
+          worktreePath: toForwardSlashes(
+            response.archivedSourceWorktree.worktreePath,
+          ),
+        }
+      : response.archivedSourceWorktree,
+  };
+}
+
 type GitResult = {
   stdout: string;
   stderr: string;
@@ -300,9 +341,11 @@ export class GitWorkspaceHandoffService {
   }
 
   async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
-    return params.direction === "local-to-worktree"
-      ? await this.handoffLocalToWorktree(params)
-      : await this.handoffWorktreeToLocal(params);
+    const response =
+      params.direction === "local-to-worktree"
+        ? await this.handoffLocalToWorktree(params)
+        : await this.handoffWorktreeToLocal(params);
+    return normalizeHandoffResponseIdentifiers(response);
   }
 
   private async buildContext(params: HandoffParams): Promise<HandoffContext> {

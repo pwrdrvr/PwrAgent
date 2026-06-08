@@ -7,7 +7,10 @@ import {
   PWRAGENT_INSTANCE_ROOT_ENV,
   RuntimeMessagingLeaseCoordinator,
 } from "../runtime-messaging-lease";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  hashCwd,
+} from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type { DesktopMessagingRuntime } from "../messaging/messaging-runtime";
@@ -115,7 +118,11 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
 
     expect(store.getInstance("instance-a")).toMatchObject({
       cwdHint: "PwrAgnt",
-      cwdHash: "c976f17804e892f9",
+      // hashCwd hashes path.resolve(cwd), which gains a drive prefix +
+      // backslashes on Windows, so compute the expectation through the product
+      // helper instead of a POSIX-only literal (equals "c976f17804e892f9" on
+      // macOS/Linux).
+      cwdHash: hashCwd("/Users/example/PwrAgnt"),
     });
 
     coordinator.shutdownSync();
