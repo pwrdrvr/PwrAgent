@@ -156,6 +156,7 @@ import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
 import type { DirectoryGitStatusEntry } from "./git-directory-service";
+import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -2431,6 +2432,18 @@ export class DesktopBackendRegistry {
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpBackend: AcpBackendAdapter;
+  // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
+  // (e.g. Grok) worktree threads group under the same directory row as their
+  // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
+  // linked directory from their own enricher; ACP sessions only know their cwd,
+  // so without this every ACP worktree session lands in its own folder. Pure
+  // filesystem — follows the worktree's `.git` link and NEVER spawns git. The
+  // repo↔worktree mapping is immutable, so the result is cached durably on the
+  // thread overlay (`acpWorktreeDirectory`) and this resolver only runs on the
+  // first sighting of a given cwd. Injectable for deterministic tests.
+  private readonly acpWorktreeRepositoryResolver: (
+    cwd: string,
+  ) => Promise<LinkedDirectorySummary | undefined>;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -2583,6 +2596,9 @@ export class DesktopBackendRegistry {
     threadTitleGenerationService?: ThreadTitleService | null;
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
+    acpWorktreeRepositoryResolver?: (
+      cwd: string,
+    ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -2667,6 +2683,9 @@ export class DesktopBackendRegistry {
         apiKey: grokApiKey,
         connectionObserver: grokObserver,
       });
+    this.acpWorktreeRepositoryResolver =
+      options?.acpWorktreeRepositoryResolver ??
+      resolveWorktreeRepositoryDirectory;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -3483,12 +3502,19 @@ export class DesktopBackendRegistry {
           thread,
           overlay?.extraLinkedDirectories ?? [],
         );
+        const linkedDirectories = await this.resolveAcpLinkedDirectories(
+          thread,
+          cwd,
+          overlay,
+          backendId,
+        );
         const codexEnvironmentOptions = cwd
           ? await listCodexEnvironmentOptions(cwd).catch(() => [])
           : [];
         return {
           ...thread,
           executionMode,
+          linkedDirectories,
           codexEnvironmentOptions,
         };
       }),
@@ -3499,6 +3525,67 @@ export class DesktopBackendRegistry {
         thread.title.toLowerCase().includes(normalizedFilter) ||
         thread.id.toLowerCase().includes(normalizedFilter),
     );
+  }
+
+  /**
+   * ACP sessions only know their working directory. When that cwd is a
+   * tool-managed worktree (`.codex/.../worktrees/...`, `.pwragent/.../worktrees/...`,
+   * `<repo>/.worktrees/...`), resolve the underlying repository checkout by
+   * following the worktree's `.git` link (filesystem only — this NEVER spawns
+   * git) so the thread's linked directory is repo-rooted (`path` = repo,
+   * `worktreePath` = cwd). That makes ACP worktree threads group under the same
+   * directory row as their repo — matching Codex — instead of each worktree
+   * getting its own folder.
+   *
+   * The repo↔worktree mapping is immutable for a given worktree path, so a
+   * successful resolution is cached durably on the thread overlay
+   * (`acpWorktreeDirectory`, keyed by cwd) and reused on every later list read
+   * without touching the filesystem again. The resolver therefore runs at most
+   * once per worktree thread, not once per refresh.
+   *
+   * Falls back to the session's own linked directories when the cwd is a plain
+   * local checkout (already repo-rooted), is not a managed worktree, or resolves
+   * to nothing (e.g. the worktree was deleted). A miss is deliberately left
+   * uncached so a transient failure is retried cheaply, and a vanished
+   * worktree's thread stays on its row rather than dropping to "unlinked".
+   */
+  private async resolveAcpLinkedDirectories(
+    thread: AppServerThreadSummary,
+    cwd: string | undefined,
+    overlay: ThreadOverlayState | undefined,
+    backendId: AppServerBackendKind,
+  ): Promise<AppServerThreadSummary["linkedDirectories"]> {
+    if (!cwd || !isLikelyToolManagedWorktreePath(cwd)) {
+      return thread.linkedDirectories;
+    }
+
+    // Reuse the durably-cached resolution while the session cwd is unchanged.
+    const cached = overlay?.acpWorktreeDirectory;
+    if (cached && cached.cwd === cwd) {
+      return [cached.directory];
+    }
+
+    try {
+      const directory = await this.acpWorktreeRepositoryResolver(cwd);
+      if (directory) {
+        await this.overlayStore.setAcpWorktreeDirectory({
+          backend: backendId,
+          threadId: thread.id,
+          cwd,
+          directory,
+        });
+        return [directory];
+      }
+    } catch (error) {
+      backendRegistryLog.warn("ACP worktree repository resolution failed", {
+        threadId: thread.id,
+        backend: thread.source,
+        cwd,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return thread.linkedDirectories;
   }
 
   private async readAcpThread(

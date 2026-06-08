@@ -613,6 +613,24 @@ export type ThreadOverlayState = {
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /**
+   * Cached repository resolution for an ACP worktree thread. ACP sessions
+   * only report their working directory; mapping a tool-managed worktree cwd
+   * to its parent repository checkout requires following the worktree's `.git`
+   * gitdir link (filesystem only — we never spawn git for this). That mapping
+   * is immutable for a given worktree path, so we resolve it once and persist
+   * it here, then reuse it on every later thread-list read instead of touching
+   * the filesystem again. `cwd` records the session directory the resolution
+   * was computed for, so a session rebind to a different workspace re-resolves.
+   * `directory` is repo-rooted (`path` = repo, `worktreePath` = the worktree),
+   * which is what lets the thread group under its repository row alongside
+   * Codex threads of the same repo. Only successful resolutions are stored;
+   * a non-worktree / vanished cwd is left uncached so it is retried cheaply.
+   */
+  acpWorktreeDirectory?: {
+    cwd: string;
+    directory: LinkedDirectorySummary;
+  };
+  /**
    * Per-thread emoji reactions. Single-user model: each emoji appears at
    * most once, ordered by insertion. Used as personal status markers
    * (e.g., "needs follow-up"), not multi-user voting.

@@ -151,6 +151,25 @@ async function buildLinkedDirectoryFromGitMetadata(
   };
 }
 
+/**
+ * Resolve a tool-managed worktree directory to its repository checkout by
+ * following the worktree's `.git` gitdir link. Filesystem-only — this NEVER
+ * spawns `git`. Returns a repo-rooted linked directory (`path` = repository,
+ * `worktreePath` = the worktree) when `cwd` is a git worktree, or `undefined`
+ * when it is a plain checkout (its `.git` is a real directory, not a gitdir
+ * link), a vanished worktree, or otherwise unreadable. The repo↔worktree
+ * relationship is immutable for a given worktree path, so callers can cache
+ * the result indefinitely and only re-resolve when `cwd` itself changes.
+ */
+export async function resolveWorktreeRepositoryDirectory(
+  cwd: string,
+): Promise<LinkedDirectorySummary | undefined> {
+  const { directory } = await buildLinkedDirectoryFromGitMetadata(
+    path.resolve(cwd),
+  );
+  return directory;
+}
+
 function parseGitWorktrees(output: string): string[] {
   return output
     .split("\n")
