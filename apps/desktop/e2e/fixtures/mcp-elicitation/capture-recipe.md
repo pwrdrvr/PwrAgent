@@ -36,6 +36,7 @@ while recording this scenario.
   `item/started` for the MCP tool call, `mcpServer/elicitation/request`, one
   progress or completion notification, then stop.
 - Redact URL query strings, hashes, cookies, tokens, and machine-specific paths.
-- Do not check in `raw.capture.jsonl` until it has been reviewed for secrets.
+- Do not check in `raw.capture.jsonl`; keep raw captures outside the repo and
+  commit only curated replay fixtures.
 - If only URL-mode elicitation is captured, keep credentials out of PwrAgent and
   assert only the redacted display URL plus accept/decline/cancel controls.

@@ -20,5 +20,5 @@ message at 11:41 AM. The expected replay order is:
 5. Later Electron E2E command activity.
 6. Assistant commentary: Chromium/contenteditable route is not enough.
 
-The checked-in `raw.capture.jsonl` is a generated slice of the live capture, not
-a hand-authored protocol transcript.
+The replay fixture is a generated slice of the live capture, not a hand-authored
+protocol transcript. Keep raw captures outside the repository.

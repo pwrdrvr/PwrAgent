@@ -31,21 +31,165 @@ describe("fixture derivation", () => {
     );
   });
 
-  it("derives the checked-in edited-changes replay fixture from raw capture", async () => {
-    const fixtureDir = path.resolve(
-      process.cwd(),
-      "apps/desktop/e2e/fixtures/edited-changes-order"
-    );
-    const derived = await deriveReplayFixtureFromCapture({
-      capturePath: path.join(fixtureDir, "raw.capture.jsonl"),
-      scenario: "edited-changes-order",
-    });
-    const expected = JSON.parse(
-      await fs.readFile(path.join(fixtureDir, "replay.fixture.json"), "utf8")
-    );
+  it("derives a replay fixture from a raw protocol capture", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const capturePath = path.join(rootDir, "capture.jsonl");
 
-    expect(derived.fixture).toEqual(expected);
-    expect(derived.rawCaptureRecords).toHaveLength(12);
+    await writeJsonl(capturePath, [
+      {
+        backend: "codex",
+        captureId: "derive-test",
+        direction: "outbound",
+        kind: "request",
+        method: "initialize",
+        id: "rpc-1",
+        sequence: 1,
+        timestamp: 1,
+        threadIds: [],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-1",
+          method: "initialize",
+          params: {}
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "derive-test",
+        direction: "inbound",
+        kind: "response",
+        id: "rpc-1",
+        sequence: 2,
+        timestamp: 2,
+        threadIds: [],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-1",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            }
+          }
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "derive-test",
+        direction: "outbound",
+        kind: "request",
+        method: "thread/read",
+        id: "rpc-2",
+        sequence: 3,
+        timestamp: 3,
+        threadIds: ["thread-1"],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-2",
+          method: "thread/read",
+          params: {
+            includeTurns: true,
+            threadId: "thread-1"
+          }
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "derive-test",
+        direction: "inbound",
+        kind: "response",
+        id: "rpc-2",
+        sequence: 4,
+        timestamp: 4,
+        threadIds: ["thread-1"],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-2",
+          result: {
+            thread: {
+              id: "thread-1",
+              title: "Synthetic thread"
+            }
+          }
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "derive-test",
+        direction: "inbound",
+        kind: "notification",
+        method: "item/started",
+        sequence: 5,
+        timestamp: 5,
+        threadIds: ["thread-1"],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "item/started",
+          params: {
+            item: {
+              id: "item-1",
+              type: "commandExecution"
+            },
+            threadId: "thread-1"
+          }
+        })
+      }
+    ]);
+
+    const derived = await deriveReplayFixtureFromCapture({
+      capturePath,
+      scenario: "synthetic-derive",
+      threadId: "thread-1",
+    });
+
+    expect(derived.fixture).toEqual({
+      metadata: {
+        backend: "codex",
+        scenario: "synthetic-derive",
+        sourceCaptureId: "derive-test",
+        threadId: "thread-1"
+      },
+      steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            }
+          }
+        },
+        {
+          id: "thread-read-1",
+          kind: "response",
+          method: "thread/read",
+          result: {
+            thread: {
+              id: "thread-1",
+              title: "Synthetic thread"
+            }
+          }
+        },
+        {
+          id: "item-started-1",
+          kind: "notification",
+          notification: {
+            method: "item/started",
+            params: {
+              item: {
+                id: "item-1",
+                type: "commandExecution"
+              },
+              threadId: "thread-1"
+            }
+          }
+        }
+      ]
+    });
+    expect(derived.rawCaptureRecords).toHaveLength(5);
   });
 
   it("preserves unknown notifications and inbound requests within the selected window", async () => {

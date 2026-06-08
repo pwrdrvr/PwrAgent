@@ -6,11 +6,10 @@ Electron E2E suite.
 Each scenario directory should contain:
 
 - `capture-recipe.md`: the live Computer Use recipe for reproducing the capture
-- `replay.fixture.json`: the curated replay script derived from that raw capture
+- `replay.fixture.json`: the curated replay script derived from a raw capture
 
-Raw captures must stay outside the repository unless they have been explicitly
-reviewed and sanitized. They often contain private thread previews, screenshots,
-local paths, and operational data.
+Raw captures must stay outside the repository. They often contain private thread
+previews, screenshots, local paths, and operational data.
 
 Until a scenario is fully seeded, its directory may contain only
 `capture-recipe.md`.
@@ -87,8 +86,8 @@ fixture for CI.
 - Keep the derived replay window tight. Retain only the records needed to
   reproduce the UI state under test.
 - Do not hand-edit raw captures.
-- Do not commit raw captures unless the scenario explicitly requires raw
-  protocol evidence and the file has been reviewed for private data.
+- Do not commit raw captures. Keep evidence in `/tmp`, `.local/`, or another
+  private artifact location and commit only curated replay fixtures.
 - If a capture includes secrets or machine-specific paths, use the replay
   derivation redaction flags when promoting the fixture.
 
@@ -97,11 +96,6 @@ fixture for CI.
 The current fixture set is still valid after rollout-file removal, but most
 desktop replay scenarios do not exercise Codex sidebar directory identity.
 
-- `codex-directory-parity/raw.capture.jsonl` adds the startup/sidebar parity
-  case for Codex Desktop directory browsing. Its live `thread/list` capture is
-  the evidence for the `limit: 50` updated-at window plus deleted-worktree
-  thread retention, while the curated replay fixture keeps the Electron spec
-  deterministic.
 - `codex-todo-list/replay.fixture.json` remains valid for transcript and plan
   rendering, but it does **not** cover startup/sidebar grouping parity. Like the
   other replay fixtures, it replays already-normalized thread summaries with
