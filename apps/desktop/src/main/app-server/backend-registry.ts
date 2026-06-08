@@ -140,6 +140,10 @@ import {
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/client";
+import {
+  CodexKitBackendClient,
+  isCodexKitFlagEnabled,
+} from "../codex-app-server/codex-kit-adapter";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
@@ -2630,7 +2634,17 @@ export class DesktopBackendRegistry {
     this.codexClient =
       options?.codexClient ??
       replayClients?.codexClient ??
-      new CodexAppServerClient({
+      // Phase B swap (v1): when PWRAGENT_CODEX_KIT=1, drive Codex through the
+      // kit's CodexThreadClient instead of the in-tree client. Core path only
+      // (start thread/turn, stream, read, interrupt); the rich features stay
+      // unavailable under the flag. Flag-off = the full in-tree client, unchanged.
+      (isCodexKitFlagEnabled()
+        ? (new CodexKitBackendClient({
+            command: codexCommand,
+            env: codexEnv,
+            clientVersion,
+          }) as unknown as BackendClient)
+        : new CodexAppServerClient({
         args: buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
@@ -2646,7 +2660,7 @@ export class DesktopBackendRegistry {
         // `describeCodexBackend` catches via `Promise.allSettled` and
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
-      });
+      }));
     this.grokClient =
       options?.grokClient ??
       replayClients?.grokClient ??
