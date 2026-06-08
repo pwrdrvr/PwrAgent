@@ -614,6 +614,38 @@ function createOverlayStoreMock(params?: {
   } as unknown as OverlayStoreLike;
 }
 
+/**
+ * Detach-mode env actions resolve on spawn and `unref()` the child, so the
+ * spawned process (the shell plus any grandchild it launches) keeps holding
+ * its `cwd` directory handle after `runCodexEnvironmentAction` returns. On
+ * Windows that open handle blocks the temp-dir cleanup with
+ * `EBUSY: resource busy or locked, rmdir` until the process fully exits —
+ * POSIX can unlink a directory that still has open handles, Windows cannot.
+ *
+ * Waiting for the action's output *file* is not sufficient: it is written
+ * while the child is still alive. The detached-exit handler flips the run's
+ * status to a terminal value ("exited"/"failed") once the child's `close`
+ * event fires, so gate temp-dir cleanup on that terminal status — the same
+ * pattern the concurrent-runs test uses — to guarantee the process is gone
+ * before we remove its working directory. The `rm` retry options remain as a
+ * backstop for Windows' lazy post-exit handle release.
+ */
+async function waitForDetachedActionRunToExit(
+  overlayStore: OverlayStoreLike,
+  params: { backend: "codex" | "grok"; threadId: string; actionId: string },
+): Promise<void> {
+  await expectEventually(async () => {
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const run = overlay?.codexEnvironmentRuntime?.actionRuns?.find(
+      (candidate) => candidate.actionId === params.actionId,
+    );
+    return run?.status === "exited" || run?.status === "failed";
+  }, true);
+}
+
 class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -7161,6 +7193,13 @@ command = '''printf action-ran > ${shellOutputPath}'''
         },
       });
       await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
+      // Gate cleanup on the detached child fully exiting (see helper) so the
+      // temp dir it spawned into is no longer locked when we remove it.
+      await waitForDetachedActionRunToExit(overlayStore, {
+        backend: "codex",
+        threadId: "thread-1",
+        actionId: "dev-messaging",
+      });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -7258,6 +7297,13 @@ command = '''printf action-ran > ${shellOutputPath}'''
           cwd: worktreePath,
         },
       });
+      // Gate cleanup on the detached child fully exiting (see helper) so the
+      // worktree dir it ran in is no longer locked when we remove it.
+      await waitForDetachedActionRunToExit(overlayStore, {
+        backend: "codex",
+        threadId: "thread-1",
+        actionId: "capture-cwd",
+      });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -7343,6 +7389,13 @@ command = '''printf action-ran > ${shellOutputPath}'''
           ),
         (await realpath(localPath)).replace(/\\/g, "/"),
       );
+      // Gate cleanup on the detached child fully exiting (see helper) so the
+      // dir it ran in is no longer locked when we remove it.
+      await waitForDetachedActionRunToExit(overlayStore, {
+        backend: "codex",
+        threadId: "thread-1",
+        actionId: "capture-cwd",
+      });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

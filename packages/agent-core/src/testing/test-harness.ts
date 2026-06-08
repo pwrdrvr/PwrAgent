@@ -129,7 +129,21 @@ export async function createTemporaryTestDirectory(): Promise<{
   return {
     path: tempPath,
     cleanup: async () => {
-      await fs.rm(tempPath, { recursive: true, force: true });
+      // Tests that start a thread with a cwd inside this temp dir spawn
+      // short-lived git/shell subprocesses (e.g. the directory enricher) whose
+      // working-directory handle Windows releases lazily — a few milliseconds
+      // *after* the process has already exited. The awaited operations
+      // guarantee the process is gone by the time we clean up, but on Windows
+      // that lingering handle still blocks `rmdir` with `EBUSY` on the first
+      // attempt. POSIX can unlink a directory with open handles; Windows
+      // cannot. The retry/backoff is the backstop for that post-exit window —
+      // a no-op on POSIX, where the first `rm` already succeeds.
+      await fs.rm(tempPath, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     },
   };
 }
