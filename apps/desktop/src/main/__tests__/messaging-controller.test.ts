@@ -1337,11 +1337,11 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Binding: Thread one"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Tool updates: Show Some"),
+      text: expect.stringContaining("Tool updates: Some"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "status:tool-updates",
-          label: "Tools: Show Some",
+          label: "Tools: Some",
           fallbackText: "tools",
         }),
         expect.objectContaining({
@@ -3489,6 +3489,122 @@ describe("MessagingController", () => {
     });
   });
 
+  it("lets messaging choose a Codex environment before starting a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentId: "repo",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+        codexEnvironmentOptions: [
+          {
+            id: "repo",
+            name: "Repo Env",
+            sourcePath: "/repo/pwragent/.codex/environments/repo.toml",
+            setupScript: "pnpm install",
+            actions: [],
+          },
+          {
+            id: "ci",
+            name: "CI Env",
+            sourcePath: "/repo/pwragent/.codex/environments/ci.toml",
+            setupScript: "pnpm test",
+            actions: [],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: Repo Env"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:environment",
+          label: "Environment: Repo Env",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:environment" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Environment",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "None",
+          value: { environmentId: null },
+        }),
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "Repo Env (current)",
+          value: { environmentId: "repo" },
+        }),
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "CI Env",
+          value: { environmentId: "ci" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "ci" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: CI Env"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use CI env"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        launchpad: expect.objectContaining({
+          codexEnvironmentId: "ci",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentSetupEnabled: true,
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+  });
+
   it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
@@ -3525,17 +3641,23 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Permissions: Full"),
+      body: expect.stringContaining("Permissions: Agent default"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:permissions",
-          label: "Permissions: Full",
+          label: "Permissions: Agent default",
         }),
       ]),
     });
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "default" },
+      }),
     );
 
     const defaultReadyIntent = harness.delivered.at(-1);
@@ -3571,7 +3693,7 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
-  it("does not label ACP model config as runtime mode in the new-thread prompt", async () => {
+  it("does not label ACP model config as permissions in the new-thread prompt", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
       ...navigation.launchpadDefaults,
@@ -3615,17 +3737,17 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Agent default"),
+      body: expect.stringContaining("Permissions: Agent default"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       body: expect.stringContaining("Model: gemini-3-flash-preview"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      body: expect.not.stringContaining("Runtime mode: Gemini 3 Flash Preview"),
+      body: expect.not.stringContaining("Permissions: Gemini 3 Flash Preview"),
     });
   });
 
-  it("lets ACP messaging choose a runtime mode before starting a new thread", async () => {
+  it("lets ACP messaging choose a permissions before starting a new thread", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
       ...navigation.launchpadDefaults,
@@ -3658,22 +3780,22 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Default"),
+      body: expect.stringContaining("Permissions: Default"),
       actions: expect.arrayContaining([
         expect.objectContaining({
-          id: "browse:new:runtime-mode",
-          label: "Runtime: Default",
+          id: "browse:new:permissions",
+          label: "Permissions: Default",
         }),
       ]),
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "browse:new:runtime-mode" }),
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "Select runtime mode",
+      title: "Select permissions",
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:set-runtime-mode",
@@ -3702,7 +3824,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringMatching(
-        /Permissions: Full[\s\S]*Runtime mode: Yolo|Runtime mode: Yolo[\s\S]*Permissions: Full/,
+        /Permissions: Yolo/,
       ),
     });
 
@@ -3781,16 +3903,16 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Yolo"),
+      body: expect.stringContaining("Permissions: Yolo"),
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "browse:new:runtime-mode" }),
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "Select runtime mode",
+      title: "Select permissions",
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:set-runtime-mode",
@@ -3839,11 +3961,11 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Permissions: Full"),
+      body: expect.stringContaining("Permissions: Default"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:permissions",
-          label: "Permissions: Full",
+          label: "Permissions: Default",
         }),
       ]),
     });
@@ -3854,18 +3976,17 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "Ready to start",
-      body: expect.not.stringContaining("Permissions: Full"),
-      actions: expect.not.arrayContaining([
+      title: "Select permissions",
+      actions: expect.arrayContaining([
         expect.objectContaining({
-          id: "browse:new:permissions",
-          label: "Permissions: Full",
+          id: "browse:new:set-runtime-mode",
+          label: "Yolo",
         }),
       ]),
     });
   });
 
-  it("warning-gates risky ACP runtime modes from messaging", async () => {
+  it("warning-gates risky ACP permissions from messaging", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
       ...navigation.launchpadDefaults,
@@ -3937,7 +4058,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Yolo"),
+      body: expect.stringContaining("Permissions: Yolo"),
     });
   });
 
@@ -4084,7 +4205,7 @@ describe("MessagingController", () => {
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:environment",
-          label: "Env: none",
+          label: "Environment: None",
         }),
       ]),
     });
@@ -4094,9 +4215,9 @@ describe("MessagingController", () => {
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "Select environment",
-      actions: expect.arrayContaining([
+      kind: "single_select",
+      prompt: "Select Environment",
+      choices: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:set-environment",
           label: "Dev Environment",
@@ -4128,7 +4249,7 @@ describe("MessagingController", () => {
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:environment",
-          label: "Env: Dev Environment",
+          label: "Environment: Dev Environment",
         }),
       ]),
     });
@@ -8025,6 +8146,24 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:permissions" }),
     );
 
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Permissions",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-permissions",
+          label: "Full Access",
+          value: { executionMode: "full-access" },
+        }),
+      ]),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
     expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -8060,6 +8199,12 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
     );
 
     expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
@@ -8100,6 +8245,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
 
     expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
     const warning = harness.delivered.at(-1);
@@ -8111,7 +8262,9 @@ describe("MessagingController", () => {
         mode: "update",
         replaceMarkup: true,
       },
-      targetSurface: binding?.statusSurface,
+      targetSurface: expect.objectContaining({
+        channel: "telegram",
+      }),
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "full-access-risk:accept", label: "Yes" }),
         expect.objectContaining({
@@ -8160,6 +8313,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
 
     const warning = harness.delivered.at(-1);
     expect(warning).toMatchObject({
@@ -8191,6 +8350,12 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
     );
     const warning = harness.delivered.at(-1);
     allowEscalation = false;
@@ -8236,6 +8401,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
 
     const warning = harness.delivered.at(-1);
     expect(warning).toMatchObject({
@@ -8245,7 +8416,9 @@ describe("MessagingController", () => {
         mode: "update",
         replaceMarkup: true,
       },
-      targetSurface: binding?.statusSurface,
+      targetSurface: expect.objectContaining({
+        channel: "telegram",
+      }),
     });
 
     await harness.controller.handleInboundEvent(
@@ -8260,7 +8433,9 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: binding?.statusSurface,
+      targetSurface: warning && "targetSurface" in warning
+        ? warning.targetSurface
+        : undefined,
       text: expect.stringContaining("Permissions: Full Access"),
     });
   });
@@ -8284,6 +8459,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
 
     const warning = harness.delivered.at(-1);
     await harness.controller.handleInboundEvent(
@@ -8299,7 +8480,9 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: binding?.statusSurface,
+      targetSurface: warning && "targetSurface" in warning
+        ? warning.targetSurface
+        : undefined,
       text: expect.stringContaining("Permissions: Default"),
     });
   });
@@ -8376,6 +8559,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:permissions" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
 
     const warning = harness.delivered.at(-1);
     expect(warning).toMatchObject({
@@ -8385,9 +8574,9 @@ describe("MessagingController", () => {
         mode: "update",
         replaceMarkup: true,
       },
-      targetSurface: {
-        id: `surface:${readyIntent?.id}`,
-      },
+      targetSurface: expect.objectContaining({
+        id: expect.stringMatching(/^surface:new-thread-permissions:/),
+      }),
     });
 
     await harness.controller.handleInboundEvent(
@@ -8404,9 +8593,9 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: {
-        id: `surface:${readyIntent?.id}`,
-      },
+      targetSurface: warning && "targetSurface" in warning
+        ? warning.targetSurface
+        : undefined,
     });
   });
 
@@ -9267,7 +9456,7 @@ describe("MessagingController", () => {
     );
   });
 
-  it("lets ACP messaging change runtime mode from the status card", async () => {
+  it("lets ACP messaging change permissions from the status card", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -9299,22 +9488,22 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Runtime mode: Default"),
+      text: expect.stringContaining("Permissions: Default"),
       actions: expect.arrayContaining([
         expect.objectContaining({
-          id: "status:runtime-mode",
-          label: "Runtime: Default",
+          id: "status:permissions",
+          label: "Permissions: Default",
         }),
       ]),
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "status:runtime-mode" }),
+      buildCallbackEvent({ actionId: "status:permissions" }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
-      prompt: "Select Runtime Mode",
+      prompt: "Select Permissions",
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "status:set-runtime-mode",
@@ -9392,7 +9581,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Show Less"),
+      text: expect.stringContaining("Tool updates: Few"),
     });
 
     await harness.controller.handleInboundEvent(
@@ -9400,8 +9589,26 @@ describe("MessagingController", () => {
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Tools",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-tool-updates",
+          label: "Some",
+          value: { toolUpdateMode: "show_some" },
+        }),
+      ]),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-tool-updates",
+        value: { toolUpdateMode: "show_some" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Show Some"),
+      text: expect.stringContaining("Tool updates: Some"),
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
@@ -9412,20 +9619,30 @@ describe("MessagingController", () => {
     });
   });
 
-  it("cycles the tool update status action through all modes and wraps", async () => {
+  it("sets the tool update status action through the picker", async () => {
     const harness = await createHarness();
     await bindThread(harness);
     harness.delivered.length = 0;
 
-    for (const expected of [
-      "Show More",
-      "Show All",
-      "Show None",
-      "Show Less",
-      "Show Some",
-    ]) {
+    for (const [toolUpdateMode, expected] of [
+      ["show_more", "More"],
+      ["show_all", "All"],
+      ["show_none", "None"],
+      ["show_less", "Few"],
+      ["show_some", "Some"],
+    ] as const) {
       await harness.controller.handleInboundEvent(
         buildCallbackEvent({ actionId: "status:tool-updates" }),
+      );
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "single_select",
+        prompt: "Select Tools",
+      });
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({
+          actionId: "status:set-tool-updates",
+          value: { toolUpdateMode },
+        }),
       );
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",

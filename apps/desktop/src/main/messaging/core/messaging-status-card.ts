@@ -1,6 +1,7 @@
 import type {
   AppServerBackendKind,
   BackendSummary,
+  CodexEnvironmentOption,
   HandoffThreadWorkspaceRequest,
   MessagingToolUpdateMode,
   ThreadExecutionMode,
@@ -106,18 +107,14 @@ export function buildBindingStatusIntent(params: {
     streamingMode,
     params.streamingResponsesDefault,
   );
-  const acpRuntimeLabel = isAcpBackendId(params.binding.backend)
+  const acpRuntimeMode = isAcpBackendId(params.binding.backend)
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
-      }).currentLabel
+      })
     : undefined;
-  const acpRuntimeChoices = isAcpBackendId(params.binding.backend)
-    ? buildMessagingAcpRuntimeModeSummary({
-        backend: params.backendSummary,
-        runtime: params.threadState.acpRuntime,
-      }).choices
-    : [];
+  const acpRuntimeLabel = acpRuntimeMode?.currentLabel;
+  const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
 
   return {
     id: params.id,
@@ -142,9 +139,10 @@ export function buildBindingStatusIntent(params: {
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastModeLabel}`,
-      acpRuntimeLabel
-        ? `Runtime mode: ${acpRuntimeLabel}`
-        : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
+      `Permissions: ${
+        acpRuntimeLabel ??
+        formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)
+      }`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
       params.binding.pendingSkillSelection
@@ -164,8 +162,10 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
-      runtimeChoices: acpRuntimeChoices,
-      supportsPermissionsAction: !acpRuntimeLabel,
+      permissionsChoices: acpRuntimeChoices,
+      supportsLegacyPermissionsAction:
+        !isAcpBackendId(params.binding.backend) ||
+        permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
       streamingMode,
@@ -384,8 +384,8 @@ function buildStatusActions(params: {
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
-  runtimeChoices?: MessagingAcpRuntimeModeChoice[];
-  supportsPermissionsAction?: boolean;
+  permissionsChoices?: MessagingAcpRuntimeModeChoice[];
+  supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
   streamingMode: MessagingStreamingResponseMode;
@@ -400,31 +400,23 @@ function buildStatusActions(params: {
   const permissionsAction:
     | MessagingSurfaceAction
     | undefined =
-    params.supportsPermissionsAction !== false &&
-    (params.permissionsMode === "full-access" || params.allowFullAccessEscalation !== false)
+    params.permissionsChoices?.length ||
+    (params.supportsLegacyPermissionsAction !== false &&
+      (params.permissionsMode === "full-access" ||
+        params.allowFullAccessEscalation !== false))
       ? {
           id: "status:permissions",
-          label: formatPermissionsActionLabel(
-            params.permissionsMode,
-            params.queuedExecutionMode,
-          ),
+          label: params.permissionsChoices?.length
+            ? `Permissions: ${
+                params.permissionsChoices.find((choice) => choice.selected)?.label ??
+                "Agent default"
+              }`
+            : formatPermissionsActionLabel(
+                params.permissionsMode,
+                params.queuedExecutionMode,
+              ),
           style: "secondary",
           fallbackText: "permissions",
-          priority: 7,
-        }
-      : undefined;
-  const runtimeAction:
-    | MessagingSurfaceAction
-    | undefined =
-    params.runtimeChoices && params.runtimeChoices.length > 0
-      ? {
-          id: "status:runtime-mode",
-          label: `Runtime: ${
-            params.runtimeChoices.find((choice) => choice.selected)?.label ??
-            "Agent default"
-          }`,
-          style: "secondary",
-          fallbackText: "runtime",
           priority: 7,
         }
       : undefined;
@@ -451,7 +443,6 @@ function buildStatusActions(params: {
       priority: 6,
     },
     ...(permissionsAction ? [permissionsAction] : []),
-    ...(runtimeAction ? [runtimeAction] : []),
     ...(params.handoff
       ? [
           {
@@ -622,16 +613,32 @@ export function formatMessagingToolUpdateModeLabel(
 ): string {
   switch (mode) {
     case "show_none":
-      return "Show None";
+      return "None";
     case "show_less":
-      return "Show Less";
+      return "Few";
     case "show_some":
-      return "Show Some";
+      return "Some";
     case "show_more":
-      return "Show More";
+      return "More";
     case "show_all":
-      return "Show All";
+      return "All";
   }
+}
+
+export type MessagingToolUpdateModeChoice = {
+  current?: boolean;
+  label: string;
+  mode: MessagingToolUpdateMode;
+};
+
+export function messagingToolUpdateModeChoices(
+  currentMode: MessagingToolUpdateMode,
+): MessagingToolUpdateModeChoice[] {
+  return TOOL_UPDATE_MODE_ORDER.map((mode) => ({
+    current: mode === currentMode,
+    label: formatMessagingToolUpdateModeLabel(mode),
+    mode,
+  }));
 }
 
 export function buildHandoffOverviewIntent(params: {
@@ -1144,6 +1151,7 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
   choices: MessagingAcpRuntimeModeChoice[];
   createdAt: number;
   id: string;
+  prompt?: string;
 }): MessagingSingleSelectIntent {
   return {
     id: params.id,
@@ -1155,8 +1163,8 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
       fallback: "present_new",
     },
     targetSurface: params.binding.statusSurface,
-    fallbackText: "Reply with a runtime mode number, Refresh, or Detach.",
-    prompt: "Select Runtime Mode",
+    fallbackText: "Reply with a permissions option number, Back, or Cancel.",
+    prompt: params.prompt ?? "Select Permissions",
     choices: applyActionCapabilityLimits(
       [
         ...params.choices.map((choice, index) => ({
@@ -1173,6 +1181,153 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
         })),
         {
           id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusPermissionsPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  currentMode: ThreadExecutionMode;
+  id: string;
+}): MessagingSingleSelectIntent {
+  const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
+    { label: "Default", mode: "default" },
+    { label: "Full Access", mode: "full-access" },
+  ];
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a permissions option number, Back, or Cancel.",
+    prompt: "Select Permissions",
+    choices: applyActionCapabilityLimits(
+      [
+        ...choices.map((choice, index) => ({
+          id: "status:set-permissions",
+          label: `${choice.label}${choice.mode === params.currentMode ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            executionMode: choice.mode,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusToolUpdateModePickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  choices: MessagingToolUpdateModeChoice[];
+  createdAt: number;
+  id: string;
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a tools option number, Back, or Cancel.",
+    prompt: "Select Tools",
+    choices: applyActionCapabilityLimits(
+      [
+        ...params.choices.map((choice, index) => ({
+          id: "status:set-tool-updates",
+          label: `${choice.label}${choice.current ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            toolUpdateMode: choice.mode,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildNewThreadEnvironmentPickerIntent(params: {
+  browseSessionId: string;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  currentEnvironmentId?: string | null;
+  id: string;
+  options: CodexEnvironmentOption[];
+  targetSurface?: MessagingStatusIntent["targetSurface"];
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    browseSessionId: params.browseSessionId,
+    createdAt: params.createdAt,
+    delivery: params.targetSurface
+      ? { mode: "update", replaceMarkup: true }
+      : undefined,
+    targetSurface: params.targetSurface,
+    fallbackText: "Reply with an environment number, Back, or Cancel.",
+    prompt: "Select Environment",
+    choices: applyActionCapabilityLimits(
+      [
+        {
+          id: "browse:new:set-environment",
+          label: `None${params.currentEnvironmentId ? "" : " (current)"}`,
+          fallbackText: "none",
+          style: "secondary" as const,
+          priority: 10,
+          value: {
+            environmentId: null,
+          },
+        },
+        ...params.options.map((option, index) => ({
+          id: "browse:new:set-environment",
+          label: `${option.name}${option.id === params.currentEnvironmentId ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 20 + index,
+          value: {
+            environmentId: option.id,
+          },
+        })),
+        {
+          id: "browse:new:environment:back",
           label: "Back",
           fallbackText: "back",
           style: "secondary" as const,

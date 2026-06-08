@@ -539,7 +539,7 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
-  it("renders ACP runtime mode instead of Codex permission controls", () => {
+  it("renders ACP permissions instead of Codex permission controls", () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults.acpRuntime = {
       currentModeId: "default",
@@ -567,22 +567,16 @@ describe("buildBindingStatusIntent", () => {
     });
 
     expect(intent.text).toContain("Binding: Thread one (acp:gemini)");
-    expect(intent.text).toContain("Runtime mode: Yolo");
-    expect(intent.text).not.toContain("Permissions:");
+    expect(intent.text).toContain("Permissions: Yolo");
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
-        id: "status:runtime-mode",
-        label: "Runtime: Yolo",
-      }),
-    );
-    expect(intent.actions).not.toContainEqual(
-      expect.objectContaining({
         id: "status:permissions",
+        label: "Permissions: Yolo",
       }),
     );
   });
 
-  it("does not treat ACP model config values as runtime modes", () => {
+  it("does not treat ACP model config values as permissions", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -630,11 +624,11 @@ describe("buildBindingStatusIntent", () => {
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Runtime mode: Agent default");
-    expect(intent.text).not.toContain("Runtime mode: Gemini 3 Flash Preview");
+    expect(intent.text).toContain("Permissions: Agent default");
+    expect(intent.text).not.toContain("Permissions: Gemini 3 Flash Preview");
     expect(intent.actions).not.toContainEqual(
       expect.objectContaining({
-        id: "status:runtime-mode",
+        id: "status:permissions",
       }),
     );
   });
