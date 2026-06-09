@@ -254,6 +254,32 @@ function isWindowCreationBlocked(): boolean {
   return quitInProgress || mainProcessResourcesDisposed;
 }
 
+/**
+ * Closing the primary window quits the whole app. PwrAgent has no tray and no
+ * dock/reopen path we want to support, so once the main window is gone there's
+ * no way back to it — and any still-open aux windows (Changelog / Logs /
+ * License / Messaging Activity) must not keep a headless, unreachable app
+ * alive. Mirror the before-quit / window-all-closed flow: hold the window open
+ * until an in-progress-thread quit is confirmed, then let app.quit() tear
+ * everything (incl. aux windows) down. Once a quit is allowed/underway,
+ * isQuitAllowed() is true and we let the close proceed — that also covers
+ * app.quit() re-closing this window during teardown, so there's no loop.
+ */
+function quitAppOnMainWindowClose(window: BrowserWindow): void {
+  window.on("close", (event) => {
+    if (appQuitManager.isQuitAllowed()) {
+      return;
+    }
+    event.preventDefault();
+    beginQuitInProgress("main-window-closed");
+    void requestQuit({ source: "main-window-closed" }).then((didQuit) => {
+      if (!didQuit) {
+        cancelQuitInProgress("main-window-closed");
+      }
+    });
+  });
+}
+
 function installProcessShutdownHandlers(): void {
   const handleSignal = (signal: NodeJS.Signals): void => {
     mainLog.info("main process shutdown signal received", { signal });
@@ -296,10 +322,12 @@ function focusPwrAgentWindows(): void {
       Boolean(window && !window.isDestroyed()),
   );
   if (windows.length === 0) {
-    createMainWindow(
-      startupCpuProfilerForNewWindows
-        ? { startupCpuProfiler: startupCpuProfilerForNewWindows }
-        : undefined,
+    quitAppOnMainWindowClose(
+      createMainWindow(
+        startupCpuProfilerForNewWindows
+          ? { startupCpuProfiler: startupCpuProfilerForNewWindows }
+          : undefined,
+      ),
     );
     app.focus({ steal: true });
     return;
@@ -603,9 +631,11 @@ export function bootstrapApp(): void {
     // current snapshot. When messaging is disabled the runtime singleton
     // still exists (default config); status returns []  / never emits.
     registerMessagingStatusIpcHandlers();
-    createMainWindow({
-      startupCpuProfiler,
-    });
+    quitAppOnMainWindowClose(
+      createMainWindow({
+        startupCpuProfiler,
+      }),
+    );
     prewarmInitialThreadList();
 
     // Wire up auto-update *after* the window is created so a slow update
@@ -618,9 +648,11 @@ export function bootstrapApp(): void {
         return;
       }
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow({
-          startupCpuProfiler,
-        });
+        quitAppOnMainWindowClose(
+          createMainWindow({
+            startupCpuProfiler,
+          }),
+        );
       }
     });
   });
