@@ -22,17 +22,25 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  placementForSourceDisplay,
+  positionWindowForSourceDisplay,
+  type WindowPlacementSource,
+} from "./window-placement";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
 const THIRD_PARTY_NOTICES_HASH = "third-party-notices";
+const LICENSE_DOCUMENT_WINDOW_WIDTH = 920;
+const LICENSE_DOCUMENT_WINDOW_HEIGHT = 760;
 
 let licenseWindow: BrowserWindow | undefined;
 let thirdPartyNoticesWindow: BrowserWindow | undefined;
 
-export function showLicenseWindow(): void {
+export function showLicenseWindow(source: WindowPlacementSource = {}): void {
   showLicenseDocumentWindow({
     hash: LICENSE_HASH,
+    source,
     title: "License",
     windowRef: () => licenseWindow,
     setWindowRef: (window) => {
@@ -41,9 +49,12 @@ export function showLicenseWindow(): void {
   });
 }
 
-export function showThirdPartyNoticesWindow(): void {
+export function showThirdPartyNoticesWindow(
+  source: WindowPlacementSource = {},
+): void {
   showLicenseDocumentWindow({
     hash: THIRD_PARTY_NOTICES_HASH,
+    source,
     title: "Third-Party Notices",
     windowRef: () => thirdPartyNoticesWindow,
     setWindowRef: (window) => {
@@ -54,20 +65,27 @@ export function showThirdPartyNoticesWindow(): void {
 
 function showLicenseDocumentWindow(options: {
   hash: string;
+  source: WindowPlacementSource;
   title: string;
   windowRef: () => BrowserWindow | undefined;
   setWindowRef: (window: BrowserWindow | undefined) => void;
 }): void {
   const existingWindow = options.windowRef();
   if (existingWindow && !existingWindow.isDestroyed()) {
+    positionWindowForSourceDisplay(existingWindow, options.source);
     showAndFocusAuxiliaryWindow(existingWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 920,
-    height: 760,
+    ...placementForSourceDisplay(
+      LICENSE_DOCUMENT_WINDOW_WIDTH,
+      LICENSE_DOCUMENT_WINDOW_HEIGHT,
+      options.source,
+    ),
+    width: LICENSE_DOCUMENT_WINDOW_WIDTH,
+    height: LICENSE_DOCUMENT_WINDOW_HEIGHT,
     minWidth: 640,
     minHeight: 480,
     show: false,

@@ -25,23 +25,32 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  placementForSourceDisplay,
+  positionWindowForSourceDisplay,
+  type WindowPlacementSource,
+} from "./window-placement";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
 const LOGS_WINDOW_TITLE = "Logs";
+const LOGS_WINDOW_WIDTH = 1040;
+const LOGS_WINDOW_HEIGHT = 760;
 
 let appLogWindow: BrowserWindow | undefined;
 
-export function showAppLogWindow(): void {
+export function showAppLogWindow(source: WindowPlacementSource = {}): void {
   if (appLogWindow && !appLogWindow.isDestroyed()) {
+    positionWindowForSourceDisplay(appLogWindow, source);
     showAndFocusAuxiliaryWindow(appLogWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 1040,
-    height: 760,
+    ...placementForSourceDisplay(LOGS_WINDOW_WIDTH, LOGS_WINDOW_HEIGHT, source),
+    width: LOGS_WINDOW_WIDTH,
+    height: LOGS_WINDOW_HEIGHT,
     minWidth: 700,
     minHeight: 500,
     show: false,

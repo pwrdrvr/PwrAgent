@@ -22,9 +22,16 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  placementForSourceDisplay,
+  positionWindowForSourceDisplay,
+  type WindowPlacementSource,
+} from "./window-placement";
 
 const log = getMainLogger("pwragent:activity-window");
 const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
+const ACTIVITY_WINDOW_WIDTH = 980;
+const ACTIVITY_WINDOW_HEIGHT = 720;
 
 /**
  * Hash that the renderer (`main.tsx`) reads to decide whether to mount
@@ -46,16 +53,24 @@ let activityWindow: BrowserWindow | undefined;
  * Closing the window does NOT affect the main window. Reopening
  * focuses the existing window when one is already open.
  */
-export function showMessagingActivityWindow(): void {
+export function showMessagingActivityWindow(
+  source: WindowPlacementSource = {},
+): void {
   if (activityWindow && !activityWindow.isDestroyed()) {
+    positionWindowForSourceDisplay(activityWindow, source);
     showAndFocusAuxiliaryWindow(activityWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 980,
-    height: 720,
+    ...placementForSourceDisplay(
+      ACTIVITY_WINDOW_WIDTH,
+      ACTIVITY_WINDOW_HEIGHT,
+      source,
+    ),
+    width: ACTIVITY_WINDOW_WIDTH,
+    height: ACTIVITY_WINDOW_HEIGHT,
     minWidth: 640,
     minHeight: 480,
     show: false,

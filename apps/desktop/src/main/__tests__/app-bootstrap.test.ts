@@ -35,6 +35,10 @@ const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => 
   popup: menuPopupMock,
   template,
 }));
+const getCursorScreenPointMock = vi.fn(() => ({ x: 100, y: 100 }));
+const getDisplayNearestPointMock = vi.fn(() => ({
+  workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+}));
 const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(this: unknown) {
   return {
     start: rendererMonitorStartMock,
@@ -162,6 +166,10 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: shellOpenExternalMock
+  },
+  screen: {
+    getCursorScreenPoint: getCursorScreenPointMock,
+    getDisplayNearestPoint: getDisplayNearestPointMock
   }
 }));
 
@@ -209,6 +217,12 @@ describe("createMainWindow", () => {
     mainMonitorStartMock.mockReset();
     mainMonitorStopMock.mockReset();
     shellOpenExternalMock.mockReset();
+    getCursorScreenPointMock.mockClear();
+    getCursorScreenPointMock.mockReturnValue({ x: 100, y: 100 });
+    getDisplayNearestPointMock.mockClear();
+    getDisplayNearestPointMock.mockReturnValue({
+      workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    });
     clipboardWriteTextMock.mockReset();
     addWordToSpellCheckerDictionaryMock.mockReset();
     replaceMisspellingMock.mockReset();
@@ -233,6 +247,12 @@ describe("createMainWindow", () => {
     createMainWindow();
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
+    expect(browserWindowState.options).toMatchObject({
+      x: 240,
+      y: 60,
+      width: 1440,
+      height: 960,
+    });
     expect(
       browserWindowState.options?.webPreferences?.preload?.replace(/\\/g, "/")
     ).toContain("preload/index.cjs");

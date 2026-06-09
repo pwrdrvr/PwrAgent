@@ -51,6 +51,9 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  BrowserWindow: {
+    fromWebContents: vi.fn(),
+  },
   ipcMain: {
     handle: vi.fn(
       (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {

@@ -22,23 +22,36 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  placementForSourceDisplay,
+  positionWindowForSourceDisplay,
+  type WindowPlacementSource,
+} from "./window-placement";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
 const CHANGELOG_WINDOW_TITLE = "Changelog";
+const CHANGELOG_WINDOW_WIDTH = 920;
+const CHANGELOG_WINDOW_HEIGHT = 760;
 
 let changelogWindow: BrowserWindow | undefined;
 
-export function showChangelogWindow(): void {
+export function showChangelogWindow(source: WindowPlacementSource = {}): void {
   if (changelogWindow && !changelogWindow.isDestroyed()) {
+    positionWindowForSourceDisplay(changelogWindow, source);
     showAndFocusAuxiliaryWindow(changelogWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 920,
-    height: 760,
+    ...placementForSourceDisplay(
+      CHANGELOG_WINDOW_WIDTH,
+      CHANGELOG_WINDOW_HEIGHT,
+      source,
+    ),
+    width: CHANGELOG_WINDOW_WIDTH,
+    height: CHANGELOG_WINDOW_HEIGHT,
     minWidth: 640,
     minHeight: 480,
     show: false,
