@@ -28,6 +28,8 @@ let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
 let periodicUpdateCheckTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
+let configuredUpdateChannel: "latest" | "prerelease" | undefined;
+let downloadedUpdateChannel: "latest" | "prerelease" | undefined;
 
 type GitHubRelease = {
   draft?: boolean;
@@ -39,6 +41,9 @@ type GitHubRelease = {
 };
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
+  if (nextStatus.status !== "downloaded") {
+    downloadedUpdateChannel = undefined;
+  }
   updateStatus = nextStatus;
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) {
@@ -63,8 +68,10 @@ function currentUpdateChannel(): "latest" | "prerelease" {
   }
 }
 
-function configureAutoUpdaterChannel(): void {
-  const updateChannel = currentUpdateChannel();
+function configureAutoUpdaterChannel(
+  updateChannel: "latest" | "prerelease" = currentUpdateChannel(),
+): void {
+  configuredUpdateChannel = updateChannel;
   autoUpdater.allowPrerelease = updateChannel === "prerelease";
   log.info("configured auto-update channel", {
     allowPrerelease: autoUpdater.allowPrerelease,
@@ -120,6 +127,18 @@ function setUpdateStatusUnlessDownloaded(nextStatus: AppUpdateStatus): void {
   setUpdateStatus(nextStatus);
 }
 
+function downloadedUpdateMatchesChannel(
+  updateChannel: "latest" | "prerelease",
+): Extract<AppUpdateCheckResult, { status: "downloaded" }> | undefined {
+  if (
+    updateStatus.status !== "downloaded" ||
+    downloadedUpdateChannel !== updateChannel
+  ) {
+    return undefined;
+  }
+  return { status: "downloaded", version: updateStatus.version };
+}
+
 export async function checkForAppUpdatesNow(
   trigger: "startup" | "periodic" | "manual" | "menu" = "manual",
 ): Promise<AppUpdateCheckResult> {
@@ -142,8 +161,18 @@ export async function checkForAppUpdatesNow(
 
   updateCheckInFlight = (async () => {
     try {
+      const updateChannel = currentUpdateChannel();
+      const downloadedResult = downloadedUpdateMatchesChannel(updateChannel);
+      if (downloadedResult) {
+        log.info("skipping app update check; update already downloaded", {
+          trigger,
+          updateChannel,
+          version: downloadedResult.version,
+        });
+        return downloadedResult;
+      }
       log.info("checking for app updates", { trigger });
-      configureAutoUpdaterChannel();
+      configureAutoUpdaterChannel(updateChannel);
       const result = await autoUpdater.checkForUpdates();
       if (updateStatus.status === "downloaded") {
         return { status: "downloaded", version: updateStatus.version };
@@ -387,6 +416,7 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("update-downloaded", { version: info.version });
+    downloadedUpdateChannel = configuredUpdateChannel;
     setUpdateStatus({ status: "downloaded", version: info.version });
   });
   autoUpdater.on("error", (err: Error) => {
