@@ -461,9 +461,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           aria-label="Context panels"
         >
           {topTabs.map((tab) => renderTab(tab))}
-        </div>
-        <div className="context-rail__spine-bottom">
+          {bottomTabs.length > 0 ? (
+            <div className="context-rail__tablist-spacer" aria-hidden="true" />
+          ) : null}
           {bottomTabs.map((tab) => renderTab(tab))}
+        </div>
+        <div className="context-rail__spine-footer">
           <button
             aria-label={pinned ? "Unpin context rail" : "Pin context rail"}
             aria-pressed={pinned}

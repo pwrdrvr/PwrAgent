@@ -8951,19 +8951,28 @@ textarea,
   background: var(--bg-panel-elevated);
 }
 
+/* The tablist fills the spine so the spacer can push the bottom-anchored
+   tab (Provider status) down. Every role="tab" must live inside this
+   role="tablist" (axe aria-required-parent), so bottom tabs render here
+   too — only the pin toggle sits in the footer below. */
 .context-rail__tablist {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  width: 100%;
 }
 
-.context-rail__spine-bottom {
+.context-rail__tablist-spacer {
+  flex: 1 1 auto;
+}
+
+.context-rail__spine-footer {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  margin-top: auto;
 }
 
 .context-rail__resize-handle {
@@ -11812,13 +11821,18 @@ textarea,
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  .context-rail__tablist,
-  .context-rail__spine-bottom {
+  .context-rail__tablist {
+    flex: 0 0 auto;
     flex-direction: row;
+    width: auto;
   }
 
-  .context-rail__spine-bottom {
-    margin-top: 0;
+  .context-rail__tablist-spacer {
+    display: none;
+  }
+
+  .context-rail__spine-footer {
+    flex-direction: row;
     margin-left: auto;
   }
 
