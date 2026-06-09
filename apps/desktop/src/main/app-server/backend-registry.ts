@@ -10349,6 +10349,10 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("starting managed task monitor thread", {
       cwd: cwd ?? null,
       executionMode,
+      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
+      shellEnvironmentKeyCount: overlay?.codexEnvironmentRuntime?.shellEnvironment
+        ? Object.keys(overlay.codexEnvironmentRuntime.shellEnvironment).length
+        : 0,
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
@@ -10364,6 +10368,9 @@ export class DesktopBackendRegistry {
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
+      ...(overlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
     });
     const turn = await client.startTurn({
       threadId: thread.threadId,
@@ -10373,10 +10380,14 @@ export class DesktopBackendRegistry {
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
+      ...(overlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
     });
 
     backendRegistryLog.info("managed task monitor turn started", {
       executionMode,
+      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
       monitorId: params.monitorId,
       monitorThreadId: turn.threadId,
       monitorTurnId: turn.turnId,
