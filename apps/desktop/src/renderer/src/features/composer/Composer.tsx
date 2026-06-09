@@ -2871,6 +2871,12 @@ export function Composer(props: ComposerProps) {
       reviewCommand.displayText
     );
     setActiveOptimisticMessageId(optimisticReviewId);
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    if (!options?.queued) {
+      clearComposerDraftSnapshot(composerScopeKey);
+      clearComposerDraft();
+      setReviewConfig(undefined);
+    }
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -2887,18 +2893,18 @@ export function Composer(props: ComposerProps) {
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
+          submittedSnapshot,
           "sent",
         );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setReviewConfig(undefined);
       }
     } catch (error) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
+      if (!options?.queued) {
+        applyRecoveredComposerDraft(submittedSnapshot);
+      }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       setInterrupting(false);
@@ -3085,6 +3091,15 @@ export function Composer(props: ComposerProps) {
       payload.imageParts
     );
     setActiveOptimisticMessageId(optimisticMessageId);
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    if (!queued) {
+      clearComposerDraftSnapshot(composerScopeKey);
+      clearComposerDraft();
+      setImageAttachments([]);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
+    }
 
     try {
       const response = await props.desktopApi.startTurn({
@@ -3113,19 +3128,19 @@ export function Composer(props: ComposerProps) {
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
+          submittedSnapshot,
           "sent",
         );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setImageAttachments([]);
-        if (collaborationMode) {
-          setPlanModeEnabled(false);
-        }
       }
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
+      }
+      if (!queued) {
+        applyRecoveredComposerDraft(submittedSnapshot);
+        if (collaborationMode) {
+          setPlanModeEnabled(true);
+        }
       }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);

@@ -1440,6 +1440,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
     expect(textarea).toBeEnabled();
+    expect(textarea).toHaveValue("");
 
     await act(async () => {
       resolveStartTurn?.({
@@ -1447,6 +1448,41 @@ describe("Composer", () => {
         threadId: "thread-1",
         turnId: "turn-1",
       });
+    });
+  });
+
+  it("restores the reply draft when starting a turn fails after clearing", async () => {
+    const startTurn = vi.fn(async () => {
+      throw new Error("Start failed");
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Failed send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Restore this draft" } });
+    await clickButton("Send");
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue("Restore this draft");
+      expect(screen.getByText("Start failed")).toBeInTheDocument();
     });
   });
 
@@ -4099,6 +4135,7 @@ describe("Composer", () => {
     expect(startReview).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("");
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
 
     await act(async () => {
