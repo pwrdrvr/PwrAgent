@@ -2084,7 +2084,7 @@ function isEligibleForGeneratedTitle(
   if (isInjectedContextPlaceholderTitle(thread.title)) {
     return true;
   }
-  if (thread.titleSource === "fallback" || thread.title === "Untitled thread") {
+  if (isFallbackPlaceholderTitle(thread.title)) {
     return true;
   }
 
@@ -2111,6 +2111,14 @@ function isInjectedContextPlaceholderTitle(title: string): boolean {
   return (
     normalizedTitle.startsWith("# agents.md instructions") ||
     normalizedTitle.startsWith("agents.md instructions for")
+  );
+}
+
+function isFallbackPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return (
+    normalizedTitle === "untitled thread" ||
+    normalizedTitle === "acp session"
   );
 }
 

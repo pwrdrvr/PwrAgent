@@ -9818,6 +9818,82 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not replace an existing ACP prompt-derived fallback title with a later prompt", async () => {
+    const acpBackendId = "acp:qwen" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "qwen-session-1",
+        title: "Run npm view openclaw",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "acp:qwen_title_generator_unavailable",
+      })),
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => sessions[0]!),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "qwen-session-1",
+        turnId: "turn-1",
+      })),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          ...createKimiAgentRecord(acpBackendId),
+          registryId: "qwen",
+          name: "Qwen Code",
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "qwen-session-1",
+      input: [{ type: "text", text: "what time is it?" }],
+    });
+    await flushAsync();
+    await flushAsync();
+
+    expect(titleService.generateTitle).not.toHaveBeenCalled();
+    expect(sessions[0]).toMatchObject({
+      title: "Run npm view openclaw",
+      titleSource: "fallback",
+    });
+
+    await registry.close();
+  });
+
   it("skips generated titles when the thread already has an explicit name", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

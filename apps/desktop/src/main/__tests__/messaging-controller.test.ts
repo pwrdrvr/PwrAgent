@@ -5862,6 +5862,38 @@ describe("MessagingController", () => {
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
   });
 
+  it("ignores assistant stream deltas that are not tied to a turn", async () => {
+    const harness = await createHarness();
+    await bindThreadToBackend(harness, "acp:kimi");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:kimi",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          itemId: "assistant:thread-1",
+          delta: "Prior turn replay should not be delivered.",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "acp:kimi",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+  });
+
   it("falls back with a final assistant message per binding", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({

@@ -1275,9 +1275,10 @@ export class AcpBackendAdapter {
           }
         }
         if (
-          updateKind === "agent_message_chunk" ||
-          (updateKind === "agent_thought_chunk" &&
-            shouldSurfaceAcpThoughtsAsMessages(agent.backendId))
+          turnId &&
+          (updateKind === "agent_message_chunk" ||
+            (updateKind === "agent_thought_chunk" &&
+              shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {

@@ -459,6 +459,79 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("does not emit replayed ACP assistant text without a live turn", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "This is prior turn thinking." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "This is a prior turn answer." },
+    });
+    await Promise.resolve();
+
+    expect(
+      events.filter(
+        (event) => event.notification.method === "item/agentMessage/delta",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("does not emit Qwen thought chunks as live assistant response text", async () => {
     const backendId = "acp:qwen" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
