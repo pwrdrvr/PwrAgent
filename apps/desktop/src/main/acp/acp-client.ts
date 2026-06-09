@@ -97,6 +97,10 @@ type AcpSessionLoadState = {
   suppressTranscriptReplay: boolean;
 };
 
+type AcpHydratedSessionHistory = {
+  isComplete: boolean;
+};
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
@@ -365,13 +369,16 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    const hasLocalHistory = this.hydrateSessionFromHistory(metadata);
+    const localHistory = this.hydrateSessionFromHistory(metadata);
     if (this.supportsSessionLoad()) {
       await this.ensureSession(metadata, {
-        suppressTranscriptReplay: hasLocalHistory,
+        suppressTranscriptReplay: localHistory.isComplete,
       });
     }
-    return this.replayForSessionMetadata(metadata);
+    return this.replayForSessionMetadata(
+      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
+        metadata,
+    );
   }
 
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
@@ -632,6 +639,14 @@ export class AcpAgentClient {
     if (updateKind === "available_commands_update") {
       this.updateSessionAvailableCommands(sessionId, update, receivedAt);
     }
+    if (updateKind === "turn_started") {
+      this.updateSessionStatus(sessionId, "active");
+    } else if (
+      updateKind === "turn_finished" ||
+      updateKind === "pwragent_turn_failed"
+    ) {
+      this.updateSessionStatus(sessionId, "idle");
+    }
     const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     if (isConversationHistoryUpdate(update)) {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
@@ -657,10 +672,7 @@ export class AcpAgentClient {
       if (updateKind === "agent_message_chunk") {
         activeTurn.assistantText += text;
       }
-    } else if (
-      (!isAssistantTextUpdate || !shouldTrackAssistantTextUpdate) &&
-      activeTurn
-    ) {
+    } else if (!isAssistantTextUpdate && activeTurn) {
       activeTurn.activeAssistantMessageItemId = undefined;
       activeTurn.activeAssistantMessagePhase = undefined;
     }
@@ -764,18 +776,24 @@ export class AcpAgentClient {
     };
   }
 
-  private hydrateSessionFromHistory(metadata: AcpSessionMetadata): boolean {
+  private hydrateSessionFromHistory(
+    metadata: AcpSessionMetadata,
+  ): AcpHydratedSessionHistory {
     if (!this.options.rolloutStore) {
-      return false;
+      return { isComplete: false };
     }
     const normalizer = new AcpSessionReplayNormalizer({
       surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
     });
+    let hasTranscriptHistory = false;
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,
     });
     for (const record of records) {
+      if (isTranscriptReplayUpdate(record.update)) {
+        hasTranscriptHistory = true;
+      }
       normalizer.apply({
         sessionId: metadata.sessionId,
         receivedAt: record.receivedAt,
@@ -784,7 +802,10 @@ export class AcpAgentClient {
     }
     this.normalizers.set(metadata.sessionId, normalizer);
     const replay = normalizer.replay();
-    return replay.messages.length > 0 || replay.entries.length > 0;
+    const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
+    return {
+      isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+    };
   }
 
   private markSessionHasConversationHistory(

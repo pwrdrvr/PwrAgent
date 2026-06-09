@@ -121,6 +121,12 @@ export class AcpSessionReplayNormalizer {
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
+    if (
+      kind === "agent_thought_chunk" &&
+      this.options.surfaceThoughtsAsMessages === false
+    ) {
+      return this.replay();
+    }
     const isAssistantTextUpdate =
       kind === "agent_message_chunk" || kind === "agent_thought_chunk";
 
