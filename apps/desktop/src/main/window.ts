@@ -43,6 +43,7 @@ import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
+import { windowCenteredOnCursorDisplay } from "./auxiliary-window-placement";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
@@ -294,6 +295,8 @@ export function createMainWindow(options?: {
     attachWindow: (window: BrowserWindow) => void;
   };
 }): BrowserWindow {
+  const width = 1440;
+  const height = 960;
   const preloadPath = getPreloadPath();
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
@@ -304,8 +307,9 @@ export function createMainWindow(options?: {
       }
     : {};
   const window = new BrowserWindow({
-    width: 1440,
-    height: 960,
+    ...windowCenteredOnCursorDisplay(width, height),
+    width,
+    height,
     minWidth: 1200,
     minHeight: 760,
     show: false,

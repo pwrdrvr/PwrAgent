@@ -31,6 +31,10 @@ const clipboardWriteTextMock = vi.fn();
 const addWordToSpellCheckerDictionaryMock = vi.fn();
 const replaceMisspellingMock = vi.fn();
 const menuPopupMock = vi.fn();
+const getCursorScreenPointMock = vi.fn(() => ({ x: 2500, y: 200 }));
+const getDisplayNearestPointMock = vi.fn(() => ({
+  workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
+}));
 const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => ({
   popup: menuPopupMock,
   template,
@@ -160,6 +164,10 @@ vi.mock("electron", () => ({
   Menu: {
     buildFromTemplate: buildFromTemplateMock
   },
+  screen: {
+    getCursorScreenPoint: getCursorScreenPointMock,
+    getDisplayNearestPoint: getDisplayNearestPointMock,
+  },
   shell: {
     openExternal: shellOpenExternalMock
   }
@@ -219,6 +227,8 @@ describe("createMainWindow", () => {
     windowEventHandlers.clear();
     webContentsEventHandlers.clear();
     webContentsOnceHandlers.clear();
+    getCursorScreenPointMock.mockClear();
+    getDisplayNearestPointMock.mockClear();
     delete process.env.ELECTRON_RENDERER_URL;
   });
 
@@ -233,6 +243,16 @@ describe("createMainWindow", () => {
     createMainWindow();
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
+    expect(browserWindowState.options).toMatchObject({
+      x: 1920 + (1920 - 1440) / 2,
+      y: (1080 - 960) / 2,
+      width: 1440,
+      height: 960,
+    });
+    expect(getDisplayNearestPointMock).toHaveBeenCalledWith({
+      x: 2500,
+      y: 200,
+    });
     expect(
       browserWindowState.options?.webPreferences?.preload?.replace(/\\/g, "/")
     ).toContain("preload/index.cjs");

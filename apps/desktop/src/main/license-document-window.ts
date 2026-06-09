@@ -22,10 +22,16 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  auxiliaryWindowPlacementOptions,
+  positionAuxiliaryWindowOnSourceDisplay,
+} from "./auxiliary-window-placement";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
 const THIRD_PARTY_NOTICES_HASH = "third-party-notices";
+const LICENSE_DOCUMENT_WINDOW_WIDTH = 920;
+const LICENSE_DOCUMENT_WINDOW_HEIGHT = 760;
 
 let licenseWindow: BrowserWindow | undefined;
 let thirdPartyNoticesWindow: BrowserWindow | undefined;
@@ -60,14 +66,19 @@ function showLicenseDocumentWindow(options: {
 }): void {
   const existingWindow = options.windowRef();
   if (existingWindow && !existingWindow.isDestroyed()) {
+    positionAuxiliaryWindowOnSourceDisplay(existingWindow);
     showAndFocusAuxiliaryWindow(existingWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 920,
-    height: 760,
+    ...auxiliaryWindowPlacementOptions(
+      LICENSE_DOCUMENT_WINDOW_WIDTH,
+      LICENSE_DOCUMENT_WINDOW_HEIGHT,
+    ),
+    width: LICENSE_DOCUMENT_WINDOW_WIDTH,
+    height: LICENSE_DOCUMENT_WINDOW_HEIGHT,
     minWidth: 640,
     minHeight: 480,
     show: false,

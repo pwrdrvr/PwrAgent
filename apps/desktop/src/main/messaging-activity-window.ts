@@ -22,9 +22,15 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import {
+  auxiliaryWindowPlacementOptions,
+  positionAuxiliaryWindowOnSourceDisplay,
+} from "./auxiliary-window-placement";
 
 const log = getMainLogger("pwragent:activity-window");
 const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
+const ACTIVITY_WINDOW_WIDTH = 980;
+const ACTIVITY_WINDOW_HEIGHT = 720;
 
 /**
  * Hash that the renderer (`main.tsx`) reads to decide whether to mount
@@ -48,14 +54,19 @@ let activityWindow: BrowserWindow | undefined;
  */
 export function showMessagingActivityWindow(): void {
   if (activityWindow && !activityWindow.isDestroyed()) {
+    positionAuxiliaryWindowOnSourceDisplay(activityWindow);
     showAndFocusAuxiliaryWindow(activityWindow);
     return;
   }
 
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 980,
-    height: 720,
+    ...auxiliaryWindowPlacementOptions(
+      ACTIVITY_WINDOW_WIDTH,
+      ACTIVITY_WINDOW_HEIGHT,
+    ),
+    width: ACTIVITY_WINDOW_WIDTH,
+    height: ACTIVITY_WINDOW_HEIGHT,
     minWidth: 640,
     minHeight: 480,
     show: false,
