@@ -11,6 +11,7 @@ import type {
 import {
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
+  DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   TASK_MONITOR_TOOL_NAMESPACE,
   isTaskMonitorOperationName,
 } from "@pwragent/shared";
@@ -30,7 +31,7 @@ export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
       namespace: TASK_MONITOR_TOOL_NAMESPACE,
       name: "create_monitor_delegation",
       description:
-        "Create a lightweight subagent monitoring delegation for long-running async work. Call this before spawning a monitor agent; then pass the returned prompt to a cheap subagent model.",
+        "Create a lightweight subagent monitoring delegation for long-running async work such as GitHub Actions, CI/CD, PR checks, deployments, builds, lint, or test jobs. Use this instead of polling from the parent agent when the task may take more than one short status check. Call this before spawning a monitor agent; then pass the returned prompt to a cheap mini/non-thinking or low-reasoning subagent model.",
       inputSchema: {
         type: "object",
         properties: {
@@ -38,6 +39,7 @@ export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
           monitorContext: { type: "string" },
           pollIntervalSeconds: { type: "number", minimum: 5 },
           preferredModel: { type: "string" },
+          preferredReasoningEffort: { type: "string" },
           finalHandoffPrompt: { type: "string" },
         },
         required: ["task"],
@@ -180,18 +182,32 @@ export function buildMonitorDelegationPrompt(params: {
   monitorId: string;
   parentThreadId: string;
   pollIntervalSeconds?: number;
+  preferredModel?: string;
+  preferredReasoningEffort?: string;
   task: string;
 }): string {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
     DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+  const preferredModel = normalizePreferredMonitorModel(params.preferredModel);
+  const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
+    params.preferredReasoningEffort,
+  );
   return [
     "You are a lightweight PwrAgent monitor subagent.",
     "",
     "Monitor only the asynchronous task below. Keep your context small and do not perform unrelated work.",
+    "Typical monitor tasks include GitHub Actions, CI/CD, PR checks, deployments, builds, lint, and test jobs.",
     `Monitor id: ${params.monitorId}`,
     `Parent thread id: ${params.parentThreadId}`,
     `Poll interval: ${pollInterval} seconds`,
+    `Preferred monitor model: ${preferredModel}`,
+    `Preferred reasoning effort: ${preferredReasoningEffort}`,
+    "",
+    "Model guidance:",
+    "- The parent agent should spawn this monitor on a cheap mini/non-thinking model when available.",
+    "- For Codex, prefer the returned preferredModel and preferredReasoningEffort values.",
+    "- For ACP or other agent runtimes, choose a non-thinking model or the lowest reasoning setting that can poll status reliably.",
     "",
     "Task:",
     params.task.trim(),
@@ -225,6 +241,10 @@ export function normalizePreferredMonitorModel(value: unknown): string {
   return readString(value) ?? DEFAULT_TASK_MONITOR_MODEL;
 }
 
+export function normalizePreferredMonitorReasoningEffort(value: unknown): string {
+  return readString(value) ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT;
+}
+
 function normalizeTaskMonitorToolArguments(
   operation: TaskMonitorOperationName,
   value: unknown,
@@ -236,6 +256,7 @@ function normalizeTaskMonitorToolArguments(
       monitorContext: readString(args.monitorContext),
       pollIntervalSeconds: normalizePollIntervalSeconds(args.pollIntervalSeconds),
       preferredModel: readString(args.preferredModel),
+      preferredReasoningEffort: readString(args.preferredReasoningEffort),
       finalHandoffPrompt: readString(args.finalHandoffPrompt),
     } satisfies CreateMonitorDelegationToolArgs;
   }

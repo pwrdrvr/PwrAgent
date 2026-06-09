@@ -11217,10 +11217,14 @@ command = "pnpm dev"
     expect(payload).toMatchObject({
       parentThreadId: "thread-1",
       preferredModel: "gpt-5.4-mini",
+      preferredReasoningEffort: "low",
       pollIntervalSeconds: 20,
     });
     expect(String(payload.monitorId)).toMatch(/^monitor-/);
     expect(String(payload.prompt)).toContain("Parent thread id: thread-1");
+    expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
+    expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
+    expect(String(payload.prompt)).toContain("GitHub Actions");
     expect(String(payload.prompt)).toContain("complete_monitoring exactly once");
 
     await registry.close();
