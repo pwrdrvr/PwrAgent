@@ -4,6 +4,7 @@ import type {
   DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type {
+  AppUpdateCheckResult,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
 } from "../../../../shared/app-metadata";
@@ -105,6 +106,25 @@ function releaseHelpText(
   return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
 }
 
+function updateResultText(result: AppUpdateCheckResult): string {
+  if (result.status === "skipped") {
+    return result.reason;
+  }
+  if (result.status === "error") {
+    return `Update check failed: ${result.message}`;
+  }
+  if (result.status === "checking") {
+    return "Checking for updates...";
+  }
+  if (result.status === "no-update") {
+    return `You're up to date (v${result.version}).`;
+  }
+  if (result.status === "downloaded") {
+    return `Update ready: v${result.version}. Restart to install.`;
+  }
+  return `Update available: v${result.version}. Downloading in the background.`;
+}
+
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -122,6 +142,10 @@ export function GeneralSettings(props: {
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
     AppUpdateReleaseVersions | undefined
+  >();
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateResult, setUpdateResult] = useState<
+    AppUpdateCheckResult | undefined
   >();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
@@ -153,6 +177,25 @@ export function GeneralSettings(props: {
       canceled = true;
     };
   }, [props.desktopApi]);
+
+  const checkForUpdates = props.desktopApi?.checkForAppUpdates;
+  const handleUpdateNow = async () => {
+    if (!checkForUpdates) {
+      return;
+    }
+    setUpdateChecking(true);
+    setUpdateResult(undefined);
+    try {
+      setUpdateResult(await checkForUpdates());
+    } catch (err) {
+      setUpdateResult({
+        status: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
 
   const appearance = props.appearanceController?.appearance;
 
@@ -392,35 +435,68 @@ export function GeneralSettings(props: {
           <SettingsField
             label="Update channel"
             sub="Choose which GitHub release stream the updater follows."
-            help={releaseHelpText(releaseVersions)}
+            help={
+              <>
+                {releaseHelpText(releaseVersions)}
+                {updateResult ? (
+                  <>
+                    {" "}
+                    <span
+                      className={
+                        updateResult.status === "error"
+                          ? "settings-update-channel__result settings-update-channel__result--error"
+                          : "settings-update-channel__result"
+                      }
+                      role={
+                        updateResult.status === "error" ? "alert" : undefined
+                      }
+                    >
+                      {updateResultText(updateResult)}
+                    </span>
+                  </>
+                ) : null}
+              </>
+            }
             error={updateChannel.error}
             source={sourceBadge(updateChannel)}
             control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Update channel"
-              >
-                {UPDATE_CHANNEL_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={updateChannel.value === option.value}
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      updateChannel.value === option.value ? " is-active" : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onUpdateChannelChange(option.value);
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {releaseVersionText(releaseVersions?.[option.value])}
-                    </span>
-                  </button>
-                ))}
+              <div className="settings-update-channel">
+                <div
+                  className="settings-segmented"
+                  role="radiogroup"
+                  aria-label="Update channel"
+                >
+                  {UPDATE_CHANNEL_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-checked={updateChannel.value === option.value}
+                      className={`settings-segmented__button settings-segmented__button--stacked${
+                        updateChannel.value === option.value ? " is-active" : ""
+                      }`}
+                      disabled={props.saving}
+                      role="radio"
+                      type="button"
+                      onClick={() => {
+                        void props.onUpdateChannelChange(option.value);
+                      }}
+                    >
+                      <span>{option.label}</span>
+                      <span className="settings-segmented__meta">
+                        {releaseVersionText(releaseVersions?.[option.value])}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="button button--secondary settings-update-channel__button"
+                  type="button"
+                  disabled={!checkForUpdates || props.saving || updateChecking}
+                  onClick={() => {
+                    void handleUpdateNow();
+                  }}
+                >
+                  {updateChecking ? "Checking..." : "Update"}
+                </button>
               </div>
             }
           />

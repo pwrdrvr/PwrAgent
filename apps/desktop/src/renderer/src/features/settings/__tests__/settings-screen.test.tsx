@@ -408,6 +408,10 @@ describe("SettingsScreen", () => {
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "available" as const,
+        version: "1.0.0-beta.8",
+      })),
       readAppUpdateReleaseVersions: vi.fn(async () => ({
         fetchedAt: 1,
         latest: { version: "v1.0.0" },
@@ -517,6 +521,13 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    await waitFor(() => {
+      expect(desktopApi.checkForAppUpdates).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      await screen.findByText(/Update available: v1.0.0-beta.8/),
+    ).toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(

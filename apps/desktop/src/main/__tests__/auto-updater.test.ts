@@ -158,6 +158,20 @@ describe("auto updater", () => {
     );
   });
 
+  it("uses the selected update channel for manual checks", async () => {
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    const updater = await importAutoUpdater();
+
+    const manualResult = await updater.checkForAppUpdatesNow("manual");
+
+    expect(manualResult).toEqual({
+      status: "available",
+      version: "1.0.0-beta.8",
+    });
+    expect(resolveUpdateChannelMock).toHaveBeenCalledTimes(1);
+    expect(autoUpdaterMock.allowPrerelease).toBe(true);
+  });
+
   it("routes downloaded update installs through requestQuit", async () => {
     const updater = await importAutoUpdater();
     const requestQuit = vi.fn(async (performQuit: () => void) => {

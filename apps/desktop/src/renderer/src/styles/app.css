@@ -4233,6 +4233,25 @@ textarea,
   line-height: 1.45;
 }
 
+.settings-update-channel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.settings-update-channel__button {
+  min-height: 0;
+}
+
+.settings-update-channel__result {
+  color: var(--text-secondary);
+}
+
+.settings-update-channel__result--error {
+  color: var(--danger-text);
+}
+
 .settings-section__description {
   margin: 6px 0 0;
   color: var(--text-secondary);
