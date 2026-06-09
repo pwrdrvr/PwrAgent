@@ -43,6 +43,7 @@ import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
+import { centeredWindowPlacementOptions } from "./window-placement";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
@@ -310,6 +311,9 @@ export function createMainWindow(options?: {
     minHeight: 760,
     show: false,
     title: "PwrAgent",
+    ...centeredWindowPlacementOptions(1440, 960, {
+      preferFocusedWindow: false,
+    }),
     ...macWindowChrome,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.

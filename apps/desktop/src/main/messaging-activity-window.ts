@@ -22,6 +22,7 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import { centeredWindowPlacementOptions } from "./window-placement";
 
 const log = getMainLogger("pwragent:activity-window");
 const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
@@ -60,6 +61,7 @@ export function showMessagingActivityWindow(): void {
     minHeight: 480,
     show: false,
     title: ACTIVITY_WINDOW_TITLE,
+    ...centeredWindowPlacementOptions(980, 720),
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {

@@ -25,6 +25,7 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import { centeredWindowPlacementOptions } from "./window-placement";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
@@ -46,6 +47,7 @@ export function showAppLogWindow(): void {
     minHeight: 500,
     show: false,
     title: LOGS_WINDOW_TITLE,
+    ...centeredWindowPlacementOptions(1040, 760),
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {

@@ -22,6 +22,7 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import { centeredWindowPlacementOptions } from "./window-placement";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
@@ -72,6 +73,7 @@ function showLicenseDocumentWindow(options: {
     minHeight: 480,
     show: false,
     title: options.title,
+    ...centeredWindowPlacementOptions(920, 760),
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {

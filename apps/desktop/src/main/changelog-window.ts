@@ -22,6 +22,7 @@ import {
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
+import { centeredWindowPlacementOptions } from "./window-placement";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
@@ -43,6 +44,7 @@ export function showChangelogWindow(): void {
     minHeight: 480,
     show: false,
     title: CHANGELOG_WINDOW_TITLE,
+    ...centeredWindowPlacementOptions(920, 760),
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
