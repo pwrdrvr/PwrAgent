@@ -9,6 +9,7 @@ import type {
   TaskMonitorResponse,
 } from "@pwragent/shared";
 import {
+  DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
@@ -39,6 +40,7 @@ export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
           task: { type: "string" },
           monitorContext: { type: "string" },
           pollIntervalSeconds: { type: "number", minimum: 5 },
+          heartbeatIntervalSeconds: { type: "number", minimum: 60 },
           preferredModel: { type: "string" },
           preferredReasoningEffort: { type: "string" },
           finalHandoffPrompt: { type: "string" },
@@ -179,6 +181,7 @@ export function buildTaskMonitorDynamicToolErrorResponse(params: {
 
 export function buildMonitorDelegationPrompt(params: {
   finalHandoffPrompt?: string;
+  heartbeatIntervalSeconds?: number;
   monitorContext?: string;
   monitorId: string;
   parentThreadId: string;
@@ -190,6 +193,9 @@ export function buildMonitorDelegationPrompt(params: {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
     DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+  const heartbeatInterval =
+    normalizeHeartbeatIntervalSeconds(params.heartbeatIntervalSeconds) ??
+    DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
   const preferredModel = normalizePreferredMonitorModel(params.preferredModel);
   const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
     params.preferredReasoningEffort,
@@ -205,6 +211,7 @@ export function buildMonitorDelegationPrompt(params: {
     `Monitor id: ${params.monitorId}`,
     `Parent thread id: ${params.parentThreadId}`,
     `Poll interval: ${pollInterval} seconds`,
+    `Heartbeat interval: ${heartbeatInterval} seconds`,
     `Preferred monitor model: ${preferredModel}`,
     `Preferred reasoning effort: ${preferredReasoningEffort}`,
     "</monitor_config>",
@@ -226,6 +233,7 @@ export function buildMonitorDelegationPrompt(params: {
     "- Immediately after startup, before the first external poll or sleep, call pwragent_task_monitors.inject_progress with monitorId, status \"running\", and a concise message such as \"Monitor started: checking task status.\"",
     `- After the startup injection, poll about every ${pollInterval} seconds while the task is incomplete.`,
     "- When the externally visible state changes, call pwragent_task_monitors.inject_progress with monitorId and a concise user-facing message.",
+    `- If the task is still running and no externally visible state changed for about ${heartbeatInterval} seconds, call pwragent_task_monitors.inject_progress with a brief heartbeat such as \"Still running: waiting for checks to finish.\" Do not send heartbeat updates more often than this interval.`,
     "- Progress injections are non-waking: they must not ask the parent agent to act.",
     "- Do not include the parent transcript or broad repository context in progress updates.",
     "- When the task reaches success, failure, or cancellation, call pwragent_task_monitors.complete_monitoring exactly once.",
@@ -240,6 +248,7 @@ export function buildMonitorDelegationPrompt(params: {
 }
 
 export function buildMonitorParentAgentGuidance(params: {
+  heartbeatIntervalSeconds?: number;
   preferredModel: string;
   preferredReasoningEffort: string;
   startupTimeoutSeconds?: number;
@@ -247,13 +256,18 @@ export function buildMonitorParentAgentGuidance(params: {
   const startupTimeoutSeconds =
     normalizeStartupTimeoutSeconds(params.startupTimeoutSeconds) ??
     DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
+  const heartbeatIntervalSeconds =
+    normalizeHeartbeatIntervalSeconds(params.heartbeatIntervalSeconds) ??
+    DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
   return [
     "Spawn one lightweight monitor subagent with the returned prompt.",
     `For Codex, pass model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort}; for ACP or other runtimes, use a mini/non-thinking model or the lowest reliable reasoning setting.`,
     "Do not fork the full parent context unless the monitor task explicitly requires it; pass only the returned prompt and minimal task data.",
     `After spawning, make a single startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
     "If the spawned agent remains pendingInit, is not found, or no startup progress injection appears within the startup window, tell the user the monitor did not start and retry once or fall back to parent-side monitoring.",
-    "After startup is confirmed, do not poll the task from the parent. The monitor will inject non-waking progress and call complete_monitoring once for the final handoff.",
+    `After startup is confirmed, do not poll the task from the parent. The monitor may inject non-waking progress updates and heartbeat messages about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
+    "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
+    "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
   ].join("\n");
 }
 
@@ -262,6 +276,13 @@ export function normalizePollIntervalSeconds(value: unknown): number | undefined
     return undefined;
   }
   return Math.max(5, Math.floor(value));
+}
+
+export function normalizeHeartbeatIntervalSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(60, Math.floor(value));
 }
 
 export function normalizePreferredMonitorModel(value: unknown): string {
@@ -289,6 +310,9 @@ function normalizeTaskMonitorToolArguments(
       task: readString(args.task) ?? "",
       monitorContext: readString(args.monitorContext),
       pollIntervalSeconds: normalizePollIntervalSeconds(args.pollIntervalSeconds),
+      heartbeatIntervalSeconds: normalizeHeartbeatIntervalSeconds(
+        args.heartbeatIntervalSeconds,
+      ),
       preferredModel: readString(args.preferredModel),
       preferredReasoningEffort: readString(args.preferredReasoningEffort),
       finalHandoffPrompt: readString(args.finalHandoffPrompt),

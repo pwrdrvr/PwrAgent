@@ -6,6 +6,7 @@ export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TASK_MONITOR_REASONING_EFFORT = "low";
 export const DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS = 20;
 export const DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS = 45;
+export const DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS = 300;
 
 export const TASK_MONITOR_OPERATION_NAMES = [
   "create_monitor_delegation",
@@ -25,6 +26,7 @@ export type CreateMonitorDelegationToolArgs = {
   task: string;
   monitorContext?: string;
   pollIntervalSeconds?: number;
+  heartbeatIntervalSeconds?: number;
   preferredModel?: string;
   preferredReasoningEffort?: string;
   finalHandoffPrompt?: string;
@@ -70,6 +72,7 @@ export type TaskMonitorDelegationData = {
   preferredModel: string;
   preferredReasoningEffort: string;
   pollIntervalSeconds: number;
+  heartbeatIntervalSeconds: number;
   startupTimeoutSeconds: number;
   parentAgentGuidance: string;
   prompt: string;
