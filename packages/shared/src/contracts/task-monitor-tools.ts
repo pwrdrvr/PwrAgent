@@ -25,6 +25,7 @@ export type TaskMonitorContext = {
 export type CreateMonitorDelegationToolArgs = {
   task: string;
   monitorContext?: string;
+  cwd?: string;
   pollIntervalSeconds?: number;
   heartbeatIntervalSeconds?: number;
   preferredModel?: string;
@@ -74,6 +75,9 @@ export type TaskMonitorDelegationData = {
   pollIntervalSeconds: number;
   heartbeatIntervalSeconds: number;
   startupTimeoutSeconds: number;
+  startedByPwrAgent: boolean;
+  monitorThreadId?: string;
+  monitorTurnId?: string;
   parentAgentGuidance: string;
   prompt: string;
 };
