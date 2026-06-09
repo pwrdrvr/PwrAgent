@@ -4293,6 +4293,33 @@ textarea,
   min-height: 0;
 }
 
+.settings-update-channel__restart {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.settings-update-channel__restart-button {
+  display: inline-flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  line-height: 1.1;
+}
+
+.settings-update-channel__restart-version,
+.settings-update-channel__downloaded {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
 .settings-update-channel__result {
   color: var(--text-secondary);
 }
