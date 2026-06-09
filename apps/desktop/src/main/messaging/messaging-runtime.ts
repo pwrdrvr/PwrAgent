@@ -851,6 +851,7 @@ export class DesktopMessagingRuntime {
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
       store,
+      activityLog: getDesktopMessagingActivityLog,
       streamingResponsesDefault: streamingResponsesDefaultForChannel(
         config,
         adapter.channel,

@@ -453,6 +453,28 @@ describe("DesktopMessagingRuntime", () => {
       kind: "status",
       status: "waiting",
     });
+
+    const { getDesktopMessagingActivityLog } = await import(
+      "../messaging/desktop-messaging-activity-log"
+    );
+    expect(getDesktopMessagingActivityLog().getPlatformActivitySummary()).toEqual({
+      summaries: [
+        expect.objectContaining({
+          platform: "telegram",
+          lastResponseAt: 1000,
+        }),
+      ],
+    });
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const outboundRowCount = getAppStateDb().raw
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM messaging_activity_log
+         WHERE kind = ?`,
+      )
+      .get("outbound") as { count: number };
+    expect(outboundRowCount.count).toBe(0);
   });
 
   it("does not route backend requests to adapters for bindings owned by another channel", async () => {

@@ -31,6 +31,11 @@ export type RecordMessagingActivityInput = {
   payload?: Record<string, unknown>;
 };
 
+export type RecordMessagingPlatformResponseActivityInput = {
+  platform: MessagingChannelKind;
+  createdAt?: number;
+};
+
 /**
  * Persisted messaging activity log. Rows live in the same sqlite DB as
  * other desktop state; per-platform FIFO eviction happens in
@@ -81,6 +86,28 @@ export class MessagingActivityLog {
     };
   }
 
+  recordPlatformResponseActivity(
+    entry: RecordMessagingPlatformResponseActivityInput,
+  ): void {
+    const createdAt = entry.createdAt ?? Date.now();
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO messaging_activity_summary(
+           platform, last_response_at, updated_at
+         ) VALUES (?, ?, ?)
+         ON CONFLICT(platform) DO UPDATE SET
+           last_response_at = MAX(
+             COALESCE(messaging_activity_summary.last_response_at, 0),
+             excluded.last_response_at
+           ),
+           updated_at = MAX(
+             messaging_activity_summary.updated_at,
+             excluded.updated_at
+           )`,
+      )
+      .run(entry.platform, createdAt, createdAt);
+  }
+
   list(params: {
     limit?: number;
     sinceId?: number;
@@ -96,7 +123,7 @@ export class MessagingActivityLog {
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
-             WHERE id > ?
+             WHERE id > ? AND kind <> 'outbound'
              ORDER BY id DESC
              LIMIT ?`,
           )
@@ -107,6 +134,7 @@ export class MessagingActivityLog {
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
+             WHERE kind <> 'outbound'
              ORDER BY id DESC
              LIMIT ?`,
           )
@@ -118,22 +146,45 @@ export class MessagingActivityLog {
     const rows = this.stateDb.raw
       .prepare(
         `SELECT
-           platform,
-           MAX(
-             CASE
-               WHEN kind IN ('inbound-routed', 'inbound-rejected', 'inbound-ignored')
-               THEN created_at
-             END
-           ) AS last_request_at,
-           MAX(
-             CASE
-               WHEN kind = 'outbound'
-               THEN created_at
-             END
-           ) AS last_response_at
-         FROM messaging_activity_log
-         GROUP BY platform
-         HAVING last_request_at IS NOT NULL OR last_response_at IS NOT NULL`,
+           platforms.platform,
+           inbound.last_request_at,
+           outbound.last_response_at
+         FROM (
+           SELECT platform
+           FROM messaging_activity_log
+           WHERE kind IN ('inbound-routed', 'inbound-rejected', 'inbound-ignored')
+           UNION
+           SELECT platform
+           FROM messaging_activity_summary
+           WHERE last_response_at IS NOT NULL
+           UNION
+           SELECT platform
+           FROM messaging_activity_log
+           WHERE kind = 'outbound'
+         ) AS platforms
+         LEFT JOIN (
+           SELECT platform, MAX(created_at) AS last_request_at
+           FROM messaging_activity_log
+           WHERE kind IN ('inbound-routed', 'inbound-rejected', 'inbound-ignored')
+           GROUP BY platform
+         ) AS inbound
+           ON inbound.platform = platforms.platform
+         LEFT JOIN (
+           SELECT platform, MAX(last_response_at) AS last_response_at
+           FROM (
+             SELECT platform, last_response_at
+             FROM messaging_activity_summary
+             WHERE last_response_at IS NOT NULL
+             UNION ALL
+             SELECT platform, created_at AS last_response_at
+             FROM messaging_activity_log
+             WHERE kind = 'outbound'
+           )
+           GROUP BY platform
+         ) AS outbound
+           ON outbound.platform = platforms.platform
+         WHERE inbound.last_request_at IS NOT NULL
+            OR outbound.last_response_at IS NOT NULL`,
       )
       .all() as RawActivitySummaryRow[];
     return {

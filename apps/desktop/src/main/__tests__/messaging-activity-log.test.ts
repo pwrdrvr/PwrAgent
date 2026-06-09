@@ -106,9 +106,24 @@ describe("MessagingActivityLog", () => {
   });
 
   it("returns events newest-first by id", () => {
-    log.record({ platform: "telegram", kind: "outbound", summary: "first", createdAt: 1 });
-    log.record({ platform: "telegram", kind: "outbound", summary: "second", createdAt: 2 });
-    log.record({ platform: "telegram", kind: "outbound", summary: "third", createdAt: 3 });
+    log.record({
+      platform: "telegram",
+      kind: "diagnostic",
+      summary: "first",
+      createdAt: 1,
+    });
+    log.record({
+      platform: "telegram",
+      kind: "diagnostic",
+      summary: "second",
+      createdAt: 2,
+    });
+    log.record({
+      platform: "telegram",
+      kind: "diagnostic",
+      summary: "third",
+      createdAt: 3,
+    });
     expect(log.list().map((entry) => entry.summary)).toEqual([
       "third",
       "second",
@@ -119,12 +134,12 @@ describe("MessagingActivityLog", () => {
   it("respects sinceId for incremental polling", () => {
     const first = log.record({
       platform: "telegram",
-      kind: "outbound",
+      kind: "diagnostic",
       summary: "old",
     });
     const second = log.record({
       platform: "telegram",
-      kind: "outbound",
+      kind: "diagnostic",
       summary: "new",
     });
 
@@ -134,6 +149,29 @@ describe("MessagingActivityLog", () => {
     ]);
   });
 
+  it("keeps outbound response freshness out of the activity feed", () => {
+    log.record({
+      platform: "telegram",
+      kind: "outbound",
+      summary: "legacy visible outbound row",
+      createdAt: 1_500,
+    });
+    log.recordPlatformResponseActivity({
+      platform: "telegram",
+      createdAt: 2_000,
+    });
+
+    expect(log.list()).toEqual([]);
+    expect(log.getPlatformActivitySummary()).toEqual({
+      summaries: [
+        expect.objectContaining({
+          platform: "telegram",
+          lastResponseAt: 2_000,
+        }),
+      ],
+    });
+  });
+
   it("summarizes latest request and response timestamps by platform", () => {
     log.record({
       platform: "telegram",
@@ -141,10 +179,8 @@ describe("MessagingActivityLog", () => {
       summary: "telegram request",
       createdAt: 1_000,
     });
-    log.record({
+    log.recordPlatformResponseActivity({
       platform: "telegram",
-      kind: "outbound",
-      summary: "telegram response",
       createdAt: 2_000,
     });
     log.record({
@@ -153,10 +189,8 @@ describe("MessagingActivityLog", () => {
       summary: "newer telegram request",
       createdAt: 3_000,
     });
-    log.record({
+    log.recordPlatformResponseActivity({
       platform: "discord",
-      kind: "outbound",
-      summary: "discord response",
       createdAt: 4_000,
     });
     log.record({
@@ -185,7 +219,7 @@ describe("MessagingActivityLog", () => {
     for (let i = 0; i < 10; i += 1) {
       log.record({
         platform: "telegram",
-        kind: "outbound",
+        kind: "diagnostic",
         summary: `event-${i}`,
       });
     }
@@ -195,8 +229,8 @@ describe("MessagingActivityLog", () => {
 
   it("evicts to the per-platform cap on cleanupExpired", () => {
     for (let i = 0; i < 7; i += 1) {
-      log.record({ platform: "telegram", kind: "outbound", summary: `t-${i}` });
-      log.record({ platform: "discord", kind: "outbound", summary: `d-${i}` });
+      log.record({ platform: "telegram", kind: "diagnostic", summary: `t-${i}` });
+      log.record({ platform: "discord", kind: "diagnostic", summary: `d-${i}` });
     }
     // Synthetic small cap via cleanupExpired uses the file-level cap (500).
     // Verify that calling cleanup is a no-op below the cap.
