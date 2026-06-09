@@ -252,19 +252,30 @@ function preservesTicketReferences(userPrompt: string, title: string): boolean {
 
 function extractTicketReferences(value: string): string[] {
   const references: string[] = [];
-  const patterns = [
+  const contextualPatterns = [
     /\b[A-Z][A-Z0-9]+-\d+\b/g,
-    /#\d+\b/g,
     /\b(?:issue|pr|pull request)\s+#?\d+\b/gi,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of contextualPatterns) {
     for (const match of value.matchAll(pattern)) {
       references.push(match[0]);
     }
   }
 
+  for (const match of value.matchAll(/#\d+\b/g)) {
+    const index = match.index;
+    if (typeof index !== "number" || isBareHashTicketReference(value, index)) {
+      references.push(match[0]);
+    }
+  }
+
   return references;
+}
+
+function isBareHashTicketReference(value: string, index: number): boolean {
+  const context = value.slice(Math.max(0, index - 32), index).toLowerCase();
+  return !/\b(?:agent|item|option|step|subagent|task|turn)\s*$/.test(context);
 }
 
 function normalizeReferenceText(value: string): string {
