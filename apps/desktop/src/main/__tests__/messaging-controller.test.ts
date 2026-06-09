@@ -3392,6 +3392,87 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not leak Codex sticky permissions and speed settings into Kimi new-thread prompts", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "codex",
+      executionMode: "full-access",
+      fastMode: true,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      providerSettings: {
+        codex: {
+          executionMode: "full-access",
+          fastMode: true,
+          model: "gpt-5.3-codex",
+          reasoningEffort: "high",
+        },
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "codex",
+            label: "Codex",
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.3-codex",
+                  label: "GPT-5.3 Codex",
+                  supportsFast: true,
+                  supportsReasoning: true,
+                },
+              ],
+              reasoningEfforts: ["low", "medium", "high"],
+              supportsFastMode: true,
+            },
+          }),
+          buildKimiRuntimeBackendSummary(),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "acp:kimi" },
+      }),
+    );
+
+    const readyIntent = harness.delivered.at(-1);
+    const body = readyIntent && "body" in readyIntent ? String(readyIntent.body) : "";
+    expect(readyIntent).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Provider: Kimi"),
+    });
+    expect(body).toContain("Permissions: Default");
+    expect(body).not.toContain("Full Access");
+    expect(body).not.toContain("Fast mode:");
+    expect(body).not.toContain("Reasoning:");
+    expect(readyIntent).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast" }),
+        expect.objectContaining({ id: "browse:new:reasoning" }),
+      ]),
+    });
+  });
+
   it("includes enabled ACP backends in the messaging new-thread provider picker", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({
@@ -3609,7 +3690,13 @@ describe("MessagingController", () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
       ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
       executionMode: "full-access",
+      providerSettings: {
+        "acp:gemini": {
+          executionMode: "full-access",
+        },
+      },
     };
     const harness = await createHarness({
       navigation,

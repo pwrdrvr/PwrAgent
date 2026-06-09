@@ -24,7 +24,9 @@ import {
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
+  applyNavigationLaunchpadProviderSettingsPatch,
   parseThreadIdentityKey,
+  projectNavigationLaunchpadProviderSettings,
 } from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
@@ -57,7 +59,8 @@ function parseDirectoryGitStatusCachePayload(
 function normalizeLaunchpadDefaults(
   defaults: NavigationLaunchpadDefaults,
 ): NavigationLaunchpadDefaults {
-  const next: NavigationLaunchpadDefaults = { ...defaults };
+  const next: NavigationLaunchpadDefaults =
+    projectNavigationLaunchpadProviderSettings(defaults);
   if (
     next.backend === "codex" &&
     (next.serviceTier === "fast" || next.serviceTier === "priority")
@@ -911,7 +914,9 @@ export class SqliteOverlayStore {
     patch: Partial<NavigationLaunchpadDefaults>,
   ): Promise<NavigationLaunchpadDefaults> {
     const current = this.readLaunchpadDefaults();
-    const next = normalizeLaunchpadDefaults({ ...current, ...patch });
+    const next = normalizeLaunchpadDefaults(
+      applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+    );
     this.writeLaunchpadDefaults(next);
     return next;
   }
@@ -940,14 +945,22 @@ export class SqliteOverlayStore {
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM directory_launchpads WHERE directory_path = ?")
       .get(params.directoryKey) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) : undefined;
+    return row
+      ? projectNavigationLaunchpadProviderSettings(
+          JSON.parse(row.payload) as DirectoryLaunchpadOverlayState,
+        )
+      : undefined;
   }
 
   async listDirectoryLaunchpads(): Promise<DirectoryLaunchpadOverlayState[]> {
     const rows = this.stateDb.raw
       .prepare("SELECT payload FROM directory_launchpads")
       .all() as { payload: string }[];
-    return rows.map((r) => JSON.parse(r.payload));
+    return rows.map((r) =>
+      projectNavigationLaunchpadProviderSettings(
+        JSON.parse(r.payload) as DirectoryLaunchpadOverlayState,
+      ),
+    );
   }
 
   async upsertDirectoryLaunchpad(
@@ -1160,7 +1173,12 @@ export class SqliteOverlayStore {
       .prepare("SELECT directory_path, payload FROM directory_launchpads")
       .all() as { directory_path: string; payload: string }[];
     return Object.fromEntries(
-      rows.map((r) => [r.directory_path, JSON.parse(r.payload)]),
+      rows.map((r) => [
+        r.directory_path,
+        projectNavigationLaunchpadProviderSettings(
+          JSON.parse(r.payload) as DirectoryLaunchpadOverlayState,
+        ),
+      ]),
     );
   }
 

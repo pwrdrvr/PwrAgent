@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import type {
   AcpBackendId,
   AgentEvent,
@@ -475,10 +478,10 @@ function createOverlayStoreMock(params?: {
     },
     getLaunchpadDefaults: async () => launchpadDefaults,
     setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
-      launchpadDefaults = {
-        ...launchpadDefaults,
-        ...patch,
-      };
+      launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
+        launchpadDefaults,
+        patch,
+      );
       return launchpadDefaults;
     },
     getDirectoryLaunchpad: async ({ directoryKey }: { directoryKey: string }) =>
@@ -6155,6 +6158,91 @@ script = "echo setup"
 
     expect(updated.defaults.workMode).toBe("worktree");
     expect(next.launchpad.workMode).toBe("worktree");
+
+    await registry.close();
+  });
+
+  it("keeps sticky model and permission settings scoped to the selected provider", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.3-codex",
+            label: "GPT-5.3 Codex",
+            supportsFast: true,
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "full-access",
+          workMode: "local",
+          model: "gpt-5.3-codex",
+          reasoningEffort: "high",
+          fastMode: true,
+          providerSettings: {
+            codex: {
+              executionMode: "full-access",
+              model: "gpt-5.3-codex",
+              reasoningEffort: "high",
+              fastMode: true,
+            },
+          },
+        },
+      }),
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    const kimi = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { backend: "acp:kimi" as AcpBackendId },
+      stickySettingsChanged: true,
+    });
+
+    expect(kimi.defaults).toMatchObject({
+      backend: "acp:kimi",
+      executionMode: "default",
+    });
+    expect(kimi.defaults.fastMode).toBeUndefined();
+    expect(kimi.defaults.reasoningEffort).toBeUndefined();
+    expect(kimi.launchpad).toMatchObject({
+      backend: "acp:kimi",
+      executionMode: "default",
+    });
+    expect(kimi.launchpad.fastMode).toBeUndefined();
+    expect(kimi.launchpad.reasoningEffort).toBeUndefined();
+
+    const codex = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { backend: "codex" },
+      stickySettingsChanged: true,
+    });
+
+    expect(codex.defaults).toMatchObject({
+      backend: "codex",
+      executionMode: "full-access",
+      fastMode: true,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+    });
+    expect(codex.launchpad).toMatchObject({
+      backend: "codex",
+      executionMode: "full-access",
+      fastMode: true,
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+    });
 
     await registry.close();
   });

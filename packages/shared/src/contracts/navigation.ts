@@ -193,7 +193,144 @@ export type NavigationLaunchpadDefaults = {
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  providerSettings?: Partial<
+    Record<AppServerBackendKind, NavigationLaunchpadProviderSettings>
+  >;
 };
+
+export type NavigationLaunchpadProviderSettings = {
+  executionMode?: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  acpRuntime?: BackendAcpSessionRuntimeState;
+};
+
+const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
+  "executionMode",
+  "model",
+  "reasoningEffort",
+  "serviceTier",
+  "fastMode",
+  "acpRuntime",
+] as const satisfies readonly (keyof NavigationLaunchpadProviderSettings)[];
+
+export function extractNavigationLaunchpadProviderSettings(
+  source: Partial<NavigationLaunchpadDefaults>,
+): NavigationLaunchpadProviderSettings {
+  const settings: NavigationLaunchpadProviderSettings = {};
+  for (const key of NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS) {
+    if (key in source) {
+      settings[key] = source[key] as never;
+    }
+  }
+  return settings;
+}
+
+function hasNavigationLaunchpadProviderSettingPatch(
+  patch: Partial<NavigationLaunchpadDefaults>,
+): boolean {
+  return NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS.some((key) => key in patch);
+}
+
+function mergeNavigationLaunchpadProviderSettings(
+  current: NavigationLaunchpadProviderSettings,
+  patch: NavigationLaunchpadProviderSettings,
+): NavigationLaunchpadProviderSettings {
+  const next: NavigationLaunchpadProviderSettings = { ...current };
+  for (const key of NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS) {
+    if (key in patch) {
+      const value = patch[key];
+      if (value === undefined) {
+        delete next[key];
+      } else {
+        next[key] = value as never;
+      }
+    }
+  }
+  return next;
+}
+
+function isEmptyNavigationLaunchpadProviderSettings(
+  settings: NavigationLaunchpadProviderSettings | undefined,
+): boolean {
+  return !settings || Object.keys(settings).length === 0;
+}
+
+function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDefaults>(
+  launchpad: T,
+): Partial<Record<AppServerBackendKind, NavigationLaunchpadProviderSettings>> {
+  const providerSettings = { ...(launchpad.providerSettings ?? {}) };
+  providerSettings[launchpad.backend] = mergeNavigationLaunchpadProviderSettings(
+    providerSettings[launchpad.backend] ?? {},
+    extractNavigationLaunchpadProviderSettings(launchpad),
+  );
+  return providerSettings;
+}
+
+function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDefaults>(
+  launchpad: T,
+): T {
+  return {
+    ...launchpad,
+    executionMode: "default",
+    model: undefined,
+    reasoningEffort: undefined,
+    serviceTier: undefined,
+    fastMode: undefined,
+    acpRuntime: undefined,
+  };
+}
+
+export function projectNavigationLaunchpadProviderSettings<
+  T extends NavigationLaunchpadDefaults,
+>(launchpad: T): T {
+  const legacySettings = extractNavigationLaunchpadProviderSettings(launchpad);
+  const providerSettings = launchpad.providerSettings?.[launchpad.backend];
+  const settings = {
+    ...legacySettings,
+    ...(providerSettings ?? {}),
+  };
+  return {
+    ...launchpad,
+    executionMode: settings.executionMode ?? "default",
+    model: settings.model,
+    reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
+    fastMode: settings.fastMode,
+    acpRuntime: settings.acpRuntime,
+  };
+}
+
+export function applyNavigationLaunchpadProviderSettingsPatch<
+  T extends NavigationLaunchpadDefaults,
+>(launchpad: T, patch: Partial<T>): T {
+  const providerPatch = extractNavigationLaunchpadProviderSettings(patch);
+  const backend = patch.backend ?? launchpad.backend;
+  const providerSettings = seedNavigationLaunchpadProviderSettings(launchpad);
+
+  if (hasNavigationLaunchpadProviderSettingPatch(patch)) {
+    providerSettings[backend] = mergeNavigationLaunchpadProviderSettings(
+      providerSettings[backend] ?? {},
+      providerPatch,
+    );
+    if (isEmptyNavigationLaunchpadProviderSettings(providerSettings[backend])) {
+      delete providerSettings[backend];
+    }
+  }
+
+  const base =
+    backend === launchpad.backend
+      ? { ...launchpad, ...patch, providerSettings }
+      : {
+          ...clearNavigationLaunchpadProviderFields(launchpad),
+          ...patch,
+          backend,
+          providerSettings,
+        };
+  return projectNavigationLaunchpadProviderSettings(base as T);
+}
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   directoryKey: string;

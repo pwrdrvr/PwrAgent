@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  applyNavigationLaunchpadProviderSettingsPatch,
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
@@ -4389,10 +4390,23 @@ export class MessagingController {
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined;
-    const currentMode =
-      session.preferences?.executionMode ??
-      directory?.launchpad?.executionMode ??
-      navigation.launchpadDefaults.executionMode;
+    const backend = await this.resolveNewThreadBackendForSession(
+      {
+        launchpadBackend: navigation.launchpadDefaults.backend,
+        preferredBackend: session.backend,
+        session,
+      },
+      event,
+    );
+    const currentMode = backend
+      ? newThreadOptionsForSession(
+          session,
+          navigation,
+          directory,
+          this.streamingResponsesDefault,
+          backend,
+        ).executionMode
+      : session.preferences?.executionMode ?? "default";
     const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
       { label: "Default", mode: "default" },
       { label: "Full Access", mode: "full-access" },
@@ -4654,9 +4668,20 @@ export class MessagingController {
     navigation: NavigationSnapshot,
     selection: AcpRuntimeRiskWarningContext & { kind: "new-thread" },
   ): Promise<void> {
-    const currentRuntime =
-      session.preferences?.acpRuntime ??
-      navigation.launchpadDefaults.acpRuntime;
+    const backend = session.backend ?? navigation.launchpadDefaults.backend;
+    const summary = await this.getBackendSummary(backend);
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const currentRuntime = summary
+      ? newThreadOptionsForSession(
+          session,
+          navigation,
+          directory,
+          this.streamingResponsesDefault,
+          summary,
+        ).acpRuntime
+      : session.preferences?.acpRuntime;
     const acpRuntime: BackendAcpSessionRuntimeState = {
       ...currentRuntime,
       configValues:
@@ -10938,11 +10963,20 @@ function newThreadOptionsForSession(
   streamingResponsesDefault: boolean,
   backend: BackendSummary,
 ): NewThreadOptionsSummary {
+  const launchpadDefaults = applyNavigationLaunchpadProviderSettingsPatch(
+    navigation.launchpadDefaults,
+    { backend: backend.kind },
+  );
+  const directoryLaunchpad = directory?.launchpad
+    ? applyNavigationLaunchpadProviderSettingsPatch(directory.launchpad, {
+        backend: backend.kind,
+      })
+    : undefined;
   const workMode = resolveNewThreadWorkMode({
     requestedWorkMode:
       session.workMode ??
-      directory?.launchpad?.workMode ??
-      navigation.launchpadDefaults.workMode ??
+      directoryLaunchpad?.workMode ??
+      launchpadDefaults.workMode ??
       "local",
     directory,
   });
@@ -10950,7 +10984,7 @@ function newThreadOptionsForSession(
   const models = backend.launchpadOptions?.models ?? [];
   const modelOption =
     models.find((model) => model.id === session.preferences?.model) ??
-    models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+    models.find((model) => model.id === launchpadDefaults.model) ??
     models.find((model) => model.current) ??
     models[0];
   const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
@@ -10958,9 +10992,9 @@ function newThreadOptionsForSession(
     session.preferences?.reasoningEffort &&
     reasoningEfforts.includes(session.preferences.reasoningEffort)
       ? session.preferences.reasoningEffort
-      : navigation.launchpadDefaults.reasoningEffort &&
-          reasoningEfforts.includes(navigation.launchpadDefaults.reasoningEffort)
-        ? navigation.launchpadDefaults.reasoningEffort
+      : launchpadDefaults.reasoningEffort &&
+          reasoningEfforts.includes(launchpadDefaults.reasoningEffort)
+        ? launchpadDefaults.reasoningEffort
         : reasoningEfforts[0];
   const supportsFast =
     Boolean(backend.launchpadOptions?.supportsFastMode) ||
@@ -10969,26 +11003,26 @@ function newThreadOptionsForSession(
     reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
   const acpRuntime = isAcpBackendId(backend.kind)
     ? session.preferences?.acpRuntime ??
-      directory?.launchpad?.acpRuntime ??
-      navigation.launchpadDefaults.acpRuntime
+      directoryLaunchpad?.acpRuntime ??
+      launchpadDefaults.acpRuntime
     : undefined;
   const executionMode =
     session.preferences?.executionMode ??
-    directory?.launchpad?.executionMode ??
-    navigation.launchpadDefaults.executionMode;
+    directoryLaunchpad?.executionMode ??
+    launchpadDefaults.executionMode;
   const executionModeSource = session.preferences?.executionMode
     ? "session"
-    : directory?.launchpad?.executionMode
+    : directoryLaunchpad?.executionMode
       ? "directory-launchpad"
       : "launchpad-defaults";
-  const codexEnvironmentOptions = directory?.launchpad?.codexEnvironmentOptions ?? [];
+  const codexEnvironmentOptions = directoryLaunchpad?.codexEnvironmentOptions ?? [];
   const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(session, directory);
   const selectedEnvironment = codexEnvironmentOptions.find(
     (environment) => environment.id === codexEnvironmentId,
   );
   const codexEnvironmentSetupEnabled = selectedEnvironment
     ? session.preferences?.codexEnvironmentSetupEnabled ??
-      directory?.launchpad?.codexEnvironmentSetupEnabled ??
+      directoryLaunchpad?.codexEnvironmentSetupEnabled ??
       Boolean(selectedEnvironment.setupScript)
     : false;
   return {
@@ -10998,11 +11032,11 @@ function newThreadOptionsForSession(
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
     codexEnvironmentActionId: selectedEnvironment
       ? session.preferences?.codexEnvironmentActionId ??
-        directory?.launchpad?.codexEnvironmentActionId
+        directoryLaunchpad?.codexEnvironmentActionId
       : undefined,
     codexEnvironmentExecutionTarget: selectedEnvironment
       ? session.preferences?.codexEnvironmentExecutionTarget ??
-        directory?.launchpad?.codexEnvironmentExecutionTarget ??
+        directoryLaunchpad?.codexEnvironmentExecutionTarget ??
         "local"
       : undefined,
     codexEnvironmentId: selectedEnvironment?.id ?? (codexEnvironmentId === null ? null : undefined),
@@ -11012,7 +11046,7 @@ function newThreadOptionsForSession(
     executionModeSource,
     fastMode:
       supportsFast
-        ? session.preferences?.fastMode ?? navigation.launchpadDefaults.fastMode ?? false
+        ? session.preferences?.fastMode ?? launchpadDefaults.fastMode ?? false
         : false,
     model: session.preferences?.model ?? modelOption?.id ?? "default",
     reasoningEffort,
