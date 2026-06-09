@@ -11285,6 +11285,90 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("inherits Codex environment runtime and Full Access for managed task monitors", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "env",
+      environmentName: "Env",
+      executionTarget: "local",
+      shellEnvironment: {
+        GH_TOKEN: "test-gh-token",
+        PATH: "/repo/app/.bin:/usr/bin",
+      },
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-env": {
+            backend: "codex",
+            threadId: "thread-env",
+            executionMode: "full-access",
+            codexEnvironmentRuntime,
+            extraLinkedDirectories: [
+              {
+                id: "/repo/app",
+                kind: "local",
+                label: "app",
+                path: "/repo/app",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-env",
+          turnId: "turn-env",
+          turn: { id: "turn-env" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-env",
+        turnId: "turn-env",
+        callId: "call-env",
+        requestId: "call-env",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR #123 checks until they finish.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      codexEnvironmentRuntime,
+      cwd: "/repo/app",
+      ephemeral: true,
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      codexEnvironmentRuntime,
+      cwd: "/repo/app",
+      sandbox: "danger-full-access",
+      threadId: "monitor-thread",
+    });
+
+    await registry.close();
+  });
+
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
