@@ -28,8 +28,12 @@ let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
 let periodicUpdateCheckTimer: ReturnType<typeof setInterval> | undefined;
 let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
-let configuredUpdateChannel: "latest" | "prerelease" | undefined;
+let updateCheckChannelInFlight: "latest" | "prerelease" | undefined;
 let downloadedUpdateChannel: "latest" | "prerelease" | undefined;
+const pendingDownloadChannelsByVersion = new Map<
+  string,
+  "latest" | "prerelease"
+>();
 
 type GitHubRelease = {
   draft?: boolean;
@@ -71,7 +75,6 @@ function currentUpdateChannel(): "latest" | "prerelease" {
 function configureAutoUpdaterChannel(
   updateChannel: "latest" | "prerelease" = currentUpdateChannel(),
 ): void {
-  configuredUpdateChannel = updateChannel;
   autoUpdater.allowPrerelease = updateChannel === "prerelease";
   log.info("configured auto-update channel", {
     allowPrerelease: autoUpdater.allowPrerelease,
@@ -139,6 +142,16 @@ function downloadedUpdateMatchesChannel(
   return { status: "downloaded", version: updateStatus.version };
 }
 
+function recordPendingDownloadChannel(
+  version: string | undefined,
+  updateChannel: "latest" | "prerelease" | undefined,
+): void {
+  if (!version || !updateChannel) {
+    return;
+  }
+  pendingDownloadChannelsByVersion.set(version, updateChannel);
+}
+
 export async function checkForAppUpdatesNow(
   trigger: "startup" | "periodic" | "manual" | "menu" = "manual",
 ): Promise<AppUpdateCheckResult> {
@@ -173,9 +186,15 @@ export async function checkForAppUpdatesNow(
       }
       log.info("checking for app updates", { trigger });
       configureAutoUpdaterChannel(updateChannel);
+      updateCheckChannelInFlight = updateChannel;
       const result = await autoUpdater.checkForUpdates();
-      if (updateStatus.status === "downloaded") {
-        return { status: "downloaded", version: updateStatus.version };
+      const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
+      if (result?.updateInfo?.version !== currentVersion) {
+        recordPendingDownloadChannel(result?.updateInfo?.version, updateChannel);
+      }
+      const matchingDownloadedResult = downloadedUpdateMatchesChannel(updateChannel);
+      if (matchingDownloadedResult) {
+        return matchingDownloadedResult;
       }
       if (!result || !result.updateInfo) {
         return {
@@ -183,7 +202,6 @@ export async function checkForAppUpdatesNow(
           version: result?.updateInfo?.version ?? "unknown",
         };
       }
-      const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (result.updateInfo.version === currentVersion) {
         return { status: "no-update", version: currentVersion };
       }
@@ -200,6 +218,7 @@ export async function checkForAppUpdatesNow(
       });
       return result;
     } finally {
+      updateCheckChannelInFlight = undefined;
       updateCheckInFlight = undefined;
     }
   })();
@@ -392,6 +411,7 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-available", (info) => {
     log.info("update-available", { version: info.version });
+    recordPendingDownloadChannel(info.version, updateCheckChannelInFlight);
     setUpdateStatus({ status: "available", version: info.version });
   });
   autoUpdater.on("update-not-available", (info) => {
@@ -416,7 +436,12 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("update-downloaded", { version: info.version });
-    downloadedUpdateChannel = configuredUpdateChannel;
+    downloadedUpdateChannel = info.version
+      ? pendingDownloadChannelsByVersion.get(info.version)
+      : undefined;
+    if (info.version) {
+      pendingDownloadChannelsByVersion.delete(info.version);
+    }
     setUpdateStatus({ status: "downloaded", version: info.version });
   });
   autoUpdater.on("error", (err: Error) => {
