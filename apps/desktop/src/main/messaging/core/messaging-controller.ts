@@ -4450,6 +4450,17 @@ export class MessagingController {
       await this.deliverInvalidBrowseSelection(event);
       return;
     }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const currentMode =
+      session.preferences?.executionMode ??
+      directory?.launchpad?.executionMode ??
+      navigation.launchpadDefaults.executionMode;
+    if (executionMode === currentMode) {
+      await this.presentNewThreadPromptGate(session, event, navigation);
+      return;
+    }
     if (executionMode === "full-access") {
       const allowed = await this.ensureFullAccessEscalationAllowed(
         { kind: "new-thread", session },

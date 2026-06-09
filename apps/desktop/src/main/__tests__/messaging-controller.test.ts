@@ -3693,6 +3693,72 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
+  it("treats selecting the current new-thread Full Access permission as a no-op", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const onFullAccessPolicyViolation = vi.fn();
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: false,
+        allowThreadResume: true,
+        warningPolicy: "never",
+      },
+      onFullAccessPolicyViolation,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select permissions",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-permissions",
+          label: "Full Access (current)",
+          value: { executionMode: "full-access" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-permissions",
+        value: { executionMode: "full-access" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full"),
+    });
+    expect(onFullAccessPolicyViolation).not.toHaveBeenCalled();
+    expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          executionMode: "full-access",
+        }),
+      }),
+    );
+  });
+
   it("does not label ACP model config as permissions in the new-thread prompt", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
