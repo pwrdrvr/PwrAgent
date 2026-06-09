@@ -148,6 +148,25 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
+  it("accepts first-turn handoff titles with non-ticket task markers", async () => {
+    const service = new ThreadTitleGenerationService({
+      generators: {
+        codex: makeGenerator({ title: "Dynamic subagent monitoring" }),
+      },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "codex",
+        userPrompt:
+          "**Handoff Message: Dynamic Subagent Monitoring for Long-Running Tasks**\n\nTask #1: monitor the spawned agents.\nTask #2: report long-running tool calls.",
+      })
+    ).resolves.toMatchObject({
+      status: "generated",
+      title: "Dynamic subagent monitoring",
+    });
+  });
+
   it("cleans wrapper quotes and trailing punctuation", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
