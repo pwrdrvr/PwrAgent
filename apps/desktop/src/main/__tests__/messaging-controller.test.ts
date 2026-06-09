@@ -4643,6 +4643,77 @@ describe("MessagingController", () => {
     });
   });
 
+  it("hydrates a bound Telegram topic title from managed topic metadata", async () => {
+    const harness = await createHarness();
+    await harness.store.upsertManagedTopic({
+      id: "topic:telegram:-1001:56",
+      authorizedActorIds: ["user-1"],
+      channel: "telegram",
+      conversation: {
+        id: "56",
+        kind: "topic",
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Test Thread",
+      },
+      createdAt: 1000,
+      lastObservedAt: 1000,
+      lifecycle: "open",
+      source: "observed",
+      supergroupId: "-1001",
+      title: "Test Thread",
+      topicId: "56",
+      updatedAt: 1000,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:56:codex:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "56",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("hello", {
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "56",
+            kind: "topic",
+            parentId: "-1001",
+            parentTitle: "Ops",
+          },
+        },
+        routingState: {
+          opaque: {
+            chatId: -1001,
+            messageThreadId: 56,
+          },
+        },
+      }),
+    );
+
+    await expect(
+      harness.store.getBinding("binding:telegram:topic:-1001:56:codex:thread-1"),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          title: "Test Thread",
+        },
+      },
+    });
+  });
+
   it("renders Telegram topic cleanup as dry-run proposals", async () => {
     const closeManagedConversation = vi.fn(async () => ({
       channel: "telegram" as const,

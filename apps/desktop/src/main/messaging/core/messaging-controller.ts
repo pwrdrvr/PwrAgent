@@ -1065,11 +1065,22 @@ export class MessagingController {
     // broadcast — so the gateway echo of our own `editForumTopic`
     // call (which carries the same name we just wrote in
     // `syncConversationName`) is a no-op, not a refresh storm.
+    const managedTopic =
+      incoming.kind === "topic" && incoming.parentId
+        ? await this.options.store.findManagedTopicByConversation({
+            channel: event.channel.channel,
+            supergroupId: incoming.parentId,
+            topicId: incoming.id,
+          })
+        : undefined;
+    const managedConversation = managedTopic?.conversation;
     const merged = {
       ...stored,
-      title: incoming.title ?? stored.title,
-      parentTitle: incoming.parentTitle ?? stored.parentTitle,
-      ancestorTitle: incoming.ancestorTitle ?? stored.ancestorTitle,
+      title: incoming.title ?? stored.title ?? managedConversation?.title,
+      parentTitle:
+        incoming.parentTitle ?? stored.parentTitle ?? managedConversation?.parentTitle,
+      ancestorTitle:
+        incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
     };
     const routingState = event.routingState ?? binding.routingState;
     const changed =
