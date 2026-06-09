@@ -101,7 +101,11 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import { wireAppMenuBridge } from "./app-menu-bridge";
-import { appQuitManager, requestQuit } from "./quit-manager";
+import {
+  appQuitManager,
+  requestQuit,
+  type QuitRequestSource,
+} from "./quit-manager";
 import {
   installTranscriptImageProtocol,
   registerTranscriptImageProtocolScheme,
@@ -250,8 +254,56 @@ function cancelQuitInProgress(source: string): void {
   mainLog.info("quit cancelled", { source });
 }
 
+/**
+ * Begin an app-wide quit for `source`, then release the hold if it doesn't
+ * take. Shared by every entry point that holds a window/quit open while the
+ * quit manager confirms (main-window close, window-all-closed, before-quit):
+ * mark the quit in progress, ask the manager to confirm, and clear
+ * `quitInProgress` again if the user declines the in-progress-thread prompt
+ * (`didQuit === false`) — or if the request rejects unexpectedly. Without that
+ * release the app wedges: the window stays held open (preventDefault) and
+ * window creation stays blocked, with no path back.
+ */
+function beginQuitWithRelease(source: QuitRequestSource): void {
+  beginQuitInProgress(source);
+  void requestQuit({ source })
+    .then((didQuit) => {
+      if (!didQuit) {
+        cancelQuitInProgress(source);
+      }
+    })
+    .catch((error: unknown) => {
+      mainLog.error("quit request failed; releasing quit hold", {
+        error,
+        source,
+      });
+      cancelQuitInProgress(source);
+    });
+}
+
 function isWindowCreationBlocked(): boolean {
   return quitInProgress || mainProcessResourcesDisposed;
+}
+
+/**
+ * Closing the primary window quits the whole app. PwrAgent has no tray and no
+ * dock/reopen path we want to support, so once the main window is gone there's
+ * no way back to it — and any still-open aux windows (Changelog / Logs /
+ * License / Messaging Activity) must not keep a headless, unreachable app
+ * alive. Mirror the before-quit / window-all-closed flow: hold the window open
+ * until an in-progress-thread quit is confirmed, then let app.quit() tear
+ * everything (incl. aux windows) down. Once a quit is allowed/underway,
+ * isQuitAllowed() is true and we let the close proceed — that also covers
+ * app.quit() re-closing this window during teardown, so there's no loop.
+ */
+function quitAppOnMainWindowClose(window: BrowserWindow): void {
+  window.on("close", (event) => {
+    if (appQuitManager.isQuitAllowed()) {
+      return;
+    }
+    event.preventDefault();
+    beginQuitWithRelease("main-window-closed");
+  });
 }
 
 function installProcessShutdownHandlers(): void {
@@ -296,10 +348,12 @@ function focusPwrAgentWindows(): void {
       Boolean(window && !window.isDestroyed()),
   );
   if (windows.length === 0) {
-    createMainWindow(
-      startupCpuProfilerForNewWindows
-        ? { startupCpuProfiler: startupCpuProfilerForNewWindows }
-        : undefined,
+    quitAppOnMainWindowClose(
+      createMainWindow(
+        startupCpuProfilerForNewWindows
+          ? { startupCpuProfiler: startupCpuProfilerForNewWindows }
+          : undefined,
+      ),
     );
     app.focus({ steal: true });
     return;
@@ -603,9 +657,11 @@ export function bootstrapApp(): void {
     // current snapshot. When messaging is disabled the runtime singleton
     // still exists (default config); status returns []  / never emits.
     registerMessagingStatusIpcHandlers();
-    createMainWindow({
-      startupCpuProfiler,
-    });
+    quitAppOnMainWindowClose(
+      createMainWindow({
+        startupCpuProfiler,
+      }),
+    );
     prewarmInitialThreadList();
 
     // Wire up auto-update *after* the window is created so a slow update
@@ -618,9 +674,11 @@ export function bootstrapApp(): void {
         return;
       }
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow({
-          startupCpuProfiler,
-        });
+        quitAppOnMainWindowClose(
+          createMainWindow({
+            startupCpuProfiler,
+          }),
+        );
       }
     });
   });
@@ -635,23 +693,13 @@ export function bootstrapApp(): void {
       mainLog.info("ignoring window-all-closed during shutdown");
       return;
     }
-    beginQuitInProgress("window-all-closed");
-    void requestQuit({ source: "window-all-closed" }).then((didQuit) => {
-      if (!didQuit) {
-        cancelQuitInProgress("window-all-closed");
-      }
-    });
+    beginQuitWithRelease("window-all-closed");
   });
 
   app.on("before-quit", (event) => {
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
-      beginQuitInProgress("before-quit");
-      void requestQuit({ source: "before-quit" }).then((didQuit) => {
-        if (!didQuit) {
-          cancelQuitInProgress("before-quit");
-        }
-      });
+      beginQuitWithRelease("before-quit");
       return;
     }
     beginQuitInProgress("before-quit");
