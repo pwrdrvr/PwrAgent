@@ -10085,7 +10085,12 @@ export class DesktopBackendRegistry {
           message: "Task monitor dynamic tools are only available for Codex threads.",
         });
       }
-      if (!this.isLiveDynamicToolCall(backend, taskMonitorToolCall)) {
+      const requiresActiveTurn =
+        taskMonitorToolCall.tool === "create_monitor_delegation";
+      if (
+        requiresActiveTurn &&
+        !this.isLiveDynamicToolCall(backend, taskMonitorToolCall)
+      ) {
         backendRegistryLog.warn("rejecting task monitor dynamic tool call", {
           backend,
           callId: taskMonitorToolCall.callId,
@@ -10097,7 +10102,7 @@ export class DesktopBackendRegistry {
         return buildTaskMonitorDynamicToolErrorResponse({
           code: "forbidden",
           message:
-            "Task monitor tool calls must originate from an active Codex turn.",
+            "Task monitor delegations must originate from an active Codex turn.",
         });
       }
       backendRegistryLog.info("handling task monitor dynamic tool call", {
