@@ -7,6 +7,9 @@
      buttons sit on the same line. Only consumed under [data-platform="win32"];
      zero contribution elsewhere. */
   --win-titlebar-h: 40px;
+  /* Width reserved at the strip's right edge for the OS caption buttons
+     (min/max/close) so title-bar content never sits under them. */
+  --win-caption-w: 140px;
   --bg-app: #000000;
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;
@@ -404,13 +407,62 @@ textarea,
   z-index: 40;
   display: flex;
   align-items: center;
+  gap: 10px;
   height: var(--win-titlebar-h);
-  padding-left: 8px;
+  /* Right padding reserves room for the OS caption buttons (min/max/close) so
+     the MSG cluster never sits under them; the draggable spacer absorbs the
+     slack. ~3 caption buttons at default DPI. */
+  padding: 0 var(--win-caption-w, 140px) 0 10px;
   /* Match the OS caption-button overlay color (TITLE_BAR_BG_* in
      appearance-bootstrap.ts mirrors --bg-sidebar) so the painted strip and the
      native min/max/close buttons read as one continuous title bar. */
   background: var(--bg-sidebar);
   -webkit-app-region: drag;
+}
+
+/* Left cluster: wordmark + menu + action buttons (all interactive → no-drag).
+   The spacer between left and right clusters stays draggable. */
+.app-titlebar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar__spacer {
+  flex: 1 1 auto;
+  align-self: stretch;
+  -webkit-app-region: drag;
+}
+
+.app-titlebar__right {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+/* Wordmark — reuse the sidebar brand tokens (--text-primary / --accent), sized
+   for the title strip. The sidebar masthead is hidden on win32 so this is the
+   only wordmark. */
+.app-titlebar__brand {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.app-titlebar__brand-accent {
+  color: var(--accent);
+}
+
+.app-titlebar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .app-titlebar__menubar {
@@ -451,6 +503,23 @@ textarea,
   margin-top: var(--win-titlebar-h);
   height: calc(100vh - var(--win-titlebar-h));
   height: calc(100dvh - var(--win-titlebar-h));
+}
+
+/* On Windows the wordmark + masthead action buttons (Automations/Settings/New
+   Thread) live in the title strip instead, so hide the sidebar masthead. */
+:root[data-platform="win32"] .sidebar__masthead {
+  display: none;
+}
+
+/* On Windows the MSG status indicator lives in the title strip (one global
+   control), so hide the per-screen copies in every header but restore the one
+   inside the title bar. */
+:root[data-platform="win32"] .messaging-status-bar {
+  display: none;
+}
+
+:root[data-platform="win32"] .app-titlebar .messaging-status-bar {
+  display: flex;
 }
 
 .app-shell--fatal-settings {

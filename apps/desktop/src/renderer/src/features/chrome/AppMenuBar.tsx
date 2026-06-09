@@ -9,30 +9,27 @@ import { getDesktopApi } from "../../lib/desktop-api";
 import type { AppMenuTopLevel } from "../../../../shared/app-menu";
 
 /**
- * Windows-only custom application menu bar, painted into our frameless title
- * strip.
+ * The painted application menu bar (File / Edit / View / Profiles / Window /
+ * Help), rendered inside the Windows title strip by `AppTitleBar`.
  *
- * Under `titleBarStyle: "hidden"` (our custom chrome) the native Windows menu
- * bar is gone — the menu lived in the title bar we hid. So we paint the
- * top-level entries (File / View / Profiles / Window / Help) as buttons and, on
- * click or Alt-mnemonic, ask main to pop the REAL native submenu at the button
- * (`popupAppMenu`). Roles, accelerators, dynamic enable/disable, and click
- * handlers all live in the application menu main already builds — this
- * component owns only the bar's looks + keyboard entry.
+ * Under `titleBarStyle: "hidden"` the native Windows menu bar is gone — the
+ * menu lived in the title bar we hid. So we paint the top-level entries as
+ * buttons and, on click or Alt-mnemonic, ask main to pop the REAL native
+ * submenu at the button (`popupAppMenu`). Roles, accelerators, dynamic
+ * enable/disable, and click handlers all live in the application menu main
+ * already builds — this component owns only the bar's looks + keyboard entry.
  *
- * Renders nothing off win32. The strip (drag region) renders on win32 even
- * before the model loads so the window stays draggable and the content offset
- * (`--win-titlebar-h`) is consistent.
+ * Renders the `<nav>` only (no strip chrome — `AppTitleBar` owns that) and
+ * nothing until the model loads. `AppTitleBar` gates on win32, so this is only
+ * ever mounted there.
  */
 export function AppMenuBar(): ReactElement | null {
-  const isWindows = getDesktopApi()?.platform === "win32";
   const [items, setItems] = useState<AppMenuTopLevel[]>([]);
   // Array position (not menu index) of the keyboard-focused entry, or null.
   const [focusedPos, setFocusedPos] = useState<number | null>(null);
   const btnRefs = useRef(new Map<number, HTMLButtonElement>());
 
   useEffect(() => {
-    if (!isWindows) return;
     const api = getDesktopApi();
     if (api?.getAppMenuModel === undefined) return;
     let alive = true;
@@ -42,7 +39,7 @@ export function AppMenuBar(): ReactElement | null {
     return () => {
       alive = false;
     };
-  }, [isWindows]);
+  }, []);
 
   const openMenu = useCallback((index: number): void => {
     const btn = btnRefs.current.get(index);
@@ -59,7 +56,7 @@ export function AppMenuBar(): ReactElement | null {
   }, []);
 
   useEffect(() => {
-    if (!isWindows || items.length === 0) return;
+    if (items.length === 0) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       // Plain Alt: toggle the keyboard-focus highlight on the bar (Windows
       // convention — Alt then arrows/Enter, or Alt+<letter> below).
@@ -102,30 +99,28 @@ export function AppMenuBar(): ReactElement | null {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isWindows, items, focusedPos, openMenu]);
+  }, [items, focusedPos, openMenu]);
 
-  if (!isWindows) return null;
+  if (items.length === 0) return null;
   return (
-    <div className="app-titlebar">
-      <nav className="app-titlebar__menubar" aria-label="Application menu">
-        {items.map((it, pos) => (
-          <button
-            key={it.index}
-            type="button"
-            ref={(el) => {
-              if (el === null) btnRefs.current.delete(it.index);
-              else btnRefs.current.set(it.index, el);
-            }}
-            className={
-              "app-titlebar__menu-item" +
-              (focusedPos === pos ? " is-focused" : "")
-            }
-            onClick={() => openMenu(it.index)}
-          >
-            {it.label}
-          </button>
-        ))}
-      </nav>
-    </div>
+    <nav className="app-titlebar__menubar" aria-label="Application menu">
+      {items.map((it, pos) => (
+        <button
+          key={it.index}
+          type="button"
+          ref={(el) => {
+            if (el === null) btnRefs.current.delete(it.index);
+            else btnRefs.current.set(it.index, el);
+          }}
+          className={
+            "app-titlebar__menu-item" +
+            (focusedPos === pos ? " is-focused" : "")
+          }
+          onClick={() => openMenu(it.index)}
+        >
+          {it.label}
+        </button>
+      ))}
+    </nav>
   );
 }

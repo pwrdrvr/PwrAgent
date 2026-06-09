@@ -14,6 +14,7 @@ import type {
   DesktopPwrAgentProfileSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import {
   useDesktopSettings,
@@ -81,33 +82,39 @@ export function App() {
 
   if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
     return (
-      <div className="app-shell app-shell--fatal-settings">
-        <main className="app-main">
-          <Suspense fallback={null}>
-            <LazySettingsScreen
-              appearanceController={appearanceController}
-              desktopApi={desktopApi}
-              settings={settings}
-            />
-          </Suspense>
-        </main>
-      </div>
+      <>
+        <AppTitleBar />
+        <div className="app-shell app-shell--fatal-settings">
+          <main className="app-main">
+            <Suspense fallback={null}>
+              <LazySettingsScreen
+                appearanceController={appearanceController}
+                desktopApi={desktopApi}
+                settings={settings}
+              />
+            </Suspense>
+          </main>
+        </div>
+      </>
     );
   }
 
   if (settings.snapshot?.configError) {
     return (
-      <div className="app-shell app-shell--fatal-settings">
-        <main className="app-main">
-          <Suspense fallback={null}>
-            <LazySettingsScreen
-              appearanceController={appearanceController}
-              desktopApi={desktopApi}
-              settings={settings}
-            />
-          </Suspense>
-        </main>
-      </div>
+      <>
+        <AppTitleBar />
+        <div className="app-shell app-shell--fatal-settings">
+          <main className="app-main">
+            <Suspense fallback={null}>
+              <LazySettingsScreen
+                appearanceController={appearanceController}
+                desktopApi={desktopApi}
+                settings={settings}
+              />
+            </Suspense>
+          </main>
+        </div>
+      </>
     );
   }
 
@@ -504,12 +511,33 @@ function DesktopAppShell(props: {
   };
 
   return (
-    <div
-      className="app-shell"
-      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
-    >
-      <Sidebar
-        backends={backendSummaries.backends}
+    <>
+      <AppTitleBar
+        desktopApi={desktopApi}
+        onOpenMessagingActivity={openMessagingActivityWindow}
+        actions={{
+          automationsActive: mainView === "automations",
+          settingsActive: mainView === "settings",
+          creatingThread: Boolean(navigation.creatingThread),
+          onOpenAutomations: () => {
+            setMainView("automations");
+          },
+          onOpenSettings: () => {
+            setSettingsInitialSection(undefined);
+            setMainView("settings");
+          },
+          onCreateThread: async () => {
+            setMainView("thread");
+            await navigation.createThread();
+          },
+        }}
+      />
+      <div
+        className="app-shell"
+        style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+      >
+        <Sidebar
+          backends={backendSummaries.backends}
         browseMode={navigation.browseMode}
         createThreadError={navigation.createThreadError}
         creatingThread={navigation.creatingThread}
@@ -725,7 +753,8 @@ function DesktopAppShell(props: {
         />
         <AppUpdateBanner desktopApi={desktopApi} />
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
