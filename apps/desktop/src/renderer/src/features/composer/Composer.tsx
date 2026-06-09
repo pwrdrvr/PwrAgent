@@ -664,7 +664,8 @@ export function formatDurationMs(
 export function formatRunningDurationMs(ms?: number): string {
   if (ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
   const totalSeconds = Math.floor(ms / 1_000);
-  return `${totalSeconds}s`;
+  if (totalSeconds < 1) return "0s";
+  return formatDurationMs(totalSeconds * 1_000);
 }
 
 /**

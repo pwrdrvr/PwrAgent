@@ -443,9 +443,10 @@ describe("formatRunningDurationMs", () => {
     expect(formatRunningDurationMs(59_999)).toBe("59s");
   });
 
-  it("keeps long-running live values in seconds", () => {
-    expect(formatRunningDurationMs(60_000)).toBe("60s");
-    expect(formatRunningDurationMs(119_999)).toBe("119s");
-    expect(formatRunningDurationMs(6 * 60_000 + 23_000)).toBe("383s");
+  it("formats minute-plus live elapsed values as minutes and seconds", () => {
+    expect(formatRunningDurationMs(60_000)).toBe("1m");
+    expect(formatRunningDurationMs(119_999)).toBe("1m 59s");
+    expect(formatRunningDurationMs(323_000)).toBe("5m 23s");
+    expect(formatRunningDurationMs(6 * 60_000 + 23_000)).toBe("6m 23s");
   });
 });
