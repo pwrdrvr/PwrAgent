@@ -4,35 +4,55 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentType,
   type CSSProperties,
   type FocusEvent,
-  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
-  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import type {
-  BackendSummary,
-  NavigationThreadSummary,
-  WorktreeSnapshotSummary,
-} from "@pwragent/shared";
+import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
-import { CopyIcon, FolderIcon, WorktreeIcon } from "../../icons";
-import { copyText, formatCopyTooltip } from "../../lib/copy-text";
-import type { DesktopApi } from "../../lib/desktop-api";
-import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
-  formatBackendAccountText,
-  formatRateLimitLine,
-  selectVisibleRateLimits,
-} from "../../lib/backend-status-format";
+  AutomationsIcon,
+  InfoIcon,
+  PinIcon,
+  ProjectsIcon,
+  PullRequestIcon,
+  ServerIcon,
+  SubAgentsIcon,
+  type IconProps,
+} from "../../icons";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
+import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
+import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
+import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
+import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
+import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
+import { buildRailTooltipText } from "./context-panels/context-rail-shared";
+import type { ContextTabId } from "./context-panels/context-tab";
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
+
+type ContextTab = {
+  id: ContextTabId;
+  label: string;
+  Icon: ComponentType<IconProps>;
+  /** Anchored to the bottom of the rail, above the pin toggle. */
+  bottom?: boolean;
+};
+
+const CONTEXT_TABS: ContextTab[] = [
+  { id: "info", label: "Thread info", Icon: InfoIcon },
+  { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
+  { id: "automations", label: "Automations", Icon: AutomationsIcon },
+  { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
+  { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
+  { id: "providers", label: "Provider status", Icon: ServerIcon, bottom: true },
+];
 
 type ThreadContextPanelProps = {
   backendError?: string;
@@ -51,6 +71,8 @@ type ThreadContextPanelProps = {
     snapshotRef: string,
     worktreePath: string
   ) => Promise<void>;
+  activeTab: ContextTabId;
+  onActiveTabChange: (tab: ContextTabId) => void;
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
@@ -59,8 +81,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
   const [resizing, setResizing] = useState(false);
-  const [agentSaving, setAgentSaving] = useState(false);
-  const [agentError, setAgentError] = useState<string>();
   const [tooltip, setTooltip] = useState<{
     left?: number;
     text: string;
@@ -76,6 +96,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const revealIntentRef = useRef(0);
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
+
+  const activeTab = props.activeTab;
+  const activeTabMeta =
+    CONTEXT_TABS.find((tab) => tab.id === activeTab) ?? CONTEXT_TABS[0]!;
+  const topTabs = CONTEXT_TABS.filter((tab) => !tab.bottom);
+  const bottomTabs = CONTEXT_TABS.filter((tab) => tab.bottom);
 
   const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
     lastMousePositionRef.current = {
@@ -150,11 +176,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     setRevealed(false);
   }, [clearRevealTimer]);
 
-  // Debounced reveal/hide prevents flicker from CSS transform transitions
-  // causing spurious mouseenter→mouseleave sequences. The final hit test
-  // keeps the rail open when an inactive window reports a transient leave
-  // during the collapsed-spine → open-panel swap while the cursor is still
-  // inside the opened rail.
+  // Debounced reveal/hide prevents flicker from the panel reveal
+  // transition causing spurious mouseenter→mouseleave sequences. The
+  // final hit test keeps the rail open when an inactive window reports a
+  // transient leave during the collapsed-spine → open-panel swap while
+  // the cursor is still inside the opened rail.
   const revealRail = useCallback(() => {
     clearTimeout(hideTimerRef.current);
     clearRevealTimer();
@@ -210,11 +236,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       revealIntentRef.current += 1;
     };
   }, []);
-
-  useEffect(() => {
-    setAgentError(undefined);
-    setAgentSaving(false);
-  }, [props.thread.id, props.thread.source]);
 
   useEffect(() => {
     if (pinned || !revealed) {
@@ -323,6 +344,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     props.onPinnedChange?.(nextPinned);
   };
 
+  const selectTab = (tab: ContextTabId): void => {
+    props.onActiveTabChange(tab);
+    if (!pinned) {
+      revealRail();
+    }
+  };
+
   const resizeRail = (nextWidth: number): void => {
     const clampedWidth = Math.min(560, Math.max(300, nextWidth));
     setRailWidth(clampedWidth);
@@ -354,26 +382,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
-  };
-
-  const setThreadAgent = async (agent: { name: string } | null): Promise<void> => {
-    if (!props.desktopApi?.setThreadAgent) {
-      return;
-    }
-    setAgentSaving(true);
-    setAgentError(undefined);
-    try {
-      await props.desktopApi.setThreadAgent({
-        backend: props.thread.source,
-        threadId: props.thread.id,
-        agent,
-      });
-      await props.onRefreshNavigation?.();
-    } catch (error) {
-      setAgentError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAgentSaving(false);
-    }
   };
 
   return (
@@ -433,408 +441,51 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           onPointerDown={startRailResize}
         />
       ) : null}
-      <div className="context-rail__spine">
-        <button
-          aria-label={pinned ? "Unpin context rail" : "Open context rail"}
-          className={`context-rail__menu-button${open ? " is-active" : ""}`}
-          type="button"
-          onClick={() => {
-            if (pinned) {
-              updatePinned(false);
-              clearTimeout(hideTimerRef.current);
-              clearRevealTimer();
-              setRevealed(false);
-              return;
-            }
-
-            revealRail();
-          }}
-        >
-          <span className="context-rail__menu-glyph" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-        </button>
-      </div>
 
       {open ? (
         <div className="context-panel">
-          <div className="context-panel__rail-header">
-            <div>
-              <p className="eyebrow">Context</p>
+          <div className="context-panel__inner">
+            <div className="context-panel__header">
+              <span className="context-panel__title">{activeTabMeta.label}</span>
             </div>
-
-            <div className="context-panel__rail-actions">
-              <span className="context-panel__rail-state">
-                {pinned ? "Pinned" : "Auto-hide"}
-              </span>
-              <button
-                aria-label={pinned ? "Unpin context rail" : "Pin context rail"}
-                className="button button--ghost context-panel__pin-button"
-                type="button"
-                onClick={() => {
-                  updatePinned(!pinned);
-                  setRevealed(true);
-                }}
-              >
-                {pinned ? "Unpin" : "Pin"}
-              </button>
-            </div>
+            <div className="context-panel__scroll">{renderActivePanel()}</div>
           </div>
-
-          <section className="context-panel__section">
-            <h3>Linked directories</h3>
-            {props.thread.linkedDirectories.length > 0 ? (
-              <ul className="context-list">
-                {props.thread.linkedDirectories.map((directory) => {
-                  const worktreePath = directory.worktreePath ?? directory.path;
-                  const snapshot = findSnapshotForWorktree(
-                    props.thread.worktreeSnapshots,
-                    worktreePath
-                  );
-                  const canRestore =
-                    directory.kind === "worktree" &&
-                    snapshot?.state === "archived" &&
-                    Boolean(props.onRestoreWorktree);
-
-                  return (
-                    <li key={directory.id} className="context-list__item">
-                      <div className="context-list__label">
-                        <CopyValueButton
-                          label={`Copy path for ${directory.label}`}
-                          value={directory.path}
-                          onBlur={hideRailTooltip}
-                          onCopy={handleCopyPath}
-                          onShowTooltip={showRailTooltip}
-                        />
-                        <TooltipValue
-                          label={`Path for ${directory.label}`}
-                          value={directory.path}
-                          onBlur={hideRailTooltip}
-                          onShowTooltip={showRailTooltip}
-                        >
-                          <span aria-hidden="true" className="context-list__icon">
-                            {directory.kind === "worktree" ? (
-                              <WorktreeIcon size={14} />
-                            ) : (
-                              <FolderIcon size={14} />
-                            )}
-                          </span>
-                          {directory.label}
-                        </TooltipValue>
-                      </div>
-                      <div className="context-list__actions">
-                        {canRestore && snapshot ? (
-                          <button
-                            className="context-list__action"
-                            type="button"
-                            onClick={() => {
-                              void props.onRestoreWorktree?.(
-                                props.thread,
-                                snapshot.snapshotRef,
-                                snapshot.worktreePath
-                              );
-                            }}
-                          >
-                            Restore
-                          </button>
-                        ) : null}
-                        <span className="context-list__meta">
-                          <CopyValueButton
-                            label={`Copy path for ${directory.kind} ${directory.label}`}
-                            value={worktreePath}
-                            onBlur={hideRailTooltip}
-                            onCopy={handleCopyPath}
-                            onShowTooltip={showRailTooltip}
-                          />
-                          <TooltipValue
-                            label={`Path for ${
-                              snapshot?.state === "archived" ? "archived" : directory.kind
-                            } ${directory.label}`}
-                            value={worktreePath}
-                            onBlur={hideRailTooltip}
-                            onShowTooltip={showRailTooltip}
-                          >
-                            {snapshot?.state === "archived" ? "archived" : directory.kind}
-                          </TooltipValue>
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : props.thread.projectKey?.trim() ? (
-              <>
-                <ul className="context-list">
-                  <li className="context-list__item">
-                    <div className="context-list__label">
-                      <CopyValueButton
-                        label="Copy recorded working directory"
-                        value={props.thread.projectKey!}
-                        onBlur={hideRailTooltip}
-                        onCopy={handleCopyPath}
-                        onShowTooltip={showRailTooltip}
-                      />
-                      <TooltipValue
-                        label="Recorded working directory path"
-                        value={props.thread.projectKey!}
-                        onBlur={hideRailTooltip}
-                        onShowTooltip={showRailTooltip}
-                      >
-                        <span aria-hidden="true" className="context-list__icon">
-                          <FolderIcon size={14} />
-                        </span>
-                        {pathBaseName(props.thread.projectKey)}
-                      </TooltipValue>
-                    </div>
-                    <span className="context-list__meta">
-                      <CopyValueButton
-                        label="Copy missing working directory path"
-                        value={props.thread.projectKey!}
-                        onBlur={hideRailTooltip}
-                        onCopy={handleCopyPath}
-                        onShowTooltip={showRailTooltip}
-                      />
-                      <TooltipValue
-                        label="Missing working directory path"
-                        value={props.thread.projectKey!}
-                        onBlur={hideRailTooltip}
-                        onShowTooltip={showRailTooltip}
-                      >
-                        missing
-                      </TooltipValue>
-                    </span>
-                  </li>
-                </ul>
-                <p className="context-empty">Recorded working directory is no longer available.</p>
-              </>
-            ) : (
-              <p className="context-empty">No linked directory</p>
-            )}
-            {props.worktreeArchiveError ? (
-              <p className="context-empty context-empty--error">
-                {props.worktreeArchiveError}
-              </p>
-            ) : null}
-          </section>
-
-          <section className="context-panel__section">
-            <h3>Agent</h3>
-            {props.thread.agent ? (
-              <div className="context-list__item">
-                <div className="context-list__content">
-                  <p className="context-list__label">{props.thread.agent.name}</p>
-                  <p className="context-list__meta">
-                    {formatAgentInstructionSummary(
-                      props.thread.agent.instructionLineCount
-                    )}
-                  </p>
-                </div>
-                <button
-                  className="context-list__action"
-                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
-                  type="button"
-                  onClick={() => void setThreadAgent(null)}
-                >
-                  Clear
-                </button>
-              </div>
-            ) : (
-              <div className="context-list__item">
-                <p className="context-empty">Ordinary work thread</p>
-                <button
-                  className="context-list__action"
-                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
-                  type="button"
-                  onClick={() => void setThreadAgent({ name: props.thread.title })}
-                >
-                  Mark as Agent
-                </button>
-              </div>
-            )}
-            {agentError ? (
-              <p className="context-empty context-empty--error" role="alert">
-                {agentError}
-              </p>
-            ) : null}
-          </section>
-
-          <ThreadAutomationsPanel
-            desktopApi={props.desktopApi}
-            thread={props.thread}
-            onRefreshNavigation={props.onRefreshNavigation}
-          />
-
-          {props.thread.worktreeSnapshots?.some(
-            (snapshot) => snapshot.state === "archived"
-          ) ? (
-            <section className="context-panel__section">
-              <h3>Worktree snapshots</h3>
-              <ul className="context-list">
-                {props.thread.worktreeSnapshots
-                  .filter((snapshot) => snapshot.state === "archived")
-                  .map((snapshot) => (
-                    <li key={snapshot.id} className="context-list__item">
-                      <button
-                        aria-label={`Copy snapshot ref ${snapshot.snapshotRef}`}
-                        className="context-list__label path-copy-target"
-                        type="button"
-                        onBlur={hideRailTooltip}
-                        onClick={(event) => {
-                          void handleCopyPath(event, snapshot.snapshotRef);
-                        }}
-                        onFocus={(event) => showRailTooltip(event, snapshot.snapshotRef)}
-                        onMouseEnter={(event) => showRailTooltip(event, snapshot.snapshotRef)}
-                        onMouseLeave={hideRailTooltip}
-                      >
-                        <span aria-hidden="true" className="context-list__icon">
-                          <WorktreeIcon size={14} />
-                        </span>
-                        {pathBaseName(snapshot.worktreePath)}
-                      </button>
-                      <div className="context-list__actions">
-                        <button
-                          className="context-list__action"
-                          type="button"
-                          onClick={() => {
-                            void props.onRestoreWorktree?.(
-                              props.thread,
-                              snapshot.snapshotRef,
-                              snapshot.worktreePath
-                            );
-                          }}
-                        >
-                          Restore
-                        </button>
-                        <span className="context-list__meta">
-                          {snapshot.archivedAt
-                            ? formatTimestamp(snapshot.archivedAt)
-                            : "archived"}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-              </ul>
-            </section>
-          ) : null}
-
-          <section className="context-panel__section">
-            <h3>Execution context</h3>
-            <dl className="context-grid">
-              <div>
-                <dt>Backend</dt>
-                <dd>{formatBackendLabel(props.thread.source, props.backends)}</dd>
-              </div>
-              <div>
-                <dt>Thread ID</dt>
-                <dd className="context-value-row">
-                  <CopyValueButton
-                    aria-label="Copy thread id"
-                    label="Copy thread id"
-                    maxTooltipLength={48}
-                    value={props.thread.id}
-                    onBlur={hideRailTooltip}
-                    onCopy={handleCopyPath}
-                    onShowTooltip={showRailTooltip}
-                  />
-                  <span className="context-grid__mono">
-                    {props.thread.id}
-                  </span>
-                </dd>
-              </div>
-              <div>
-                <dt>Access</dt>
-                <dd>{formatExecutionModeLabel(props.thread.executionMode)}</dd>
-              </div>
-              <div>
-                <dt>Branch</dt>
-                <dd className="context-value-row">
-                  {props.thread.gitBranch ? (
-                    <CopyValueButton
-                      label="Copy branch name"
-                      value={props.thread.gitBranch}
-                      onBlur={hideRailTooltip}
-                      onCopy={handleCopyPath}
-                      onShowTooltip={showRailTooltip}
-                    />
-                  ) : null}
-                  <span className="context-grid__mono">
-                    {props.thread.gitBranch ?? "Not attached"}
-                  </span>
-                </dd>
-              </div>
-              <div>
-                <dt>Updated</dt>
-                <dd>{props.thread.updatedAt ? formatTimestamp(props.thread.updatedAt) : "Unknown"}</dd>
-              </div>
-              <div>
-                <dt>Desktop</dt>
-                <dd>{props.platform ?? "Unknown"}</dd>
-              </div>
-            </dl>
-
-          </section>
-
-          <section className="context-panel__section context-panel__section--status">
-            <h3>App servers</h3>
-            {props.backendError ? (
-              <p className="context-empty">{props.backendError}</p>
-            ) : props.backends.length > 0 ? (
-              <ul className="backend-status-list">
-                {props.backends.map((backend) => (
-                  <li key={backend.kind} className="backend-status-list__item">
-                    <div className="backend-status-list__summary">
-                      <span
-                        aria-hidden="true"
-                        className={`backend-status-list__dot${
-                          backend.available ? "" : " is-unavailable"
-                        }`}
-                      />
-                      <span>{backend.label}</span>
-                    </div>
-                    <p className="backend-status-list__details">
-                      {backend.available
-                        ? "Available"
-                        : backend.unavailableReason ?? "Unavailable"}
-                    </p>
-                    {backend.available &&
-                    (backend.account || (backend.rateLimits?.length ?? 0) > 0) ? (
-                      <div className="backend-status-list__metadata">
-                        {backend.account ? (
-                          <dl className="backend-status-list__metadata-grid">
-                            <div>
-                              <dt>Account</dt>
-                              <dd>{formatBackendAccountText(backend.account)}</dd>
-                            </div>
-                            {backend.account.planType ? (
-                              <div>
-                                <dt>Plan</dt>
-                                <dd>{backend.account.planType}</dd>
-                              </div>
-                            ) : null}
-                          </dl>
-                        ) : null}
-                        {backend.rateLimits?.length ? (
-                          <ul className="backend-status-list__limits">
-                            {selectVisibleRateLimits(backend).map((limit) => (
-                              <li key={`${limit.limitId ?? "limit"}:${limit.name}`}>
-                                {formatRateLimitLine(limit)}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="context-empty">Status unavailable</p>
-            )}
-          </section>
         </div>
       ) : null}
+
+      <div className="context-rail__spine">
+        <div
+          className="context-rail__tablist"
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="Context panels"
+        >
+          {topTabs.map((tab) => renderTab(tab))}
+        </div>
+        <div className="context-rail__spine-bottom">
+          {bottomTabs.map((tab) => renderTab(tab))}
+          <button
+            aria-label={pinned ? "Unpin context rail" : "Pin context rail"}
+            aria-pressed={pinned}
+            className={`context-rail__pin${pinned ? " is-active" : ""}`}
+            title={pinned ? "Unpin context rail" : "Pin context rail"}
+            type="button"
+            onClick={() => {
+              const next = !pinned;
+              updatePinned(next);
+              if (next) {
+                setRevealed(true);
+              } else {
+                clearTimeout(hideTimerRef.current);
+                clearRevealTimer();
+                setRevealed(false);
+              }
+            }}
+          >
+            <PinIcon size={16} filled={pinned} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
 
       {tooltip && typeof document !== "undefined"
         ? createPortal(
@@ -856,6 +507,72 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     </aside>
   );
 
+  function renderTab(tab: ContextTab) {
+    const isActive = tab.id === activeTab;
+    const TabIcon = tab.Icon;
+    return (
+      <button
+        key={tab.id}
+        aria-label={tab.label}
+        aria-selected={isActive && open}
+        className={`context-rail__tab${isActive ? " is-active" : ""}`}
+        role="tab"
+        tabIndex={isActive ? 0 : -1}
+        title={tab.label}
+        type="button"
+        onClick={() => selectTab(tab.id)}
+      >
+        <TabIcon size={18} aria-hidden="true" />
+      </button>
+    );
+  }
+
+  function renderActivePanel() {
+    switch (activeTab) {
+      case "info":
+        return (
+          <ThreadInfoPanel
+            thread={props.thread}
+            backends={props.backends}
+            platform={props.platform}
+            desktopApi={props.desktopApi}
+            worktreeArchiveError={props.worktreeArchiveError}
+            onRefreshNavigation={props.onRefreshNavigation}
+            onRestoreWorktree={props.onRestoreWorktree}
+            showTooltip={showRailTooltip}
+            hideTooltip={hideRailTooltip}
+          />
+        );
+      case "subagents":
+        return <SubAgentsPanel thread={props.thread} />;
+      case "automations":
+        return (
+          <ThreadAutomationsPanel
+            desktopApi={props.desktopApi}
+            thread={props.thread}
+            onRefreshNavigation={props.onRefreshNavigation}
+          />
+        );
+      case "prs":
+        return <PullRequestsPanel thread={props.thread} />;
+      case "projects":
+        return (
+          <LinkedProjectsPanel
+            thread={props.thread}
+            showTooltip={showRailTooltip}
+            hideTooltip={hideRailTooltip}
+          />
+        );
+      case "providers":
+        return (
+          <ProviderStatusPanel
+            backends={props.backends}
+            backendError={props.backendError}
+          />
+        );
+    }
+  }
+
   function showRailTooltip(
     event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
     path: string,
@@ -864,9 +581,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   ): void {
     const rect = event.currentTarget.getBoundingClientRect();
     setTooltip({
-      text: copyHint
-        ? formatCopyTooltip(path, maxLength)
-        : formatTooltipValue(path, maxLength),
+      text: buildRailTooltipText(path, maxLength, copyHint),
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
       targetTop: rect.top,
@@ -876,123 +591,4 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   function hideRailTooltip(): void {
     setTooltip(undefined);
   }
-}
-
-function CopyValueButton(props: {
-  label?: string;
-  "aria-label"?: string;
-  maxTooltipLength?: number;
-  onBlur: () => void;
-  onCopy: (
-    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
-    value: string
-  ) => Promise<void>;
-  onShowTooltip: (
-    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
-    value: string,
-    maxLength?: number,
-    copyHint?: boolean
-  ) => void;
-  value: string;
-}) {
-  const label = props["aria-label"] ?? props.label ?? "Copy to clipboard";
-
-  return (
-    <button
-      aria-label={label}
-      className="context-copy-button path-copy-target"
-      type="button"
-      onBlur={props.onBlur}
-      onClick={(event) => {
-        void props.onCopy(event, props.value);
-      }}
-      onFocus={(event) => props.onShowTooltip(event, props.value, props.maxTooltipLength)}
-      onMouseEnter={(event) =>
-        props.onShowTooltip(event, props.value, props.maxTooltipLength)
-      }
-      onMouseLeave={props.onBlur}
-    >
-      <CopyIcon size={12} aria-hidden="true" />
-    </button>
-  );
-}
-
-function TooltipValue(props: {
-  children: ReactNode;
-  label: string;
-  onBlur: () => void;
-  onShowTooltip: (
-    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
-    value: string,
-    maxLength?: number,
-    copyHint?: boolean
-  ) => void;
-  value: string;
-}) {
-  return (
-    <span
-      aria-label={props.label}
-      className="context-tooltip-value"
-      tabIndex={0}
-      onBlur={props.onBlur}
-      onFocus={(event) => props.onShowTooltip(event, props.value, undefined, false)}
-      onMouseEnter={(event) => props.onShowTooltip(event, props.value, undefined, false)}
-      onMouseLeave={props.onBlur}
-    >
-      {props.children}
-    </span>
-  );
-}
-
-async function handleCopyPath(
-  event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
-  path: string
-): Promise<void> {
-  event.preventDefault();
-  event.stopPropagation();
-  await copyText(path);
-}
-
-function formatTooltipValue(value: string, maxLength = 72): string {
-  return elideMiddle(value, maxLength);
-}
-
-function elideMiddle(text: string, maxLength: number): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  const visible = Math.max(8, maxLength - 1);
-  const left = Math.ceil(visible / 2);
-  const right = Math.floor(visible / 2);
-  return `${text.slice(0, left)}…${text.slice(-right)}`;
-}
-
-function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(timestamp);
-}
-
-function formatAgentInstructionSummary(lineCount: number): string {
-  if (lineCount <= 0) {
-    return "No Agent instructions";
-  }
-  return `${lineCount} instruction line${lineCount === 1 ? "" : "s"}`;
-}
-
-function findSnapshotForWorktree(
-  snapshots: WorktreeSnapshotSummary[] | undefined,
-  worktreePath: string
-): WorktreeSnapshotSummary | undefined {
-  return snapshots?.find((snapshot) => snapshot.worktreePath === worktreePath);
-}
-
-function pathBaseName(pathname: string): string {
-  const normalized = pathname.replace(/[\\/]+$/, "");
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  return segments.at(-1) ?? pathname;
 }

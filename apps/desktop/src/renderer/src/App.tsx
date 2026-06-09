@@ -3,6 +3,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type CSSProperties,
@@ -21,6 +22,11 @@ import {
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
+import {
+  DEFAULT_CONTEXT_TAB,
+  isContextTabId,
+  type ContextTabId,
+} from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
@@ -138,6 +144,14 @@ function DesktopAppShell(props: {
   // attributes on the resize handle stay in sync.
   const sidebarMinWidth = 280;
   const sidebarMaxWidth = 560;
+  // Window-level layout preferences (persisted to config — see the
+  // `ui` settings section). The left sidebar can be hidden entirely and
+  // the right context rail pinned open; the active rail tab is also
+  // remembered. Seeded from the settings snapshot once it arrives.
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [contextRailPinned, setContextRailPinned] = useState(false);
+  const [activeContextTab, setActiveContextTab] =
+    useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
   const [mainView, setMainView] = useState<"thread" | "settings" | "automations">(
     "thread",
   );
@@ -189,6 +203,50 @@ function DesktopAppShell(props: {
     });
   }, []);
   const settings = props.settings;
+
+  // Persisted layout setters — update local state immediately and write the
+  // new value to config.toml's [ui] section so it survives a relaunch. The
+  // writeConfig call is fire-and-forget; a failed write just means the
+  // preference isn't remembered next launch.
+  const writeConfig = settings.writeConfig;
+  const setSidebarHiddenPersisted = useCallback(
+    (next: boolean) => {
+      setSidebarHidden(next);
+      void writeConfig({ ui: { sidebarHidden: next } });
+    },
+    [writeConfig],
+  );
+  const setContextRailPinnedPersisted = useCallback(
+    (next: boolean) => {
+      setContextRailPinned(next);
+      void writeConfig({ ui: { contextRailPinned: next } });
+    },
+    [writeConfig],
+  );
+  const setActiveContextTabPersisted = useCallback(
+    (tab: ContextTabId) => {
+      setActiveContextTab(tab);
+      void writeConfig({ ui: { activeContextTab: tab } });
+    },
+    [writeConfig],
+  );
+
+  // Adopt the persisted layout prefs once the settings snapshot arrives.
+  // Guarded so later snapshot refreshes never clobber an in-session toggle.
+  const uiPrefsSeededRef = useRef(false);
+  const uiPrefs = settings.snapshot?.ui;
+  useEffect(() => {
+    if (!uiPrefs || uiPrefsSeededRef.current) {
+      return;
+    }
+    uiPrefsSeededRef.current = true;
+    setSidebarHidden(uiPrefs.sidebarHidden.value);
+    setContextRailPinned(uiPrefs.contextRailPinned.value);
+    if (isContextTabId(uiPrefs.activeContextTab.value)) {
+      setActiveContextTab(uiPrefs.activeContextTab.value);
+    }
+  }, [uiPrefs]);
+
   const normalAppEnabled =
     !desktopApi?.readSettings ||
     (Boolean(settings.snapshot) &&
@@ -437,6 +495,12 @@ function DesktopAppShell(props: {
     },
     onOpenMessagingActivity: openMessagingActivityWindow,
     onRevealSelectedThreadInList: revealSelectedThreadInList,
+    contextRailPinned,
+    onContextRailPinnedChange: setContextRailPinnedPersisted,
+    activeContextTab,
+    onActiveContextTabChange: setActiveContextTabPersisted,
+    sidebarHidden,
+    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
@@ -515,6 +579,12 @@ function DesktopAppShell(props: {
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}
+        layout={{
+          sidebarOpen: !sidebarHidden,
+          railOpen: contextRailPinned,
+          onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+          onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+        }}
         actions={{
           automationsActive: mainView === "automations",
           settingsActive: mainView === "settings",
@@ -534,6 +604,7 @@ function DesktopAppShell(props: {
       />
       <div
         className="app-shell"
+        data-sidebar-hidden={sidebarHidden ? "true" : undefined}
         style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
         <Sidebar

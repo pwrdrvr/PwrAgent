@@ -99,6 +99,11 @@ export type DesktopSettingsConfig = {
   updates?: {
     channel?: DesktopUpdateChannel;
   };
+  ui?: {
+    sidebarHidden?: boolean;
+    contextRailPinned?: boolean;
+    activeContextTab?: string;
+  };
   messaging?: {
     enabled?: boolean;
     allowFullAccessEscalation?: boolean;
@@ -703,6 +708,30 @@ export function desktopSettingsPatchToEdits(
     }
   }
 
+  // Window-layout prefs default to off/"info"; delete on default so the
+  // [ui] section only carries non-default values.
+  if (patch.ui?.sidebarHidden !== undefined) {
+    if (patch.ui.sidebarHidden) {
+      set(["ui", "sidebar_hidden"], true);
+    } else {
+      edits.push({ op: "delete", path: ["ui", "sidebar_hidden"] });
+    }
+  }
+  if (patch.ui?.contextRailPinned !== undefined) {
+    if (patch.ui.contextRailPinned) {
+      set(["ui", "context_rail_pinned"], true);
+    } else {
+      edits.push({ op: "delete", path: ["ui", "context_rail_pinned"] });
+    }
+  }
+  if (patch.ui?.activeContextTab !== undefined) {
+    if (patch.ui.activeContextTab === "info") {
+      edits.push({ op: "delete", path: ["ui", "active_context_tab"] });
+    } else {
+      set(["ui", "active_context_tab"], patch.ui.activeContextTab);
+    }
+  }
+
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
   }
@@ -1060,6 +1089,7 @@ function normalizeDesktopConfig(
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
+  const ui = tables["ui"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -1128,6 +1158,11 @@ function normalizeDesktopConfig(
     },
     updates: {
       channel: readUpdateChannel(updates?.channel),
+    },
+    ui: {
+      sidebarHidden: readBoolean(ui?.sidebar_hidden),
+      contextRailPinned: readBoolean(ui?.context_rail_pinned),
+      activeContextTab: readString(ui?.active_context_tab),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),

@@ -393,6 +393,18 @@ textarea,
   user-select: none;
 }
 
+/* Left sidebar hidden via the layout toggle (⌘B). Collapse its grid track
+   to zero and drop the sidebar (and its resize handle) entirely. The
+   re-show control lives in the header chrome / title bar, never inside the
+   sidebar, so it stays reachable. */
+.app-shell[data-sidebar-hidden="true"] {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.app-shell[data-sidebar-hidden="true"] .sidebar {
+  display: none;
+}
+
 /* Windows custom title-bar strip (File / View / Profiles / Window / Help).
    Frameless WCO draws the OS caption buttons at the top-right; this strip
    fills the rest of that line with the painted menu bar (left) and a draggable
@@ -666,8 +678,17 @@ textarea,
      all share the same vertical centerline.
      The launchpad variant (`.thread-header--launchpad`) overrides
      align-items back to flex-start since it has its own taller
-     stacked layout. */
-  align-items: center;
+     stacked layout.
+     The header is now a column: a single top row (breadcrumb + chips on
+     the left, layout toggles + MessagingStatusBar on the right) with any
+     directory/branch warnings stacked beneath it. Keeping MSG in the top
+     row — instead of vertically centered against a `__main` that grows
+     when a warning appears — is what keeps the MSG cluster on the
+     titlebar line on macOS (the warnings used to push it down). */
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
   min-height: 44px;
   padding-top: 10px;
   /* Issue #240 follow-up: the thread header carries its OWN left
@@ -692,12 +713,14 @@ textarea,
      indicators. Reserve the opened rail width here as well; the
      title/chips shrink first and the status indicators keep their
      visible slot. */
-  padding-right: calc(min(var(--context-rail-width, 380px), calc(100% - 32px)) + 12px);
+  /* + 48px reserves the always-visible tab rail (spine) that now sits at
+     the window edge to the right of the panel. */
+  padding-right: calc(min(var(--context-rail-width, 380px), calc(100% - 32px)) + 60px);
 }
 
 .thread-view:has(.context-rail.is-pinned) .thread-header,
 .thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
-  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 12px);
+  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 60px);
 }
 
 .thread-header button,
@@ -705,6 +728,71 @@ textarea,
 .thread-header a,
 .thread-header select {
   -webkit-app-region: no-drag;
+}
+
+.thread-header__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 24px;
+}
+
+.thread-header__chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* Window layout toggle chips (show/hide sidebar + context rail). Used in
+   the thread header (macOS/Linux) and the AppTitleBar (Windows). */
+.panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
+.panel-toggle__chip {
+  display: inline-flex;
+  width: 28px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+
+.panel-toggle__chip:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-active);
+}
+
+.panel-toggle__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.panel-toggle__chip.is-open {
+  color: var(--accent-bright);
+}
+
+.panel-toggle__chip.is-open:hover {
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .thread-header__main {
@@ -6028,6 +6116,9 @@ textarea,
 }
 
 .thread-header--launchpad {
+  /* The launchpad header keeps its own row layout (title column +
+     aside), so opt back out of the base header's column stacking. */
+  flex-direction: row;
   align-items: flex-start;
   padding-left: 0;
   padding-right: 0;
@@ -6341,16 +6432,14 @@ textarea,
 }
 
 .thread-view__layout.has-pinned-context-rail {
-  /* When the rail is pinned (manually or auto-pinned via the wide
-     breakpoint), the chat area sits flush against the rail's left
-     border (issue #240). The transcript / composer are themselves
+  /* When the rail is pinned, the chat area sits flush against the rail's
+     left border (issue #240). The transcript / composer are themselves
      max-width-capped + centered (`.transcript-list__content`,
-     `.composer > *`), so the visual breathing room between the
-     message column and the rail comes from the centered chat
-     column's right margin — no extra layout padding needed. The
-     rail's `border-left: 1px solid var(--border-subtle)` already
-     provides the visual divider. */
-  padding-right: min(var(--context-rail-width, 380px), 42vw);
+     `.composer > *`), so the visual breathing room between the message
+     column and the rail comes from the centered chat column's right
+     margin. + 48px reserves the always-visible tab rail (spine) that
+     sits at the window edge to the right of the panel. */
+  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 48px);
 }
 
 .thread-view__layout.is-resizing-context-rail {
@@ -8812,19 +8901,14 @@ textarea,
   bottom: 0;
   z-index: 10;
   flex: 0 0 auto;
-  width: min(var(--context-rail-width, 380px), calc(100% - 32px));
+  width: max-content;
+  max-width: calc(100vw - 32px);
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   border: 0;
-  border-left: 1px solid var(--border-subtle);
   border-radius: 0;
-  background: var(--bg-panel);
-  transform: translateX(calc(100% - 48px));
-  transition:
-    transform 260ms cubic-bezier(0.2, 0, 0.2, 1),
-    border-color 140ms ease,
-    background 140ms ease;
+  background: transparent;
   -webkit-app-region: no-drag;
 }
 
@@ -8833,105 +8917,111 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+/* Revealed (auto-hide) overlays the chat with a shadow; pinned sits flush
+   in-layout (the thread layout reserves padding instead). */
 .context-rail.is-open {
-  width: min(var(--context-rail-width, 380px), calc(100% - 32px));
   z-index: 30;
-  overflow: visible;
   box-shadow: var(--shadow-popover);
-  transform: translateX(0);
 }
 
 .context-rail.is-pinned {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
   z-index: 10;
-  flex: 0 0 min(var(--context-rail-width, 380px), 42vw);
-  width: min(var(--context-rail-width, 380px), 42vw);
-  overflow: hidden;
   box-shadow: none;
-  transform: translateX(0);
 }
 
-.context-rail.is-resizing {
-  transition: none;
+/* On Windows the context-rail is position:fixed top:0 — it would slide under
+   the custom title strip (and its tabs under the OS caption buttons). Pin it
+   below the strip instead. */
+:root[data-platform="win32"] .context-rail {
+  top: var(--win-titlebar-h);
 }
 
-.context-rail:hover,
-.context-rail:focus-within,
-.context-rail.is-open {
-  border-color: var(--accent-border);
-}
-
+/* Vertical tab rail pinned to the window's right edge — always visible. Tool
+   tabs stack at the top; the pin toggle sits at the bottom. */
 .context-rail__spine {
   display: flex;
   width: 48px;
   flex: 0 0 48px;
+  order: 2;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
+  gap: 4px;
   padding: 8px 0;
-  border-right: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
 }
 
-/* On Windows the context-rail is position:fixed top:0 — it would slide under
-   the custom title strip (and its hamburger under the OS caption buttons). Pin
-   it below the strip instead. Both the collapsed and pinned states inherit
-   top:0, so offset both. */
-:root[data-platform="win32"] .context-rail,
-:root[data-platform="win32"] .context-rail.is-pinned {
-  top: var(--win-titlebar-h);
+.context-rail__tablist {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
-.context-rail.is-open .context-rail__spine {
-  display: none;
+.context-rail__spine-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
 }
 
 .context-rail__resize-handle {
   top: 0;
   bottom: 0;
   left: 0;
+  z-index: 3;
 }
 
-.context-rail__menu-button {
+.context-rail__tab,
+.context-rail__pin {
+  position: relative;
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
+  cursor: pointer;
   transition:
     border-color 140ms ease,
     background 140ms ease,
     color 140ms ease;
 }
 
-.context-rail__menu-button:hover,
-.context-rail__menu-button:focus-visible,
-.context-rail__menu-button.is-active {
+.context-rail__tab:hover,
+.context-rail__tab:focus-visible,
+.context-rail__pin:hover,
+.context-rail__pin:focus-visible {
   border-color: var(--border-subtle);
   background: var(--bg-row-active);
   color: var(--text-primary);
   outline: none;
 }
 
-.context-rail__menu-glyph {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 4px;
+.context-rail__tab.is-active {
+  color: var(--accent-bright);
+  background: var(--bg-row-active);
 }
 
-.context-rail__menu-glyph span {
-  display: block;
-  width: 14px;
-  height: 2px;
-  border-radius: 999px;
-  background: currentColor;
+.context-rail__tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.context-rail__pin.is-active {
+  color: var(--accent-bright);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 /* Portal-rendered tooltip rendered by the useViewportTooltip hook.
@@ -8978,60 +9068,67 @@ textarea,
 }
 
 .context-panel {
+  order: 1;
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 0 0 min(var(--context-rail-width, 380px), calc(100vw - 96px));
+  width: min(var(--context-rail-width, 380px), calc(100vw - 96px));
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: visible;
-  overscroll-behavior: contain;
+  overflow: hidden;
   border: 0;
+  border-left: 1px solid var(--border-subtle);
   border-radius: 0;
-  background: transparent;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(12px);
-  transition:
-    opacity 200ms ease,
-    transform 240ms cubic-bezier(0.2, 0, 0.2, 1);
+  background: var(--bg-panel);
+  animation: context-panel-in 220ms cubic-bezier(0.2, 0, 0.2, 1);
 }
 
-.context-rail.is-open .context-panel {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
+@keyframes context-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
-.context-panel__rail-header {
+@media (prefers-reduced-motion: reduce) {
+  .context-panel {
+    animation: none;
+  }
+}
+
+.context-panel__inner {
   display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.context-panel__header {
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.context-panel__rail-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+.context-panel__title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
-.context-panel__rail-state {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.context-panel__pin-button {
-  min-height: 28px;
-  padding: 0 10px;
-}
-
-.context-panel__close-button {
-  min-height: 28px;
-  padding: 0 10px;
+.context-panel__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .context-panel__section {
@@ -9629,6 +9726,124 @@ textarea,
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Shared subheading inside a rail panel (e.g. "Linked pull requests"). */
+.context-subheading {
+  margin: 16px 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Sub-Agents panel rows. */
+.context-list--rows {
+  gap: 12px;
+}
+
+.subagent-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.subagent-row__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subagent-row__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+
+.subagent-row__dot--active {
+  background: var(--accent);
+}
+
+.subagent-row__dot--done {
+  background: var(--success-text, var(--accent));
+}
+
+.subagent-row__dot--warn {
+  background: var(--danger-text);
+}
+
+.subagent-row__text {
+  min-width: 0;
+}
+
+.subagent-row__message {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* Pull Requests panel rows. */
+.pr-panel-list {
+  gap: 8px;
+}
+
+.pr-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pr-panel-row__state {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Linked Projects panel. */
+.linked-projects-list {
+  gap: 14px;
+}
+
+.linked-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.linked-project__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.linked-project__facts div {
+  display: contents;
+}
+
+.linked-project__facts dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.linked-project__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.linked-project__pending {
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .composer {
@@ -11536,32 +11751,6 @@ textarea,
   white-space: pre-wrap;
 }
 
-/* ============================================================
-   Wide-display auto-pin (issue #240)
-   ============================================================
-   On displays wide enough to comfortably show sidebar + capped
-   transcript column + the full context rail, ThreadView auto-pins
-   the rail via React state (`contextRailEffectivePinned`) using
-   the same `min-width: 1700px` breakpoint as below. That React
-   path adds the `.is-pinned` class which the existing rail rules
-   pick up — so the rail's wrapper position, sizing, and panel
-   content render the same way as a manually-pinned rail.
-
-   What this CSS adds on top is the visibility hiding for the
-   manual-toggle UI: at this width the user can't change pinning,
-   so leaving the controls visible would just confuse them. The
-   threshold (1700px) is the minimum where:
-     sidebar (≥280) + transcript max (940) + rail (≤380) + gutters
-   all fit without crowding. Below it, the existing mouseover +
-   pin/unpin behavior remains. */
-@media (min-width: 1700px) {
-  .context-rail__menu-button,
-  .context-panel__pin-button,
-  .context-panel__rail-state {
-    display: none;
-  }
-}
-
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: minmax(280px, min(var(--sidebar-width, 360px), 360px)) minmax(0, 1fr);
@@ -11596,40 +11785,50 @@ textarea,
     border-bottom: 1px solid var(--border-subtle);
   }
 
+  /* At narrow widths the rail stops floating and stacks below the chat:
+     the tab strip becomes a horizontal row and the open panel sits under
+     it, full width. */
   .context-rail,
-  .context-rail.is-open {
+  .context-rail.is-open,
+  .context-rail.is-pinned {
     position: static;
     width: 100%;
+    max-width: none;
     min-width: 0;
     flex-basis: auto;
+    flex-direction: column;
     margin-left: 0;
     box-shadow: none;
-    transform: none;
   }
 
   .context-rail__spine {
+    order: 0;
     width: 100%;
     flex: 0 0 auto;
     flex-direction: row;
-    justify-content: flex-end;
+    align-items: center;
     padding: 8px;
-    border-right: 0;
+    border-left: 0;
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  .context-rail.is-open .context-rail__spine {
-    display: flex;
-    position: static;
-    width: 100%;
-    flex-basis: auto;
-    padding: 8px;
-    border-bottom: 1px solid var(--border-subtle);
+  .context-rail__tablist,
+  .context-rail__spine-bottom {
+    flex-direction: row;
+  }
+
+  .context-rail__spine-bottom {
+    margin-top: 0;
+    margin-left: auto;
   }
 
   .context-panel {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
+    order: 1;
+    width: 100%;
+    flex-basis: auto;
+    border-left: 0;
+    max-height: 60vh;
+    animation: none;
   }
 }
 

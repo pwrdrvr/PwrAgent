@@ -308,11 +308,14 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("reserves opened context rail width for the thread header status area", () => {
+    // + 60px = panel width + the always-visible 48px tab rail (spine) +
+    // a small gap, so the header status area clears both the panel and
+    // the spine when the rail is open/pinned.
     expect(css).toMatch(
-      /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 12px\);[\s\S]*?\}/
+      /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 60px\);[\s\S]*?\}/
     );
     expect(css).toMatch(
-      /\.thread-view:has\(\.context-rail\.is-pinned\) \.thread-header,\s*\.thread-view:has\(\.thread-view__layout\.has-pinned-context-rail\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), 42vw\) \+ 12px\);[\s\S]*?\}/
+      /\.thread-view:has\(\.context-rail\.is-pinned\) \.thread-header,\s*\.thread-view:has\(\.thread-view__layout\.has-pinned-context-rail\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), 42vw\) \+ 60px\);[\s\S]*?\}/
     );
     expect(css).toMatch(
       /@media \(max-width: 1100px\)\s*\{[\s\S]*?\.thread-view:has\(\.context-rail\.is-open\) \.thread-header,[\s\S]*?padding-right:\s*56px;[\s\S]*?\}/

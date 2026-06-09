@@ -8,10 +8,17 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
+import type { ContextTabId } from "../context-panels/context-tab";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
+
+// When the rail is open, the active tab's title renders in the panel
+// header. The default tab is "info" → "Thread info", so its presence is a
+// stable "the panel is revealed" signal (the old "Auto-hide" pill is gone).
+const REVEALED_SIGNAL = "Thread info";
 
 afterEach(() => {
   cleanup();
@@ -89,58 +96,70 @@ const baseBackend: BackendSummary = {
   ],
 };
 
+type PanelOverrides = Partial<
+  Pick<
+    ComponentProps<typeof ThreadContextPanel>,
+    "activeTab" | "backends" | "desktopApi" | "pinned" | "thread" | "onRefreshNavigation"
+  >
+>;
+
+function renderPanel(overrides: PanelOverrides = {}) {
+  const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
+  const result = render(
+    <ThreadContextPanel
+      activeTab="info"
+      backends={[baseBackend]}
+      pinned={false}
+      thread={baseThread}
+      onActiveTabChange={onActiveTabChange}
+      {...overrides}
+    />,
+  );
+  return { ...result, onActiveTabChange };
+}
+
 const advanceHoverRevealDelay = async (): Promise<void> => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(HOVER_RAIL_REVEAL_DELAY_MS + 1);
   });
 };
 
+const mockRailRect = (rail: HTMLElement): void => {
+  vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
+    bottom: 800,
+    height: 800,
+    left: 620,
+    right: 1000,
+    top: 0,
+    width: 380,
+    x: 620,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+};
+
 describe("ThreadContextPanel", () => {
   it("waits for hover intent before revealing the rail", async () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    renderPanel();
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
-    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+    expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
 
     await advanceHoverRevealDelay();
 
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
   });
 
   it("does not reveal the rail after a drive-by hover", () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    renderPanel();
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     act(() => {
@@ -151,55 +170,36 @@ describe("ThreadContextPanel", () => {
       vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS + 1);
     });
 
-    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+    expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
   });
 
-  it("reveals immediately when the collapsed rail is clicked", () => {
+  it("reveals immediately when a collapsed rail tab is clicked", () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    const { onActiveTabChange } = renderPanel();
 
-    const rail = screen.getByLabelText("Thread context");
-    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
-    act(() => {
-      vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS - 25);
-    });
+    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
-
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
+    expect(onActiveTabChange).toHaveBeenCalledWith("info");
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    renderPanel();
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     await advanceHoverRevealDelay();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
 
     fireEvent.mouseMove(document, { clientX: 600, clientY: 120 });
     act(() => {
       vi.advanceTimersByTime(301);
     });
 
-    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+    expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
   });
 
   it("polls the window pointer and closes when the cursor remains outside the rail", async () => {
@@ -233,38 +233,21 @@ describe("ThreadContextPanel", () => {
         windowFocused: false,
       });
 
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        desktopApi={{ getWindowPointerSnapshot }}
-        pinned={false}
-        thread={baseThread}
-      />
-    );
+    renderPanel({ desktopApi: { getWindowPointerSnapshot } });
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     await advanceHoverRevealDelay();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_701);
     });
 
     expect(getWindowPointerSnapshot).toHaveBeenCalled();
-    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+    expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
   });
 
   it("keeps the hover rail open while the polled cursor remains inside the rail", async () => {
@@ -283,150 +266,106 @@ describe("ThreadContextPanel", () => {
       windowFocused: false,
     }));
 
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        desktopApi={{ getWindowPointerSnapshot }}
-        pinned={false}
-        thread={baseThread}
-      />
-    );
+    renderPanel({ desktopApi: { getWindowPointerSnapshot } });
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     await advanceHoverRevealDelay();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
 
     expect(getWindowPointerSnapshot).toHaveBeenCalled();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
   });
 
   it("keeps the hover rail open when a transient leave is still inside the opened rail", async () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    renderPanel();
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     await advanceHoverRevealDelay();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
 
     fireEvent.mouseLeave(rail, { clientX: 980, clientY: 120 });
     act(() => {
       vi.advanceTimersByTime(301);
     });
 
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
   });
 
   it("hides the hover rail after the mouse leaves the opened rail", async () => {
     vi.useFakeTimers();
-    render(
-      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
-    );
+    renderPanel();
 
     const rail = screen.getByLabelText("Thread context");
-    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
-      bottom: 800,
-      height: 800,
-      left: 620,
-      right: 1000,
-      top: 0,
-      width: 380,
-      x: 620,
-      y: 0,
-      toJSON: () => ({}),
-    } as DOMRect);
+    mockRailRect(rail);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
     await advanceHoverRevealDelay();
-    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+    expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
 
     fireEvent.mouseLeave(rail, { clientX: 600, clientY: 120 });
     act(() => {
       vi.advanceTimersByTime(301);
     });
 
-    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+    expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
   });
 
   it("shows path tooltips on linked directory labels and kind badges", () => {
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        pinned
-        thread={{
-          ...baseThread,
-          linkedDirectories: [
-            {
-              id: "worktree-dir",
-              kind: "worktree",
-              label: "PwrAgent",
-              path: "/Users/huntharo/github/PwrAgent",
-              worktreePath:
-                "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-molpnvyk",
-            },
-            {
-              id: "local-dir",
-              kind: "local",
-              label: "LocalOnly",
-              path: "/Users/huntharo/github/PwrAgent",
-            },
-          ],
-        }}
-      />
-    );
+    renderPanel({
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "worktree-dir",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-molpnvyk",
+          },
+          {
+            id: "local-dir",
+            kind: "local",
+            label: "LocalOnly",
+            path: "/Users/huntharo/github/PwrAgent",
+          },
+        ],
+      },
+    });
 
     fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgent"
+      "/Users/huntharo/github/PwrAgent",
     );
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/huntharo/github");
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "launchpad-pwragent-main-molpnvyk"
+      "launchpad-pwragent-main-molpnvyk",
     );
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for local LocalOnly"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgent"
+      "/Users/huntharo/github/PwrAgent",
     );
   });
 
-  it("shows regular and Spark rate limits together", () => {
-    render(<ThreadContextPanel backends={[baseBackend]} pinned thread={baseThread} />);
+  it("shows regular and Spark rate limits together on the Provider status tab", () => {
+    renderPanel({ activeTab: "providers", pinned: true });
 
     expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
     expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
@@ -447,15 +386,11 @@ describe("ThreadContextPanel", () => {
     }));
     const onRefreshNavigation = vi.fn(async () => undefined);
 
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        desktopApi={{ setThreadAgent }}
-        pinned
-        thread={baseThread}
-        onRefreshNavigation={onRefreshNavigation}
-      />,
-    );
+    renderPanel({
+      desktopApi: { setThreadAgent },
+      pinned: true,
+      onRefreshNavigation,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
 
@@ -476,22 +411,19 @@ describe("ThreadContextPanel", () => {
       threadId: "thread-1",
     }));
 
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        desktopApi={{ setThreadAgent }}
-        pinned
-        thread={{
-          ...baseThread,
-          agent: {
-            name: "Inbox Agent",
-            instructionLineCount: 0,
-            instructionsTooLong: false,
-            updatedAt: 1,
-          },
-        }}
-      />,
-    );
+    renderPanel({
+      desktopApi: { setThreadAgent },
+      pinned: true,
+      thread: {
+        ...baseThread,
+        agent: {
+          name: "Inbox Agent",
+          instructionLineCount: 0,
+          instructionsTooLong: false,
+          updatedAt: 1,
+        },
+      },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
 
@@ -504,22 +436,20 @@ describe("ThreadContextPanel", () => {
   });
 
   it("labels Spark rate limits when Spark has usage", () => {
-    render(
-      <ThreadContextPanel
-        backends={[
-          {
-            ...baseBackend,
-            rateLimits: baseBackend.rateLimits?.map((limit) =>
-              limit.limitId === "gpt-5.3-codex-spark" && limit.windowMinutes === 300
-                ? { ...limit, usedPercent: 2 }
-                : limit
-            ),
-          },
-        ]}
-        pinned
-        thread={baseThread}
-      />
-    );
+    renderPanel({
+      activeTab: "providers",
+      pinned: true,
+      backends: [
+        {
+          ...baseBackend,
+          rateLimits: baseBackend.rateLimits?.map((limit) =>
+            limit.limitId === "gpt-5.3-codex-spark" && limit.windowMinutes === 300
+              ? { ...limit, usedPercent: 2 }
+              : limit,
+          ),
+        },
+      ],
+    });
 
     expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();

@@ -442,6 +442,11 @@ describe("App", () => {
       updates: {
         channel: { value: "latest", source: "default" },
       },
+      ui: {
+        sidebarHidden: { value: false, source: "default" },
+        contextRailPinned: { value: false, source: "default" },
+        activeContextTab: { value: "info", source: "default" },
+      },
       messaging: {
         enabled: { value: true, source: "default" },
         allowFullAccessEscalation: { value: true, source: "default" },
@@ -954,12 +959,11 @@ describe("App", () => {
     expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
     expect(screen.getByText("Render plan card")).toBeInTheDocument();
     expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
-    const openContextButton = screen.getByRole("button", { name: "Open context rail" });
-    openContextButton.click();
+    const context = screen.getByLabelText("Thread context");
+    fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));
     expect(
       await screen.findByRole("heading", { level: 3, name: "Linked directories" })
     ).toBeInTheDocument();
-    const context = screen.getByLabelText("Thread context");
     fireEvent.click(
       within(context).getByRole("button", { name: "Copy path for PwrAgent" })
     );
@@ -969,8 +973,10 @@ describe("App", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
     expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
     expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
-    expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
+    // Provider availability now lives under its own context-rail tab.
+    fireEvent.click(within(context).getByRole("tab", { name: "Provider status" }));
+    expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(
       screen.queryByText("This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.")
