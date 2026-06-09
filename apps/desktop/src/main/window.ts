@@ -307,12 +307,14 @@ export function createMainWindow(options?: {
     : isWindows
       ? {
           // Frameless + Window Controls Overlay: the OS draws min/max/close in
-          // a reserved region at the top-right; the rest of the bar (our
-          // sidebar masthead) is ours and draggable. autoHideMenuBar tucks the
-          // File/Edit/View menu away (Alt reveals it), like GitHub Desktop.
+          // a reserved region at the top-right; the menu bar (File/Edit/View/
+          // Help) renders to its left and the rest of the strip is draggable —
+          // GitHub-Desktop style. autoHideMenuBar:false keeps the menu always
+          // visible; Alt focuses it and Alt+F etc. open the menus (it does NOT
+          // toggle visibility the way autoHideMenuBar:true would).
           titleBarStyle: "hidden" as const,
           titleBarOverlay: themedTitleBarOverlay(appearance),
-          autoHideMenuBar: true,
+          autoHideMenuBar: false,
         }
       : {};
   const window = new BrowserWindow({
