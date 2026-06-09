@@ -406,7 +406,10 @@ textarea,
   align-items: center;
   height: var(--win-titlebar-h);
   padding-left: 8px;
-  background: var(--bg-app);
+  /* Match the OS caption-button overlay color (TITLE_BAR_BG_* in
+     appearance-bootstrap.ts mirrors --bg-sidebar) so the painted strip and the
+     native min/max/close buttons read as one continuous title bar. */
+  background: var(--bg-sidebar);
   -webkit-app-region: drag;
 }
 

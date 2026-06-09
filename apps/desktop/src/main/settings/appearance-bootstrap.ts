@@ -56,13 +56,26 @@ export function themedWindowBackgroundColor(
 }
 
 /**
+ * Title-bar (caption-button strip) background. This MUST match the renderer's
+ * painted title strip — `.app-titlebar`, which fills `var(--bg-sidebar)`, NOT
+ * the page background — so the native min/max/close buttons blend seamlessly
+ * into our chrome instead of sitting on a slightly-off rectangle (most visible
+ * in light theme: pure white behind cream). GitHub Desktop does the same: point
+ * the overlay at the title-bar color. Keep in sync with `--bg-sidebar` in
+ * `app.css` (`:root` and `:root[data-theme="light"]`).
+ */
+export const TITLE_BAR_BG_DARK = "#050505";
+export const TITLE_BAR_BG_LIGHT = "#f7f4ef";
+
+/**
  * Window Controls Overlay (Windows) styling for the frameless title bar.
  *
  * `color` is the background behind the OS-drawn min/max/close caption buttons
- * (matched to the window fill so there's no seam); `symbolColor` is the caption
- * glyph color; `height` sets the caption strip height so the buttons align with
- * the app's title-bar row (the sidebar masthead / content title row). Re-apply
- * via `window.setTitleBarOverlay(...)` when the theme flips. macOS uses
+ * (matched to the painted `.app-titlebar` strip so there's no seam);
+ * `symbolColor` is the caption glyph color; `height` sets the caption strip
+ * height so the buttons align with the painted menu bar. Re-apply via
+ * `window.setTitleBarOverlay(...)` when the theme flips — Electron restyles the
+ * existing overlay in place, so NO window recreation is needed. macOS uses
  * `trafficLightPosition` instead; Linux gets a normal frame.
  */
 // Keep in sync with `--win-titlebar-h` in app.css so the OS caption buttons
@@ -76,7 +89,7 @@ export function themedTitleBarOverlay(appearance: BootstrapAppearance): {
 } {
   const light = appearance.theme === "light";
   return {
-    color: light ? WINDOW_BG_LIGHT : WINDOW_BG_DARK,
+    color: light ? TITLE_BAR_BG_LIGHT : TITLE_BAR_BG_DARK,
     symbolColor: light ? "#3a3a3a" : "#c8ccd4",
     height: TITLE_BAR_OVERLAY_HEIGHT,
   };

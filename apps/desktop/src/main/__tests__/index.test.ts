@@ -172,6 +172,10 @@ vi.mock("../window", () => ({
   syncHotCpuProfilersFromSettings: vi.fn(),
 }));
 
+vi.mock("../app-menu-bridge", () => ({
+  wireAppMenuBridge: vi.fn(),
+}));
+
 vi.mock("../window-open-settings", () => ({
   requestOpenSettings: requestOpenSettingsMock,
 }));
