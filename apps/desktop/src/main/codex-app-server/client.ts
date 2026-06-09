@@ -54,6 +54,7 @@ import type {
   ReviewStartParams as CodexReviewStartParams,
   SkillsListParams as CodexSkillsListParams,
   ThreadForkParams as CodexThreadForkParams,
+  ThreadInjectItemsParams as CodexThreadInjectItemsParams,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadResumeParams as CodexThreadResumeParams,
@@ -5391,6 +5392,25 @@ export class CodexAppServerClient {
     }
 
     return extractThreadReplayFromReadResult(result);
+  }
+
+  async injectThreadItems(params: {
+    threadId: string;
+    items: CodexThreadInjectItemsParams["items"];
+  }): Promise<void> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/inject_items"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          items: params.items,
+        } satisfies CodexThreadInjectItemsParams,
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
   }
 
   async startThread(params: {

@@ -685,6 +685,7 @@ class MockBackendClient {
     before?: string;
     limit?: number;
   };
+  injectedThreadItems: Array<{ threadId: string; items: unknown[] }> = [];
   lastStartThreadParams?: {
     cwd?: string;
     dynamicTools?: unknown;
@@ -954,6 +955,10 @@ class MockBackendClient {
         hasPreviousPage: false,
       },
     };
+  }
+
+  async injectThreadItems(params: { threadId: string; items: unknown[] }): Promise<void> {
+    this.injectedThreadItems.push(params);
   }
 
   async startThread(params?: {
@@ -4974,6 +4979,14 @@ script = "echo setup"
         expect.objectContaining({
           namespace: "pwragent_automations",
           name: "get_automation_run_artifact",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "complete_monitoring",
         }),
       ]),
     );
@@ -11154,6 +11167,332 @@ command = "pnpm dev"
     expect(events).toEqual([]);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("creates task monitor delegations for active Codex turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR #123 checks until they finish.",
+          monitorContext: "Repository: pwrdrvr/PwrAgnt",
+          pollIntervalSeconds: 20,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(response).toMatchObject({ success: true });
+    expect(payload).toMatchObject({
+      parentThreadId: "thread-1",
+      preferredModel: "gpt-5.4-mini",
+      pollIntervalSeconds: 20,
+    });
+    expect(String(payload.monitorId)).toMatch(/^monitor-/);
+    expect(String(payload.prompt)).toContain("Parent thread id: thread-1");
+    expect(String(payload.prompt)).toContain("complete_monitoring exactly once");
+
+    await registry.close();
+  });
+
+  it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR #123 checks until they finish.",
+          finalHandoffPrompt: "Tell me whether to merge.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "monitor-turn",
+          turn: { id: "monitor-turn" },
+        },
+      },
+    });
+
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-2",
+        requestId: "call-2",
+        namespace: "pwragent_task_monitors",
+        tool: "inject_progress",
+        arguments: {
+          monitorId,
+          status: "running",
+          message: "lint is running",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems[0]).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: expect.stringContaining("lint is running"),
+            },
+          ],
+        },
+      ],
+    });
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-3",
+        requestId: "call-3",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "failure",
+          summary: "Tests failed in CI.",
+          details: "unit-test reported 2 failures.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(codexClient.injectedThreadItems).toHaveLength(2);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [
+        {
+          type: "text",
+          text: expect.stringContaining("Tests failed in CI."),
+        },
+      ],
+    });
+    expect(
+      String(
+        codexClient.lastStartTurnParams?.input[0]?.type === "text"
+          ? codexClient.lastStartTurnParams.input[0].text
+          : "",
+      ),
+    ).toContain(
+      "Tell me whether to merge.",
+    );
+    expect(completionPayload).toMatchObject({
+      monitorId,
+      parentThreadId: "thread-1",
+      outcome: "failure",
+      parentTurn: {
+        status: "started",
+        turnId: "turn-1",
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("rejects task monitor updates from a different monitor thread after binding", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "monitor-thread-1",
+          turnId: "monitor-turn-1",
+          turn: { id: "monitor-turn-1" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "monitor-thread-2",
+          turnId: "monitor-turn-2",
+          turn: { id: "monitor-turn-2" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread-1",
+        turnId: "monitor-turn-1",
+        callId: "call-2",
+        requestId: "call-2",
+        namespace: "pwragent_task_monitors",
+        tool: "inject_progress",
+        arguments: {
+          monitorId,
+          message: "build is running",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const rejected = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread-2",
+        turnId: "monitor-turn-2",
+        callId: "call-3",
+        requestId: "call-3",
+        namespace: "pwragent_task_monitors",
+        tool: "inject_progress",
+        arguments: {
+          monitorId,
+          message: "spoofed update",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(rejected).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message: "This monitorId is already bound to another monitor thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+
     await registry.close();
   });
 
