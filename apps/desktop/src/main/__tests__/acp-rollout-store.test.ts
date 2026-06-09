@@ -199,4 +199,59 @@ describe("AcpRolloutStore", () => {
       expect.objectContaining({ role: "assistant", text: "It is PwrAgent." }),
     ]);
   });
+
+  it("does not persist ACP <system-reminder> boilerplate (no reload pollution)", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:kimi" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "Run npm view pwrdrvr",
+        turnId: "turn-1",
+      },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "pwrdrvr exists on npm." },
+      },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 2000,
+      update: {
+        session_update: "user_message_chunk",
+        content: {
+          type: "text",
+          text: "<system-reminder> Auto permission mode is no longer active. Tool approvals and permission checks are back to the current mode. </system-reminder>",
+        },
+      },
+    });
+
+    const updates = store.readUpdates({ backendId, sessionId: "session-1" });
+    expect(
+      updates.some(
+        (record) =>
+          (record.update.kind ?? record.update.session_update) ===
+          "user_message_chunk",
+      ),
+    ).toBe(false);
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Run npm view pwrdrvr",
+      "pwrdrvr exists on npm.",
+    ]);
+    expect(
+      replay.messages.some((message) => message.text.includes("system-reminder")),
+    ).toBe(false);
+  });
 });

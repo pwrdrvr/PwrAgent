@@ -904,6 +904,72 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
+  it("filters ACP system reminders when rehydrating provider session/load replay", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "Run npm view pwrdrvr" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: {
+                type: "text",
+                text: "<system-reminder> Auto permission mode is no longer active. Tool approvals and permission checks are back to the current mode. </system-reminder>",
+              },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "pwrdrvr exists on npm." },
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Run npm view pwrdrvr",
+      "pwrdrvr exists on npm.",
+    ]);
+    expect(
+      replay.entries.some(
+        (entry) =>
+          entry.type === "message" && entry.text.includes("system-reminder"),
+      ),
+    ).toBe(false);
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+  });
+
   it("returns empty replay when no provider session/load support is advertised", async () => {
     const transport = new FakeAcpAgentTransport({
       initialize: {

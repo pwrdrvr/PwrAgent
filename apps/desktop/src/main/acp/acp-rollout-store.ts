@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AcpBackendId, AppServerThreadReplay } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
-  isAcpSessionContextBoilerplate,
+  isAcpUserBoilerplateMessage,
   readAcpContentText,
   readAcpTopicTitle,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -196,13 +196,12 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
   if (readAcpTopicTitle(update)) {
     return false;
   }
-  // Don't persist Gemini's <session_context> boilerplate. It arrives as a
-  // user_message_chunk during session/load replay, so without this guard every
-  // reload appends another copy to the rollout — permanently polluting the
-  // durable history with environment setup text.
+  // Don't persist ACP user boilerplate. These chunks arrive during session/load
+  // replay, so without this guard every reload appends another copy to the
+  // rollout and permanently pollutes durable history with setup/control text.
   if (
     kind === "user_message_chunk" &&
-    isAcpSessionContextBoilerplate(readUpdateText(update))
+    isAcpUserBoilerplateMessage(readUpdateText(update))
   ) {
     return false;
   }

@@ -59,6 +59,49 @@ describe("AcpSessionReplayNormalizer", () => {
     ).toBe(false);
   });
 
+  it("drops ACP <system-reminder> boilerplate user_message_chunk", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        session_update: "user_message_chunk",
+        content: { type: "text", text: "Run npm view pwrdrvr" },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        session_update: "user_message_chunk",
+        content: {
+          type: "text",
+          text: "<system-reminder> Auto permission mode is no longer active. Tool approvals and permission checks are back to the current mode. </system-reminder>",
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "pwrdrvr exists on npm." },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "Run npm view pwrdrvr" }),
+      expect.objectContaining({
+        role: "assistant",
+        text: "pwrdrvr exists on npm.",
+      }),
+    ]);
+    expect(
+      replay.messages.some((message) => message.text.includes("system-reminder")),
+    ).toBe(false);
+  });
+
   it("reads ACP text content blocks from assistant chunks", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

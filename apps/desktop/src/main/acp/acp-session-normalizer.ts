@@ -215,7 +215,7 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (isModeUpdateMarker(text)) {
+    if (!text || isModeUpdateMarker(text)) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -233,12 +233,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (isAcpSessionContextBoilerplate(text)) {
+    if (isAcpUserBoilerplateMessage(text)) {
       // Gemini re-emits its <session_context> environment block (date, OS,
       // workspace dir, directory tree) as a user_message_chunk on session/load.
-      // It's setup boilerplate the agent injects, not a turn the user typed —
-      // surfacing it makes a reloaded thread look like the human pasted a file
-      // listing. Drop it from the transcript entirely.
+      // ACP agents can also replay synthetic <system-reminder> prompts. These
+      // are setup/control text the agent saw, not user-authored turns.
       return;
     }
     if (this.currentTurnId) {
@@ -639,6 +638,17 @@ function readContentText(
  */
 export function isAcpSessionContextBoilerplate(text: string | undefined): boolean {
   return text !== undefined && text.trimStart().startsWith("<session_context>");
+}
+
+export function isAcpSystemReminderBoilerplate(text: string | undefined): boolean {
+  return text !== undefined && text.trimStart().startsWith("<system-reminder>");
+}
+
+export function isAcpUserBoilerplateMessage(text: string | undefined): boolean {
+  return (
+    isAcpSessionContextBoilerplate(text) ||
+    isAcpSystemReminderBoilerplate(text)
+  );
 }
 
 export function readAcpContentText(value: unknown): string | undefined {
