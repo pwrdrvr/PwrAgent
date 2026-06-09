@@ -861,7 +861,9 @@ export class DesktopMessagingRuntime {
       fullAccessControls: async () =>
         (await this.loadConfig()).fullAccessControls,
       onBindingChanged: () => this.broadcastBindingsChanged(),
-      onDeliveryBudgetEvent: (event) => this.handleDeliveryBudgetEvent(event),
+      onDeliveryBudgetEvent: (event) => {
+        void this.handleDeliveryBudgetEvent(event);
+      },
       onFullAccessPolicyViolation: (event) =>
         this.recordFullAccessPolicyViolation(adapter.channel, event),
     });
@@ -1338,9 +1340,9 @@ export class DesktopMessagingRuntime {
     });
   }
 
-  private handleDeliveryBudgetEvent(
+  private async handleDeliveryBudgetEvent(
     event: MessagingControllerDeliveryBudgetEvent,
-  ): void {
+  ): Promise<void> {
     const scopeId = event.scope?.id ?? "unknown";
     const reason = event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
     const retryDelayMs = event.retryAt !== undefined
@@ -1348,10 +1350,12 @@ export class DesktopMessagingRuntime {
       : undefined;
     const isCoolOff = reason === "cool-off";
     const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
+    const targetKey = deliveryBudgetTargetKey(event);
 
     const diagnosticKey = [
       event.channel,
       scopeId,
+      targetKey,
       event.outcome,
       event.reason ?? "deferred",
       event.priority,
@@ -1365,6 +1369,8 @@ export class DesktopMessagingRuntime {
       return;
     }
     this.deliveryBudgetDiagnosticLastLoggedAt.set(diagnosticKey, event.at);
+    const localThreadTitle = await this.resolveDeliveryBudgetThreadTitle(event);
+    const targetPhrase = describeDeliveryBudgetTarget(event, localThreadTitle);
 
     messagingLog.info("messaging delivery budget constrained", {
       bindingId: event.bindingId,
@@ -1384,13 +1390,17 @@ export class DesktopMessagingRuntime {
     const expiresAt = event.outcome === "deferred"
       ? event.retryAt
       : event.at + DELIVERY_BUDGET_WARNING_TTL_MS;
-    const key = degradationKey(event.channel, "warning", `delivery-budget:${scopeId}`);
+    const key = degradationKey(
+      event.channel,
+      "warning",
+      `delivery-budget:${scopeId}:${targetKey}`,
+    );
     this.addPlatformDegradationReason(event.channel, {
       kind: "warning",
       key,
       message: event.outcome === "deferred"
-        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}.`
-        : `${modeLabel} active; dropped ${event.priority} (${reason}).`,
+        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
+        : `${modeLabel} active; dropped ${event.priority} (${reason})${targetPhrase}.`,
       scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
       startedAt: event.at,
       expiresAt,
@@ -1400,21 +1410,32 @@ export class DesktopMessagingRuntime {
       backend: event.backend,
       threadId: event.threadId,
       bindingId: event.bindingId,
+      conversation: event.conversation,
       summary: event.outcome === "deferred"
-        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}`
-        : `${modeLabel} dropped ${event.priority}: ${reason}`,
+        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
+        : `${modeLabel} dropped ${event.priority}: ${reason}${targetPhrase}`,
       createdAt: event.at,
       payload: {
         type: isCoolOff ? "cool-off" : "slow-mode",
+        bindingId: event.bindingId,
+        conversationKind: event.conversation?.kind,
+        conversationParentId: event.conversation?.parentId,
+        conversationTitle: event.conversation
+          ? describeConversation(event.conversation)
+          : undefined,
         intentId: event.intentId,
         intentKind: event.intentKind,
+        localThreadTitle,
         outcome: event.outcome,
         priority: event.priority,
         reason,
         retryAt: event.retryAt,
         retryDelayMs,
         scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
+        scopeId,
+        scopeKind: event.scope?.kind,
         slowModeActive: event.slowMode,
+        threadId: event.threadId,
       },
     });
   }
@@ -1435,6 +1456,31 @@ export class DesktopMessagingRuntime {
       lastFailureReason: clipStatusText(info.lastFailureReason),
       startedAt: info.observedAt ?? Date.now(),
     });
+  }
+
+  private async resolveDeliveryBudgetThreadTitle(
+    event: MessagingControllerDeliveryBudgetEvent,
+  ): Promise<string | undefined> {
+    if (!event.backend || !event.threadId) {
+      return undefined;
+    }
+    try {
+      const snapshot = await this.options.backendBridge.getNavigationSnapshot({
+        backend: "all",
+      });
+      const thread = snapshot.threads.find(
+        (candidate) =>
+          candidate.source === event.backend && candidate.id === event.threadId,
+      );
+      return clipStatusText(thread?.title);
+    } catch (error) {
+      messagingLog.debug("messaging budget diagnostic thread-title lookup failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: event.threadId,
+      });
+      return undefined;
+    }
   }
 
   private addPlatformDegradationReason(
@@ -1773,7 +1819,9 @@ export class DesktopMessagingRuntime {
         threadId: params.threadId,
         bindingId: params.bindingId,
         conversationId: params.conversation?.id,
-        conversationTitle: params.conversation?.title,
+        conversationTitle: params.conversation
+          ? describeConversation(params.conversation)
+          : undefined,
         actorId: params.actor?.platformUserId,
         actorDisplayName: params.actor?.displayName,
         summary: params.summary,
@@ -2159,6 +2207,50 @@ function sanitizeDeliveryScope(
   };
 }
 
+function describeDeliveryBudgetTarget(
+  event: MessagingControllerDeliveryBudgetEvent,
+  localThreadTitle?: string,
+): string {
+  const pieces: string[] = [];
+  if (event.conversation) {
+    pieces.push(`conversation ${shortIdentifier(describeConversation(event.conversation), 80)}`);
+  } else if (event.bindingId) {
+    pieces.push(`binding ${shortIdentifier(event.bindingId)}`);
+  }
+  if (localThreadTitle) {
+    pieces.push(`thread ${shortIdentifier(localThreadTitle, 48)}`);
+  } else if (event.threadId) {
+    pieces.push(`thread ${shortIdentifier(event.threadId)}`);
+  }
+  if (event.scope && !event.conversation) {
+    pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id, 48)}`);
+  }
+  return pieces.length > 0 ? ` for ${pieces.join(", ")}` : "";
+}
+
+function deliveryBudgetTargetKey(
+  event: MessagingControllerDeliveryBudgetEvent,
+): string {
+  const pieces: string[] = [];
+  if (event.bindingId) {
+    pieces.push(`binding:${encodeURIComponent(event.bindingId)}`);
+  }
+  if (event.threadId) {
+    pieces.push(`thread:${encodeURIComponent(event.threadId)}`);
+  }
+  return pieces.length > 0 ? pieces.join("|") : "scope";
+}
+
+function shortIdentifier(value: string, maxLength = 24): string {
+  const normalized = clipStatusText(value) ?? value;
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  const prefixLength = Math.max(10, Math.ceil((maxLength - 3) * 0.6));
+  const suffixLength = Math.max(8, maxLength - 3 - prefixLength);
+  return `${normalized.slice(0, prefixLength)}...${normalized.slice(-suffixLength)}`;
+}
+
 function clipStatusText(value: string | undefined): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -2168,7 +2260,7 @@ function clipStatusText(value: string | undefined): string | undefined {
 }
 
 function describeConversation(
-  conversation: MessagingBindingRecord["channel"]["conversation"],
+  conversation: MessagingChannelRef["conversation"],
 ): string {
   const pieces = [
     conversation.ancestorTitle,

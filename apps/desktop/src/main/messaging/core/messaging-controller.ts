@@ -421,6 +421,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   backend?: AppServerBackendKind;
   bindingId?: string;
   channel: MessagingChannelKind;
+  conversation?: MessagingChannelRef["conversation"];
   intentId: string;
   intentKind: MessagingSurfaceIntent["kind"];
   outcome: "deferred" | "dropped";
@@ -674,11 +675,18 @@ export class MessagingController {
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
     const threadId = threadIdForBackendEvent(event);
-    if (!threadId && isBackendAccountMetadataEvent(event)) {
+    if (!threadId && event.notification.method === "account/updated") {
       await this.refreshStatusSurfacesForBackend(
         event.backend,
         event.notification.method,
       );
+      return;
+    }
+    if (!threadId && event.notification.method === "account/rateLimits/updated") {
+      this.logger.debug?.("messaging skipped bound status refresh for backend rate limits", {
+        backend: event.backend,
+        method: event.notification.method,
+      });
       return;
     }
     if (!threadId) {
@@ -1057,11 +1065,22 @@ export class MessagingController {
     // broadcast — so the gateway echo of our own `editForumTopic`
     // call (which carries the same name we just wrote in
     // `syncConversationName`) is a no-op, not a refresh storm.
+    const managedTopic =
+      incoming.kind === "topic" && incoming.parentId
+        ? await this.options.store.findManagedTopicByConversation({
+            channel: event.channel.channel,
+            supergroupId: incoming.parentId,
+            topicId: incoming.id,
+          })
+        : undefined;
+    const managedConversation = managedTopic?.conversation;
     const merged = {
       ...stored,
-      title: incoming.title ?? stored.title,
-      parentTitle: incoming.parentTitle ?? stored.parentTitle,
-      ancestorTitle: incoming.ancestorTitle ?? stored.ancestorTitle,
+      title: incoming.title ?? stored.title ?? managedConversation?.title,
+      parentTitle:
+        incoming.parentTitle ?? stored.parentTitle ?? managedConversation?.parentTitle,
+      ancestorTitle:
+        incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
     };
     const routingState = event.routingState ?? binding.routingState;
     const changed =
@@ -8406,16 +8425,21 @@ export class MessagingController {
       toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
     });
     const result = await this.deliver(intent, binding, event);
+    const latestBinding = await this.options.store.getBinding(binding.id);
+    if (latestBinding?.revokedAt) {
+      return latestBinding;
+    }
     if (!result.surface) {
-      return binding;
+      return latestBinding ?? binding;
     }
 
+    const currentBinding = latestBinding ?? binding;
     return await this.options.store.upsertBinding({
-      ...binding,
+      ...currentBinding,
       pinnedStatusSurface:
         result.outcome === "pinned"
           ? result.surface
-          : binding.pinnedStatusSurface,
+          : currentBinding.pinnedStatusSurface,
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
@@ -9427,6 +9451,7 @@ export class MessagingController {
             backend: binding?.backend,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
+            conversation: binding?.channel.conversation,
             intentId: routedIntent.id,
             intentKind: routedIntent.kind,
             outcome: "deferred",
@@ -9461,6 +9486,7 @@ export class MessagingController {
             backend: binding?.backend,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
+            conversation: binding?.channel.conversation,
             intentId: routedIntent.id,
             intentKind: routedIntent.kind,
             outcome: "dropped",
@@ -10889,11 +10915,6 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
     return params.threadId;
   }
   return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
-}
-
-function isBackendAccountMetadataEvent(event: AgentEvent): boolean {
-  return event.notification.method === "account/updated" ||
-    event.notification.method === "account/rateLimits/updated";
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {

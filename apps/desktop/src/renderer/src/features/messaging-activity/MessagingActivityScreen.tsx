@@ -5,7 +5,10 @@ import type {
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { MESSAGING_PLATFORM_ICONS } from "../../lib/messaging-platform-branding";
+import {
+  formatMessagingPlatformName,
+  MESSAGING_PLATFORM_ICONS,
+} from "../../lib/messaging-platform-branding";
 
 const REFRESH_INTERVAL_MS = 5_000;
 const KIND_LABEL: Record<MessagingActivityKind, string> = {
@@ -214,14 +217,6 @@ function copyFieldsForEntry(
   entry: MessagingActivityEntry,
 ): Array<{ key: string; label: string; value: string }> {
   const fields: Array<{ key: string; label: string; value: string }> = [];
-  if (entry.actorId) {
-    fields.push({
-      key: "actor",
-      label: userIdLabel(entry.platform),
-      value: entry.actorId,
-    });
-  }
-
   const conversationKind =
     typeof entry.payload?.conversationKind === "string"
       ? entry.payload.conversationKind
@@ -234,6 +229,59 @@ function copyFieldsForEntry(
     typeof entry.payload?.conversationBucketId === "string"
       ? entry.payload.conversationBucketId
       : undefined;
+  const conversationTitle =
+    typeof entry.payload?.conversationTitle === "string"
+      ? entry.payload.conversationTitle
+      : entry.conversationTitle;
+  const localThreadTitle =
+    typeof entry.payload?.localThreadTitle === "string"
+      ? entry.payload.localThreadTitle
+      : undefined;
+
+  if (entry.kind === "diagnostic") {
+    fields.push({
+      key: "provider",
+      label: "Provider",
+      value: formatMessagingPlatformName(entry.platform),
+    });
+    if (conversationTitle) {
+      fields.push({
+        key: "conversation-title",
+        label: "Conversation",
+        value: conversationTitle,
+      });
+    }
+    if (localThreadTitle) {
+      fields.push({
+        key: "local-thread-title",
+        label: "Thread",
+        value: localThreadTitle,
+      });
+    }
+  }
+  if (entry.actorId) {
+    fields.push({
+      key: "actor",
+      label: userIdLabel(entry.platform),
+      value: entry.actorId,
+    });
+  }
+  if (entry.kind === "diagnostic") {
+    if (entry.bindingId) {
+      fields.push({
+        key: "binding",
+        label: "Binding ID",
+        value: entry.bindingId,
+      });
+    }
+    if (entry.threadId) {
+      fields.push({
+        key: "thread",
+        label: "Thread ID",
+        value: entry.threadId,
+      });
+    }
+  }
 
   if (parentId) {
     fields.push({

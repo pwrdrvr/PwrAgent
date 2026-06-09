@@ -2666,6 +2666,26 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("does not refresh every bound status surface for backend rate-limit metadata", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    harness.getNavigationSnapshot.mockClear();
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "account/rateLimits/updated",
+        params: {
+          rateLimits: [],
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses the thread rename event title when the navigation snapshot is stale", async () => {
     const staleNavigation = buildNavigationSnapshot();
     staleNavigation.threads[0] = {
@@ -4620,6 +4640,77 @@ describe("MessagingController", () => {
     ).resolves.toMatchObject({
       source: "owned",
       lifecycle: "open",
+    });
+  });
+
+  it("hydrates a bound Telegram topic title from managed topic metadata", async () => {
+    const harness = await createHarness();
+    await harness.store.upsertManagedTopic({
+      id: "topic:telegram:-1001:56",
+      authorizedActorIds: ["user-1"],
+      channel: "telegram",
+      conversation: {
+        id: "56",
+        kind: "topic",
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Test Thread",
+      },
+      createdAt: 1000,
+      lastObservedAt: 1000,
+      lifecycle: "open",
+      source: "observed",
+      supergroupId: "-1001",
+      title: "Test Thread",
+      topicId: "56",
+      updatedAt: 1000,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:56:codex:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "56",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("hello", {
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "56",
+            kind: "topic",
+            parentId: "-1001",
+            parentTitle: "Ops",
+          },
+        },
+        routingState: {
+          opaque: {
+            chatId: -1001,
+            messageThreadId: 56,
+          },
+        },
+      }),
+    );
+
+    await expect(
+      harness.store.getBinding("binding:telegram:topic:-1001:56:codex:thread-1"),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          title: "Test Thread",
+        },
+      },
     });
   });
 
@@ -7240,6 +7331,60 @@ describe("MessagingController", () => {
 
     await expect(
       harness.store.getBinding("binding:discord:channel::discord-channel:codex:thread-1"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+  });
+
+  it("does not resurrect a revoked binding after a failed status refresh returns a surface", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "telegram",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "Bad Request: chat not found",
+        surface: {
+          channel: "telegram",
+          id: "stale-status-surface",
+        },
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+      statusSurface: {
+        channel: "telegram",
+        id: "existing-status-surface",
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1"),
     ).resolves.toMatchObject({
       revokedAt: 1000,
     });
