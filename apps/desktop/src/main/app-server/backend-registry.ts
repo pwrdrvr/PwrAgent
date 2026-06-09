@@ -10292,7 +10292,8 @@ export class DesktopBackendRegistry {
       return taskMonitorFailure("inject_progress", "invalid_arguments", "message is required.");
     }
 
-    await this.injectCodexMonitorMessage({
+    await this.emitTaskMonitorProgressMessage({
+      monitorId: bound.record.monitorId,
       parentThreadId: bound.record.parentThreadId,
       text: formatTaskMonitorProgressMessage({
         message,
@@ -10415,6 +10416,34 @@ export class DesktopBackendRegistry {
       record.monitorThreadId = callerThreadId;
     }
     return { ok: true, record };
+  }
+
+  private async emitTaskMonitorProgressMessage(params: {
+    monitorId: string;
+    parentThreadId: string;
+    text: string;
+  }): Promise<void> {
+    const now = Date.now();
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.parentThreadId,
+          turnId: `monitor:${params.monitorId}`,
+          item: {
+            id: `${params.monitorId}:progress:${now}`,
+            type: "agentMessage",
+            text: params.text,
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: params.monitorId,
+              transient: true,
+            },
+          },
+        },
+      },
+    });
   }
 
   private async injectCodexMonitorMessage(params: {
