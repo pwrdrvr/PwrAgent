@@ -6166,7 +6166,20 @@ export class MessagingController {
     }
     if (actionId === "status:permissions") {
       if (isAcpBackendId(binding.backend)) {
-        await this.presentStatusAcpRuntimeModePicker(binding, event);
+        const summary = await this.getBackendSummary(binding.backend);
+        const navigation = await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+        });
+        const thread = findThreadForBinding(navigation, binding);
+        const runtimeMode = buildMessagingAcpRuntimeModeSummary({
+          backend: summary,
+          runtime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
+        });
+        if (runtimeMode.choices.length > 0) {
+          await this.presentStatusAcpRuntimeModePicker(binding, event);
+        } else {
+          await this.presentPermissionsPicker(binding, event);
+        }
       } else {
         await this.presentPermissionsPicker(binding, event);
       }
@@ -7252,10 +7265,6 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
-    if (isAcpBackendId(binding.backend)) {
-      await this.renderBindingStatus(binding, event);
-      return;
-    }
     const executionMode = readThreadExecutionModeValue(event.value);
     if (!executionMode) {
       await this.deliverInvalidStatusSelection(event);

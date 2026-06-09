@@ -9691,6 +9691,88 @@ describe("MessagingController", () => {
     });
   });
 
+  it("falls back to legacy permissions for ACP threads without runtime choices", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildAcpRuntimeBackendSummary({
+            acp: {
+              registryId: "gemini",
+              distributionKinds: ["local"],
+              installStatus: "installed",
+              authStatus: "authenticated",
+              verificationStatus: "not-applicable",
+            },
+          }),
+        ],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:gemini:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:gemini",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Full Access"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:permissions",
+          label: expect.stringContaining("Full Access"),
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Permissions",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-permissions",
+          label: "Default",
+          value: { executionMode: "default" },
+        }),
+        expect.objectContaining({
+          id: "status:set-permissions",
+          label: "Full Access (current)",
+          value: { executionMode: "full-access" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-permissions",
+        value: { executionMode: "default" },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      executionMode: "default",
+    });
+  });
+
   it("uses Kimi config-option permissions in the status picker", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

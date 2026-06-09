@@ -261,6 +261,49 @@ describe("FeishuAdapter", () => {
     });
   });
 
+  it("stores browse session ids for single-select callback handles", async () => {
+    const store = fakeStore();
+    const spies: { sent: unknown[] } = { sent: [] };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await adapter.deliver({
+      id: "environment-picker",
+      kind: "single_select",
+      browseSessionId: "browse-env-1",
+      createdAt: 1,
+      fallbackText: "Pick an environment.",
+      prompt: "Select Environment",
+      choices: [
+        {
+          id: "browse:new:set-environment",
+          label: "Dev",
+          value: { environmentId: "dev" },
+        },
+      ],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(store.records).toHaveLength(1);
+    expect(store.records[0]).toMatchObject({
+      actionId: "browse:new:set-environment",
+      browseSessionId: "browse-env-1",
+      pendingIntentId: "environment-picker",
+      value: { environmentId: "dev" },
+    });
+  });
+
   it("normalizes authorized webhook text events", async () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,
