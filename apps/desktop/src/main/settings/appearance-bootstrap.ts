@@ -55,6 +55,31 @@ export function themedWindowBackgroundColor(
   return appearance.theme === "light" ? WINDOW_BG_LIGHT : WINDOW_BG_DARK;
 }
 
+/**
+ * Window Controls Overlay (Windows) styling for the frameless title bar.
+ *
+ * `color` is the background behind the OS-drawn min/max/close caption buttons
+ * (matched to the window fill so there's no seam); `symbolColor` is the caption
+ * glyph color; `height` sets the caption strip height so the buttons align with
+ * the app's title-bar row (the sidebar masthead / content title row). Re-apply
+ * via `window.setTitleBarOverlay(...)` when the theme flips. macOS uses
+ * `trafficLightPosition` instead; Linux gets a normal frame.
+ */
+export const TITLE_BAR_OVERLAY_HEIGHT = 48;
+
+export function themedTitleBarOverlay(appearance: BootstrapAppearance): {
+  color: string;
+  symbolColor: string;
+  height: number;
+} {
+  const light = appearance.theme === "light";
+  return {
+    color: light ? WINDOW_BG_LIGHT : WINDOW_BG_DARK,
+    symbolColor: light ? "#3a3a3a" : "#c8ccd4",
+    height: TITLE_BAR_OVERLAY_HEIGHT,
+  };
+}
+
 /** Build the `webPreferences.additionalArguments` array that surfaces
  *  the appearance to the preload script. Every BrowserWindow that
  *  loads the renderer needs this — without it, the preload's

@@ -1108,6 +1108,11 @@ const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragent", desktopApi);
   contextBridge.exposeInMainWorld("__pwragentAppearance", bootstrapAppearance);
+  // Surface the OS platform synchronously so the index.html bootstrap can set
+  // `<html data-platform>` before first paint. This drives platform-specific
+  // window chrome in app.css (e.g. zeroing the macOS stoplight reservation on
+  // Windows, where the caption buttons live in the Window Controls Overlay).
+  contextBridge.exposeInMainWorld("__pwragentPlatform", process.platform);
   contextBridge.exposeInMainWorld(
     "__pwragentNavigationPreferences",
     bootstrapNavigationPreferences,

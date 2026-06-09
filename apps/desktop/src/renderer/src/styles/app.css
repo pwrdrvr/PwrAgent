@@ -498,8 +498,10 @@ textarea,
   border-bottom: none;
 }
 
-:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
-  .sidebar__masthead {
+/* macOS reserves 80px for the traffic-light stoplights. Every other
+   platform (Linux normal frame; Windows frameless with caption buttons on
+   the right, never the left) starts the brand at the left edge. */
+:root[data-platform]:not([data-platform="darwin"]) .sidebar__masthead {
   padding-left: 0;
 }
 

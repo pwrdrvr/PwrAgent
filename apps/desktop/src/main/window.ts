@@ -36,6 +36,7 @@ import {
 } from "../shared/ipc";
 import {
   readBootstrapAppearance,
+  themedTitleBarOverlay,
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
@@ -46,6 +47,7 @@ import {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
+const isWindows = process.platform === "win32";
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
@@ -297,12 +299,22 @@ export function createMainWindow(options?: {
   const preloadPath = getPreloadPath();
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
-  const macWindowChrome = isMac
+  const windowChrome = isMac
     ? {
         titleBarStyle: "hiddenInset" as const,
         trafficLightPosition: { x: 20, y: 18 },
       }
-    : {};
+    : isWindows
+      ? {
+          // Frameless + Window Controls Overlay: the OS draws min/max/close in
+          // a reserved region at the top-right; the rest of the bar (our
+          // sidebar masthead) is ours and draggable. autoHideMenuBar tucks the
+          // File/Edit/View menu away (Alt reveals it), like GitHub Desktop.
+          titleBarStyle: "hidden" as const,
+          titleBarOverlay: themedTitleBarOverlay(appearance),
+          autoHideMenuBar: true,
+        }
+      : {};
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -310,7 +322,7 @@ export function createMainWindow(options?: {
     minHeight: 760,
     show: false,
     title: "PwrAgent",
-    ...macWindowChrome,
+    ...windowChrome,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
     //
