@@ -4971,6 +4971,7 @@ export class MessagingController {
       now: this.now(),
       workMode: options.workMode,
       branchName: options.branchName,
+      options,
       acpRuntime: options.acpRuntime,
     });
     const materialized = this.options.backend.materializeDirectoryLaunchpad
@@ -12092,6 +12093,7 @@ function launchpadForMessagingProject(params: {
   directory?: NavigationDirectorySummary;
   navigation: NavigationSnapshot;
   now: number;
+  options: NewThreadOptionsSummary;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
   workMode: LaunchpadWorkMode;
@@ -12123,33 +12125,32 @@ function launchpadForMessagingProject(params: {
   return {
     ...base,
     backend: params.backend,
-    acpRuntime: params.acpRuntime ?? params.preferences?.acpRuntime ?? base.acpRuntime,
+    acpRuntime: params.acpRuntime ?? params.options.acpRuntime,
     codexEnvironmentId:
       params.preferences?.codexEnvironmentId === null
         ? undefined
-        : params.preferences?.codexEnvironmentId ?? base.codexEnvironmentId,
+        : params.options.codexEnvironmentId ?? undefined,
     codexEnvironmentExecutionTarget:
       params.preferences?.codexEnvironmentId === null
         ? undefined
-        : params.preferences?.codexEnvironmentExecutionTarget ??
-          base.codexEnvironmentExecutionTarget,
+        : params.options.codexEnvironmentExecutionTarget,
     codexEnvironmentSetupEnabled:
       params.preferences?.codexEnvironmentId === null
         ? false
-        : params.preferences?.codexEnvironmentSetupEnabled ??
-          base.codexEnvironmentSetupEnabled,
+        : params.options.codexEnvironmentSetupEnabled,
     codexEnvironmentActionId:
       params.preferences?.codexEnvironmentId === null
         ? undefined
         : params.preferences?.codexEnvironmentActionId === null
           ? undefined
-          : params.preferences?.codexEnvironmentActionId ??
-            base.codexEnvironmentActionId,
-    executionMode: params.preferences?.executionMode ?? base.executionMode,
-    model: params.preferences?.model ?? base.model,
-    reasoningEffort: params.preferences?.reasoningEffort ?? base.reasoningEffort,
-    serviceTier: params.preferences?.serviceTier ?? base.serviceTier,
-    fastMode: params.preferences?.fastMode ?? base.fastMode,
+          : params.options.codexEnvironmentActionId ?? undefined,
+    executionMode: params.options.executionMode,
+    model: params.options.supportsModel ? params.options.model : undefined,
+    reasoningEffort: params.options.supportsReasoning
+      ? params.options.reasoningEffort
+      : undefined,
+    serviceTier: params.preferences?.serviceTier,
+    fastMode: params.options.supportsFast ? params.options.fastMode : undefined,
     prompt: "",
     workMode: params.workMode,
     branchName: params.branchName,
