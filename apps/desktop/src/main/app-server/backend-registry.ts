@@ -78,6 +78,8 @@ import {
   type SetAcpSessionRuntimeOptionResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
+  applyNavigationLaunchpadProviderSettingsPatch,
+  projectNavigationLaunchpadProviderSettings,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
@@ -6865,17 +6867,18 @@ export class DesktopBackendRegistry {
     );
     if (existing) {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
-      const backend = await this.resolveLaunchpadBackend(existing.backend);
+      const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
+      const backend = await this.resolveLaunchpadBackend(existingLaunchpad.backend);
       const modelSettings = await this.resolveLaunchpadModelSettings(
         backend,
-        existing,
+        existingLaunchpad,
       );
       const executionMode = getAvailableExecutionMode(
         backend,
-        existing.executionMode,
+        existingLaunchpad.executionMode,
       );
       const normalizedExisting: NavigationLaunchpadDraft = {
-        ...existing,
+        ...existingLaunchpad,
         backend: backend.kind,
         executionMode,
         ...modelSettings,
@@ -6905,6 +6908,8 @@ export class DesktopBackendRegistry {
           reasoningEffort: defaults.reasoningEffort,
           serviceTier: defaults.serviceTier,
           fastMode: defaults.fastMode,
+          acpRuntime: defaults.acpRuntime,
+          providerSettings: defaults.providerSettings,
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
@@ -6967,6 +6972,8 @@ export class DesktopBackendRegistry {
       reasoningEffort: defaults.reasoningEffort,
       serviceTier: defaults.serviceTier,
       fastMode: defaults.fastMode,
+      acpRuntime: defaults.acpRuntime,
+      providerSettings: defaults.providerSettings,
       prompt: "",
       registeredAt: request.registeredAt,
       workMode: defaultLaunchpadWorkMode(request, defaults),
@@ -6998,12 +7005,12 @@ export class DesktopBackendRegistry {
         directoryLabel: request.directoryKey,
       })).launchpad;
 
-    const nextLaunchpad: NavigationLaunchpadDraft = {
-      ...current,
+    const patch = {
       ...request.patch,
-      ...("fastMode" in request.patch
-        ? { serviceTier: undefined }
-        : {}),
+      ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
+    };
+    const nextLaunchpad: NavigationLaunchpadDraft = {
+      ...applyNavigationLaunchpadProviderSettingsPatch(current, patch),
       directoryKey: request.directoryKey,
       settingsTouchedAt: request.stickySettingsChanged
         ? Date.now()
@@ -7016,21 +7023,24 @@ export class DesktopBackendRegistry {
     if (request.stickySettingsChanged && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
     }
-    if (request.stickySettingsChanged && request.patch.executionMode) {
-      stickyPatch.executionMode = request.patch.executionMode;
+    if (request.stickySettingsChanged && patch.executionMode) {
+      stickyPatch.executionMode = patch.executionMode;
     }
-    if (request.stickySettingsChanged && "model" in request.patch) {
-      stickyPatch.model = request.patch.model;
+    if (request.stickySettingsChanged && "model" in patch) {
+      stickyPatch.model = patch.model;
     }
-    if (request.stickySettingsChanged && "reasoningEffort" in request.patch) {
-      stickyPatch.reasoningEffort = request.patch.reasoningEffort;
+    if (request.stickySettingsChanged && "reasoningEffort" in patch) {
+      stickyPatch.reasoningEffort = patch.reasoningEffort;
     }
-    if (request.stickySettingsChanged && "serviceTier" in request.patch) {
-      stickyPatch.serviceTier = request.patch.serviceTier;
+    if (request.stickySettingsChanged && "serviceTier" in patch) {
+      stickyPatch.serviceTier = patch.serviceTier;
     }
-    if (request.stickySettingsChanged && "fastMode" in request.patch) {
-      stickyPatch.fastMode = request.patch.fastMode;
+    if (request.stickySettingsChanged && "fastMode" in patch) {
+      stickyPatch.fastMode = patch.fastMode;
       stickyPatch.serviceTier = undefined;
+    }
+    if (request.stickySettingsChanged && "acpRuntime" in patch) {
+      stickyPatch.acpRuntime = patch.acpRuntime;
     }
     if (request.stickySettingsChanged && request.patch.workMode) {
       stickyPatch.workMode = request.patch.workMode;
@@ -7783,19 +7793,34 @@ export class DesktopBackendRegistry {
     storedDefaults: NavigationLaunchpadDefaults,
     preferredBackend?: AppServerBackendKind,
   ): Promise<NavigationLaunchpadDefaults> {
+    const projectedDefaults =
+      projectNavigationLaunchpadProviderSettings(storedDefaults);
     const backend = await this.resolveLaunchpadBackend(
-      preferredBackend ?? storedDefaults.backend,
+      preferredBackend ?? projectedDefaults.backend,
     );
+    const backendDefaults =
+      backend.kind === projectedDefaults.backend
+        ? projectedDefaults
+        : projectNavigationLaunchpadProviderSettings({
+            ...projectedDefaults,
+            backend: backend.kind,
+            executionMode: "default",
+            model: undefined,
+            reasoningEffort: undefined,
+            serviceTier: undefined,
+            fastMode: undefined,
+            acpRuntime: undefined,
+          });
     const modelSettings = await this.resolveLaunchpadModelSettings(
       backend,
-      storedDefaults,
+      backendDefaults,
     );
     const resolvedDefaults: NavigationLaunchpadDefaults = {
-      ...storedDefaults,
+      ...backendDefaults,
       backend: backend.kind,
       executionMode: getAvailableExecutionMode(
         backend,
-        storedDefaults.executionMode,
+        backendDefaults.executionMode,
       ),
       ...modelSettings,
     };
@@ -7807,8 +7832,8 @@ export class DesktopBackendRegistry {
       delete resolvedDefaults.serviceTier;
     }
 
-    if (launchpadDefaultsEqual(storedDefaults, resolvedDefaults)) {
-      return storedDefaults;
+    if (launchpadDefaultsEqual(projectedDefaults, resolvedDefaults)) {
+      return projectedDefaults;
     }
 
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);

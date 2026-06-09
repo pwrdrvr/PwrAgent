@@ -2272,6 +2272,7 @@ function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
 function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
   return intent.kind === "thread_picker" ||
     intent.kind === "project_picker" ||
+    intent.kind === "single_select" ||
     intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;

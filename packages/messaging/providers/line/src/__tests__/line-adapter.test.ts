@@ -240,6 +240,43 @@ describe("LineAdapter", () => {
     );
   });
 
+  it("stores browse session ids for single-select callback handles", async () => {
+    const api = createApi();
+    const store = createCallbackStore();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: store,
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    await adapter.deliver({
+      id: "environment-picker",
+      kind: "single_select",
+      browseSessionId: "browse-env-1",
+      createdAt: 1234,
+      fallbackText: "Pick an environment.",
+      prompt: "Select Environment",
+      choices: [
+        {
+          id: "browse:new:set-environment",
+          label: "Dev",
+          value: { environmentId: "dev" },
+        },
+      ],
+      audit: lineDmAudit(),
+    });
+
+    expect(store.upsertCallbackHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "browse:new:set-environment",
+        browseSessionId: "browse-env-1",
+        value: { environmentId: "dev" },
+      }),
+    );
+  });
+
   it("uses concise LINE flex titles instead of repeating full picker fallback text", async () => {
     const api = createApi();
     const adapter = new LineAdapter({

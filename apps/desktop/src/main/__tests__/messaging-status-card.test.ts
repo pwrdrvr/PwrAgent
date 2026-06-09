@@ -81,6 +81,7 @@ describe("buildBindingStatusIntent", () => {
         },
         executionModes: [],
         launchpadOptions: {
+          reasoningEfforts: ["low", "medium", "high"],
           supportsFastMode: true,
         },
       },
@@ -283,10 +284,10 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).not.toContain("95 remaining");
   });
 
-  it("reports Fast mode as unsupported when the backend says it is not available", () => {
+  it("hides Fast mode when the backend says it is not available", () => {
     const binding = buildBinding();
     const navigation = buildNavigationSnapshot();
-    delete navigation.launchpadDefaults.fastMode;
+    navigation.launchpadDefaults.fastMode = true;
     const intent = buildBindingStatusIntent({
       id: "status-fast-unsupported",
       backendSummary: {
@@ -336,7 +337,69 @@ describe("buildBindingStatusIntent", () => {
       }),
     });
 
-    expect(intent.text).toContain("Fast mode: unsupported");
+    expect(intent.text).not.toContain("Fast mode:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:fast" }),
+    );
+  });
+
+  it("does not leak launchpad Fast or Reasoning defaults into ACP status cards", () => {
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:kimi",
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults.fastMode = true;
+    navigation.launchpadDefaults.reasoningEffort = "high";
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:kimi",
+      fastMode: undefined,
+      reasoningEffort: undefined,
+    };
+
+    const intent = buildBindingStatusIntent({
+      id: "status-acp-no-fast",
+      backendSummary: {
+        kind: "acp:kimi",
+        source: "acp",
+        label: "Kimi",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          models: [{ id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" }],
+          reasoningEfforts: [],
+          supportsFastMode: false,
+        },
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).not.toContain("Fast mode:");
+    expect(intent.text).not.toContain("Reasoning:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:fast" }),
+    );
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:reasoning" }),
+    );
   });
 
   it("renders a pending skill selection on the status card", () => {
@@ -539,7 +602,7 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
-  it("renders ACP runtime mode instead of Codex permission controls", () => {
+  it("renders ACP permissions instead of Codex permission controls", () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults.acpRuntime = {
       currentModeId: "default",
@@ -567,22 +630,16 @@ describe("buildBindingStatusIntent", () => {
     });
 
     expect(intent.text).toContain("Binding: Thread one (acp:gemini)");
-    expect(intent.text).toContain("Runtime mode: Yolo");
-    expect(intent.text).not.toContain("Permissions:");
+    expect(intent.text).toContain("Permissions: Yolo");
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
-        id: "status:runtime-mode",
-        label: "Runtime: Yolo",
-      }),
-    );
-    expect(intent.actions).not.toContainEqual(
-      expect.objectContaining({
         id: "status:permissions",
+        label: "Permissions: Yolo",
       }),
     );
   });
 
-  it("does not treat ACP model config values as runtime modes", () => {
+  it("does not treat ACP model config values as permissions", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -630,11 +687,11 @@ describe("buildBindingStatusIntent", () => {
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Runtime mode: Agent default");
-    expect(intent.text).not.toContain("Runtime mode: Gemini 3 Flash Preview");
+    expect(intent.text).toContain("Permissions: Agent default");
+    expect(intent.text).not.toContain("Permissions: Gemini 3 Flash Preview");
     expect(intent.actions).not.toContainEqual(
       expect.objectContaining({
-        id: "status:runtime-mode",
+        id: "status:permissions",
       }),
     );
   });

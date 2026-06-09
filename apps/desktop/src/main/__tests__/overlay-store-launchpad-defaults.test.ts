@@ -104,7 +104,18 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
 
     await store.setLaunchpadDefaults({ fastMode: false, serviceTier: undefined });
 
-    expect(listDefaultKeys()).toEqual(["backend", "executionMode", "fastMode"]);
+    expect(listDefaultKeys()).toEqual([
+      "backend",
+      "executionMode",
+      "fastMode",
+      "providerSettings",
+    ]);
+    expect(readDefaultValue("providerSettings")).toEqual({
+      codex: {
+        executionMode: "default",
+        fastMode: false,
+      },
+    });
   });
 
   it("preserves unknown launchpad default keys while clearing owned keys", async () => {

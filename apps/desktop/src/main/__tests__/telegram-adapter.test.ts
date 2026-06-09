@@ -301,6 +301,55 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("stores browse session ids for single-select callback handles", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.deliver({
+      id: "environment-picker",
+      kind: "single_select",
+      browseSessionId: "browse-env-1",
+      createdAt: 1000,
+      fallbackText: "Pick an environment.",
+      prompt: "Select Environment",
+      choices: [
+        {
+          id: "browse:new:set-environment",
+          label: "Dev",
+          value: { environmentId: "dev" },
+        },
+      ],
+      audit: {
+        actor: { platformUserId: "42" },
+        channel: {
+          channel: "telegram",
+          conversation: { id: "777", kind: "dm" },
+        },
+        occurredAt: 1000,
+      },
+    });
+
+    const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
+    const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    await expect(
+      harness.store.resolveCallbackHandle({
+        actorId: "42",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        handle: callbackData ?? "",
+        now: 1000,
+      }),
+    ).resolves.toMatchObject({
+      actionId: "browse:new:set-environment",
+      browseSessionId: "browse-env-1",
+      value: { environmentId: "dev" },
+    });
+  });
+
   it("treats `@PwrAgentBot resume` as the /resume command", async () => {
     const harness = await createControllerHarness();
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));

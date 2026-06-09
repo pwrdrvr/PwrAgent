@@ -1,6 +1,7 @@
 import type {
   AppServerBackendKind,
   BackendSummary,
+  CodexEnvironmentOption,
   HandoffThreadWorkspaceRequest,
   MessagingToolUpdateMode,
   ThreadExecutionMode,
@@ -72,14 +73,25 @@ export function buildBindingStatusIntent(params: {
     preferences?.model ??
     defaults?.model ??
     unavailable();
-  const reasoning =
-    params.threadState.reasoningEffort ??
-    preferences?.reasoningEffort ??
-    defaults?.reasoningEffort ??
-    unavailable();
-  const fastMode =
-    params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
-  const fastModeLabel = formatFastModeStatus(fastMode, params.backendSummary);
+  const modelOption = params.backendSummary?.launchpadOptions?.models?.find(
+    (option) => option.id === model,
+  );
+  const supportsReasoning =
+    !params.backendSummary ||
+    Boolean(params.backendSummary.launchpadOptions?.reasoningEfforts?.length);
+  const reasoning = supportsReasoning
+    ? params.threadState.reasoningEffort ??
+      preferences?.reasoningEffort ??
+      defaults?.reasoningEffort ??
+      unavailable()
+    : undefined;
+  const supportsFastMode = backendSupportsFastMode(
+    params.backendSummary,
+    modelOption,
+  );
+  const fastMode = supportsFastMode
+    ? params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode
+    : undefined;
   const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
   const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
   const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
@@ -106,18 +118,24 @@ export function buildBindingStatusIntent(params: {
     streamingMode,
     params.streamingResponsesDefault,
   );
-  const acpRuntimeLabel = isAcpBackendId(params.binding.backend)
+  const acpRuntimeMode = isAcpBackendId(params.binding.backend)
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
-      }).currentLabel
+      })
     : undefined;
-  const acpRuntimeChoices = isAcpBackendId(params.binding.backend)
-    ? buildMessagingAcpRuntimeModeSummary({
-        backend: params.backendSummary,
-        runtime: params.threadState.acpRuntime,
-      }).choices
-    : [];
+  const acpRuntimeLabel = acpRuntimeMode?.currentLabel;
+  const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
+  const permissionsLineLabel = formatPermissionsLineDisplayLabel({
+    acpRuntimeLabel,
+    current: permissionsMode,
+    queued: queuedExecutionMode,
+  });
+  const permissionsActionLabel = formatPermissionsActionDisplayLabel({
+    acpRuntimeLabel,
+    current: permissionsMode,
+    queued: queuedExecutionMode,
+  });
 
   return {
     id: params.id,
@@ -140,11 +158,9 @@ export function buildBindingStatusIntent(params: {
       params.threadState.missing ? "Thread state: unavailable" : undefined,
       mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
-      `Reasoning: ${reasoning}`,
-      `Fast mode: ${fastModeLabel}`,
-      acpRuntimeLabel
-        ? `Runtime mode: ${acpRuntimeLabel}`
-        : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
+      reasoning ? `Reasoning: ${reasoning}` : undefined,
+      supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
+      `Permissions: ${permissionsLineLabel}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
       params.binding.pendingSkillSelection
@@ -164,10 +180,15 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
-      runtimeChoices: acpRuntimeChoices,
-      supportsPermissionsAction: !acpRuntimeLabel,
+      permissionsActionLabel,
+      permissionsChoices: acpRuntimeChoices,
+      supportsLegacyPermissionsAction:
+        !isAcpBackendId(params.binding.backend) ||
+        permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
+      supportsFastMode,
+      supportsReasoning,
       streamingMode,
       streamingResponsesDefault: params.streamingResponsesDefault,
       toolUpdateMode,
@@ -175,17 +196,17 @@ export function buildBindingStatusIntent(params: {
   };
 }
 
-function formatFastModeStatus(
-  fastMode: boolean | undefined,
+function backendSupportsFastMode(
   backendSummary: BackendSummary | undefined,
-): string {
-  if (fastMode !== undefined) {
-    return fastMode ? "on" : "off";
+  modelOption: { supportsFast?: boolean } | undefined,
+): boolean {
+  if (!backendSummary) {
+    return true;
   }
-  if (backendSummary?.launchpadOptions?.supportsFastMode === false) {
-    return "unsupported";
+  if (backendSummary.kind !== "codex") {
+    return false;
   }
-  return unavailable();
+  return modelOption?.supportsFast ?? backendSummary.launchpadOptions?.supportsFastMode ?? false;
 }
 
 function formatContextUsageLine(summary: string | undefined): string | undefined {
@@ -384,10 +405,13 @@ function buildStatusActions(params: {
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
-  runtimeChoices?: MessagingAcpRuntimeModeChoice[];
-  supportsPermissionsAction?: boolean;
+  permissionsActionLabel: string;
+  permissionsChoices?: MessagingAcpRuntimeModeChoice[];
+  supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
-  reasoning: string;
+  reasoning?: string;
+  supportsFastMode: boolean;
+  supportsReasoning: boolean;
   streamingMode: MessagingStreamingResponseMode;
   streamingResponsesDefault?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
@@ -400,31 +424,15 @@ function buildStatusActions(params: {
   const permissionsAction:
     | MessagingSurfaceAction
     | undefined =
-    params.supportsPermissionsAction !== false &&
-    (params.permissionsMode === "full-access" || params.allowFullAccessEscalation !== false)
+    params.permissionsChoices?.length ||
+    (params.supportsLegacyPermissionsAction !== false &&
+      (params.permissionsMode === "full-access" ||
+        params.allowFullAccessEscalation !== false))
       ? {
           id: "status:permissions",
-          label: formatPermissionsActionLabel(
-            params.permissionsMode,
-            params.queuedExecutionMode,
-          ),
+          label: `Permissions: ${params.permissionsActionLabel}`,
           style: "secondary",
           fallbackText: "permissions",
-          priority: 7,
-        }
-      : undefined;
-  const runtimeAction:
-    | MessagingSurfaceAction
-    | undefined =
-    params.runtimeChoices && params.runtimeChoices.length > 0
-      ? {
-          id: "status:runtime-mode",
-          label: `Runtime: ${
-            params.runtimeChoices.find((choice) => choice.selected)?.label ??
-            "Agent default"
-          }`,
-          style: "secondary",
-          fallbackText: "runtime",
           priority: 7,
         }
       : undefined;
@@ -436,22 +444,29 @@ function buildStatusActions(params: {
       fallbackText: "model",
       priority: 4,
     },
-    {
-      id: "status:reasoning",
-      label: `Reasoning: ${params.reasoning}`,
-      style: "secondary",
-      fallbackText: "reasoning",
-      priority: 5,
-    },
-    {
-      id: "status:fast",
-      label: params.fastMode ? "Fast: on" : "Fast: off",
-      style: "secondary",
-      fallbackText: "fast",
-      priority: 6,
-    },
+    ...(params.supportsReasoning && params.reasoning
+      ? [
+          {
+            id: "status:reasoning",
+            label: `Reasoning: ${params.reasoning}`,
+            style: "secondary" as const,
+            fallbackText: "reasoning",
+            priority: 5,
+          },
+        ]
+      : []),
+    ...(params.supportsFastMode
+      ? [
+          {
+            id: "status:fast",
+            label: params.fastMode ? "Fast: on" : "Fast: off",
+            style: "secondary" as const,
+            fallbackText: "fast",
+            priority: 6,
+          },
+        ]
+      : []),
     ...(permissionsAction ? [permissionsAction] : []),
-    ...(runtimeAction ? [runtimeAction] : []),
     ...(params.handoff
       ? [
           {
@@ -622,16 +637,32 @@ export function formatMessagingToolUpdateModeLabel(
 ): string {
   switch (mode) {
     case "show_none":
-      return "Show None";
+      return "None";
     case "show_less":
-      return "Show Less";
+      return "Few";
     case "show_some":
-      return "Show Some";
+      return "Some";
     case "show_more":
-      return "Show More";
+      return "More";
     case "show_all":
-      return "Show All";
+      return "All";
   }
+}
+
+export type MessagingToolUpdateModeChoice = {
+  current?: boolean;
+  label: string;
+  mode: MessagingToolUpdateMode;
+};
+
+export function messagingToolUpdateModeChoices(
+  currentMode: MessagingToolUpdateMode,
+): MessagingToolUpdateModeChoice[] {
+  return TOOL_UPDATE_MODE_ORDER.map((mode) => ({
+    current: mode === currentMode,
+    label: formatMessagingToolUpdateModeLabel(mode),
+    mode,
+  }));
 }
 
 export function buildHandoffOverviewIntent(params: {
@@ -1050,6 +1081,7 @@ export function buildStatusModelPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
+  currentModelId?: string;
   id: string;
   models: Array<{ id: string; label?: string; current?: boolean }>;
 }): MessagingSingleSelectIntent {
@@ -1073,7 +1105,11 @@ export function buildStatusModelPickerIntent(params: {
       [
         ...params.models.map((model, index) => ({
           id: "status:set-model",
-          label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
+          label: `${model.label ?? model.id}${
+            (params.currentModelId ? model.id === params.currentModelId : model.current)
+              ? " (current)"
+              : ""
+          }`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
           priority: 10 + index,
@@ -1098,6 +1134,7 @@ export function buildStatusReasoningPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
+  currentReasoningEffort?: string;
   id: string;
   efforts: string[];
 }): MessagingSingleSelectIntent {
@@ -1117,7 +1154,7 @@ export function buildStatusReasoningPickerIntent(params: {
       [
         ...params.efforts.map((effort, index) => ({
           id: "status:set-reasoning",
-          label: effort,
+          label: `${effort}${effort === params.currentReasoningEffort ? " (current)" : ""}`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
           priority: 10 + index,
@@ -1144,6 +1181,7 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
   choices: MessagingAcpRuntimeModeChoice[];
   createdAt: number;
   id: string;
+  prompt?: string;
 }): MessagingSingleSelectIntent {
   return {
     id: params.id,
@@ -1155,8 +1193,8 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
       fallback: "present_new",
     },
     targetSurface: params.binding.statusSurface,
-    fallbackText: "Reply with a runtime mode number, Refresh, or Detach.",
-    prompt: "Select Runtime Mode",
+    fallbackText: "Reply with a permissions option number, Back, or Cancel.",
+    prompt: params.prompt ?? "Select Permissions",
     choices: applyActionCapabilityLimits(
       [
         ...params.choices.map((choice, index) => ({
@@ -1173,6 +1211,153 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
         })),
         {
           id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusPermissionsPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  currentMode: ThreadExecutionMode;
+  id: string;
+}): MessagingSingleSelectIntent {
+  const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
+    { label: "Default", mode: "default" },
+    { label: "Full Access", mode: "full-access" },
+  ];
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a permissions option number, Back, or Cancel.",
+    prompt: "Select Permissions",
+    choices: applyActionCapabilityLimits(
+      [
+        ...choices.map((choice, index) => ({
+          id: "status:set-permissions",
+          label: `${choice.label}${choice.mode === params.currentMode ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            executionMode: choice.mode,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusToolUpdateModePickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  choices: MessagingToolUpdateModeChoice[];
+  createdAt: number;
+  id: string;
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a tools option number, Back, or Cancel.",
+    prompt: "Select Tools",
+    choices: applyActionCapabilityLimits(
+      [
+        ...params.choices.map((choice, index) => ({
+          id: "status:set-tool-updates",
+          label: `${choice.label}${choice.current ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            toolUpdateMode: choice.mode,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildNewThreadEnvironmentPickerIntent(params: {
+  browseSessionId: string;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  currentEnvironmentId?: string | null;
+  id: string;
+  options: CodexEnvironmentOption[];
+  targetSurface?: MessagingStatusIntent["targetSurface"];
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    browseSessionId: params.browseSessionId,
+    createdAt: params.createdAt,
+    delivery: params.targetSurface
+      ? { mode: "update", replaceMarkup: true }
+      : undefined,
+    targetSurface: params.targetSurface,
+    fallbackText: "Reply with an environment number, Back, or Cancel.",
+    prompt: "Select Environment",
+    choices: applyActionCapabilityLimits(
+      [
+        {
+          id: "browse:new:set-environment",
+          label: `None${params.currentEnvironmentId ? "" : " (current)"}`,
+          fallbackText: "none",
+          style: "secondary" as const,
+          priority: 10,
+          value: {
+            environmentId: null,
+          },
+        },
+        ...params.options.map((option, index) => ({
+          id: "browse:new:set-environment",
+          label: `${option.name}${option.id === params.currentEnvironmentId ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 20 + index,
+          value: {
+            environmentId: option.id,
+          },
+        })),
+        {
+          id: "browse:new:environment:back",
           label: "Back",
           fallbackText: "back",
           style: "secondary" as const,
@@ -1272,6 +1457,50 @@ export function formatPermissionsActionLabel(
   }
   const queuedLabel = queued === "full-access" ? "Full Access" : "Default";
   return `Permissions: ${currentLabel} → ${queuedLabel} (queued)`;
+}
+
+export function formatPermissionsActionDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  return formatPermissionsDisplayLabel({
+    acpRuntimeLabel: params.acpRuntimeLabel,
+    executionLabel: formatPermissionsActionLabel(params.current, params.queued).replace(
+      /^Permissions:\s*/,
+      "",
+    ),
+    current: params.current,
+    queued: params.queued,
+  });
+}
+
+export function formatPermissionsLineDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  return formatPermissionsDisplayLabel({
+    acpRuntimeLabel: params.acpRuntimeLabel,
+    executionLabel: formatPermissionsLineLabel(params.current, params.queued),
+    current: params.current,
+    queued: params.queued,
+  });
+}
+
+function formatPermissionsDisplayLabel(params: {
+  acpRuntimeLabel?: string;
+  executionLabel: string;
+  current: string;
+  queued?: ThreadExecutionMode;
+}): string {
+  if (!params.acpRuntimeLabel) {
+    return params.executionLabel;
+  }
+  if (params.current === "default" && !params.queued) {
+    return params.acpRuntimeLabel;
+  }
+  return `${params.acpRuntimeLabel} + ${params.executionLabel}`;
 }
 
 /**

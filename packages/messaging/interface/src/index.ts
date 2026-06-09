@@ -1,11 +1,11 @@
 import type {
   AppServerBackendKind,
   BackendAcpSessionRuntimeState,
+  CodexEnvironmentExecutionTarget,
   LaunchpadWorkMode,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
-  CodexEnvironmentExecutionTarget,
   MessagingDeliveryScope,
   MessagingToolUpdateMode,
   ThreadIdentifier,
@@ -747,6 +747,7 @@ export type MessagingProjectPickerIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingSingleSelectIntent = MessagingBaseSurfaceIntent & {
   kind: "single_select";
+  browseSessionId?: string;
   prompt: string;
   choices: MessagingChoice[];
 };
@@ -954,6 +955,10 @@ export type MessagingPermissionsMode = "default" | "full-access";
 
 export type MessagingBindingPreferences = {
   acpRuntime?: BackendAcpSessionRuntimeState;
+  codexEnvironmentActionId?: string | null;
+  codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  codexEnvironmentId?: string | null;
+  codexEnvironmentSetupEnabled?: boolean;
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
   model?: string;

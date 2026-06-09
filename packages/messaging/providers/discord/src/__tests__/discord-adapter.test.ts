@@ -530,6 +530,55 @@ describe("discord adapter", () => {
     await restartedAdapter.stop();
   });
 
+  it("stores browse session ids for single-select component handles", async () => {
+    const store = createCallbackHandleStore();
+    let createdRequest: Parameters<DiscordApi["createMessage"]>[1] | undefined;
+    const createMessage = vi.fn(async (channelId: string, request) => {
+      createdRequest = request;
+      return {
+        channel_id: channelId,
+        id: "message-2",
+      };
+    });
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+      store,
+    });
+
+    await adapter.deliver({
+      audit: discordAudit(),
+      browseSessionId: "browse-env-1",
+      choices: [
+        {
+          id: "browse:new:set-environment",
+          label: "Dev",
+          value: { environmentId: "dev" },
+        },
+      ],
+      createdAt: 1234,
+      fallbackText: "Pick an environment.",
+      id: "environment-picker",
+      kind: "single_select",
+      prompt: "Select Environment",
+    });
+
+    const customId = createdRequest?.components?.[0]?.components[0]?.custom_id;
+    expect(store.upsertCallbackHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "browse:new:set-environment",
+        browseSessionId: "browse-env-1",
+        handle: customId,
+        value: { environmentId: "dev" },
+      }),
+    );
+  });
+
   it("validates live component clicks against persisted callback actor scope", async () => {
     const store = createCallbackHandleStore();
     let createdRequest: Parameters<DiscordApi["createMessage"]>[1] | undefined;
