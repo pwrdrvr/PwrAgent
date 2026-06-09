@@ -11489,6 +11489,24 @@ command = "pnpm dev"
         },
       },
     });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "monitor-turn",
+          tokenUsage: {
+            total: {
+              inputTokens: 1_000,
+              cachedInputTokens: 200,
+              outputTokens: 50,
+              reasoningOutputTokens: 10,
+            },
+          },
+        },
+      },
+    });
     await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
@@ -11506,6 +11524,8 @@ command = "pnpm dev"
       },
     } as AppServerPendingRequestNotification);
 
+    const expectedUsageSummary =
+      "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price";
     const progressEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -11520,6 +11540,11 @@ command = "pnpm dev"
         item.text?.includes("lint is running") === true
       );
     });
+    expect(
+      progressEvent?.notification.method === "item/completed"
+        ? (progressEvent.notification.params.item as { text?: string }).text
+        : undefined,
+    ).toContain(`Monitor usage so far: ${expectedUsageSummary}`);
     expect(progressEvent).toMatchObject({
       backend: "codex",
       notification: {
@@ -11574,7 +11599,7 @@ command = "pnpm dev"
           content: [
             {
               type: "output_text",
-              text: expect.stringContaining("Tests failed in CI."),
+              text: expect.stringContaining(`Monitor usage: ${expectedUsageSummary}`),
             },
           ],
         },
@@ -11590,6 +11615,13 @@ command = "pnpm dev"
         },
       ],
     });
+    expect(
+      String(
+        codexClient.lastStartTurnParams?.input[0]?.type === "text"
+          ? codexClient.lastStartTurnParams.input[0].text
+          : "",
+      ),
+    ).toContain(`Monitor usage: ${expectedUsageSummary}`);
     expect(
       String(
         codexClient.lastStartTurnParams?.input[0]?.type === "text"

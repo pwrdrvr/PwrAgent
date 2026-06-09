@@ -1401,6 +1401,7 @@ type TaskMonitorDelegationRecord = {
   backend: "codex";
   createdAt: number;
   finalHandoffPrompt?: string;
+  latestUsageSummary?: string;
   monitorId: string;
   monitorThreadId?: string;
   monitorTurnId?: string;
@@ -1432,11 +1433,13 @@ function formatTaskMonitorProgressMessage(params: {
   message: string;
   status?: InjectMonitorProgressToolArgs["status"];
   task: string;
+  usageSummary?: string;
 }): string {
   return [
     "PwrAgent monitor update",
     `Task: ${params.task}`,
     params.status ? `Status: ${params.status}` : undefined,
+    params.usageSummary ? `Monitor usage so far: ${params.usageSummary}` : undefined,
     params.message,
   ]
     .filter(Boolean)
@@ -1448,11 +1451,13 @@ function formatTaskMonitorCompletionMessage(params: {
   outcome: CompleteMonitoringToolArgs["outcome"];
   summary: string;
   task: string;
+  usageSummary?: string;
 }): string {
   return [
     "PwrAgent monitor complete",
     `Task: ${params.task}`,
     `Outcome: ${params.outcome}`,
+    params.usageSummary ? `Monitor usage: ${params.usageSummary}` : undefined,
     params.summary,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
   ]
@@ -1466,12 +1471,14 @@ function buildTaskMonitorFinalHandoffInput(params: {
   outcome: CompleteMonitoringToolArgs["outcome"];
   summary: string;
   task: string;
+  usageSummary?: string;
 }): string {
   return [
     "A lightweight PwrAgent monitor subagent finished a long-running task.",
     "",
     `Task: ${params.task}`,
     `Outcome: ${params.outcome}`,
+    params.usageSummary ? `Monitor usage: ${params.usageSummary}` : undefined,
     `Summary: ${params.summary}`,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
     params.finalHandoffPrompt?.trim()
@@ -1482,6 +1489,208 @@ function buildTaskMonitorFinalHandoffInput(params: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+type TaskMonitorTokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type TaskMonitorPricingCatalogEntry = {
+  cachedInputUsdPerMillion: number;
+  inputUsdPerMillion: number;
+  model: string;
+  outputUsdPerMillion: number;
+};
+
+const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = [
+  {
+    model: "gpt-5.5",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
+  },
+  {
+    model: "gpt-5.4",
+    inputUsdPerMillion: 2.5,
+    cachedInputUsdPerMillion: 0.25,
+    outputUsdPerMillion: 15,
+  },
+  {
+    model: "gpt-5.4-mini",
+    inputUsdPerMillion: 0.75,
+    cachedInputUsdPerMillion: 0.075,
+    outputUsdPerMillion: 4.5,
+  },
+];
+
+function formatTaskMonitorUsageSummary(params: {
+  model?: string;
+  tokenUsage: unknown;
+}): string | undefined {
+  const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
+  if (!tokens) {
+    return undefined;
+  }
+
+  const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const cost = estimateTaskMonitorUsageCost({
+    cachedInputTokens,
+    model: params.model,
+    outputTokens,
+    uncachedInputTokens,
+  });
+
+  return [
+    `${formatTaskMonitorTokenCount(uncachedInputTokens)} uncached in`,
+    `${formatTaskMonitorTokenCount(cachedInputTokens)} cached`,
+    reasoningOutputTokens > 0
+      ? `${formatTaskMonitorTokenCount(outputTokens)} out (${formatTaskMonitorTokenCount(
+          reasoningOutputTokens,
+        )} reasoning)`
+      : `${formatTaskMonitorTokenCount(outputTokens)} out`,
+    cost ? `${formatTaskMonitorUsd(cost.totalUsd)} list price` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function normalizeTaskMonitorTokenUsage(
+  tokenUsage: unknown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const root = readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const container =
+    readRecord(root.tokenUsage) ??
+    readRecord(root.token_usage) ??
+    readRecord(root.info) ??
+    root;
+  const current =
+    readRecord(container.total) ??
+    readRecord(container.total_token_usage) ??
+    readRecord(container.last) ??
+    readRecord(container.last_token_usage) ??
+    container;
+  const direct = readTaskMonitorTokenBreakdown(current);
+  if (direct) {
+    return direct;
+  }
+
+  for (const key of ["data", "payload", "info", "usage", "result"]) {
+    const nested = normalizeTaskMonitorTokenUsage(root[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readTaskMonitorTokenBreakdown(
+  record: Record<string, unknown>,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const explicitTotal = readTaskMonitorNumber(record, "totalTokens", "total_tokens");
+  const inputTokens = readTaskMonitorNumber(record, "inputTokens", "input_tokens");
+  const cachedInputTokens = readTaskMonitorNumber(
+    record,
+    "cachedInputTokens",
+    "cached_input_tokens",
+  );
+  const outputTokens = readTaskMonitorNumber(record, "outputTokens", "output_tokens");
+  const reasoningOutputTokens = readTaskMonitorNumber(
+    record,
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  );
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function readTaskMonitorNumber(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function estimateTaskMonitorUsageCost(params: {
+  cachedInputTokens: number;
+  model?: string;
+  outputTokens: number;
+  uncachedInputTokens: number;
+}): { model: string; totalUsd: number } | undefined {
+  const model = params.model?.trim();
+  if (!model) {
+    return undefined;
+  }
+  const entry = TASK_MONITOR_PRICING_CATALOG.find(
+    (candidate) => candidate.model === model,
+  );
+  if (!entry) {
+    return undefined;
+  }
+  const totalUsd =
+    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
+    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
+    (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
+  return { model, totalUsd };
+}
+
+function formatTaskMonitorTokenCount(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function formatTaskMonitorUsd(value: number): string {
+  if (value > 0 && value < 0.001) {
+    return "<$0.001";
+  }
+  if (value < 0.1) {
+    return new Intl.NumberFormat(undefined, {
+      currency: "USD",
+      maximumFractionDigits: 3,
+      minimumFractionDigits: 3,
+      style: "currency",
+    }).format(Math.ceil(value * 1_000) / 1_000);
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(Math.ceil(value * 100) / 100);
 }
 
 function readTurnStatus(value: unknown): string | undefined {
@@ -9012,6 +9221,27 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private recordTaskMonitorUsage(notification: AppServerNotification): void {
+    if (notification.method !== "thread/tokenUsage/updated") {
+      return;
+    }
+
+    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
+      (record) => record.monitorThreadId === notification.params.threadId,
+    );
+    if (!monitorRecord) {
+      return;
+    }
+
+    const usageSummary = formatTaskMonitorUsageSummary({
+      model: monitorRecord.preferredModel,
+      tokenUsage: notification.params.tokenUsage,
+    });
+    if (usageSummary) {
+      monitorRecord.latestUsageSummary = usageSummary;
+    }
+  }
+
   private async describeSingleBackend(
     kind: AppServerBackendKind,
     client: BackendClient
@@ -10455,6 +10685,7 @@ export class DesktopBackendRegistry {
         message,
         status: args.status,
         task: bound.record.task,
+        usageSummary: bound.record.latestUsageSummary,
       }),
     });
 
@@ -10487,6 +10718,7 @@ export class DesktopBackendRegistry {
       outcome: args.outcome,
       summary,
       task: bound.record.task,
+      usageSummary: bound.record.latestUsageSummary,
     });
     await this.injectCodexMonitorMessage({
       parentThreadId: bound.record.parentThreadId,
@@ -10514,6 +10746,7 @@ export class DesktopBackendRegistry {
               outcome: args.outcome,
               summary,
               task: bound.record.task,
+              usageSummary: bound.record.latestUsageSummary,
             }),
           },
         ],
@@ -10932,6 +11165,10 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    if (event.backend === "codex") {
+      this.recordTaskMonitorUsage(event.notification);
+    }
+
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
     }
