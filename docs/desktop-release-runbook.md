@@ -169,8 +169,12 @@ metadata are the intended release. Do not create the GitHub Release manually
 before the build succeeds. A manually created release appears before
 signing/notarization finishes. The current flow lets electron-builder create or
 update the release from the successful CI build; afterward, edit the release to
-mark prerelease tags as prereleases and replace the generated/empty notes with
-the matching `CHANGELOG.md` content.
+replace the generated/empty notes with the matching `CHANGELOG.md` content.
+For beta releases that should be offered by normal update checks and stable
+landing-page download links, leave GitHub's release label as `None` so the
+release can become Latest. Mark a release as `Pre-release` only when it should
+be hidden from `/releases/latest`, `PwrAgent.dmg`, and the default Electron
+updater feed.
 
 If direct push to the release branch is rejected, use the repo-local release
 skill fallback: open a short-lived release PR against the release branch, wait

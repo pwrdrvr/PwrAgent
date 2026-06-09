@@ -273,15 +273,22 @@ The stable `PwrAgent.dmg` alias is intentionally unversioned so the website can
 link to the latest release without knowing the current version. Do not remove
 or replace it with an arch-suffixed DMG.
 
-Then replace electron-builder's empty/default release notes and mark prerelease
-tags as prereleases:
+Then replace electron-builder's empty/default release notes. For beta releases
+that should be offered by the normal updater and stable landing-page download
+URLs, leave GitHub's release label as `None` so the release can become Latest;
+do not mark it as `Pre-release`. GitHub excludes pre-release entries from
+`/releases/latest`, which also breaks
+`https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg` and
+the default Electron updater feed.
 
 ```bash
 gh release edit v<version> \
   --title "v<version> - <short release theme>" \
-  --notes-file .local/release/v<version>/RELEASE_NOTES.md \
-  --prerelease
+  --notes-file .local/release/v<version>/RELEASE_NOTES.md
 ```
+
+Only add `--prerelease` when the user explicitly wants a release hidden from
+normal update checks and latest download links.
 
 ## Local Fallback
 
