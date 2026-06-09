@@ -11310,18 +11310,6 @@ command = "pnpm dev"
         },
       },
     });
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/started",
-        params: {
-          threadId: "monitor-thread",
-          turnId: "monitor-turn",
-          turn: { id: "monitor-turn" },
-        },
-      },
-    });
-
     await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
