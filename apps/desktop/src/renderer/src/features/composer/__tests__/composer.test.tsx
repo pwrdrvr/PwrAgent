@@ -4049,6 +4049,68 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("ignores a duplicate slash review submit while the review start is pending", async () => {
+    const startTurn = vi.fn();
+    const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");
+    const startReviewDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      reviewThreadId: string;
+      turnId: string;
+    }>();
+    const startReview = vi.fn(() => startReviewDeferred.promise);
+
+    render(
+      <Composer
+        addOptimisticReviewEntry={addOptimisticReviewEntry}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    const form = textarea.closest("form");
+    expect(form).not.toBeNull();
+
+    fireEvent.change(textarea, {
+      target: { value: "/review main" },
+    });
+
+    await act(async () => {
+      fireEvent.submit(form!);
+      fireEvent.submit(form!);
+      await Promise.resolve();
+    });
+
+    expect(startReview).toHaveBeenCalledTimes(1);
+    expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+
+    await act(async () => {
+      startReviewDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      });
+    });
+  });
+
   it("keeps review completion tied to the review/start turn id", async () => {
     let agentEventHandler: ((event: {
       backend: "codex";

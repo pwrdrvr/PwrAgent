@@ -1020,6 +1020,22 @@ function reviewCommandToDraftText(command: {
   return `/review --custom ${target.instructions}`;
 }
 
+function reviewSubmissionKey(command: {
+  target: AppServerReviewTarget;
+}): string {
+  const target = command.target;
+  switch (target.type) {
+    case "baseBranch":
+      return `review:baseBranch:${target.branch}`;
+    case "commit":
+      return `review:commit:${target.sha}:${target.title ?? ""}`;
+    case "custom":
+      return `review:custom:${target.instructions}`;
+    default:
+      return `review:${JSON.stringify(target)}`;
+  }
+}
+
 function HighlightedAutocompleteLabel(props: {
   label: string;
   query: string;
@@ -1403,6 +1419,7 @@ export function Composer(props: ComposerProps) {
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
+  const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
@@ -2777,6 +2794,15 @@ export function Composer(props: ComposerProps) {
     queueClaimed?: boolean;
     queued?: QueuedTurnDraft;
   }): Promise<void> => {
+    const submissionKey = reviewSubmissionKey(reviewCommand);
+    if (
+      sendingRef.current &&
+      inFlightReviewSubmissionKeyRef.current === submissionKey
+    ) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      return;
+    }
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -2798,6 +2824,7 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
+    inFlightReviewSubmissionKeyRef.current = submissionKey;
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -2821,6 +2848,7 @@ export function Composer(props: ComposerProps) {
         setReviewConfig(undefined);
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
+        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -2870,6 +2898,7 @@ export function Composer(props: ComposerProps) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
+      inFlightReviewSubmissionKeyRef.current = undefined;
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       setInterrupting(false);
@@ -3376,6 +3405,13 @@ export function Composer(props: ComposerProps) {
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
+    if (
+      reviewCommand &&
+      sendingRef.current &&
+      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+    ) {
+      return;
+    }
     if (isCompactCommand) {
       await submitCompactThread();
       return;
