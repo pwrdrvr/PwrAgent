@@ -11251,6 +11251,10 @@ command = "pnpm dev"
       }),
       overlayStore: createOverlayStoreMock(),
     });
+    const events: AgentEvent[] = [];
+    const unsubscribeEvents = registry.onEvent((event) => {
+      events.push(event);
+    });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -11321,22 +11325,39 @@ command = "pnpm dev"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
-    expect(codexClient.injectedThreadItems[0]).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: expect.stringContaining("lint is running"),
-            },
-          ],
-        },
-      ],
+    const progressEvent = events.find((event) => {
+      if (event.notification.method !== "item/completed") {
+        return false;
+      }
+      const item = event.notification.params.item as {
+        text?: string;
+        type?: string;
+      };
+      return (
+        event.notification.params.threadId === "thread-1" &&
+        item.type === "agentMessage" &&
+        item.text?.includes("lint is running") === true
+      );
     });
+    expect(progressEvent).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            type: "agentMessage",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              transient: true,
+            },
+          },
+        },
+      },
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     expect(codexClient.startTurnCallCount).toBe(0);
 
     const completionResponse = await codexClient.emitRequest({
@@ -11362,7 +11383,22 @@ command = "pnpm dev"
     ) as Record<string, unknown>;
 
     expect(completionResponse).toMatchObject({ success: true });
-    expect(codexClient.injectedThreadItems).toHaveLength(2);
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems[0]).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: expect.stringContaining("Tests failed in CI."),
+            },
+          ],
+        },
+      ],
+    });
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
@@ -11392,6 +11428,7 @@ command = "pnpm dev"
       },
     });
 
+    unsubscribeEvents();
     await registry.close();
   });
 
@@ -11505,7 +11542,7 @@ command = "pnpm dev"
         },
       ],
     });
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
 
     await registry.close();
   });
