@@ -829,6 +829,7 @@ class MockBackendClient {
       rateLimits?: BackendRateLimitSummary[];
       listThreadsError?: Error;
       archivedThreads?: AppServerThreadSummary[];
+      startThreadResult?: { threadId: string };
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -974,7 +975,7 @@ class MockBackendClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
-    return { threadId: "thread-1" };
+    return this.options.startThreadResult ?? { threadId: "thread-1" };
   }
 
   async forkThread(params: {
@@ -11173,6 +11174,7 @@ command = "pnpm dev"
   it("creates task monitor delegations for active Codex turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -11221,9 +11223,12 @@ command = "pnpm dev"
       pollIntervalSeconds: 20,
       heartbeatIntervalSeconds: 300,
       startupTimeoutSeconds: 45,
+      startedByPwrAgent: true,
+      monitorThreadId: "monitor-thread",
+      monitorTurnId: "turn-1",
     });
     expect(String(payload.monitorId)).toMatch(/^monitor-/);
-    expect(String(payload.parentAgentGuidance)).toContain("pendingInit");
+    expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.4-mini");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");
     expect(String(payload.parentAgentGuidance)).toContain("session/process id");
@@ -11233,6 +11238,36 @@ command = "pnpm dev"
     expect(String(payload.parentAgentGuidance)).toContain("typecheck, lint, tests, builds");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
     expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      ephemeral: true,
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    expect(
+      (codexClient.lastStartThreadParams?.dynamicTools as Array<{ name: string }> | undefined)
+        ?.map((tool) => tool.name),
+    ).toEqual([
+      "create_monitor_delegation",
+      "inject_progress",
+      "complete_monitoring",
+    ]);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "monitor-thread",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    expect(
+      String(
+        codexClient.lastStartTurnParams?.input[0]?.type === "text"
+          ? codexClient.lastStartTurnParams.input[0].text
+          : "",
+      ),
+    ).toContain("Monitor id:");
     expect(String(payload.prompt)).toContain("Parent thread id: thread-1");
     expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
     expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
@@ -11253,6 +11288,7 @@ command = "pnpm dev"
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -11356,7 +11392,7 @@ command = "pnpm dev"
       },
     });
     expect(codexClient.injectedThreadItems).toHaveLength(0);
-    expect(codexClient.startTurnCallCount).toBe(0);
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     const completionResponse = await codexClient.emitRequest({
       method: "item/tool/call",
@@ -11397,7 +11433,7 @@ command = "pnpm dev"
         },
       ],
     });
-    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.startTurnCallCount).toBe(2);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
       input: [
@@ -11433,6 +11469,7 @@ command = "pnpm dev"
   it("rejects task monitor updates from a different monitor thread after binding", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread-1" },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,

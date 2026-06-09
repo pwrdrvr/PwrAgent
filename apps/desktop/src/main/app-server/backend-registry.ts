@@ -1401,6 +1401,7 @@ type TaskMonitorDelegationRecord = {
   finalHandoffPrompt?: string;
   monitorId: string;
   monitorThreadId?: string;
+  monitorTurnId?: string;
   parentThreadId: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
@@ -10181,8 +10182,8 @@ export class DesktopBackendRegistry {
     request: TaskMonitorRequest,
   ): Promise<TaskMonitorResponse> {
     if (request.operation === "create_monitor_delegation") {
-      return this.createTaskMonitorDelegation(
-        request.context.threadId,
+      return await this.createTaskMonitorDelegation(
+        request.context,
         request.args as CreateMonitorDelegationToolArgs,
       );
     }
@@ -10198,10 +10199,11 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private createTaskMonitorDelegation(
-    parentThreadId: string,
+  private async createTaskMonitorDelegation(
+    context: TaskMonitorRequest<"create_monitor_delegation">["context"],
     args: CreateMonitorDelegationToolArgs,
-  ): TaskMonitorResponse<"create_monitor_delegation"> {
+  ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
+    const parentThreadId = context.threadId;
     const task = args.task?.trim();
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
@@ -10235,7 +10237,7 @@ export class DesktopBackendRegistry {
       preferredReasoningEffort,
       task,
     });
-    this.taskMonitorDelegations.set(monitorId, {
+    const record: TaskMonitorDelegationRecord = {
       backend: "codex",
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
@@ -10247,7 +10249,34 @@ export class DesktopBackendRegistry {
       preferredReasoningEffort,
       startupTimeoutSeconds,
       task,
-    });
+    };
+    this.taskMonitorDelegations.set(monitorId, record);
+
+    let startedMonitor: { threadId: string; turnId: string };
+    try {
+      startedMonitor = await this.startManagedTaskMonitor({
+        context,
+        cwd: args.cwd,
+        monitorId,
+        preferredModel,
+        preferredReasoningEffort,
+        prompt,
+      });
+    } catch (error) {
+      this.taskMonitorDelegations.delete(monitorId);
+      backendRegistryLog.error("failed to start managed task monitor", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId,
+        parentThreadId,
+      });
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "internal_error",
+        `Failed to start managed task monitor: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    record.monitorThreadId = startedMonitor.threadId;
+    record.monitorTurnId = startedMonitor.turnId;
 
     return {
       ok: true,
@@ -10260,9 +10289,85 @@ export class DesktopBackendRegistry {
         pollIntervalSeconds,
         heartbeatIntervalSeconds,
         startupTimeoutSeconds,
+        startedByPwrAgent: true,
+        monitorThreadId: startedMonitor.threadId,
+        monitorTurnId: startedMonitor.turnId,
         parentAgentGuidance,
         prompt,
       },
+    };
+  }
+
+  private async startManagedTaskMonitor(params: {
+    context: TaskMonitorRequest<"create_monitor_delegation">["context"];
+    cwd?: string;
+    monitorId: string;
+    preferredModel: string;
+    preferredReasoningEffort: string;
+    prompt: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    const executionMode =
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
+      ) ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(
+        params.context.threadId,
+      ));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.context.threadId,
+    });
+    const cwd =
+      params.cwd?.trim() ||
+      (await this.resolveThreadEnvironmentCwd(
+        "codex",
+        params.context.threadId,
+        overlay,
+      ));
+    const client = this.getClient("codex", executionMode);
+    const dynamicTools = buildTaskMonitorDynamicToolSpecs();
+
+    backendRegistryLog.info("starting managed task monitor thread", {
+      cwd: cwd ?? null,
+      executionMode,
+      monitorId: params.monitorId,
+      model: params.preferredModel,
+      parentThreadId: params.context.threadId,
+      reasoningEffort: params.preferredReasoningEffort,
+      toolCount: dynamicTools.length,
+    });
+
+    const thread = await client.startThread({
+      ...(cwd ? { cwd } : {}),
+      approvalPolicy: modeSettings.approvalPolicy,
+      dynamicTools,
+      ephemeral: true,
+      model: params.preferredModel,
+      reasoningEffort: params.preferredReasoningEffort,
+      sandbox: modeSettings.sandbox,
+    });
+    const turn = await client.startTurn({
+      threadId: thread.threadId,
+      input: [{ type: "text", text: params.prompt }],
+      ...(cwd ? { cwd } : {}),
+      approvalPolicy: modeSettings.approvalPolicy,
+      model: params.preferredModel,
+      reasoningEffort: params.preferredReasoningEffort,
+      sandbox: modeSettings.sandbox,
+    });
+
+    backendRegistryLog.info("managed task monitor turn started", {
+      executionMode,
+      monitorId: params.monitorId,
+      monitorThreadId: turn.threadId,
+      monitorTurnId: turn.turnId,
+      parentThreadId: params.context.threadId,
+    });
+
+    return {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
     };
   }
 

@@ -33,12 +33,13 @@ export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
       namespace: TASK_MONITOR_TOOL_NAMESPACE,
       name: "create_monitor_delegation",
       description:
-        "Create a lightweight subagent monitoring delegation for long-running async work such as GitHub Actions, CI/CD, PR checks, deployments, local verification commands, builds, typecheck, lint, or test jobs. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, or check to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to a monitor subagent with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd/repo, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Call this before spawning a monitor agent; then pass the returned prompt to a cheap mini/non-thinking or low-reasoning subagent model. After spawning, do one startup observation only: the child must immediately call inject_progress before its first sleep or poll. If no startup injection appears within the returned startupTimeoutSeconds, or the spawned agent remains pendingInit after a short wait, assume the monitor failed to start and retry once or fall back.",
+        "Create and start a lightweight PwrAgent-managed monitor thread for long-running async work such as GitHub Actions, CI/CD, PR checks, deployments, local verification commands, builds, typecheck, lint, or test jobs. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, or check to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd/repo, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
       inputSchema: {
         type: "object",
         properties: {
           task: { type: "string" },
           monitorContext: { type: "string" },
+          cwd: { type: "string" },
           pollIntervalSeconds: { type: "number", minimum: 5 },
           heartbeatIntervalSeconds: { type: "number", minimum: 60 },
           preferredModel: { type: "string" },
@@ -218,8 +219,8 @@ export function buildMonitorDelegationPrompt(params: {
     "</monitor_config>",
     "",
     "<model_guidance>",
-    "- The parent agent should spawn this monitor on a cheap mini/non-thinking model when available.",
-    "- For Codex, prefer the returned preferredModel and preferredReasoningEffort values.",
+    "- PwrAgent should have started this monitor on a cheap mini/non-thinking model when available.",
+    "- For Codex, this monitor should use the returned preferredModel and preferredReasoningEffort values.",
     "- For ACP or other agent runtimes, choose a non-thinking model or the lowest reasoning setting that can poll status reliably.",
     "</model_guidance>",
     "",
@@ -269,14 +270,14 @@ export function buildMonitorParentAgentGuidance(params: {
     normalizeHeartbeatIntervalSeconds(params.heartbeatIntervalSeconds) ??
     DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
   return [
-    "Spawn one lightweight monitor subagent with the returned prompt.",
-    `For Codex, pass model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort}; for ACP or other runtimes, use a mini/non-thinking model or the lowest reliable reasoning setting.`,
-    "Do not fork the full parent context unless the monitor task explicitly requires it; pass only the returned prompt and minimal task data.",
+    "PwrAgent starts one lightweight monitor thread for this delegation; do not call generic spawnAgent for this flow.",
+    `The managed monitor uses model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort} for Codex; ACP or other runtimes should use a mini/non-thinking model or the lowest reliable reasoning setting.`,
+    "Do not fork the full parent context unless the monitor task explicitly requires it; give create_monitor_delegation only the minimal task data and exact polling procedure.",
     "Before creating the delegation, write down the exact monitoring procedure you were about to perform yourself: session/process id, cwd, command, status command or wait API, poll cadence, terminal success/failure criteria, and log lines needed for final diagnosis.",
     "If you have checked something for progress for about 30 seconds and the check is repeatable, stop polling in the parent and delegate that repeatable check to the monitor.",
     "Use this for local verification commands too when the alternative is repeatedly checking whether typecheck, lint, tests, builds, or another long-running command has finished.",
-    `After spawning, make a single startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
-    "If the spawned agent remains pendingInit, is not found, or no startup progress injection appears within the startup window, tell the user the monitor did not start and retry once or fall back to parent-side monitoring.",
+    `After the tool reports startedByPwrAgent=true, make at most one startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
+    "If the tool fails or no startup progress injection appears within the startup window, tell the user the monitor did not start and fall back to parent-side monitoring.",
     `After startup is confirmed, do not poll the task from the parent. The monitor may inject non-waking progress updates and heartbeat messages about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
     "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
     "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
@@ -321,6 +322,7 @@ function normalizeTaskMonitorToolArguments(
     return {
       task: readString(args.task) ?? "",
       monitorContext: readString(args.monitorContext),
+      cwd: readString(args.cwd),
       pollIntervalSeconds: normalizePollIntervalSeconds(args.pollIntervalSeconds),
       heartbeatIntervalSeconds: normalizeHeartbeatIntervalSeconds(
         args.heartbeatIntervalSeconds,
