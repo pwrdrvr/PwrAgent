@@ -136,7 +136,10 @@ describe("acpToolUpdateNotifications", () => {
       },
     });
 
-    const item = notifications[0]?.params.item as Record<string, unknown> | undefined;
+    const params = notifications[0]?.params as
+      | { item?: Record<string, unknown> }
+      | undefined;
+    const item = params?.item;
     expect(item).toMatchObject({
       id: "2:tool_FepVvUHmSL1YkNrQrdMD9alt",
       command: "npm view pnpm",
