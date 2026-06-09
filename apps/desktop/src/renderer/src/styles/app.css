@@ -2,6 +2,14 @@
   color-scheme: dark;
   font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+  /* Windows custom title-bar strip height. Matches TITLE_BAR_OVERLAY_HEIGHT
+     (appearance-bootstrap.ts) so the painted menu bar and the OS caption
+     buttons sit on the same line. Only consumed under [data-platform="win32"];
+     zero contribution elsewhere. */
+  --win-titlebar-h: 40px;
+  /* Width reserved at the strip's right edge for the OS caption buttons
+     (min/max/close) so title-bar content never sits under them. */
+  --win-caption-w: 140px;
   --bg-app: #000000;
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;
@@ -385,6 +393,135 @@ textarea,
   user-select: none;
 }
 
+/* Windows custom title-bar strip (File / View / Profiles / Window / Help).
+   Frameless WCO draws the OS caption buttons at the top-right; this strip
+   fills the rest of that line with the painted menu bar (left) and a draggable
+   remainder. The whole app shell is pushed below it so nothing renders under
+   the caption buttons. macOS/Linux never set data-platform="win32", so the
+   strip isn't mounted and these offsets don't apply. */
+.app-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--win-titlebar-h);
+  /* Right padding reserves room for the OS caption buttons (min/max/close) so
+     the MSG cluster never sits under them; the draggable spacer absorbs the
+     slack. ~3 caption buttons at default DPI. */
+  padding: 0 var(--win-caption-w, 140px) 0 10px;
+  /* Match the OS caption-button overlay color (TITLE_BAR_BG_* in
+     appearance-bootstrap.ts mirrors --bg-sidebar) so the painted strip and the
+     native min/max/close buttons read as one continuous title bar. */
+  background: var(--bg-sidebar);
+  -webkit-app-region: drag;
+}
+
+/* Left cluster: wordmark + menu + action buttons (all interactive → no-drag).
+   The spacer between left and right clusters stays draggable. */
+.app-titlebar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar__spacer {
+  flex: 1 1 auto;
+  align-self: stretch;
+  -webkit-app-region: drag;
+}
+
+.app-titlebar__right {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+/* Wordmark — reuse the sidebar brand tokens (--text-primary / --accent), sized
+   for the title strip. The sidebar masthead is hidden on win32 so this is the
+   only wordmark. */
+.app-titlebar__brand {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.app-titlebar__brand-accent {
+  color: var(--accent);
+}
+
+.app-titlebar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-titlebar__menubar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar__menu-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.app-titlebar__menu-item:hover {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.app-titlebar__menu-item.is-focused {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Push the entire shell (main, startup, and fatal variants all carry the
+   .app-shell base) below the fixed title strip on Windows. */
+:root[data-platform="win32"] .app-shell {
+  margin-top: var(--win-titlebar-h);
+  height: calc(100vh - var(--win-titlebar-h));
+  height: calc(100dvh - var(--win-titlebar-h));
+}
+
+/* On Windows the wordmark + masthead action buttons (Automations/Settings/New
+   Thread) live in the title strip instead, so hide the sidebar masthead. */
+:root[data-platform="win32"] .sidebar__masthead {
+  display: none;
+}
+
+/* On Windows the MSG status indicator lives in the title strip (one global
+   control), so hide the per-screen copies in every header but restore the one
+   inside the title bar. */
+:root[data-platform="win32"] .messaging-status-bar {
+  display: none;
+}
+
+:root[data-platform="win32"] .app-titlebar .messaging-status-bar {
+  display: flex;
+}
+
 .app-shell--fatal-settings {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -498,8 +635,10 @@ textarea,
   border-bottom: none;
 }
 
-:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
-  .sidebar__masthead {
+/* macOS reserves 80px for the traffic-light stoplights. Every other
+   platform (Linux normal frame; Windows frameless with caption buttons on
+   the right, never the left) starts the brand at the left edge. */
+:root[data-platform]:not([data-platform="darwin"]) .sidebar__masthead {
   padding-left: 0;
 }
 
@@ -908,6 +1047,18 @@ textarea,
 :root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
   .activity-titlebar {
   padding-left: 14px;
+}
+
+/* On Windows the aux windows (Changelog / License / Logs / Activity) are
+   frameless with the OS caption buttons at the top-right, so the
+   .activity-titlebar header IS the title strip: drop the macOS stoplight
+   reservation on the left, reserve the caption-button width on the right, and
+   match the WCO overlay color (--bg-sidebar) so the buttons blend in. It's
+   already draggable + min-height 44px from the base rule. */
+:root[data-platform="win32"] .activity-titlebar {
+  padding-left: 14px;
+  padding-right: var(--win-caption-w, 140px);
+  background: var(--bg-sidebar);
 }
 
 .activity-titlebar button,
@@ -8723,6 +8874,15 @@ textarea,
   padding: 8px 0;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
+}
+
+/* On Windows the context-rail is position:fixed top:0 — it would slide under
+   the custom title strip (and its hamburger under the OS caption buttons). Pin
+   it below the strip instead. Both the collapsed and pinned states inherit
+   top:0, so offset both. */
+:root[data-platform="win32"] .context-rail,
+:root[data-platform="win32"] .context-rail.is-pinned {
+  top: var(--win-titlebar-h);
 }
 
 .context-rail.is-open .context-rail__spine {

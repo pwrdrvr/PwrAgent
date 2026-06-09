@@ -36,6 +36,7 @@ import {
 } from "../shared/ipc";
 import {
   readBootstrapAppearance,
+  themedTitleBarOverlay,
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
@@ -46,6 +47,7 @@ import {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
+const isWindows = process.platform === "win32";
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
@@ -297,12 +299,26 @@ export function createMainWindow(options?: {
   const preloadPath = getPreloadPath();
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
-  const macWindowChrome = isMac
+  const windowChrome = isMac
     ? {
         titleBarStyle: "hiddenInset" as const,
         trafficLightPosition: { x: 20, y: 18 },
       }
-    : {};
+    : isWindows
+      ? {
+          // Frameless + Window Controls Overlay: the OS draws min/max/close in
+          // a reserved region at the top-right. titleBarStyle:"hidden" ALSO
+          // removes the native menu bar on Windows (it lived in the title bar
+          // we hid), so the renderer paints its own always-visible menu bar
+          // (File/View/Profiles/Window/Help) in the strip and pops the real
+          // native submenus via the app-menu bridge — GitHub-Desktop style.
+          // autoHideMenuBar is moot here (no native bar to toggle); keep it
+          // true so no phantom native bar can ever appear above our painted one.
+          titleBarStyle: "hidden" as const,
+          titleBarOverlay: themedTitleBarOverlay(appearance),
+          autoHideMenuBar: true,
+        }
+      : {};
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -310,7 +326,7 @@ export function createMainWindow(options?: {
     minHeight: 760,
     show: false,
     title: "PwrAgent",
-    ...macWindowChrome,
+    ...windowChrome,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
     //

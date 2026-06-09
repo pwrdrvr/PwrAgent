@@ -207,6 +207,7 @@ import type {
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
+import type { AppMenuTopLevel, AppMenuPopupRequest } from "../../../shared/app-menu";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -663,6 +664,14 @@ export type DesktopApi = {
    */
   onReplayOnboardingRequested?: (callback: () => void) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
+  /**
+   * Windows custom title-bar menu bar (win32 only). `getAppMenuModel`
+   * returns the top-level entries for the painted bar; `popupAppMenu`
+   * pops the real native submenu at a button's bottom-left. The native
+   * menu (`installApplicationMenu`) stays the single source of truth.
+   */
+  getAppMenuModel?: () => Promise<AppMenuTopLevel[]>;
+  popupAppMenu?: (request: AppMenuPopupRequest) => void;
   platform?: string;
   versions?: {
     chrome?: string;

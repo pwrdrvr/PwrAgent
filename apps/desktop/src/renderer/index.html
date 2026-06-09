@@ -28,6 +28,13 @@
       // — no reload needed.
       (function () {
         try {
+          // Tag the OS platform so platform-specific window chrome (e.g. the
+          // Windows title bar / caption-button reservation) applies on first
+          // paint. Exposed synchronously by the preload as __pwragentPlatform.
+          var platform = window.__pwragentPlatform;
+          if (platform) {
+            document.documentElement.setAttribute("data-platform", platform);
+          }
           var bridged = window.__pwragentAppearance || {};
           var theme = bridged.theme || "system";
           var density = bridged.density || "mission-control";

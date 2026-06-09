@@ -121,6 +121,9 @@ const routes: Array<{
 
 function chooseRoot(): ReactElement {
   const hash = window.location.hash.replace(/^#/, "");
+  // The Windows custom title bar (AppTitleBar) is rendered inside <App/> —
+  // it needs App's handlers + messaging state, and aux windows (matched
+  // routes) keep their own chrome.
   return routes.find((route) => route.match(hash))?.render() ?? <App />;
 }
 
