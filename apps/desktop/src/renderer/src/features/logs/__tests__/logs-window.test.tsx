@@ -196,16 +196,28 @@ describe("LogsWindow", () => {
     });
   });
 
-  it("defaults to Info logs and enables debug collection from the Debug filter", async () => {
+  it("defaults to Error, Warning, and Info toggles with Debug off", async () => {
     const entries = [
       {
         sequence: 1,
+        timestamp: Date.now(),
+        level: "error",
+        line: "[2026-05-12 20:06:26.000] [error] (pwragent:main) visible error line",
+      },
+      {
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "warn",
+        line: "[2026-05-12 20:06:27.000] [warn] (pwragent:main) visible warn line",
+      },
+      {
+        sequence: 3,
         timestamp: Date.now(),
         level: "info",
         line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) visible info line",
       },
       {
-        sequence: 2,
+        sequence: 4,
         timestamp: Date.now(),
         level: "debug",
         line: "[2026-05-12 20:06:29.000] [debug] (pwragent:main) hidden debug line",
@@ -234,8 +246,22 @@ describe("LogsWindow", () => {
 
     render(<LogsWindow />);
 
+    expect(await screen.findByText(/visible error line/)).toBeInTheDocument();
+    expect(screen.getByText(/visible warn line/)).toBeInTheDocument();
     expect(await screen.findByText(/visible info line/)).toBeInTheDocument();
     expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+
+    expect(screen.getByText(/visible error line/)).toBeInTheDocument();
+    expect(screen.getByText(/visible warn line/)).toBeInTheDocument();
+    expect(screen.queryByText(/visible info line/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Error" }));
+
+    expect(screen.queryByText(/visible error line/)).not.toBeInTheDocument();
+    expect(screen.getByText(/visible warn line/)).toBeInTheDocument();
+    expect(screen.queryByText(/visible info line/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Debug" }));
 
@@ -245,7 +271,7 @@ describe("LogsWindow", () => {
     expect(await screen.findByText(/hidden debug line/)).toBeInTheDocument();
     expect(screen.getByText("Debug collection on")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }));
 
     await waitFor(() => {
       expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
@@ -253,7 +279,7 @@ describe("LogsWindow", () => {
     expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
   });
 
-  it("disables debug collection after a rapid Debug to Info toggle", async () => {
+  it("disables debug collection after a rapid Debug toggle off", async () => {
     const entries = [
       {
         sequence: 1,
@@ -301,7 +327,7 @@ describe("LogsWindow", () => {
     await waitFor(() => {
       expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(true);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }));
     expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledTimes(1);
 
     await act(async () => {
