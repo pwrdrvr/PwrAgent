@@ -139,6 +139,74 @@ describe("auto updater", () => {
     expect(windowSendMock).not.toHaveBeenCalled();
   });
 
+  it("does not check again when an update is already downloaded for the selected channel", async () => {
+    const updater = await importAutoUpdater();
+
+    updater.initAutoUpdater();
+    await Promise.resolve();
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    checkForUpdatesMock.mockClear();
+
+    const manualResult = await updater.checkForAppUpdatesNow("manual");
+
+    expect(manualResult).toEqual({
+      status: "downloaded",
+      version: "1.0.0-beta.8",
+    });
+    expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
+  it("checks again when the selected channel changes after an update is downloaded", async () => {
+    const updater = await importAutoUpdater();
+
+    updater.initAutoUpdater();
+    await Promise.resolve();
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    checkForUpdatesMock.mockClear();
+
+    const manualResult = await updater.checkForAppUpdatesNow("manual");
+
+    expect(manualResult).toEqual({
+      status: "available",
+      version: "1.0.0-beta.8",
+    });
+    expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds a downloaded update to the channel that found it", async () => {
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    checkForUpdatesMock
+      .mockResolvedValueOnce({ updateInfo: { version: "1.0.0-beta.8" } })
+      .mockResolvedValue({ updateInfo: { version: "1.0.0-beta.7" } });
+    const updater = await importAutoUpdater();
+
+    updater.initAutoUpdater();
+    await Promise.resolve();
+
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "no-update",
+      version: "1.0.0-beta.7",
+    });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+
+    checkForUpdatesMock.mockClear();
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "no-update",
+      version: "1.0.0-beta.7",
+    });
+    expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    checkForUpdatesMock.mockClear();
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "downloaded",
+      version: "1.0.0-beta.8",
+    });
+    expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
   it("skips electron-updater on Linux package builds", async () => {
     setPlatform("linux");
     const updater = await importAutoUpdater();

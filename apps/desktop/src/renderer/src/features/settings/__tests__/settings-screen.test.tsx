@@ -521,7 +521,7 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
     await waitFor(() => {
       expect(desktopApi.checkForAppUpdates).toHaveBeenCalledTimes(1);
     });
@@ -2881,6 +2881,67 @@ describe("SettingsScreen", () => {
 
     expect(tokenInput).toHaveValue("");
     expect(settings.replaceSecret).not.toHaveBeenCalled();
+  });
+
+  it("shows a restart action when the selected channel version is already downloaded", async () => {
+    const settings = createSettingsState(
+      createSnapshot({
+        updates: {
+          channel: { value: "prerelease", source: "config" },
+        },
+      }),
+    );
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "available" as const,
+        version: "1.0.0-beta.8",
+      })),
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        latest: { version: "v1.0.0" },
+        prerelease: { version: "v1.0.0-beta.7" },
+      })),
+      readAppUpdateStatus: vi.fn(async () => ({
+        status: "downloaded" as const,
+        version: "1.0.0-beta.7",
+      })),
+      installAppUpdate: vi.fn(async () => ({ status: "restarting" as const })),
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", {
+        name: "Restart to Update (1.0.0-beta.7)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Downloaded version: 1.0.0-beta.7"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Restart to Update (1.0.0-beta.7)",
+      }),
+    );
+    await waitFor(() => {
+      expect(desktopApi.installAppUpdate).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await waitFor(() => {
+      expect(desktopApi.checkForAppUpdates).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      await screen.findByText(/Update available: v1.0.0-beta.8/),
+    ).toBeInTheDocument();
+    expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
   it("blocks settings edits when the config file cannot be parsed", () => {

@@ -7,6 +7,7 @@ import type {
   AppUpdateCheckResult,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
+  AppUpdateStatus,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
@@ -147,6 +148,13 @@ export function GeneralSettings(props: {
   const [updateResult, setUpdateResult] = useState<
     AppUpdateCheckResult | undefined
   >();
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>({
+    status: "idle",
+  });
+  const [updateRestarting, setUpdateRestarting] = useState(false);
+  const [updateRestartError, setUpdateRestartError] = useState<
+    string | undefined
+  >();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
@@ -178,15 +186,41 @@ export function GeneralSettings(props: {
     };
   }, [props.desktopApi]);
 
+  useEffect(() => {
+    let canceled = false;
+    let receivedEvent = false;
+    const unsubscribe = props.desktopApi?.onAppUpdateStatus?.((status) => {
+      receivedEvent = true;
+      setUpdateStatus(status);
+      if (status.status === "downloaded") {
+        setUpdateRestartError(undefined);
+        setUpdateRestarting(false);
+      }
+    });
+    void props.desktopApi?.readAppUpdateStatus?.().then((status) => {
+      if (!canceled && !receivedEvent) {
+        setUpdateStatus(status);
+      }
+    });
+    return () => {
+      canceled = true;
+      unsubscribe?.();
+    };
+  }, [props.desktopApi]);
+
   const checkForUpdates = props.desktopApi?.checkForAppUpdates;
-  const handleUpdateNow = async () => {
+  const downloadedVersion =
+    updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+  const handleCheckForUpdate = async () => {
     if (!checkForUpdates) {
       return;
     }
     setUpdateChecking(true);
     setUpdateResult(undefined);
     try {
-      setUpdateResult(await checkForUpdates());
+      const result = await checkForUpdates();
+      setUpdateResult(result);
+      setUpdateStatus(result);
     } catch (err) {
       setUpdateResult({
         status: "error",
@@ -194,6 +228,19 @@ export function GeneralSettings(props: {
       });
     } finally {
       setUpdateChecking(false);
+    }
+  };
+  const handleRestartUpdate = async () => {
+    if (!props.desktopApi?.installAppUpdate) {
+      setUpdateRestartError("Restart is not available in this build.");
+      return;
+    }
+    setUpdateRestarting(true);
+    setUpdateRestartError(undefined);
+    const result = await props.desktopApi.installAppUpdate();
+    if (result.status === "error") {
+      setUpdateRestartError(result.message);
+      setUpdateRestarting(false);
     }
   };
 
@@ -487,15 +534,46 @@ export function GeneralSettings(props: {
                     </button>
                   ))}
                 </div>
+                {downloadedVersion ? (
+                  <div className="settings-update-channel__restart">
+                    <button
+                      aria-label={`Restart to Update (${downloadedVersion})`}
+                      className="button button--primary settings-update-channel__restart-button"
+                      type="button"
+                      disabled={
+                        updateRestarting || !props.desktopApi?.installAppUpdate
+                      }
+                      onClick={() => {
+                        void handleRestartUpdate();
+                      }}
+                    >
+                      <span>Restart to Update</span>
+                      <span className="settings-update-channel__restart-version">
+                        ({downloadedVersion})
+                      </span>
+                    </button>
+                    <span className="settings-update-channel__downloaded">
+                      Downloaded version: {downloadedVersion}
+                    </span>
+                    {updateRestartError ? (
+                      <span
+                        className="settings-update-channel__result settings-update-channel__result--error"
+                        role="alert"
+                      >
+                        {updateRestartError}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
                 <button
                   className="button button--secondary settings-update-channel__button"
                   type="button"
                   disabled={!checkForUpdates || props.saving || updateChecking}
                   onClick={() => {
-                    void handleUpdateNow();
+                    void handleCheckForUpdate();
                   }}
                 >
-                  {updateChecking ? "Checking..." : "Update"}
+                  {updateChecking ? "Checking..." : "Check for Update"}
                 </button>
               </div>
             }
