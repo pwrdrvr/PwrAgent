@@ -285,3 +285,8 @@ export const APP_GET_BOOT_INFO_CHANNEL = "app:get-boot-info";
 export const APP_QUIT_CHANNEL = "app:quit";
 export const APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL = "app:wait-for-profile-alive";
 export const PROFILES_WRITE_SECRETS_CHANNEL = "profiles:write-secrets";
+// Windows custom title-bar menu bar (see shared/app-menu.ts). `model` returns
+// the top-level entries for the renderer's painted bar; `popup` pops the real
+// native submenu at a button. Unused on macOS/Linux.
+export const APP_MENU_MODEL_CHANNEL = "app-menu:model";
+export const APP_MENU_POPUP_CHANNEL = "app-menu:popup";

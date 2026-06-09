@@ -307,14 +307,16 @@ export function createMainWindow(options?: {
     : isWindows
       ? {
           // Frameless + Window Controls Overlay: the OS draws min/max/close in
-          // a reserved region at the top-right; the menu bar (File/Edit/View/
-          // Help) renders to its left and the rest of the strip is draggable —
-          // GitHub-Desktop style. autoHideMenuBar:false keeps the menu always
-          // visible; Alt focuses it and Alt+F etc. open the menus (it does NOT
-          // toggle visibility the way autoHideMenuBar:true would).
+          // a reserved region at the top-right. titleBarStyle:"hidden" ALSO
+          // removes the native menu bar on Windows (it lived in the title bar
+          // we hid), so the renderer paints its own always-visible menu bar
+          // (File/View/Profiles/Window/Help) in the strip and pops the real
+          // native submenus via the app-menu bridge — GitHub-Desktop style.
+          // autoHideMenuBar is moot here (no native bar to toggle); keep it
+          // true so no phantom native bar can ever appear above our painted one.
           titleBarStyle: "hidden" as const,
           titleBarOverlay: themedTitleBarOverlay(appearance),
-          autoHideMenuBar: false,
+          autoHideMenuBar: true,
         }
       : {};
   const window = new BrowserWindow({

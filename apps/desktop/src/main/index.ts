@@ -100,6 +100,7 @@ import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
+import { wireAppMenuBridge } from "./app-menu-bridge";
 import { appQuitManager, requestQuit } from "./quit-manager";
 import {
   installTranscriptImageProtocol,
@@ -512,6 +513,9 @@ export function bootstrapApp(): void {
       installProfileFocusRequestWatcher();
     }
     installApplicationMenu();
+    // Windows: serve the painted title-bar menu bar from the live application
+    // menu (idempotent; the renderer mounts the bar only on win32).
+    wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();

@@ -5,6 +5,7 @@ import type {
   DesktopAppearanceTheme,
 } from "@pwragent/shared";
 import { App } from "./App";
+import { AppMenuBar } from "./features/chrome/AppMenuBar";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
@@ -121,7 +122,17 @@ const routes: Array<{
 
 function chooseRoot(): ReactElement {
   const hash = window.location.hash.replace(/^#/, "");
-  return routes.find((route) => route.match(hash))?.render() ?? <App />;
+  const matched = routes.find((route) => route.match(hash))?.render();
+  if (matched) return matched;
+  // Main shell. On Windows, the painted title-bar menu bar mounts above it
+  // (AppMenuBar renders null off win32). Aux windows above keep their own
+  // chrome and never get the bar.
+  return (
+    <>
+      <AppMenuBar />
+      <App />
+    </>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

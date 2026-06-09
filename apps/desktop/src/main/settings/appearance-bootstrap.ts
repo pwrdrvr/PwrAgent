@@ -65,7 +65,9 @@ export function themedWindowBackgroundColor(
  * via `window.setTitleBarOverlay(...)` when the theme flips. macOS uses
  * `trafficLightPosition` instead; Linux gets a normal frame.
  */
-export const TITLE_BAR_OVERLAY_HEIGHT = 48;
+// Keep in sync with `--win-titlebar-h` in app.css so the OS caption buttons
+// and the painted menu bar share one line.
+export const TITLE_BAR_OVERLAY_HEIGHT = 40;
 
 export function themedTitleBarOverlay(appearance: BootstrapAppearance): {
   color: string;

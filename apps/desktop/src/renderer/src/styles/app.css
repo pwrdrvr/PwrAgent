@@ -2,6 +2,11 @@
   color-scheme: dark;
   font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+  /* Windows custom title-bar strip height. Matches TITLE_BAR_OVERLAY_HEIGHT
+     (appearance-bootstrap.ts) so the painted menu bar and the OS caption
+     buttons sit on the same line. Only consumed under [data-platform="win32"];
+     zero contribution elsewhere. */
+  --win-titlebar-h: 40px;
   --bg-app: #000000;
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;
@@ -383,6 +388,66 @@ textarea,
   color: var(--text-primary);
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Windows custom title-bar strip (File / View / Profiles / Window / Help).
+   Frameless WCO draws the OS caption buttons at the top-right; this strip
+   fills the rest of that line with the painted menu bar (left) and a draggable
+   remainder. The whole app shell is pushed below it so nothing renders under
+   the caption buttons. macOS/Linux never set data-platform="win32", so the
+   strip isn't mounted and these offsets don't apply. */
+.app-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  height: var(--win-titlebar-h);
+  padding-left: 8px;
+  background: var(--bg-app);
+  -webkit-app-region: drag;
+}
+
+.app-titlebar__menubar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar__menu-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.app-titlebar__menu-item:hover {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.app-titlebar__menu-item.is-focused {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Push the entire shell (main, startup, and fatal variants all carry the
+   .app-shell base) below the fixed title strip on Windows. */
+:root[data-platform="win32"] .app-shell {
+  margin-top: var(--win-titlebar-h);
+  height: calc(100vh - var(--win-titlebar-h));
+  height: calc(100dvh - var(--win-titlebar-h));
 }
 
 .app-shell--fatal-settings {
@@ -8700,13 +8765,13 @@ textarea,
   background: var(--bg-panel-elevated);
 }
 
-/* On Windows the OS draws the min/max/close caption buttons in a reserved
-   overlay at the window's top-right — exactly where this fixed spine pins its
-   hamburger. Drop the spine's top content below the caption strip so the
-   hamburger never sits under the close button. env(titlebar-area-height) is
-   the overlay height (TITLE_BAR_OVERLAY_HEIGHT); falls back to 48px. */
-:root[data-platform="win32"] .context-rail__spine {
-  padding-top: calc(8px + env(titlebar-area-height, 48px));
+/* On Windows the context-rail is position:fixed top:0 — it would slide under
+   the custom title strip (and its hamburger under the OS caption buttons). Pin
+   it below the strip instead. Both the collapsed and pinned states inherit
+   top:0, so offset both. */
+:root[data-platform="win32"] .context-rail,
+:root[data-platform="win32"] .context-rail.is-pinned {
+  top: var(--win-titlebar-h);
 }
 
 .context-rail.is-open .context-rail__spine {

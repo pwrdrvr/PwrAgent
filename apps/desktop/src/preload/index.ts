@@ -347,7 +347,10 @@ import {
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
   WINDOW_REPLAY_ONBOARDING_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
+  APP_MENU_MODEL_CHANNEL,
+  APP_MENU_POPUP_CHANNEL,
 } from "../shared/ipc";
+import type { AppMenuTopLevel, AppMenuPopupRequest } from "../shared/app-menu";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
@@ -1036,6 +1039,14 @@ const desktopApi = Object.freeze({
     return () => {
       ipcRenderer.off(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, listener);
     };
+  },
+  // Windows custom title-bar menu bar (see shared/app-menu.ts). The renderer
+  // reads the top-level model once on mount and pops the live native submenu on
+  // click / Alt-mnemonic. No-op surface on macOS/Linux (the bar isn't mounted).
+  getAppMenuModel: async (): Promise<AppMenuTopLevel[]> =>
+    await ipcRenderer.invoke(APP_MENU_MODEL_CHANNEL),
+  popupAppMenu: (request: AppMenuPopupRequest): void => {
+    ipcRenderer.send(APP_MENU_POPUP_CHANNEL, request);
   },
   platform: process.platform,
   versions: {
