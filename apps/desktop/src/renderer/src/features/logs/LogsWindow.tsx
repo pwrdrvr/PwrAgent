@@ -7,13 +7,20 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import type { AppLogEntry } from "../../../../shared/app-metadata";
+import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
 import { CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 
 const BOTTOM_THRESHOLD_PX = 32;
 export const MAX_RENDERED_LOG_ENTRIES = 5000;
+const DEFAULT_SELECTED_LOG_LEVELS: LogLevelFilter[] = ["error", "warn", "info"];
+const LOG_LEVEL_FILTERS: Array<{ value: LogLevelFilter; label: string }> = [
+  { value: "error", label: "Error" },
+  { value: "warn", label: "Warning" },
+  { value: "info", label: "Info" },
+  { value: "debug", label: "Debug" },
+];
 
 type RenderedLogEntryBuffer = {
   slots: Array<AppLogEntry | undefined>;
@@ -34,6 +41,7 @@ type RenderedLogLine = {
 };
 
 type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "verbose";
+type LogLevelFilter = "error" | "warn" | "info" | "debug";
 
 type LogLinePartTone =
   | "timestamp"
@@ -48,6 +56,10 @@ export function LogsWindow() {
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const activeMatchRef = useRef<HTMLElement | null>(null);
   const followingRef = useRef(true);
+  const confirmedDebugCollectionRef = useRef(false);
+  const desiredDebugCollectionRef = useRef(false);
+  const debugCollectionSyncInFlightRef = useRef(false);
+  const syncDebugCollectionRef = useRef<() => void>(() => undefined);
   const entryBufferRef = useRef(createRenderedLogEntryBuffer());
   const copyResetTimerRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
@@ -59,11 +71,62 @@ export function LogsWindow() {
   const [query, setQuery] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [following, setFollowing] = useState(true);
+  const [selectedLevels, setSelectedLevels] = useState<LogLevelFilter[]>(
+    DEFAULT_SELECTED_LOG_LEVELS,
+  );
+  const [debugCollectionEnabled, setDebugCollectionEnabled] = useState(false);
 
   const setFollowingMode = useCallback((value: boolean) => {
     followingRef.current = value;
     setFollowing(value);
   }, []);
+
+  const applySnapshot = useCallback((value: AppLogSnapshot) => {
+    entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
+    setRenderVersion((version) => version + 1);
+    setLogFilePath(value.logFilePath);
+    confirmedDebugCollectionRef.current = value.debugCollectionEnabled;
+    setDebugCollectionEnabled(value.debugCollectionEnabled);
+    setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
+    setError(undefined);
+  }, []);
+
+  const syncDebugCollection = useCallback(() => {
+    const setter = desktopApi?.setAppLogDebugCollectionEnabled;
+    if (!setter || debugCollectionSyncInFlightRef.current) {
+      return;
+    }
+
+    const desiredDebugCollectionEnabled = desiredDebugCollectionRef.current;
+    if (
+      confirmedDebugCollectionRef.current === desiredDebugCollectionEnabled
+    ) {
+      return;
+    }
+
+    debugCollectionSyncInFlightRef.current = true;
+    let requestFailed = false;
+    setLoading(true);
+    void setter(desiredDebugCollectionEnabled)
+      .then((snapshot) => {
+        applySnapshot(snapshot);
+      })
+      .catch((err: unknown) => {
+        requestFailed = true;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        debugCollectionSyncInFlightRef.current = false;
+        setLoading(false);
+        if (!requestFailed) {
+          syncDebugCollectionRef.current();
+        }
+      });
+  }, [applySnapshot, desktopApi]);
+
+  useEffect(() => {
+    syncDebugCollectionRef.current = syncDebugCollection;
+  }, [syncDebugCollection]);
 
   useEffect(() => {
     document.title = "Logs";
@@ -86,17 +149,13 @@ export function LogsWindow() {
     setLoading(true);
     try {
       const value = await reader();
-      entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
-      setRenderVersion((version) => version + 1);
-      setLogFilePath(value.logFilePath);
-      setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
-      setError(undefined);
+      applySnapshot(value);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [desktopApi]);
+  }, [applySnapshot, desktopApi]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -149,8 +208,14 @@ export function LogsWindow() {
 
   const rendered = useMemo(() => {
     const entries = orderedRenderedLogEntries(entryBufferRef.current);
-    return buildRenderedLogLines(entries.map((entry) => entry.line).join("\n"), query);
-  }, [query, renderVersion]);
+    const visibleEntries = entries.filter((entry) =>
+      shouldShowLogEntry(entry, selectedLevels),
+    );
+    return buildRenderedLogLines(
+      visibleEntries.map((entry) => entry.line).join("\n"),
+      query,
+    );
+  }, [query, renderVersion, selectedLevels]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -223,6 +288,24 @@ export function LogsWindow() {
     }
   }, [setFollowingMode]);
 
+  const handleLogLevelToggle = useCallback(
+    (value: LogLevelFilter) => {
+      const nextLevels = selectedLevels.includes(value)
+        ? selectedLevels.filter((level) => level !== value)
+        : [...selectedLevels, value];
+      setSelectedLevels(nextLevels);
+
+      const nextDebugCollectionEnabled = nextLevels.includes("debug");
+      if (desiredDebugCollectionRef.current === nextDebugCollectionEnabled) {
+        return;
+      }
+
+      desiredDebugCollectionRef.current = nextDebugCollectionEnabled;
+      syncDebugCollection();
+    },
+    [selectedLevels, syncDebugCollection],
+  );
+
   const handleCopyLogFilePath = useCallback(() => {
     if (!logFilePath) {
       return;
@@ -275,6 +358,30 @@ export function LogsWindow() {
                 spellCheck={false}
               />
             </label>
+            <div
+              aria-label="Log levels"
+              className="log-window__level-filter"
+              role="group"
+            >
+              {LOG_LEVEL_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  aria-pressed={selectedLevels.includes(option.value)}
+                  className="log-window__level-option"
+                  data-debug-collection={
+                    option.value === "debug" &&
+                    selectedLevels.includes("debug") &&
+                    !debugCollectionEnabled
+                      ? "off"
+                      : undefined
+                  }
+                  type="button"
+                  onClick={() => handleLogLevelToggle(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
             <span className="log-window__match-count" aria-live="polite">
               {activeMatchLabel}
             </span>
@@ -336,6 +443,9 @@ export function LogsWindow() {
             </span>
             {truncated ? (
               <span className="log-window__status-note">Showing tail</span>
+            ) : null}
+            {debugCollectionEnabled ? (
+              <span className="log-window__status-note">Debug collection on</span>
             ) : null}
           </div>
 
@@ -418,6 +528,20 @@ export function orderedRenderedLogEntries(
     }
   }
   return ordered;
+}
+
+function shouldShowLogEntry(
+  entry: AppLogEntry,
+  selectedLevels: LogLevelFilter[],
+): boolean {
+  const level = normalizeLogLevel(entry.level);
+  if (!level) {
+    return selectedLevels.includes("info");
+  }
+  if (level === "trace" || level === "verbose") {
+    return selectedLevels.includes("debug");
+  }
+  return selectedLevels.includes(level);
 }
 
 function LogLine(props: {

@@ -5,6 +5,7 @@ import { app, ipcMain } from "electron";
 import {
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+  APP_LOG_DEBUG_COLLECTION_SET_CHANNEL,
   APP_LOG_ENTRY_EVENT_CHANNEL,
   APP_LOG_SNAPSHOT_READ_CHANNEL,
   APP_LOG_WINDOW_OPEN_CHANNEL,
@@ -25,12 +26,24 @@ import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
 import { showChangelogWindow } from "../changelog-window";
 import { showThirdPartyNoticesWindow } from "../license-document-window";
-import { getMainLogFilePath } from "../log";
+import {
+  getMainLogFilePath,
+  isMainLogDebugCollectionEnabled,
+  setMainLogDebugCollectionEnabled,
+} from "../log";
 import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 
 let unsubscribeAppLogEntries: (() => void) | undefined;
+
+function readDecoratedAppLogSnapshot(): AppLogSnapshot {
+  const snapshot = readAppLogSnapshot({
+    debugCollectionEnabled: isMainLogDebugCollectionEnabled(),
+  });
+  const logFilePath = getMainLogFilePath();
+  return logFilePath ? { ...snapshot, logFilePath } : snapshot;
+}
 
 export function resolveAppMetadata(): AppMetadata {
   return {
@@ -104,6 +117,7 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_DEBUG_COLLECTION_SET_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
   ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
     resolveAppMetadata(),
@@ -130,10 +144,13 @@ export function registerAppMetadataIpcHandlers(): void {
   );
   ipcMain.handle(
     APP_LOG_SNAPSHOT_READ_CHANNEL,
-    async (): Promise<AppLogSnapshot> => {
-      const snapshot = readAppLogSnapshot();
-      const logFilePath = getMainLogFilePath();
-      return logFilePath ? { ...snapshot, logFilePath } : snapshot;
+    async (): Promise<AppLogSnapshot> => readDecoratedAppLogSnapshot(),
+  );
+  ipcMain.handle(
+    APP_LOG_DEBUG_COLLECTION_SET_CHANNEL,
+    async (_event, enabled: boolean): Promise<AppLogSnapshot> => {
+      setMainLogDebugCollectionEnabled(enabled);
+      return readDecoratedAppLogSnapshot();
     },
   );
   ipcMain.handle(APP_LOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
@@ -150,5 +167,6 @@ export function disposeAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_DEBUG_COLLECTION_SET_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
 }

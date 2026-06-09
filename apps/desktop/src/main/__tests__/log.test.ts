@@ -2,13 +2,29 @@ import { describe, expect, it } from "vitest";
 import electronLog from "electron-log/main.js";
 import {
   compactStructuredLogData,
+  isMainLogDebugCollectionEnabled,
   resolveMainLogFileNameForProfile,
   resolveMainLogProfileName,
+  setMainLogDebugCollectionEnabled,
 } from "../log";
 
 describe("main logger compact formatting", () => {
   it("suppresses the electron-log console transport during unit tests", () => {
     expect(electronLog.transports.console.level).toBe(false);
+  });
+
+  it("keeps app-log debug collection disabled unless explicitly enabled", () => {
+    setMainLogDebugCollectionEnabled(false);
+
+    expect(isMainLogDebugCollectionEnabled()).toBe(false);
+    expect(electronLog.transports.file.level).toBe("info");
+
+    setMainLogDebugCollectionEnabled(true);
+
+    expect(isMainLogDebugCollectionEnabled()).toBe(true);
+    expect(electronLog.transports.file.level).toBe("debug");
+
+    setMainLogDebugCollectionEnabled(false);
   });
 
   it("omits undefined object fields from compact log output", () => {

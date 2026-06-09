@@ -231,6 +231,9 @@ export type DesktopApi = {
   openChangelogWindow?: () => Promise<void>;
   openThirdPartyNoticesWindow?: () => Promise<void>;
   readAppLogSnapshot?: () => Promise<AppLogSnapshot>;
+  setAppLogDebugCollectionEnabled?: (
+    enabled: boolean,
+  ) => Promise<AppLogSnapshot>;
   openAppLogWindow?: () => Promise<void>;
   onAppLogEntry?: (callback: (entry: AppLogEntry) => void) => () => void;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;

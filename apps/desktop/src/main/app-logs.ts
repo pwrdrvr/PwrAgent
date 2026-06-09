@@ -35,10 +35,13 @@ export function appendAppLogEntry(entry: Omit<AppLogEntry, "sequence">): AppLogE
   return stored;
 }
 
-export function readAppLogSnapshot(): AppLogSnapshot {
+export function readAppLogSnapshot(options?: {
+  debugCollectionEnabled?: boolean;
+}): AppLogSnapshot {
   return {
     kind: "log-snapshot",
     title: "Logs",
+    debugCollectionEnabled: options?.debugCollectionEnabled ?? false,
     entries: orderedEntries(),
     readAt: Date.now(),
     truncated: droppedEntries > 0,
