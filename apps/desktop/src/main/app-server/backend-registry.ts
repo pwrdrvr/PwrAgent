@@ -122,6 +122,12 @@ import {
   isAcpBackendId,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
+  TASK_MONITOR_TOOL_NAMESPACE,
+  type CompleteMonitoringToolArgs,
+  type CreateMonitorDelegationToolArgs,
+  type InjectMonitorProgressToolArgs,
+  type TaskMonitorRequest,
+  type TaskMonitorResponse,
 } from "@pwragent/shared";
 import {
   ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
@@ -152,6 +158,15 @@ import {
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
+import {
+  buildMonitorDelegationPrompt,
+  buildTaskMonitorDynamicToolErrorResponse,
+  buildTaskMonitorDynamicToolSpecs,
+  handleTaskMonitorDynamicToolCall,
+  normalizePollIntervalSeconds,
+  normalizePreferredMonitorModel,
+  readTaskMonitorDynamicToolCall,
+} from "./task-monitor-codex-tools";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
@@ -329,6 +344,7 @@ type BackendClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
+  injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
     ephemeral?: boolean;
@@ -1395,6 +1411,89 @@ function readStatusType(value: unknown): string | undefined {
 
   const type = value.type;
   return typeof type === "string" ? type : undefined;
+}
+
+type TaskMonitorDelegationRecord = {
+  backend: "codex";
+  createdAt: number;
+  finalHandoffPrompt?: string;
+  monitorId: string;
+  monitorThreadId?: string;
+  parentThreadId: string;
+  pollIntervalSeconds: number;
+  preferredModel: string;
+  task: string;
+};
+
+function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
+  operation: TOperation,
+  code: "forbidden" | "internal_error" | "invalid_arguments" | "not_found" | "unsupported_operation",
+  message: string,
+): TaskMonitorResponse<TOperation> {
+  return {
+    ok: false,
+    operation,
+    error: {
+      code,
+      message,
+    },
+  } as TaskMonitorResponse<TOperation>;
+}
+
+function formatTaskMonitorProgressMessage(params: {
+  message: string;
+  status?: InjectMonitorProgressToolArgs["status"];
+  task: string;
+}): string {
+  return [
+    "PwrAgent monitor update",
+    `Task: ${params.task}`,
+    params.status ? `Status: ${params.status}` : undefined,
+    params.message,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatTaskMonitorCompletionMessage(params: {
+  details?: string;
+  outcome: CompleteMonitoringToolArgs["outcome"];
+  summary: string;
+  task: string;
+}): string {
+  return [
+    "PwrAgent monitor complete",
+    `Task: ${params.task}`,
+    `Outcome: ${params.outcome}`,
+    params.summary,
+    params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildTaskMonitorFinalHandoffInput(params: {
+  details?: string;
+  finalHandoffPrompt?: string;
+  outcome: CompleteMonitoringToolArgs["outcome"];
+  summary: string;
+  task: string;
+}): string {
+  return [
+    "A lightweight PwrAgent monitor subagent finished a long-running task.",
+    "",
+    `Task: ${params.task}`,
+    `Outcome: ${params.outcome}`,
+    `Summary: ${params.summary}`,
+    params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
+    params.finalHandoffPrompt?.trim()
+      ? ["", "Requested parent-agent follow-up:", params.finalHandoffPrompt.trim()].join("\n")
+      : "",
+    "",
+    "Process this final monitor result. Do not resume polling unless the result explicitly says monitoring is still required.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function readTurnStatus(value: unknown): string | undefined {
@@ -2502,6 +2601,10 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly taskMonitorDelegations = new Map<
+    string,
+    TaskMonitorDelegationRecord
+  >();
   /**
    * Best-effort cache of thread labels keyed by `${backend}:${threadId}`, used
    * only to label native attention/terminal notifications so multiple
@@ -4803,9 +4906,14 @@ export class DesktopBackendRegistry {
       runtime: acpRuntimeWithModel,
     });
     const dynamicTools =
-      backend === "codex" ? buildAutomationInspectionDynamicToolSpecs() : undefined;
+      backend === "codex"
+        ? [
+            ...buildAutomationInspectionDynamicToolSpecs(),
+            ...buildTaskMonitorDynamicToolSpecs(),
+          ]
+        : undefined;
     if (dynamicTools?.length) {
-      backendRegistryLog.info("attaching automation inspection dynamic tools", {
+      backendRegistryLog.info("attaching codex dynamic tools", {
         backend,
         toolCount: dynamicTools.length,
         tools: dynamicTools.map((tool) => tool.name),
@@ -9946,7 +10054,7 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (dynamicToolCall?.namespace === "pwragent_automations") {
-      if (!this.isLiveAutomationInspectionToolCall(backend, dynamicToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
         backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
           backend,
           callId: dynamicToolCall.callId,
@@ -9973,6 +10081,48 @@ export class DesktopBackendRegistry {
         backend,
         call: dynamicToolCall,
         handler: this.automationInspectionHandler,
+      });
+    }
+
+    const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (taskMonitorToolCall?.namespace === TASK_MONITOR_TOOL_NAMESPACE) {
+      if (backend !== "codex") {
+        return buildTaskMonitorDynamicToolErrorResponse({
+          code: "forbidden",
+          message: "Task monitor dynamic tools are only available for Codex threads.",
+        });
+      }
+      if (!this.isLiveDynamicToolCall(backend, taskMonitorToolCall)) {
+        backendRegistryLog.warn("rejecting task monitor dynamic tool call", {
+          backend,
+          callId: taskMonitorToolCall.callId,
+          namespace: taskMonitorToolCall.namespace,
+          threadId: taskMonitorToolCall.threadId,
+          tool: taskMonitorToolCall.tool,
+          turnId: taskMonitorToolCall.turnId,
+        });
+        return buildTaskMonitorDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Task monitor tool calls must originate from an active Codex turn.",
+        });
+      }
+      backendRegistryLog.info("handling task monitor dynamic tool call", {
+        backend,
+        callId: taskMonitorToolCall.callId,
+        namespace: taskMonitorToolCall.namespace,
+        threadId: taskMonitorToolCall.threadId,
+        tool: taskMonitorToolCall.tool,
+        turnId: taskMonitorToolCall.turnId,
+      });
+      return await handleTaskMonitorDynamicToolCall({
+        backend,
+        call: taskMonitorToolCall,
+        handler: async (monitorRequest) =>
+          await this.handleTaskMonitorRequest(monitorRequest),
       });
     }
 
@@ -10023,13 +10173,238 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private isLiveAutomationInspectionToolCall(
+  private isLiveDynamicToolCall(
     backend: AppServerBackendKind,
     call: { threadId: string; turnId?: string },
   ): boolean {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private async handleTaskMonitorRequest(
+    request: TaskMonitorRequest,
+  ): Promise<TaskMonitorResponse> {
+    if (request.operation === "create_monitor_delegation") {
+      return this.createTaskMonitorDelegation(
+        request.context.threadId,
+        request.args as CreateMonitorDelegationToolArgs,
+      );
+    }
+    if (request.operation === "inject_progress") {
+      return await this.injectTaskMonitorProgress(
+        request.context.threadId,
+        request.args as InjectMonitorProgressToolArgs,
+      );
+    }
+    return await this.completeTaskMonitoring(
+      request.context.threadId,
+      request.args as CompleteMonitoringToolArgs,
+    );
+  }
+
+  private createTaskMonitorDelegation(
+    parentThreadId: string,
+    args: CreateMonitorDelegationToolArgs,
+  ): TaskMonitorResponse<"create_monitor_delegation"> {
+    const task = args.task?.trim();
+    if (!task) {
+      return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
+    }
+
+    const monitorId = `monitor-${randomUUID()}`;
+    const pollIntervalSeconds =
+      normalizePollIntervalSeconds(args.pollIntervalSeconds) ?? 20;
+    const preferredModel = normalizePreferredMonitorModel(args.preferredModel);
+    const prompt = buildMonitorDelegationPrompt({
+      finalHandoffPrompt: args.finalHandoffPrompt,
+      monitorContext: args.monitorContext,
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      task,
+    });
+    this.taskMonitorDelegations.set(monitorId, {
+      backend: "codex",
+      createdAt: Date.now(),
+      finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      preferredModel,
+      task,
+    });
+
+    return {
+      ok: true,
+      operation: "create_monitor_delegation",
+      data: {
+        monitorId,
+        parentThreadId,
+        preferredModel,
+        pollIntervalSeconds,
+        prompt,
+      },
+    };
+  }
+
+  private async injectTaskMonitorProgress(
+    callerThreadId: string,
+    args: InjectMonitorProgressToolArgs,
+  ): Promise<TaskMonitorResponse<"inject_progress">> {
+    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    if (!bound.ok) {
+      return taskMonitorFailure("inject_progress", bound.code, bound.message);
+    }
+    const message = args.message?.trim();
+    if (!message) {
+      return taskMonitorFailure("inject_progress", "invalid_arguments", "message is required.");
+    }
+
+    await this.injectCodexMonitorMessage({
+      parentThreadId: bound.record.parentThreadId,
+      text: formatTaskMonitorProgressMessage({
+        message,
+        status: args.status,
+        task: bound.record.task,
+      }),
+    });
+
+    return {
+      ok: true,
+      operation: "inject_progress",
+      data: {
+        monitorId: bound.record.monitorId,
+        parentThreadId: bound.record.parentThreadId,
+        injected: true,
+      },
+    };
+  }
+
+  private async completeTaskMonitoring(
+    callerThreadId: string,
+    args: CompleteMonitoringToolArgs,
+  ): Promise<TaskMonitorResponse<"complete_monitoring">> {
+    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    if (!bound.ok) {
+      return taskMonitorFailure("complete_monitoring", bound.code, bound.message);
+    }
+    const summary = args.summary?.trim();
+    if (!summary) {
+      return taskMonitorFailure("complete_monitoring", "invalid_arguments", "summary is required.");
+    }
+
+    const finalText = formatTaskMonitorCompletionMessage({
+      details: args.details,
+      outcome: args.outcome,
+      summary,
+      task: bound.record.task,
+    });
+    await this.injectCodexMonitorMessage({
+      parentThreadId: bound.record.parentThreadId,
+      text: finalText,
+    });
+
+    let parentTurn:
+      | {
+          status: "started" | "queued";
+          turnId?: string;
+          queueEntryId?: string;
+          position?: number;
+        }
+      | undefined;
+    if (args.triggerParentTurn !== false) {
+      const submitted = await this.submitTurn({
+        backend: "codex",
+        threadId: bound.record.parentThreadId,
+        input: [
+          {
+            type: "text",
+            text: buildTaskMonitorFinalHandoffInput({
+              details: args.details,
+              finalHandoffPrompt: bound.record.finalHandoffPrompt,
+              outcome: args.outcome,
+              summary,
+              task: bound.record.task,
+            }),
+          },
+        ],
+        origin: "manual",
+      });
+      parentTurn =
+        submitted.status === "started"
+          ? {
+              status: "started",
+              turnId: submitted.turnId,
+              queueEntryId: submitted.entry.id,
+            }
+          : {
+              status: "queued",
+              queueEntryId: submitted.entry.id,
+              position: submitted.position,
+            };
+    }
+
+    this.taskMonitorDelegations.delete(bound.record.monitorId);
+    return {
+      ok: true,
+      operation: "complete_monitoring",
+      data: {
+        monitorId: bound.record.monitorId,
+        parentThreadId: bound.record.parentThreadId,
+        injected: true,
+        outcome: args.outcome,
+        ...(parentTurn ? { parentTurn } : {}),
+      },
+    };
+  }
+
+  private bindTaskMonitorCaller(
+    monitorId: string,
+    callerThreadId: string,
+  ):
+    | { ok: true; record: TaskMonitorDelegationRecord }
+    | { ok: false; code: "forbidden" | "invalid_arguments" | "not_found"; message: string } {
+    const normalizedMonitorId = monitorId?.trim();
+    if (!normalizedMonitorId) {
+      return { ok: false, code: "invalid_arguments", message: "monitorId is required." };
+    }
+    const record = this.taskMonitorDelegations.get(normalizedMonitorId);
+    if (!record) {
+      return { ok: false, code: "not_found", message: "Unknown or completed monitorId." };
+    }
+    if (record.monitorThreadId && record.monitorThreadId !== callerThreadId) {
+      return {
+        ok: false,
+        code: "forbidden",
+        message: "This monitorId is already bound to another monitor thread.",
+      };
+    }
+    if (!record.monitorThreadId) {
+      record.monitorThreadId = callerThreadId;
+    }
+    return { ok: true, record };
+  }
+
+  private async injectCodexMonitorMessage(params: {
+    parentThreadId: string;
+    text: string;
+  }): Promise<void> {
+    await this.withCodexThreadClient(params.parentThreadId, async (client) => {
+      if (!client.injectThreadItems) {
+        throw new Error("Codex thread item injection is not available.");
+      }
+      await client.injectThreadItems({
+        threadId: params.parentThreadId,
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: params.text }],
+          },
+        ],
+      });
+    });
   }
 
   private notificationsEnabled(): boolean {
