@@ -538,221 +538,221 @@ function DesktopAppShell(props: {
       >
         <Sidebar
           backends={backendSummaries.backends}
-        browseMode={navigation.browseMode}
-        createThreadError={navigation.createThreadError}
-        creatingThread={navigation.creatingThread}
-        directories={navigation.directories}
-        error={navigation.error}
-        inboxThreads={navigation.inboxThreads}
-        recentThreads={navigation.recentThreads}
-        archiveThreadError={navigation.archiveThreadError}
-        renameThreadError={navigation.renameThreadError}
-        runtimeIdentity={runtimeIdentity}
-        activeProfile={profiles.activeProfile}
-        profiles={profiles.profiles}
-        launchpadError={navigation.launchpadError}
-        loading={navigation.loading}
-        approvalRequestThreadKeys={session.approvalRequestThreadKeys}
-        selectedItemKey={navigation.selectedItemKey}
-        thinkingThreadKeys={session.thinkingThreadKeys}
-        threads={navigation.threads}
-        automationsActive={mainView === "automations"}
-        settingsActive={mainView === "settings"}
-        onBrowseModeChange={navigation.setBrowseMode}
-        onCreateThread={async () => {
-          setMainView("thread");
-          await navigation.createThread();
-        }}
-        onCreateSubthread={async (thread, mode) => {
-          setMainView("thread");
-          await navigation.createSubthread(thread, mode);
-        }}
-        onForkThread={async (thread, mode) => {
-          setMainView("thread");
-          await navigation.forkThread(thread, mode);
-        }}
-        onOpenAutomations={() => {
-          setMainView("automations");
-        }}
-        onOpenLaunchpad={async (directory, preferredBackend) => {
-          setMainView("thread");
-          await navigation.openDirectoryLaunchpad(directory, preferredBackend);
-        }}
-        onOpenSettings={() => {
-          setSettingsInitialSection(undefined);
-          setMainView("settings");
-        }}
-        onOpenProfile={profiles.openProfile}
-        onSelectThread={(thread) => {
-          setMainView("thread");
-          navigation.selectThread(thread);
-        }}
-        onArchiveThread={navigation.archiveThread}
-        onRenameThread={navigation.renameThread}
-        onSetThreadReaction={navigation.setThreadReaction}
-        onSetThreadPin={navigation.setThreadPin}
-        onReorderThreadPins={navigation.reorderThreadPins}
-        onSetThreadParent={navigation.setThreadParent}
-        onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
-        onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
-        onSetDirectoryPin={navigation.setDirectoryPin}
-        onReorderDirectoryPins={navigation.reorderDirectoryPins}
-        onPrefetchPullRequests={pullRequests.prefetch}
-        onUnbindMessagingBinding={async (_thread, binding) => {
-          if (!desktopApi?.unbindMessagingThread) return;
-          await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
-          await navigation.refresh?.();
-        }}
-        onResizeStart={startSidebarResize}
-        onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
-        sidebarWidth={sidebarWidth}
-        sidebarMinWidth={sidebarMinWidth}
-        sidebarMaxWidth={sidebarMaxWidth}
-      />
+          browseMode={navigation.browseMode}
+          createThreadError={navigation.createThreadError}
+          creatingThread={navigation.creatingThread}
+          directories={navigation.directories}
+          error={navigation.error}
+          inboxThreads={navigation.inboxThreads}
+          recentThreads={navigation.recentThreads}
+          archiveThreadError={navigation.archiveThreadError}
+          renameThreadError={navigation.renameThreadError}
+          runtimeIdentity={runtimeIdentity}
+          activeProfile={profiles.activeProfile}
+          profiles={profiles.profiles}
+          launchpadError={navigation.launchpadError}
+          loading={navigation.loading}
+          approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+          selectedItemKey={navigation.selectedItemKey}
+          thinkingThreadKeys={session.thinkingThreadKeys}
+          threads={navigation.threads}
+          automationsActive={mainView === "automations"}
+          settingsActive={mainView === "settings"}
+          onBrowseModeChange={navigation.setBrowseMode}
+          onCreateThread={async () => {
+            setMainView("thread");
+            await navigation.createThread();
+          }}
+          onCreateSubthread={async (thread, mode) => {
+            setMainView("thread");
+            await navigation.createSubthread(thread, mode);
+          }}
+          onForkThread={async (thread, mode) => {
+            setMainView("thread");
+            await navigation.forkThread(thread, mode);
+          }}
+          onOpenAutomations={() => {
+            setMainView("automations");
+          }}
+          onOpenLaunchpad={async (directory, preferredBackend) => {
+            setMainView("thread");
+            await navigation.openDirectoryLaunchpad(directory, preferredBackend);
+          }}
+          onOpenSettings={() => {
+            setSettingsInitialSection(undefined);
+            setMainView("settings");
+          }}
+          onOpenProfile={profiles.openProfile}
+          onSelectThread={(thread) => {
+            setMainView("thread");
+            navigation.selectThread(thread);
+          }}
+          onArchiveThread={navigation.archiveThread}
+          onRenameThread={navigation.renameThread}
+          onSetThreadReaction={navigation.setThreadReaction}
+          onSetThreadPin={navigation.setThreadPin}
+          onReorderThreadPins={navigation.reorderThreadPins}
+          onSetThreadParent={navigation.setThreadParent}
+          onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
+          onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
+          onSetDirectoryPin={navigation.setDirectoryPin}
+          onReorderDirectoryPins={navigation.reorderDirectoryPins}
+          onPrefetchPullRequests={pullRequests.prefetch}
+          onUnbindMessagingBinding={async (_thread, binding) => {
+            if (!desktopApi?.unbindMessagingThread) return;
+            await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+            await navigation.refresh?.();
+          }}
+          onResizeStart={startSidebarResize}
+          onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
+          sidebarWidth={sidebarWidth}
+          sidebarMinWidth={sidebarMinWidth}
+          sidebarMaxWidth={sidebarMaxWidth}
+        />
 
-      <main
-        className={`app-main${
-          threadDetailPending ? " app-main--thread-detail-pending" : ""
-        }`}
-      >
-        {threadDetailPending ? (
-          <section className="thread-view thread-view--pending">
-            <ThreadPlaceholderHeader
-              desktopApi={desktopApi}
-              title="Loading..."
-              onOpenMessagingActivity={openMessagingActivityWindow}
-            />
-          </section>
-        ) : ThreadViewComponent ? (
-          <ThreadViewComponent {...threadViewProps} />
+        <main
+          className={`app-main${
+            threadDetailPending ? " app-main--thread-detail-pending" : ""
+          }`}
+        >
+          {threadDetailPending ? (
+            <section className="thread-view thread-view--pending">
+              <ThreadPlaceholderHeader
+                desktopApi={desktopApi}
+                title="Loading..."
+                onOpenMessagingActivity={openMessagingActivityWindow}
+              />
+            </section>
+          ) : ThreadViewComponent ? (
+            <ThreadViewComponent {...threadViewProps} />
+          ) : null}
+        </main>
+
+        {mainView === "settings" ? (
+          <div className="app-shell__settings-layer">
+            <Suspense fallback={null}>
+              <LazySettingsScreen
+                appearanceController={props.appearanceController}
+                desktopApi={desktopApi}
+                initialSection={settingsInitialSection}
+                profiles={profiles}
+                settings={settings}
+                onClose={() => setMainView("thread")}
+                onOpenMessagingActivity={openMessagingActivityWindow}
+              />
+            </Suspense>
+          </div>
         ) : null}
-      </main>
 
-      {mainView === "settings" ? (
-        <div className="app-shell__settings-layer">
-          <Suspense fallback={null}>
-            <LazySettingsScreen
-              appearanceController={props.appearanceController}
+        {mainView === "automations" ? (
+          <div className="app-shell__settings-layer">
+            <AutomationsScreen
               desktopApi={desktopApi}
-              initialSection={settingsInitialSection}
-              profiles={profiles}
-              settings={settings}
+              threads={navigation.threads}
               onClose={() => setMainView("thread")}
               onOpenMessagingActivity={openMessagingActivityWindow}
+              onRefreshNavigation={navigation.refresh}
+              onSelectThread={(thread) => {
+                setMainView("thread");
+                navigation.selectThread(thread);
+              }}
+            />
+          </div>
+        ) : null}
+
+        {onboardingOpen !== null && settings.snapshot ? (
+          <Suspense fallback={null}>
+            <LazyOnboardingWizard
+              isReplay={onboardingOpen === "replay"}
+              bootInfo={bootInfo}
+              initialDensity={settings.snapshot.general.appearance.density.value}
+              initialTheme={settings.snapshot.general.appearance.theme.value}
+              initialCodexProfileModel={
+                onboardingOpen === "replay" && replayCodexProfileSetup
+                  ? replayCodexProfileSetup.model
+                  : settings.snapshot.general.codexProfileModel.value
+              }
+              initialCodexProfileNames={
+                onboardingOpen === "replay"
+                  ? replayCodexProfileSetup?.profileNames
+                  : undefined
+              }
+              appearanceController={props.appearanceController}
+              settings={settings}
+              desktopApi={desktopApi}
+              onComplete={async (patch) => {
+                await settings.writeConfig(patch);
+                // The wizard already flips theme + density live via
+                // appearanceController as the operator clicks — the
+                // explicit setters below are a belt-and-suspenders to keep
+                // the controller's React state aligned with whatever the
+                // final patch holds, even if persistAndComplete adjusts.
+                if (patch.general?.appearance?.density) {
+                  props.appearanceController.setDensity(
+                    patch.general.appearance.density,
+                  );
+                }
+                if (patch.general?.appearance?.theme) {
+                  props.appearanceController.setTheme(
+                    patch.general.appearance.theme,
+                  );
+                }
+                // Mark onboarding complete AND kick off the deferred Codex
+                // `listThreads` prefetch in one IPC call (#500). On replay,
+                // skip the call entirely — replays don't touch onboarding.
+                //
+                // In bootstrap mode (#524), skip this too. The bootstrap
+                // window is about to quit; firing
+                // `completeOnboardingCodexBootstrap` here would (a) write
+                // `[onboarding] completed = true` to `.bootstrap/config.toml`
+                // (which we're about to delete) and (b) trigger a Codex
+                // `listThreads` against the system default Codex install,
+                // contaminating the soon-to-quit window with the operator's
+                // real Codex Desktop threads. The new profile's window
+                // handles its own completion + prefetch on launch.
+                if (!onboardingOpen) return;
+                if (
+                  onboardingOpen !== "replay" &&
+                  bootInfo?.mode !== "bootstrap" &&
+                  desktopApi?.completeOnboardingCodexBootstrap
+                ) {
+                  await desktopApi.completeOnboardingCodexBootstrap({
+                    connect: true,
+                  });
+                  await settings.refresh();
+                }
+                setOnboardingOpen(null);
+              }}
+              onDismiss={(persistCompleted) => {
+                if (persistCompleted) {
+                  // Skip path: persist `completed = true` so the wizard
+                  // doesn't auto-fire again, but pass `connect: false` so
+                  // we don't auto-load Codex threads under an unverified
+                  // identity. The renderer's next explicit refresh (or app
+                  // restart) will surface them.
+                  void desktopApi?.completeOnboardingCodexBootstrap?.({
+                    connect: false,
+                  }).then(() => settings.refresh());
+                }
+                setOnboardingOpen(null);
+              }}
+              onOpenMessagingSettings={() => {
+                setSettingsInitialSection("messaging");
+                setMainView("settings");
+              }}
             />
           </Suspense>
-        </div>
-      ) : null}
+        ) : null}
 
-      {mainView === "automations" ? (
-        <div className="app-shell__settings-layer">
-          <AutomationsScreen
+        <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <div className="app-toast-stack" aria-live="polite">
+          <AppNoticeToast
             desktopApi={desktopApi}
-            threads={navigation.threads}
-            onClose={() => setMainView("thread")}
-            onOpenMessagingActivity={openMessagingActivityWindow}
-            onRefreshNavigation={navigation.refresh}
-            onSelectThread={(thread) => {
-              setMainView("thread");
-              navigation.selectThread(thread);
-            }}
+            notice={navigation.archiveThreadNotice}
+            onDismiss={navigation.dismissArchiveThreadNotice}
           />
+          <AppUpdateBanner desktopApi={desktopApi} />
         </div>
-      ) : null}
-
-      {onboardingOpen !== null && settings.snapshot ? (
-        <Suspense fallback={null}>
-          <LazyOnboardingWizard
-            isReplay={onboardingOpen === "replay"}
-            bootInfo={bootInfo}
-            initialDensity={settings.snapshot.general.appearance.density.value}
-            initialTheme={settings.snapshot.general.appearance.theme.value}
-            initialCodexProfileModel={
-              onboardingOpen === "replay" && replayCodexProfileSetup
-                ? replayCodexProfileSetup.model
-                : settings.snapshot.general.codexProfileModel.value
-            }
-            initialCodexProfileNames={
-              onboardingOpen === "replay"
-                ? replayCodexProfileSetup?.profileNames
-                : undefined
-            }
-            appearanceController={props.appearanceController}
-            settings={settings}
-            desktopApi={desktopApi}
-            onComplete={async (patch) => {
-              await settings.writeConfig(patch);
-              // The wizard already flips theme + density live via
-              // appearanceController as the operator clicks — the
-              // explicit setters below are a belt-and-suspenders to keep
-              // the controller's React state aligned with whatever the
-              // final patch holds, even if persistAndComplete adjusts.
-              if (patch.general?.appearance?.density) {
-                props.appearanceController.setDensity(
-                  patch.general.appearance.density,
-                );
-              }
-              if (patch.general?.appearance?.theme) {
-                props.appearanceController.setTheme(
-                  patch.general.appearance.theme,
-                );
-              }
-              // Mark onboarding complete AND kick off the deferred Codex
-              // `listThreads` prefetch in one IPC call (#500). On replay,
-              // skip the call entirely — replays don't touch onboarding.
-              //
-              // In bootstrap mode (#524), skip this too. The bootstrap
-              // window is about to quit; firing
-              // `completeOnboardingCodexBootstrap` here would (a) write
-              // `[onboarding] completed = true` to `.bootstrap/config.toml`
-              // (which we're about to delete) and (b) trigger a Codex
-              // `listThreads` against the system default Codex install,
-              // contaminating the soon-to-quit window with the operator's
-              // real Codex Desktop threads. The new profile's window
-              // handles its own completion + prefetch on launch.
-              if (!onboardingOpen) return;
-              if (
-                onboardingOpen !== "replay" &&
-                bootInfo?.mode !== "bootstrap" &&
-                desktopApi?.completeOnboardingCodexBootstrap
-              ) {
-                await desktopApi.completeOnboardingCodexBootstrap({
-                  connect: true,
-                });
-                await settings.refresh();
-              }
-              setOnboardingOpen(null);
-            }}
-            onDismiss={(persistCompleted) => {
-              if (persistCompleted) {
-                // Skip path: persist `completed = true` so the wizard
-                // doesn't auto-fire again, but pass `connect: false` so
-                // we don't auto-load Codex threads under an unverified
-                // identity. The renderer's next explicit refresh (or app
-                // restart) will surface them.
-                void desktopApi?.completeOnboardingCodexBootstrap?.({
-                  connect: false,
-                }).then(() => settings.refresh());
-              }
-              setOnboardingOpen(null);
-            }}
-            onOpenMessagingSettings={() => {
-              setSettingsInitialSection("messaging");
-              setMainView("settings");
-            }}
-          />
-        </Suspense>
-      ) : null}
-
-      <CodexConfigWarningBanner desktopApi={desktopApi} />
-      <div className="app-toast-stack" aria-live="polite">
-        <AppNoticeToast
-          desktopApi={desktopApi}
-          notice={navigation.archiveThreadNotice}
-          onDismiss={navigation.dismissArchiveThreadNotice}
-        />
-        <AppUpdateBanner desktopApi={desktopApi} />
-      </div>
       </div>
     </>
   );
