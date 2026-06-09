@@ -2,6 +2,7 @@ import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
+  AppServerTranscriptPhase,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
@@ -91,9 +92,18 @@ type AcpRolloutStoreLike = {
 
 type AcpActiveTurn = {
   activeAssistantMessageItemId?: string;
+  activeAssistantMessagePhase?: AppServerTranscriptPhase;
   assistantText: string;
   assistantMessageSequence: number;
   turnId: string;
+};
+
+type AcpSessionLoadState = {
+  suppressTranscriptReplay: boolean;
+};
+
+type AcpHydratedSessionHistory = {
+  isComplete: boolean;
 };
 
 export type AcpAgentClientOptions = {
@@ -144,6 +154,7 @@ export class AcpAgentClient {
     string,
     { textChunks: string[] }
   >();
+  private readonly loadingSessions = new Map<string, AcpSessionLoadState>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
@@ -363,19 +374,26 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    const localHistory = this.hydrateSessionFromHistory(metadata);
     if (this.supportsSessionLoad()) {
-      await this.ensureSession(metadata);
-    } else {
-      this.hydrateSessionFromHistory(metadata);
+      await this.ensureSession(metadata, {
+        suppressTranscriptReplay: localHistory.isComplete,
+      });
     }
-    return this.replayForSessionMetadata(metadata);
+    return this.replayForSessionMetadata(
+      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
+        metadata,
+    );
   }
 
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
     await this.ensureSession(metadata);
   }
 
-  async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
+  async ensureSession(
+    metadata: AcpSessionMetadata,
+    options: { suppressTranscriptReplay?: boolean } = {},
+  ): Promise<void> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     if (!this.supportsSessionLoad()) {
@@ -389,7 +407,7 @@ export class AcpAgentClient {
     ) {
       return;
     }
-    await this.loadSessionFromAgent(metadata);
+    await this.loadSessionFromAgent(metadata, options);
   }
 
   startPrompt(params: {
@@ -619,21 +637,41 @@ export class AcpAgentClient {
       ).catch(() => undefined);
       return;
     }
+    const loadState = this.loadingSessions.get(protocolSessionId);
+    if (loadState?.suppressTranscriptReplay && isTranscriptReplayUpdate(update)) {
+      return;
+    }
     if (updateKind === "available_commands_update") {
       this.updateSessionAvailableCommands(sessionId, update, receivedAt);
+    }
+    if (updateKind === "turn_started") {
+      this.updateSessionStatus(sessionId, "active");
+    } else if (
+      updateKind === "turn_finished" ||
+      updateKind === "pwragent_turn_failed"
+    ) {
+      this.updateSessionStatus(sessionId, "idle");
     }
     const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     if (isConversationHistoryUpdate(update)) {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
-    this.appendHistoryUpdate(sessionId, receivedAt, update);
+    if (!loadState) {
+      this.appendHistoryUpdate(sessionId, receivedAt, update);
+    }
     const isAssistantTextUpdate =
       updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+    const shouldTrackAssistantTextUpdate =
+      updateKind === "agent_message_chunk" ||
+      (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
     let assistantMessageItemId: string | undefined;
-    if (isAssistantTextUpdate && activeTurn && text) {
+    if (shouldTrackAssistantTextUpdate && activeTurn && text) {
+      const phase: AppServerTranscriptPhase =
+        updateKind === "agent_thought_chunk" ? "commentary" : "final";
       assistantMessageItemId = assistantMessageItemIdForUpdate({
         activeTurn,
+        phase,
         update,
       });
       if (updateKind === "agent_message_chunk") {
@@ -641,6 +679,7 @@ export class AcpAgentClient {
       }
     } else if (!isAssistantTextUpdate && activeTurn) {
       activeTurn.activeAssistantMessageItemId = undefined;
+      activeTurn.activeAssistantMessagePhase = undefined;
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
@@ -743,17 +782,24 @@ export class AcpAgentClient {
     };
   }
 
-  private hydrateSessionFromHistory(metadata: AcpSessionMetadata): void {
+  private hydrateSessionFromHistory(
+    metadata: AcpSessionMetadata,
+  ): AcpHydratedSessionHistory {
     if (!this.options.rolloutStore) {
-      return;
+      return { isComplete: false };
     }
     const normalizer = new AcpSessionReplayNormalizer({
       surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
     });
-    for (const record of this.options.rolloutStore.readUpdates({
+    let hasTranscriptHistory = false;
+    const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,
-    })) {
+    });
+    for (const record of records) {
+      if (isTranscriptReplayUpdate(record.update)) {
+        hasTranscriptHistory = true;
+      }
       normalizer.apply({
         sessionId: metadata.sessionId,
         receivedAt: record.receivedAt,
@@ -761,6 +807,11 @@ export class AcpAgentClient {
       });
     }
     this.normalizers.set(metadata.sessionId, normalizer);
+    const replay = normalizer.replay();
+    const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
+    return {
+      isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+    };
   }
 
   private markSessionHasConversationHistory(
@@ -858,7 +909,10 @@ export class AcpAgentClient {
     );
   }
 
-  private async loadSessionFromAgent(metadata: AcpSessionMetadata): Promise<unknown> {
+  private async loadSessionFromAgent(
+    metadata: AcpSessionMetadata,
+    options: { suppressTranscriptReplay?: boolean } = {},
+  ): Promise<unknown> {
     if (!this.supportsSessionLoad()) {
       return undefined;
     }
@@ -868,11 +922,19 @@ export class AcpAgentClient {
       cwd,
       sessionId: metadata.sessionId,
     });
-    const result = await this.options.transport.request("session/load", {
-      cwd,
-      mcpServers,
-      sessionId: protocolSessionId,
+    this.loadingSessions.set(protocolSessionId, {
+      suppressTranscriptReplay: options.suppressTranscriptReplay === true,
     });
+    let result: unknown;
+    try {
+      result = await this.options.transport.request("session/load", {
+        cwd,
+        mcpServers,
+        sessionId: protocolSessionId,
+      });
+    } finally {
+      this.loadingSessions.delete(protocolSessionId);
+    }
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
       result,
@@ -1071,7 +1133,22 @@ function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
   return (
     kind === "pwragent_user_prompt" ||
     kind === "user_message_chunk" ||
-    kind === "agent_message_chunk"
+    kind === "agent_message_chunk" ||
+    kind === "agent_thought_chunk"
+  );
+}
+
+function isTranscriptReplayUpdate(update: Record<string, unknown>): boolean {
+  const kind = readUpdateKind(update);
+  return (
+    isConversationHistoryUpdate(update) ||
+    kind === "plan" ||
+    kind === "tool_call" ||
+    kind === "tool_call_update" ||
+    kind === "file" ||
+    kind === "terminal" ||
+    kind === "turn_finished" ||
+    kind === "pwragent_turn_failed"
   );
 }
 
@@ -1317,8 +1394,13 @@ function textPrompt(text: string): AcpPromptContentBlock[] {
 
 function assistantMessageItemIdForUpdate(params: {
   activeTurn: AcpActiveTurn;
+  phase: AppServerTranscriptPhase;
   update: Record<string, unknown>;
 }): string {
+  if (params.activeTurn.activeAssistantMessagePhase !== params.phase) {
+    params.activeTurn.activeAssistantMessageItemId = undefined;
+    params.activeTurn.activeAssistantMessagePhase = params.phase;
+  }
   const explicitId =
     typeof params.update.messageId === "string"
       ? params.update.messageId

@@ -377,7 +377,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("emits ACP thought chunks as live assistant response text", async () => {
+  it("emits ACP thought chunks with the same commentary phase used in replay", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];
@@ -440,21 +440,135 @@ describe("AcpBackendAdapter", () => {
       session_update: "agent_thought_chunk",
       content: { type: "text", text: "I should inspect the build setup." },
     });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "The build setup is straightforward." },
+    });
 
     await vi.waitFor(() => {
-      expect(events).toContainEqual({
-        backend: backendId,
-        notification: {
-          method: "item/agentMessage/delta",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "assistant:turn-1:0",
-            delta: "I should inspect the build setup.",
-          },
+      expect(
+        events
+          .filter(
+            (event) => event.notification.method === "item/agentMessage/delta",
+          )
+          .map((event) =>
+            event.notification.method === "item/agentMessage/delta"
+              ? event.notification.params
+              : undefined,
+          ),
+      ).toEqual([
+        {
+          threadId: session.sessionId,
+          turnId: "turn-1",
+          itemId: "assistant:turn-1:0",
+          delta: "I should inspect the build setup.",
+          phase: "commentary",
         },
-      });
+        {
+          threadId: session.sessionId,
+          turnId: "turn-1",
+          itemId: "assistant:turn-1:1",
+          delta: "The build setup is straightforward.",
+          phase: "final",
+        },
+      ]);
     });
+    await expect(
+      adapter.readReplay(backendId, session.sessionId),
+    ).resolves.toMatchObject({
+      entries: [
+        expect.objectContaining({
+          id: "user:turn-1",
+          role: "user",
+          text: "Inspect this",
+        }),
+        expect.objectContaining({
+          id: "assistant:turn-1:0",
+          role: "assistant",
+          phase: "commentary",
+          text: "I should inspect the build setup.",
+        }),
+        expect.objectContaining({
+          id: "assistant:turn-1:1",
+          role: "assistant",
+          phase: "final",
+          text: "The build setup is straightforward.",
+        }),
+      ],
+    });
+
+    await adapter.close();
+  });
+
+  it("does not emit replayed ACP assistant text without a live turn", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "This is prior turn thinking." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "This is a prior turn answer." },
+    });
+    await Promise.resolve();
+
+    expect(
+      events.filter(
+        (event) => event.notification.method === "item/agentMessage/delta",
+      ),
+    ).toEqual([]);
 
     await adapter.close();
   });
@@ -537,6 +651,7 @@ describe("AcpBackendAdapter", () => {
             turnId: "turn-1",
             itemId: "assistant:turn-1:0",
             delta: "Yes, it builds.",
+            phase: "final",
           },
         },
       });
@@ -639,6 +754,17 @@ describe("AcpBackendAdapter", () => {
           ),
       ).toEqual(["assistant:turn-1:0", "assistant:turn-1:1"]);
     });
+    expect(
+      events
+        .filter(
+          (event) => event.notification.method === "item/agentMessage/delta",
+        )
+        .map((event) =>
+          event.notification.method === "item/agentMessage/delta"
+            ? event.notification.params.phase
+            : undefined,
+        ),
+    ).toEqual(["commentary", "commentary"]);
 
     await adapter.close();
   });

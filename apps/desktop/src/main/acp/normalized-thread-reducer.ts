@@ -64,13 +64,13 @@ class NormalizedThreadReducer {
         this.status = "active";
         break;
       case "agent_message_delta":
-        this.appendAssistantDelta(event.itemId, event.delta);
+        this.appendAssistantDelta("final", event.itemId, event.delta);
         break;
       case "reasoning_delta":
         // Reasoning is surfaced as assistant text when the agent's quirk says
         // so; the kit already gates this (it only emits reasoning_delta when
         // surfaceThoughts is true), so treat it like an assistant delta.
-        this.appendAssistantDelta(event.itemId, event.delta);
+        this.appendAssistantDelta("reasoning", event.itemId, event.delta);
         break;
       case "agent_message":
         this.setAssistantMessage(event.message);
@@ -118,8 +118,13 @@ class NormalizedThreadReducer {
     };
   }
 
-  private appendAssistantDelta(itemId: string, delta: string): void {
-    const existingIndex = this.messageEntryByItem.get(itemId);
+  private appendAssistantDelta(
+    phase: "final" | "reasoning",
+    itemId: string,
+    delta: string,
+  ): void {
+    const messageKey = `${phase}:${itemId}`;
+    const existingIndex = this.messageEntryByItem.get(messageKey);
     if (existingIndex !== undefined) {
       const entry = this.entries[existingIndex] as NormalizedMessageEntry;
       entry.text += delta;
@@ -131,18 +136,28 @@ class NormalizedThreadReducer {
       role: "assistant",
       text: delta,
     };
-    this.messageEntryByItem.set(itemId, this.entries.length);
+    this.messageEntryByItem.set(messageKey, this.entries.length);
     this.entries.push(entry);
   }
 
   private setAssistantMessage(message: NormalizedMessage): void {
-    const existingIndex = this.messageEntryByItem.get(message.id);
+    const messageKey = `final:${message.id}`;
+    const existingIndex = this.messageEntryByItem.get(messageKey);
     const entry: NormalizedMessageEntry = { type: "message", ...message };
     if (existingIndex !== undefined) {
-      this.entries[existingIndex] = entry;
+      // Some ACP normalizers finalize with reasoning+final text combined after
+      // emitting final deltas. The in-tree replay keeps the final answer lane
+      // separate, so preserve the streamed final entry.
       return;
     }
-    this.messageEntryByItem.set(message.id, this.entries.length);
+    const reasoningIndex = this.messageEntryByItem.get(`reasoning:${message.id}`);
+    if (reasoningIndex !== undefined) {
+      const reasoningEntry = this.entries[reasoningIndex] as NormalizedMessageEntry;
+      if (reasoningEntry.text === message.text) {
+        return;
+      }
+    }
+    this.messageEntryByItem.set(messageKey, this.entries.length);
     this.entries.push(entry);
   }
 

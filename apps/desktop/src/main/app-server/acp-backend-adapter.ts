@@ -1275,12 +1275,15 @@ export class AcpBackendAdapter {
           }
         }
         if (
-          updateKind === "agent_message_chunk" ||
-          (updateKind === "agent_thought_chunk" &&
-            shouldSurfaceAcpThoughtsAsMessages(agent.backendId))
+          turnId &&
+          (updateKind === "agent_message_chunk" ||
+            (updateKind === "agent_thought_chunk" &&
+              shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {
+            const phase =
+              updateKind === "agent_thought_chunk" ? "commentary" : "final";
             await this.emit({
               backend: agent.backendId,
               notification: {
@@ -1291,6 +1294,7 @@ export class AcpBackendAdapter {
                   itemId:
                     assistantMessageItemId ?? `assistant:${turnId ?? sessionId}`,
                   delta,
+                  phase,
                 },
               },
             });

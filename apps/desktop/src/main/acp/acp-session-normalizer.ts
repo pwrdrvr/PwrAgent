@@ -35,6 +35,7 @@ export class AcpSessionReplayNormalizer {
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
   private activeAssistantMessageId?: string;
+  private activeAssistantMessagePhase?: AppServerTranscriptPhase;
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
 
@@ -53,6 +54,7 @@ export class AcpSessionReplayNormalizer {
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.currentTurnId = params.turnId;
     this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.upsertMessage({
       id,
@@ -78,6 +80,7 @@ export class AcpSessionReplayNormalizer {
       this.currentTurnId = undefined;
     }
     this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
     this.status = "idle";
     return this.replay();
   }
@@ -94,6 +97,7 @@ export class AcpSessionReplayNormalizer {
       this.currentTurnId = undefined;
     }
     this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
     this.status = "idle";
     this.upsertActivity({
       type: "activity",
@@ -122,6 +126,12 @@ export class AcpSessionReplayNormalizer {
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
+    if (
+      kind === "agent_thought_chunk" &&
+      this.options.surfaceThoughtsAsMessages === false
+    ) {
+      return this.replay();
+    }
     const isAssistantTextUpdate =
       kind === "agent_message_chunk" || kind === "agent_thought_chunk";
 
@@ -136,12 +146,15 @@ export class AcpSessionReplayNormalizer {
         this.removeAgentWaitingActivity(this.currentTurnId);
       }
       if (kind === "agent_message_chunk") {
+        this.resetAssistantMessageIfPhaseChanged("final");
         this.applyAgentMessageChunk(update, createdAt);
       } else {
+        this.resetAssistantMessageIfPhaseChanged("commentary");
         this.applyAgentThoughtChunk(update, createdAt);
       }
     } else if (kind === "user_message_chunk") {
       this.activeAssistantMessageId = undefined;
+      this.activeAssistantMessagePhase = undefined;
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
@@ -151,6 +164,7 @@ export class AcpSessionReplayNormalizer {
       // Topic updates are thread metadata, not transcript entries.
     } else {
       this.activeAssistantMessageId = undefined;
+      this.activeAssistantMessagePhase = undefined;
       if (kind === "plan") {
         this.removeCurrentAgentWaitingActivity();
         this.upsertPlan(update, createdAt);
@@ -212,11 +226,17 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (isModeUpdateMarker(text)) {
+    if (!text || isModeUpdateMarker(text)) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
-    this.appendMessageChunk({ id, role: "assistant", text, createdAt });
+    this.appendMessageChunk({
+      id,
+      phase: "final",
+      role: "assistant",
+      text,
+      createdAt,
+    });
   }
 
   private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
@@ -224,12 +244,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (isAcpSessionContextBoilerplate(text)) {
+    if (isAcpUserBoilerplateMessage(text)) {
       // Gemini re-emits its <session_context> environment block (date, OS,
       // workspace dir, directory tree) as a user_message_chunk on session/load.
-      // It's setup boilerplate the agent injects, not a turn the user typed —
-      // surfacing it makes a reloaded thread look like the human pasted a file
-      // listing. Drop it from the transcript entirely.
+      // ACP agents can also replay synthetic <system-reminder> prompts. These
+      // are setup/control text the agent saw, not user-authored turns.
       return;
     }
     if (this.currentTurnId) {
@@ -265,6 +284,7 @@ export class AcpSessionReplayNormalizer {
     const id = this.assistantMessageIdForChunk(update);
     this.appendMessageChunk({
       id,
+      phase: "commentary",
       role: "assistant",
       text,
       createdAt,
@@ -284,6 +304,16 @@ export class AcpSessionReplayNormalizer {
         `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
     }
     return this.activeAssistantMessageId;
+  }
+
+  private resetAssistantMessageIfPhaseChanged(
+    phase: AppServerTranscriptPhase
+  ): void {
+    if (this.activeAssistantMessagePhase === phase) {
+      return;
+    }
+    this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = phase;
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
@@ -620,6 +650,17 @@ function readContentText(
  */
 export function isAcpSessionContextBoilerplate(text: string | undefined): boolean {
   return text !== undefined && text.trimStart().startsWith("<session_context>");
+}
+
+export function isAcpSystemReminderBoilerplate(text: string | undefined): boolean {
+  return text !== undefined && text.trimStart().startsWith("<system-reminder>");
+}
+
+export function isAcpUserBoilerplateMessage(text: string | undefined): boolean {
+  return (
+    isAcpSessionContextBoilerplate(text) ||
+    isAcpSystemReminderBoilerplate(text)
+  );
 }
 
 export function readAcpContentText(value: unknown): string | undefined {

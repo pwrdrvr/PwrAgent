@@ -2084,7 +2084,13 @@ function isEligibleForGeneratedTitle(
   if (isInjectedContextPlaceholderTitle(thread.title)) {
     return true;
   }
-  if (thread.titleSource === "fallback" || thread.title === "Untitled thread") {
+  if (thread.titleSource === "fallback") {
+    return (
+      !isAcpBackendId(thread.source) ||
+      isAcpFallbackPlaceholderTitle(thread.title)
+    );
+  }
+  if (isGenericPlaceholderTitle(thread.title)) {
     return true;
   }
 
@@ -2112,6 +2118,16 @@ function isInjectedContextPlaceholderTitle(title: string): boolean {
     normalizedTitle.startsWith("# agents.md instructions") ||
     normalizedTitle.startsWith("agents.md instructions for")
   );
+}
+
+function isAcpFallbackPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return normalizedTitle === "acp session";
+}
+
+function isGenericPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return normalizedTitle === "untitled thread";
 }
 
 function truncateLogValue(value: string | undefined): string | null {

@@ -229,7 +229,7 @@ type AssistantStreamDelta = {
   itemId: string;
   streamKey: string;
   threadId: ThreadIdentifier;
-  turnId?: string;
+  turnId: string;
 };
 
 type AssistantStreamBuffer = AssistantStreamDelta & {
@@ -11313,28 +11313,32 @@ function assistantDeltaForBackendEvent(
   const params = event.notification.params as {
     delta?: unknown;
     itemId?: unknown;
+    phase?: unknown;
     threadId?: unknown;
     turnId?: unknown;
   };
+  if (params.phase === "commentary") {
+    return undefined;
+  }
   if (
     typeof params.threadId !== "string" ||
+    typeof params.turnId !== "string" ||
     typeof params.itemId !== "string" ||
     typeof params.delta !== "string" ||
     params.delta.length === 0
   ) {
     return undefined;
   }
-  const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
   return {
     delta: params.delta,
     itemId: params.itemId,
     streamKey: assistantStreamKey({
       backend: event.backend,
       threadId: params.threadId,
-      turnId,
+      turnId: params.turnId,
     }),
     threadId: params.threadId,
-    turnId,
+    turnId: params.turnId,
   };
 }
 

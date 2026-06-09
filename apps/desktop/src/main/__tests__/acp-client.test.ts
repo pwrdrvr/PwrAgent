@@ -1017,6 +1017,272 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
+  it("filters ACP system reminders when rehydrating provider session/load replay", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "Run npm view pwrdrvr" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: {
+                type: "text",
+                text: "<system-reminder> Auto permission mode is no longer active. Tool approvals and permission checks are back to the current mode. </system-reminder>",
+              },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "pwrdrvr exists on npm." },
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Run npm view pwrdrvr",
+      "pwrdrvr exists on npm.",
+    ]);
+    expect(
+      replay.entries.some(
+        (entry) =>
+          entry.type === "message" && entry.text.includes("system-reminder"),
+      ),
+    ).toBe(false);
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+  });
+
+  it("preserves local rollout timestamps when provider session/load replays old messages", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "What have we here?",
+        turnId: "turn-1",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1200,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "This is PwrAgent." },
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1900,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "what time is it?",
+        turnId: "turn-2",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1950,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "It's 10:57 PM." },
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1960,
+      update: {
+        session_update: "turn_finished",
+        turnId: "turn-2",
+      },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "What have we here?" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "This is PwrAgent." },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "what time is it?" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "It's 10:57 PM." },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "turn_finished",
+              turnId: "turn-2",
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1950,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(
+      replay.messages.map((message) => ({
+        createdAt: message.createdAt,
+        text: message.text,
+      })),
+    ).toEqual([
+      { createdAt: 1100, text: "What have we here?" },
+      { createdAt: 1200, text: "This is PwrAgent." },
+      { createdAt: 1900, text: "what time is it?" },
+      { createdAt: 1950, text: "It's 10:57 PM." },
+    ]);
+    expect(
+      rolloutStore.readUpdates({
+        backendId: "acp:kimi",
+        sessionId: "session-1",
+      }),
+    ).toHaveLength(5);
+  });
+
+  it("merges provider session/load replay when local rollout history is incomplete", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "what time is it?",
+        turnId: "turn-1",
+      },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "what time is it?" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "It's 10:57 PM." },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "turn_finished",
+              turnId: "turn-1",
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1100,
+      executionMode: "default",
+      status: "active",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(
+      replay.messages.map((message) => ({
+        createdAt: message.createdAt,
+        text: message.text,
+      })),
+    ).toEqual([
+      { createdAt: 1100, text: "what time is it?" },
+      { createdAt: 2000, text: "It's 10:57 PM." },
+    ]);
+    expect(replay.threadStatus).toBe("idle");
+    expect(
+      rolloutStore.readUpdates({
+        backendId: "acp:kimi",
+        sessionId: "session-1",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("returns empty replay when no provider session/load support is advertised", async () => {
     const transport = new FakeAcpAgentTransport({
       initialize: {
@@ -1922,6 +2188,65 @@ describe("AcpAgentClient", () => {
     promptResponse.resolve({ turnId: "turn-1" });
     await Promise.resolve();
     await client.dispose();
+  });
+
+  it("preserves a visible assistant stream across hidden ACP thought chunks", async () => {
+    const assistantMessageItemIds: Array<string | undefined> = [];
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:qwen",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ assistantMessageItemId, update }) => {
+        if (
+          (update.sessionUpdate ?? update.session_update ?? update.kind) ===
+          "agent_message_chunk"
+        ) {
+          assistantMessageItemIds.push(assistantMessageItemId);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Visible " },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "hidden reasoning" },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "answer." },
+    });
+
+    expect(assistantMessageItemIds).toEqual([
+      "assistant:turn-1:0",
+      "assistant:turn-1:0",
+    ]);
+    expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+      "Visible answer.",
+    );
+    expect(
+      client
+        .readReplay(session.sessionId)
+        .entries.some(
+          (entry) =>
+            entry.type === "message" && entry.text.includes("hidden reasoning"),
+        ),
+    ).toBe(false);
   });
 
   it("strips legacy transcript updates when upserting stored sessions", () => {
