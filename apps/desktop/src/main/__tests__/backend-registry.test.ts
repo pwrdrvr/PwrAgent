@@ -11225,7 +11225,7 @@ command = "pnpm dev"
       preferredModel: "gpt-5.4-mini",
       preferredReasoningEffort: "low",
       pollIntervalSeconds: 20,
-      heartbeatIntervalSeconds: 300,
+      heartbeatIntervalSeconds: 30,
       startupTimeoutSeconds: 45,
       startedByPwrAgent: true,
       monitorThreadId: "monitor-thread",
@@ -11271,7 +11271,7 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("Parent thread id: thread-1");
     expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
     expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
-    expect(String(payload.prompt)).toContain("Heartbeat interval: 300 seconds");
+    expect(String(payload.prompt)).toContain("Heartbeat interval: 30 seconds");
     expect(String(payload.prompt)).toContain("GitHub Actions");
     expect(String(payload.prompt)).toContain("local verification commands");
     expect(String(payload.prompt)).toContain("typecheck");

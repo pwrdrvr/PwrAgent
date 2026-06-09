@@ -42,7 +42,7 @@ export function buildTaskMonitorDynamicToolSpecs(
         monitorContext: { type: "string" },
         cwd: { type: "string" },
         pollIntervalSeconds: { type: "number", minimum: 5 },
-        heartbeatIntervalSeconds: { type: "number", minimum: 60 },
+        heartbeatIntervalSeconds: { type: "number", minimum: 30 },
         preferredModel: { type: "string" },
         preferredReasoningEffort: { type: "string" },
         finalHandoffPrompt: { type: "string" },
@@ -304,7 +304,7 @@ export function normalizeHeartbeatIntervalSeconds(value: unknown): number | unde
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  return Math.max(60, Math.floor(value));
+  return Math.max(30, Math.floor(value));
 }
 
 export function normalizePreferredMonitorModel(value: unknown): string {
