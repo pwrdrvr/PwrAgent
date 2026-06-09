@@ -379,102 +379,6 @@ export function GeneralSettings(props: {
 
       <SettingsSection
         eyebrow="General"
-        title="Developer mode"
-        chip={sourceBadge(developerMode)}
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Developer Mode"
-            sub="Expose Reload, Force Reload, and Developer Tools menu shortcuts."
-            source={sourceBadge(developerMode)}
-            control={
-              <SettingsSwitch
-                checked={developerMode.value}
-                disabled={props.saving}
-                label="Developer Mode"
-                onChange={(next) => {
-                  void props.onDeveloperModeChange(next);
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Hot renderer CPU profiling"
-            sub="Capture a short Chrome CPU profile when the renderer stays hot."
-            source={sourceBadge(hotCpuProfilingEnabled)}
-            control={
-              <SettingsSwitch
-                checked={hotCpuProfilingEnabled.value}
-                disabled={props.saving}
-                label="Hot renderer CPU profiling"
-                onChange={(next) => {
-                  void props.onHotCpuProfilingEnabledChange(next);
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Smart heap snapshots"
-            sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
-            help="This also enables hot renderer CPU profiling so it can arm immediately while the current instance keeps running."
-            source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
-            control={
-              <SettingsSwitch
-                checked={hotCpuProfilingCaptureHeapSnapshot.value}
-                disabled={props.saving}
-                label="Smart heap snapshots"
-                onChange={(next) => {
-                  void props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Heap snapshot limit"
-            sub="Keep emergency heap capture small enough to avoid filling disk or stalling the app repeatedly."
-            source={sourceBadge(hotCpuProfilingHeapSnapshotLimit)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Heap snapshot limit"
-              >
-                {HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={
-                      hotCpuProfilingHeapSnapshotLimit.value === option.value
-                    }
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      hotCpuProfilingHeapSnapshotLimit.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={
-                      props.saving || !hotCpuProfilingCaptureHeapSnapshot.value
-                    }
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onHotCpuProfilingHeapSnapshotLimitChange(
-                        option.value,
-                      );
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            }
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="General"
         title="Updates"
         chip={sourceBadge(updateChannel)}
       >
@@ -676,6 +580,102 @@ export function GeneralSettings(props: {
               >
                 Clear acknowledgment
               </button>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Developer mode"
+        chip={sourceBadge(developerMode)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Developer Mode"
+            sub="Expose Reload, Force Reload, and Developer Tools menu shortcuts."
+            source={sourceBadge(developerMode)}
+            control={
+              <SettingsSwitch
+                checked={developerMode.value}
+                disabled={props.saving}
+                label="Developer Mode"
+                onChange={(next) => {
+                  void props.onDeveloperModeChange(next);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Hot renderer CPU profiling"
+            sub="Capture a short Chrome CPU profile when the renderer stays hot."
+            source={sourceBadge(hotCpuProfilingEnabled)}
+            control={
+              <SettingsSwitch
+                checked={hotCpuProfilingEnabled.value}
+                disabled={props.saving}
+                label="Hot renderer CPU profiling"
+                onChange={(next) => {
+                  void props.onHotCpuProfilingEnabledChange(next);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Smart heap snapshots"
+            sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
+            help="This also enables hot renderer CPU profiling so it can arm immediately while the current instance keeps running."
+            source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
+            control={
+              <SettingsSwitch
+                checked={hotCpuProfilingCaptureHeapSnapshot.value}
+                disabled={props.saving}
+                label="Smart heap snapshots"
+                onChange={(next) => {
+                  void props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Heap snapshot limit"
+            sub="Keep emergency heap capture small enough to avoid filling disk or stalling the app repeatedly."
+            source={sourceBadge(hotCpuProfilingHeapSnapshotLimit)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Heap snapshot limit"
+              >
+                {HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={
+                      hotCpuProfilingHeapSnapshotLimit.value === option.value
+                    }
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      hotCpuProfilingHeapSnapshotLimit.value === option.value
+                        ? " is-active"
+                        : ""
+                    }`}
+                    disabled={
+                      props.saving || !hotCpuProfilingCaptureHeapSnapshot.value
+                    }
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onHotCpuProfilingHeapSnapshotLimitChange(
+                        option.value,
+                      );
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {option.meta}
+                    </span>
+                  </button>
+                ))}
+              </div>
             }
           />
         </div>
