@@ -32,7 +32,6 @@ type QuitDialogPalette = {
   accent: string;
   accentBright: string;
   buttonText: string;
-  shadow: string;
 };
 
 const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
@@ -49,7 +48,6 @@ const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
     accent: "#ff8a1f",
     accentBright: "#ffb35c",
     buttonText: "#120800",
-    shadow: "0 18px 48px rgba(0, 0, 0, 0.42)",
   },
   light: {
     bg: "#ffffff",
@@ -64,7 +62,6 @@ const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
     accent: "#c45200",
     accentBright: "#d96d00",
     buttonText: "#ffffff",
-    shadow: "0 18px 48px rgba(0, 0, 0, 0.18)",
   },
 };
 
