@@ -9594,6 +9594,53 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps forked fallback placeholder titles eligible for title generation", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Forked sidebar followup",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "forked-thread-title",
+          title: "Forked thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "forked-thread-title",
+      input: [{ type: "text", text: "Improve the sidebar followup" }],
+    });
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      userPrompt: "Improve the sidebar followup",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "forked-thread-title",
+      name: "Forked sidebar followup",
+    });
+
+    await registry.close();
+  });
+
   it("applies generated titles when Codex exposes the prompt as an explicit title", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

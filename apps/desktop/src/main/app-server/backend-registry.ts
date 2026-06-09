@@ -2084,7 +2084,13 @@ function isEligibleForGeneratedTitle(
   if (isInjectedContextPlaceholderTitle(thread.title)) {
     return true;
   }
-  if (isFallbackPlaceholderTitle(thread.title)) {
+  if (thread.titleSource === "fallback") {
+    return (
+      !isAcpBackendId(thread.source) ||
+      isAcpFallbackPlaceholderTitle(thread.title)
+    );
+  }
+  if (isGenericPlaceholderTitle(thread.title)) {
     return true;
   }
 
@@ -2114,12 +2120,14 @@ function isInjectedContextPlaceholderTitle(title: string): boolean {
   );
 }
 
-function isFallbackPlaceholderTitle(title: string): boolean {
+function isAcpFallbackPlaceholderTitle(title: string): boolean {
   const normalizedTitle = normalizeTitleForComparison(title);
-  return (
-    normalizedTitle === "untitled thread" ||
-    normalizedTitle === "acp session"
-  );
+  return normalizedTitle === "acp session";
+}
+
+function isGenericPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return normalizedTitle === "untitled thread";
 }
 
 function truncateLogValue(value: string | undefined): string | null {
