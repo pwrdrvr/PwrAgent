@@ -7735,7 +7735,23 @@ describe("MessagingController", () => {
   });
 
   it("opens a model picker and stores the selected model", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            launchpadOptions: {
+              models: [
+                { id: "gpt-5.2-codex", label: "GPT-5.2 Codex", current: true },
+                { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+              ],
+              reasoningEfforts: ["low", "medium", "high"],
+              supportsFastMode: true,
+            },
+          }),
+        ],
+      }),
+    });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
@@ -7749,6 +7765,12 @@ describe("MessagingController", () => {
             model: "gpt-5.3-codex",
           },
         }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "GPT-5.2 Codex (current)" }),
+        expect.objectContaining({ label: "GPT-5.3 Codex" }),
       ]),
     });
 
@@ -7768,6 +7790,16 @@ describe("MessagingController", () => {
         model: "gpt-5.3-codex",
       }),
     );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Model: gpt-5.3-codex"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:model",
+          label: "Model",
+        }),
+      ]),
+    });
     expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
@@ -7775,6 +7807,15 @@ describe("MessagingController", () => {
       preferences: {
         model: "gpt-5.3-codex",
       },
+    });
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "GPT-5.2 Codex" }),
+        expect.objectContaining({ label: "GPT-5.3 Codex (current)" }),
+      ]),
     });
   });
 

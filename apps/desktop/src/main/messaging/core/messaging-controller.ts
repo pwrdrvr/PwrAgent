@@ -6842,12 +6842,23 @@ export class MessagingController {
       return;
     }
 
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const currentModelId =
+      thread?.model ??
+      binding.preferences?.model ??
+      navigation.launchpadDefaults.model ??
+      models.find((model) => model.current)?.id;
+
     await this.deliver(
       buildStatusModelPickerIntent({
         id: this.newIntentId("status-model-picker"),
         capabilityProfile: this.capabilityProfile,
         binding,
         createdAt: this.now(),
+        currentModelId,
         models,
       }),
       binding,
@@ -6976,6 +6987,9 @@ export class MessagingController {
       return;
     }
 
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const updatedBinding = await this.updateBindingPreferences(binding, {
       model,
     });
@@ -6987,9 +7001,16 @@ export class MessagingController {
       reasoningEffort: updatedBinding.preferences?.reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    // Bus-driven refresh: setThreadModelSettings emits thread/modelSettings/updated
-    // which fans out to refreshStatusSurfacesForThread for every controller —
-    // including this one — so we don't need an inline render here.
+    const optimisticNavigation: NavigationSnapshot = {
+      ...navigation,
+      threads: navigation.threads.map((candidate) =>
+        candidate.source === binding.backend && candidate.id === binding.threadId
+          ? { ...candidate, model }
+          : candidate,
+      ),
+    };
+    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async setBindingReasoning(

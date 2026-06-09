@@ -1058,6 +1058,7 @@ export function buildStatusModelPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
+  currentModelId?: string;
   id: string;
   models: Array<{ id: string; label?: string; current?: boolean }>;
 }): MessagingSingleSelectIntent {
@@ -1081,7 +1082,11 @@ export function buildStatusModelPickerIntent(params: {
       [
         ...params.models.map((model, index) => ({
           id: "status:set-model",
-          label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
+          label: `${model.label ?? model.id}${
+            (params.currentModelId ? model.id === params.currentModelId : model.current)
+              ? " (current)"
+              : ""
+          }`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
           priority: 10 + index,
