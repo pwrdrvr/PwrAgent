@@ -27,30 +27,32 @@ export type TaskMonitorHandler = (
   request: TaskMonitorRequest,
 ) => TaskMonitorResponse | Promise<TaskMonitorResponse>;
 
-export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
-  return [
-    {
-      namespace: TASK_MONITOR_TOOL_NAMESPACE,
-      name: "create_monitor_delegation",
-      description:
-        "Create and start a lightweight PwrAgent-managed monitor thread for long-running async work such as GitHub Actions, CI/CD, PR checks, deployments, local verification commands, builds, typecheck, lint, or test jobs. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, or check to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd/repo, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          task: { type: "string" },
-          monitorContext: { type: "string" },
-          cwd: { type: "string" },
-          pollIntervalSeconds: { type: "number", minimum: 5 },
-          heartbeatIntervalSeconds: { type: "number", minimum: 60 },
-          preferredModel: { type: "string" },
-          preferredReasoningEffort: { type: "string" },
-          finalHandoffPrompt: { type: "string" },
-        },
-        required: ["task"],
-        additionalProperties: false,
+export function buildTaskMonitorDynamicToolSpecs(
+  role: "parent" | "monitor" | "all" = "all",
+): DynamicToolSpec[] {
+  const createTool: DynamicToolSpec = {
+    namespace: TASK_MONITOR_TOOL_NAMESPACE,
+    name: "create_monitor_delegation",
+    description:
+      "Create and start a lightweight PwrAgent-managed monitor thread for long-running async work such as GitHub Actions, CI/CD, PR checks, deployments, local verification commands, builds, typecheck, lint, or test jobs. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, or check to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd/repo, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        monitorContext: { type: "string" },
+        cwd: { type: "string" },
+        pollIntervalSeconds: { type: "number", minimum: 5 },
+        heartbeatIntervalSeconds: { type: "number", minimum: 60 },
+        preferredModel: { type: "string" },
+        preferredReasoningEffort: { type: "string" },
+        finalHandoffPrompt: { type: "string" },
       },
-      deferLoading: false,
+      required: ["task"],
+      additionalProperties: false,
     },
+    deferLoading: false,
+  };
+  const monitorTools: DynamicToolSpec[] = [
     {
       namespace: TASK_MONITOR_TOOL_NAMESPACE,
       name: "inject_progress",
@@ -94,6 +96,13 @@ export function buildTaskMonitorDynamicToolSpecs(): DynamicToolSpec[] {
       deferLoading: false,
     },
   ];
+  if (role === "parent") {
+    return [createTool];
+  }
+  if (role === "monitor") {
+    return monitorTools;
+  }
+  return [createTool, ...monitorTools];
 }
 
 export function readTaskMonitorDynamicToolCall(request: {

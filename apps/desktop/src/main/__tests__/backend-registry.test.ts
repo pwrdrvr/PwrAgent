@@ -4986,12 +4986,16 @@ script = "echo setup"
           namespace: "pwragent_task_monitors",
           name: "create_monitor_delegation",
         }),
-        expect.objectContaining({
-          namespace: "pwragent_task_monitors",
-          name: "complete_monitoring",
-        }),
       ]),
     );
+    expect(
+      (codexClient.lastStartThreadParams?.dynamicTools as Array<{
+        namespace: string;
+        name: string;
+      }> | undefined)
+        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        .map((tool) => tool.name),
+    ).toEqual(["create_monitor_delegation"]);
 
     await registry.close();
   });
@@ -11252,11 +11256,7 @@ command = "pnpm dev"
     expect(
       (codexClient.lastStartThreadParams?.dynamicTools as Array<{ name: string }> | undefined)
         ?.map((tool) => tool.name),
-    ).toEqual([
-      "create_monitor_delegation",
-      "inject_progress",
-      "complete_monitoring",
-    ]);
+    ).toEqual(["inject_progress", "complete_monitoring"]);
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "monitor-thread",

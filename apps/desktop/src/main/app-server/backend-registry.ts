@@ -4918,7 +4918,7 @@ export class DesktopBackendRegistry {
       backend === "codex"
         ? [
             ...buildAutomationInspectionDynamicToolSpecs(),
-            ...buildTaskMonitorDynamicToolSpecs(),
+            ...buildTaskMonitorDynamicToolSpecs("parent"),
           ]
         : undefined;
     if (dynamicTools?.length) {
@@ -10344,7 +10344,7 @@ export class DesktopBackendRegistry {
         overlay,
       ));
     const client = this.getClient("codex", executionMode);
-    const dynamicTools = buildTaskMonitorDynamicToolSpecs();
+    const dynamicTools = buildTaskMonitorDynamicToolSpecs("monitor");
 
     backendRegistryLog.info("starting managed task monitor thread", {
       cwd: cwd ?? null,
