@@ -122,6 +122,7 @@ import {
   isAcpBackendId,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
+  DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   TASK_MONITOR_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
@@ -159,6 +160,7 @@ import {
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
 import {
+  buildMonitorParentAgentGuidance,
   buildMonitorDelegationPrompt,
   buildTaskMonitorDynamicToolErrorResponse,
   buildTaskMonitorDynamicToolSpecs,
@@ -1401,6 +1403,7 @@ type TaskMonitorDelegationRecord = {
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
+  startupTimeoutSeconds: number;
   task: string;
 };
 
@@ -10203,6 +10206,12 @@ export class DesktopBackendRegistry {
     const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
       args.preferredReasoningEffort,
     );
+    const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
+    const parentAgentGuidance = buildMonitorParentAgentGuidance({
+      preferredModel,
+      preferredReasoningEffort,
+      startupTimeoutSeconds,
+    });
     const prompt = buildMonitorDelegationPrompt({
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
@@ -10222,6 +10231,7 @@ export class DesktopBackendRegistry {
       pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
+      startupTimeoutSeconds,
       task,
     });
 
@@ -10234,6 +10244,8 @@ export class DesktopBackendRegistry {
         preferredModel,
         preferredReasoningEffort,
         pollIntervalSeconds,
+        startupTimeoutSeconds,
+        parentAgentGuidance,
         prompt,
       },
     };
