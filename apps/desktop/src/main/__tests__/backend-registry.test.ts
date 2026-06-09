@@ -11369,6 +11369,69 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("falls back to a supported monitor model when the parent requests an unavailable one", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+        { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", supportsReasoning: true },
+      ],
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-model",
+          turnId: "turn-model",
+          turn: { id: "turn-model" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-model",
+        turnId: "turn-model",
+        callId: "call-model",
+        requestId: "call-model",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+          preferredModel: "gpt-5",
+          preferredReasoningEffort: "low",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(response).toMatchObject({ success: true });
+    expect(payload.preferredModel).toBe("gpt-5.4-mini");
+    expect(payload.preferredReasoningEffort).toBe("low");
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+    });
+
+    await registry.close();
+  });
+
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

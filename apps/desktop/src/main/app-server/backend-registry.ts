@@ -123,6 +123,8 @@ import {
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS,
+  DEFAULT_TASK_MONITOR_MODEL,
+  DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   TASK_MONITOR_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
@@ -10215,10 +10217,15 @@ export class DesktopBackendRegistry {
     const heartbeatIntervalSeconds =
       normalizeHeartbeatIntervalSeconds(args.heartbeatIntervalSeconds) ??
       DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
-    const preferredModel = normalizePreferredMonitorModel(args.preferredModel);
-    const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
+    const requestedModel = normalizePreferredMonitorModel(args.preferredModel);
+    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
       args.preferredReasoningEffort,
     );
+    const { preferredModel, preferredReasoningEffort } =
+      await this.resolveTaskMonitorModelSettings({
+        preferredModel: requestedModel,
+        preferredReasoningEffort: requestedReasoningEffort,
+      });
     const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
     const parentAgentGuidance = buildMonitorParentAgentGuidance({
       heartbeatIntervalSeconds,
@@ -10237,6 +10244,19 @@ export class DesktopBackendRegistry {
       preferredReasoningEffort,
       task,
     });
+    if (
+      preferredModel !== requestedModel ||
+      preferredReasoningEffort !== requestedReasoningEffort
+    ) {
+      backendRegistryLog.info("adjusted task monitor model settings", {
+        monitorId,
+        parentThreadId,
+        preferredModel,
+        preferredReasoningEffort,
+        requestedModel,
+        requestedReasoningEffort,
+      });
+    }
     const record: TaskMonitorDelegationRecord = {
       backend: "codex",
       createdAt: Date.now(),
@@ -10295,6 +10315,39 @@ export class DesktopBackendRegistry {
         parentAgentGuidance,
         prompt,
       },
+    };
+  }
+
+  private async resolveTaskMonitorModelSettings(params: {
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): Promise<{ preferredModel: string; preferredReasoningEffort: string }> {
+    const requestedModel = normalizePreferredMonitorModel(params.preferredModel);
+    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
+      params.preferredReasoningEffort,
+    );
+    const options = await this.getBackendLaunchpadOptions("codex", "task-monitor");
+    const models = options?.models ?? [];
+    const selectedModel =
+      models.find((model) => model.id === requestedModel) ??
+      models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
+      models.find((model) => model.id.toLowerCase().includes("mini")) ??
+      models.find((model) => model.current) ??
+      models.find((model) => model.supportsReasoning) ??
+      models[0];
+    const preferredModel = selectedModel?.id ?? DEFAULT_TASK_MONITOR_MODEL;
+    const reasoningEfforts = options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
+    const preferredReasoningEffort = reasoningEfforts.includes(
+      requestedReasoningEffort,
+    )
+      ? requestedReasoningEffort
+      : reasoningEfforts.includes(DEFAULT_TASK_MONITOR_REASONING_EFFORT)
+        ? DEFAULT_TASK_MONITOR_REASONING_EFFORT
+        : (reasoningEfforts[0] ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT);
+
+    return {
+      preferredModel,
+      preferredReasoningEffort,
     };
   }
 
