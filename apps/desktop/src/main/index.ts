@@ -101,7 +101,11 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import { wireAppMenuBridge } from "./app-menu-bridge";
-import { appQuitManager, requestQuit } from "./quit-manager";
+import {
+  appQuitManager,
+  requestQuit,
+  type QuitRequestSource,
+} from "./quit-manager";
 import {
   installTranscriptImageProtocol,
   registerTranscriptImageProtocolScheme,
@@ -250,6 +254,33 @@ function cancelQuitInProgress(source: string): void {
   mainLog.info("quit cancelled", { source });
 }
 
+/**
+ * Begin an app-wide quit for `source`, then release the hold if it doesn't
+ * take. Shared by every entry point that holds a window/quit open while the
+ * quit manager confirms (main-window close, window-all-closed, before-quit):
+ * mark the quit in progress, ask the manager to confirm, and clear
+ * `quitInProgress` again if the user declines the in-progress-thread prompt
+ * (`didQuit === false`) — or if the request rejects unexpectedly. Without that
+ * release the app wedges: the window stays held open (preventDefault) and
+ * window creation stays blocked, with no path back.
+ */
+function beginQuitWithRelease(source: QuitRequestSource): void {
+  beginQuitInProgress(source);
+  void requestQuit({ source })
+    .then((didQuit) => {
+      if (!didQuit) {
+        cancelQuitInProgress(source);
+      }
+    })
+    .catch((error: unknown) => {
+      mainLog.error("quit request failed; releasing quit hold", {
+        error,
+        source,
+      });
+      cancelQuitInProgress(source);
+    });
+}
+
 function isWindowCreationBlocked(): boolean {
   return quitInProgress || mainProcessResourcesDisposed;
 }
@@ -271,12 +302,7 @@ function quitAppOnMainWindowClose(window: BrowserWindow): void {
       return;
     }
     event.preventDefault();
-    beginQuitInProgress("main-window-closed");
-    void requestQuit({ source: "main-window-closed" }).then((didQuit) => {
-      if (!didQuit) {
-        cancelQuitInProgress("main-window-closed");
-      }
-    });
+    beginQuitWithRelease("main-window-closed");
   });
 }
 
@@ -667,23 +693,13 @@ export function bootstrapApp(): void {
       mainLog.info("ignoring window-all-closed during shutdown");
       return;
     }
-    beginQuitInProgress("window-all-closed");
-    void requestQuit({ source: "window-all-closed" }).then((didQuit) => {
-      if (!didQuit) {
-        cancelQuitInProgress("window-all-closed");
-      }
-    });
+    beginQuitWithRelease("window-all-closed");
   });
 
   app.on("before-quit", (event) => {
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
-      beginQuitInProgress("before-quit");
-      void requestQuit({ source: "before-quit" }).then((didQuit) => {
-        if (!didQuit) {
-          cancelQuitInProgress("before-quit");
-        }
-      });
+      beginQuitWithRelease("before-quit");
       return;
     }
     beginQuitInProgress("before-quit");

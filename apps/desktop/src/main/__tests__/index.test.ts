@@ -668,6 +668,42 @@ describe("bootstrapApp", () => {
     expect(requestQuitMock).not.toHaveBeenCalled();
   });
 
+  it("releases the quit hold when the close-triggered quit request rejects", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const closeHandler = mainWindowHandlers.get("close");
+    expect(closeHandler).toBeTypeOf("function");
+    if (!closeHandler) {
+      return;
+    }
+
+    // A rejected quit request (e.g. the confirmation dialog throws) must not
+    // wedge the app: we log it and clear the in-progress hold. Proof the hold
+    // released — a later window-all-closed is NOT swallowed as "already
+    // quitting" but routes through the quit flow again.
+    isQuitAllowedMock.mockReturnValue(false);
+    requestQuitMock.mockRejectedValueOnce(new Error("quit dialog boom"));
+    const event = { preventDefault: vi.fn() };
+    closeHandler(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(mainLogErrorMock).toHaveBeenCalledWith(
+      "quit request failed; releasing quit hold",
+      expect.objectContaining({ source: "main-window-closed" }),
+    );
+
+    appEventHandlers.get("window-all-closed")?.();
+    await flushMicrotasks();
+
+    expect(requestQuitMock).toHaveBeenLastCalledWith({
+      source: "window-all-closed",
+    });
+  });
+
   it("creates a main window when a profile focus request arrives without one", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
