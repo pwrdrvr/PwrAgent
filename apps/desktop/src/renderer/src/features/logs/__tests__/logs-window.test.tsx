@@ -151,6 +151,7 @@ describe("LogsWindow", () => {
         kind: "log-snapshot",
         title: "Logs",
         logFilePath: "/Users/example/Library/Logs/PwrAgent/main.log",
+        debugCollectionEnabled: false,
         entries: [
           {
             sequence: 1,
@@ -194,12 +195,70 @@ describe("LogsWindow", () => {
     });
   });
 
+  it("defaults to Info logs and enables debug collection from the Debug filter", async () => {
+    const entries = [
+      {
+        sequence: 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) visible info line",
+      },
+      {
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "debug",
+        line: "[2026-05-12 20:06:29.000] [debug] (pwragent:main) hidden debug line",
+      },
+    ];
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: false,
+        entries,
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      setAppLogDebugCollectionEnabled: vi.fn(async (enabled: boolean) => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: enabled,
+        entries,
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    expect(await screen.findByText(/visible info line/)).toBeInTheDocument();
+    expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }));
+
+    await waitFor(() => {
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(true);
+    });
+    expect(await screen.findByText(/hidden debug line/)).toBeInTheDocument();
+    expect(screen.getByText("Debug collection on")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+
+    await waitFor(() => {
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
+    });
+    expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
+  });
+
   it("appends streamed log entries while following", async () => {
     let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
+        debugCollectionEnabled: false,
         entries: [],
         readAt: Date.now(),
         truncated: false,
@@ -232,6 +291,7 @@ describe("LogsWindow", () => {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
+        debugCollectionEnabled: false,
         entries: [
           {
             sequence: 1,
@@ -273,6 +333,7 @@ describe("LogsWindow", () => {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
+        debugCollectionEnabled: false,
         entries: [
           {
             sequence: 1,
@@ -319,6 +380,7 @@ describe("LogsWindow", () => {
         .mockResolvedValueOnce({
           kind: "log-snapshot",
           title: "Logs",
+          debugCollectionEnabled: false,
           entries: [
             {
               sequence: 1,
@@ -333,6 +395,7 @@ describe("LogsWindow", () => {
         .mockResolvedValueOnce({
           kind: "log-snapshot",
           title: "Logs",
+          debugCollectionEnabled: false,
           entries: [
             {
               sequence: 7,
@@ -396,6 +459,7 @@ describe("LogsWindow", () => {
         readAppLogSnapshot: vi.fn(async () => ({
           kind: "log-snapshot",
           title: "Logs",
+          debugCollectionEnabled: false,
           entries: Array.from(
             { length: MAX_RENDERED_LOG_ENTRIES },
             (_, index) => ({

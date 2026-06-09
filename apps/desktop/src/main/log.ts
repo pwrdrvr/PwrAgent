@@ -3,6 +3,7 @@ import { appendAppLogEntry } from "./app-logs";
 import type { ProfileBootDecision } from "./profile";
 
 let initialized = false;
+let debugCollectionEnabled = false;
 const MAX_COMPACT_STRING_LENGTH = 320;
 const MAX_COMPACT_FIELDS = 24;
 const MAX_COMPACT_DEPTH = 2;
@@ -27,6 +28,7 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
       options.profileName,
     );
   }
+  electronLog.transports.file.level = debugCollectionEnabled ? "debug" : "info";
   electronLog.initialize();
   electronLog.scope.labelPadding = false;
   electronLog.hooks.push((
@@ -79,6 +81,15 @@ export function getMainLogFilePath(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function isMainLogDebugCollectionEnabled(): boolean {
+  return debugCollectionEnabled;
+}
+
+export function setMainLogDebugCollectionEnabled(enabled: boolean): void {
+  debugCollectionEnabled = enabled;
+  electronLog.transports.file.level = enabled ? "debug" : "info";
 }
 
 type CompactField = {

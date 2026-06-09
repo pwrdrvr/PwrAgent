@@ -243,6 +243,7 @@ import {
   AUTOMATIONS_UPDATE_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+  APP_LOG_DEBUG_COLLECTION_SET_CHANNEL,
   APP_LOG_ENTRY_EVENT_CHANNEL,
   APP_LOG_SNAPSHOT_READ_CHANNEL,
   APP_LOG_WINDOW_OPEN_CHANNEL,
@@ -404,6 +405,10 @@ const desktopApi = Object.freeze({
   },
   readAppLogSnapshot: async (): Promise<AppLogSnapshot> =>
     await ipcRenderer.invoke(APP_LOG_SNAPSHOT_READ_CHANNEL),
+  setAppLogDebugCollectionEnabled: async (
+    enabled: boolean,
+  ): Promise<AppLogSnapshot> =>
+    await ipcRenderer.invoke(APP_LOG_DEBUG_COLLECTION_SET_CHANNEL, enabled),
   openAppLogWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(APP_LOG_WINDOW_OPEN_CHANNEL);
   },

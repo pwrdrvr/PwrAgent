@@ -21,6 +21,7 @@ describe("app log snapshots", () => {
 
     expect(readAppLogSnapshot()).toMatchObject({
       kind: "log-snapshot",
+      debugCollectionEnabled: false,
       entries: [
         {
           sequence: 1,

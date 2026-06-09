@@ -258,6 +258,8 @@ export const APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL =
   "app:open-third-party-notices-window";
 export const APP_LOG_SNAPSHOT_READ_CHANNEL = "app:read-log-snapshot";
 export const APP_LOG_ENTRY_EVENT_CHANNEL = "app:log-entry-event";
+export const APP_LOG_DEBUG_COLLECTION_SET_CHANNEL =
+  "app:set-log-debug-collection";
 export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";

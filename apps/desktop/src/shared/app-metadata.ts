@@ -30,6 +30,7 @@ export type AppLogSnapshot = {
   kind: "log-snapshot";
   title: string;
   logFilePath?: string;
+  debugCollectionEnabled: boolean;
   entries: AppLogEntry[];
   readAt: number;
   truncated: boolean;

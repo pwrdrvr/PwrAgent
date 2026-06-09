@@ -8951,7 +8951,7 @@ export class DesktopBackendRegistry {
         source = "default-fallback";
       }
     }
-    backendRegistryLog.info("codex thread client routing", {
+    backendRegistryLog.debug("codex thread client routing", {
       threadId,
       requestedMode,
       resolvedMode: mode,

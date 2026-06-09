@@ -7,13 +7,20 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import type { AppLogEntry } from "../../../../shared/app-metadata";
+import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
 import { CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 
 const BOTTOM_THRESHOLD_PX = 32;
 export const MAX_RENDERED_LOG_ENTRIES = 5000;
+const DEFAULT_MINIMUM_LOG_LEVEL: LogLevelFilter = "info";
+const LOG_LEVEL_FILTERS: Array<{ value: LogLevelFilter; label: string }> = [
+  { value: "error", label: "Error" },
+  { value: "warn", label: "Warning" },
+  { value: "info", label: "Info" },
+  { value: "debug", label: "Debug" },
+];
 
 type RenderedLogEntryBuffer = {
   slots: Array<AppLogEntry | undefined>;
@@ -34,6 +41,7 @@ type RenderedLogLine = {
 };
 
 type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "verbose";
+type LogLevelFilter = "error" | "warn" | "info" | "debug";
 
 type LogLinePartTone =
   | "timestamp"
@@ -59,10 +67,23 @@ export function LogsWindow() {
   const [query, setQuery] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [following, setFollowing] = useState(true);
+  const [minimumLevel, setMinimumLevel] = useState<LogLevelFilter>(
+    DEFAULT_MINIMUM_LOG_LEVEL,
+  );
+  const [debugCollectionEnabled, setDebugCollectionEnabled] = useState(false);
 
   const setFollowingMode = useCallback((value: boolean) => {
     followingRef.current = value;
     setFollowing(value);
+  }, []);
+
+  const applySnapshot = useCallback((value: AppLogSnapshot) => {
+    entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
+    setRenderVersion((version) => version + 1);
+    setLogFilePath(value.logFilePath);
+    setDebugCollectionEnabled(value.debugCollectionEnabled);
+    setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
+    setError(undefined);
   }, []);
 
   useEffect(() => {
@@ -86,17 +107,13 @@ export function LogsWindow() {
     setLoading(true);
     try {
       const value = await reader();
-      entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
-      setRenderVersion((version) => version + 1);
-      setLogFilePath(value.logFilePath);
-      setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
-      setError(undefined);
+      applySnapshot(value);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [desktopApi]);
+  }, [applySnapshot, desktopApi]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -149,8 +166,14 @@ export function LogsWindow() {
 
   const rendered = useMemo(() => {
     const entries = orderedRenderedLogEntries(entryBufferRef.current);
-    return buildRenderedLogLines(entries.map((entry) => entry.line).join("\n"), query);
-  }, [query, renderVersion]);
+    const visibleEntries = entries.filter((entry) =>
+      shouldShowLogEntry(entry, minimumLevel),
+    );
+    return buildRenderedLogLines(
+      visibleEntries.map((entry) => entry.line).join("\n"),
+      query,
+    );
+  }, [minimumLevel, query, renderVersion]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -223,6 +246,30 @@ export function LogsWindow() {
     }
   }, [setFollowingMode]);
 
+  const handleMinimumLevelChange = useCallback(
+    (value: LogLevelFilter) => {
+      setMinimumLevel(value);
+      const nextDebugCollectionEnabled = value === "debug";
+      const setter = desktopApi?.setAppLogDebugCollectionEnabled;
+      if (!setter || nextDebugCollectionEnabled === debugCollectionEnabled) {
+        return;
+      }
+
+      setLoading(true);
+      void setter(nextDebugCollectionEnabled)
+        .then((snapshot) => {
+          applySnapshot(snapshot);
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    },
+    [applySnapshot, debugCollectionEnabled, desktopApi],
+  );
+
   const handleCopyLogFilePath = useCallback(() => {
     if (!logFilePath) {
       return;
@@ -275,6 +322,28 @@ export function LogsWindow() {
                 spellCheck={false}
               />
             </label>
+            <div
+              aria-label="Minimum log level"
+              className="log-window__level-filter"
+              role="group"
+            >
+              {LOG_LEVEL_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  aria-pressed={minimumLevel === option.value}
+                  className="log-window__level-option"
+                  data-debug-collection={
+                    option.value === "debug" && !debugCollectionEnabled
+                      ? "off"
+                      : undefined
+                  }
+                  type="button"
+                  onClick={() => handleMinimumLevelChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
             <span className="log-window__match-count" aria-live="polite">
               {activeMatchLabel}
             </span>
@@ -336,6 +405,9 @@ export function LogsWindow() {
             </span>
             {truncated ? (
               <span className="log-window__status-note">Showing tail</span>
+            ) : null}
+            {debugCollectionEnabled ? (
+              <span className="log-window__status-note">Debug collection on</span>
             ) : null}
           </div>
 
@@ -418,6 +490,14 @@ export function orderedRenderedLogEntries(
     }
   }
   return ordered;
+}
+
+function shouldShowLogEntry(entry: AppLogEntry, minimumLevel: LogLevelFilter): boolean {
+  const level = normalizeLogLevel(entry.level);
+  if (!level) {
+    return minimumLevel === "debug" || minimumLevel === "info";
+  }
+  return severityForLogLevel(level) <= severityForLogLevel(minimumLevel);
 }
 
 function LogLine(props: {
@@ -578,6 +658,13 @@ function normalizeLogLevel(levelToken: string): LogLevel | undefined {
     return value;
   }
   return undefined;
+}
+
+function severityForLogLevel(level: LogLevel): number {
+  if (level === "error") return 0;
+  if (level === "warn") return 1;
+  if (level === "info") return 2;
+  return 3;
 }
 
 function toneForLogLevel(level: LogLevel | undefined): LogLinePartTone | undefined {

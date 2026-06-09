@@ -1646,10 +1646,10 @@ export class MessagingController {
       // a silent security bug — the user thinks they're sandboxed but
       // commands like `npm view` succeed because the full-access client
       // skipped the network sandbox. We log the resolved mode + where
-      // it came from here at the messaging layer; the registry's
-      // `codex thread client routing` log shows which client actually
-      // received the turn. Cross-reference both lines by threadId to
-      // verify the routing matched intent. `executionModeSource` of
+      // it came from here at the messaging layer; with Debug log collection
+      // enabled, the registry's `codex thread client routing` log shows which
+      // client actually received the turn. Cross-reference both lines by
+      // threadId to verify the routing matched intent. `executionModeSource` of
       // anything other than `thread` is suspicious for a thread the UI
       // claims has been explicitly toggled.
       this.logger.info?.("messaging starting turn", {
