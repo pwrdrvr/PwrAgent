@@ -9851,6 +9851,80 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not show or apply Fast and Reasoning controls for Kimi status cards", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults.fastMode = true;
+    navigation.launchpadDefaults.reasoningEffort = "high";
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:kimi",
+      model: "kimi-code/kimi-for-coding,thinking",
+      acpRuntime: {
+        configValues: { mode: "default" },
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildKimiRuntimeBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:kimi:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:kimi",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.not.stringContaining("Fast mode:"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "status:fast" }),
+        expect.objectContaining({ id: "status:reasoning" }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.not.stringContaining("Reasoning:"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:fast" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:reasoning" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-reasoning",
+        value: { reasoningEffort: "high" },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:kimi",
+        threadId: "thread-1",
+        fastMode: expect.any(Boolean),
+      }),
+    );
+    expect(harness.setThreadModelSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:kimi",
+        threadId: "thread-1",
+        reasoningEffort: "high",
+      }),
+    );
+  });
+
   it("shows ACP runtime and Full Access together on the status card", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

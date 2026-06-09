@@ -6889,6 +6889,10 @@ export class MessagingController {
       "medium",
       "high",
     ];
+    if (summary && efforts.length === 0) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
@@ -7045,6 +7049,16 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
+    const summary = await this.getBackendSummary(binding.backend);
+    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
+      "low",
+      "medium",
+      "high",
+    ];
+    if (summary && !efforts.includes(reasoningEffort)) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
 
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
@@ -7188,6 +7202,14 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    const summary = await this.getBackendSummary(binding.backend);
+    if (
+      summary &&
+      (summary.kind !== "codex" || summary.launchpadOptions?.supportsFastMode === false)
+    ) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
     const fastMode = !binding.preferences?.fastMode;
     const updatedBinding = await this.updateBindingPreferences(binding, {
       fastMode,

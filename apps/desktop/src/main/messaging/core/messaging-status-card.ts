@@ -73,14 +73,25 @@ export function buildBindingStatusIntent(params: {
     preferences?.model ??
     defaults?.model ??
     unavailable();
-  const reasoning =
-    params.threadState.reasoningEffort ??
-    preferences?.reasoningEffort ??
-    defaults?.reasoningEffort ??
-    unavailable();
-  const fastMode =
-    params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
-  const fastModeLabel = formatFastModeStatus(fastMode, params.backendSummary);
+  const modelOption = params.backendSummary?.launchpadOptions?.models?.find(
+    (option) => option.id === model,
+  );
+  const supportsReasoning =
+    !params.backendSummary ||
+    Boolean(params.backendSummary.launchpadOptions?.reasoningEfforts?.length);
+  const reasoning = supportsReasoning
+    ? params.threadState.reasoningEffort ??
+      preferences?.reasoningEffort ??
+      defaults?.reasoningEffort ??
+      unavailable()
+    : undefined;
+  const supportsFastMode = backendSupportsFastMode(
+    params.backendSummary,
+    modelOption,
+  );
+  const fastMode = supportsFastMode
+    ? params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode
+    : undefined;
   const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
   const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
   const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
@@ -147,8 +158,8 @@ export function buildBindingStatusIntent(params: {
       params.threadState.missing ? "Thread state: unavailable" : undefined,
       mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
-      `Reasoning: ${reasoning}`,
-      `Fast mode: ${fastModeLabel}`,
+      reasoning ? `Reasoning: ${reasoning}` : undefined,
+      supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       `Permissions: ${permissionsLineLabel}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
@@ -176,6 +187,8 @@ export function buildBindingStatusIntent(params: {
         permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
+      supportsFastMode,
+      supportsReasoning,
       streamingMode,
       streamingResponsesDefault: params.streamingResponsesDefault,
       toolUpdateMode,
@@ -183,17 +196,17 @@ export function buildBindingStatusIntent(params: {
   };
 }
 
-function formatFastModeStatus(
-  fastMode: boolean | undefined,
+function backendSupportsFastMode(
   backendSummary: BackendSummary | undefined,
-): string {
-  if (fastMode !== undefined) {
-    return fastMode ? "on" : "off";
+  modelOption: { supportsFast?: boolean } | undefined,
+): boolean {
+  if (!backendSummary) {
+    return true;
   }
-  if (backendSummary?.launchpadOptions?.supportsFastMode === false) {
-    return "unsupported";
+  if (backendSummary.kind !== "codex") {
+    return false;
   }
-  return unavailable();
+  return modelOption?.supportsFast ?? backendSummary.launchpadOptions?.supportsFastMode ?? false;
 }
 
 function formatContextUsageLine(summary: string | undefined): string | undefined {
@@ -396,7 +409,9 @@ function buildStatusActions(params: {
   permissionsChoices?: MessagingAcpRuntimeModeChoice[];
   supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
-  reasoning: string;
+  reasoning?: string;
+  supportsFastMode: boolean;
+  supportsReasoning: boolean;
   streamingMode: MessagingStreamingResponseMode;
   streamingResponsesDefault?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
@@ -429,20 +444,28 @@ function buildStatusActions(params: {
       fallbackText: "model",
       priority: 4,
     },
-    {
-      id: "status:reasoning",
-      label: `Reasoning: ${params.reasoning}`,
-      style: "secondary",
-      fallbackText: "reasoning",
-      priority: 5,
-    },
-    {
-      id: "status:fast",
-      label: params.fastMode ? "Fast: on" : "Fast: off",
-      style: "secondary",
-      fallbackText: "fast",
-      priority: 6,
-    },
+    ...(params.supportsReasoning && params.reasoning
+      ? [
+          {
+            id: "status:reasoning",
+            label: `Reasoning: ${params.reasoning}`,
+            style: "secondary" as const,
+            fallbackText: "reasoning",
+            priority: 5,
+          },
+        ]
+      : []),
+    ...(params.supportsFastMode
+      ? [
+          {
+            id: "status:fast",
+            label: params.fastMode ? "Fast: on" : "Fast: off",
+            style: "secondary" as const,
+            fallbackText: "fast",
+            priority: 6,
+          },
+        ]
+      : []),
     ...(permissionsAction ? [permissionsAction] : []),
     ...(params.handoff
       ? [
