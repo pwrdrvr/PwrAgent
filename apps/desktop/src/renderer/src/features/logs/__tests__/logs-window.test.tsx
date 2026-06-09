@@ -11,6 +11,7 @@ import {
   tokenizeLogLine,
 } from "../LogsWindow";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import type { AppLogSnapshot } from "../../../../../shared/app-metadata";
 
 afterEach(() => {
   cleanup();
@@ -248,6 +249,89 @@ describe("LogsWindow", () => {
 
     await waitFor(() => {
       expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
+    });
+    expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
+  });
+
+  it("disables debug collection after a rapid Debug to Info toggle", async () => {
+    const entries = [
+      {
+        sequence: 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) visible info line",
+      },
+      {
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "debug",
+        line: "[2026-05-12 20:06:29.000] [debug] (pwragent:main) hidden debug line",
+      },
+    ];
+    let resolveEnable: ((snapshot: AppLogSnapshot) => void) | undefined;
+    let resolveDisable: ((snapshot: AppLogSnapshot) => void) | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: false,
+        entries,
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      setAppLogDebugCollectionEnabled: vi.fn(
+        (enabled: boolean) =>
+          new Promise<AppLogSnapshot>((resolve) => {
+            if (enabled) {
+              resolveEnable = resolve;
+            } else {
+              resolveDisable = resolve;
+            }
+          }),
+      ),
+      onAppLogEntry: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    expect(await screen.findByText(/visible info line/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }));
+    await waitFor(() => {
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(true);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveEnable?.({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: true,
+        entries,
+        readAt: Date.now(),
+        truncated: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
+    });
+
+    await act(async () => {
+      resolveDisable?.({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: false,
+        entries,
+        readAt: Date.now(),
+        truncated: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Debug collection on")).not.toBeInTheDocument();
     });
     expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
   });

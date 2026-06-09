@@ -56,6 +56,10 @@ export function LogsWindow() {
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const activeMatchRef = useRef<HTMLElement | null>(null);
   const followingRef = useRef(true);
+  const confirmedDebugCollectionRef = useRef(false);
+  const desiredDebugCollectionRef = useRef(false);
+  const debugCollectionSyncInFlightRef = useRef(false);
+  const syncDebugCollectionRef = useRef<() => void>(() => undefined);
   const entryBufferRef = useRef(createRenderedLogEntryBuffer());
   const copyResetTimerRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
@@ -81,10 +85,48 @@ export function LogsWindow() {
     entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
     setRenderVersion((version) => version + 1);
     setLogFilePath(value.logFilePath);
+    confirmedDebugCollectionRef.current = value.debugCollectionEnabled;
     setDebugCollectionEnabled(value.debugCollectionEnabled);
     setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
     setError(undefined);
   }, []);
+
+  const syncDebugCollection = useCallback(() => {
+    const setter = desktopApi?.setAppLogDebugCollectionEnabled;
+    if (!setter || debugCollectionSyncInFlightRef.current) {
+      return;
+    }
+
+    const desiredDebugCollectionEnabled = desiredDebugCollectionRef.current;
+    if (
+      confirmedDebugCollectionRef.current === desiredDebugCollectionEnabled
+    ) {
+      return;
+    }
+
+    debugCollectionSyncInFlightRef.current = true;
+    let requestFailed = false;
+    setLoading(true);
+    void setter(desiredDebugCollectionEnabled)
+      .then((snapshot) => {
+        applySnapshot(snapshot);
+      })
+      .catch((err: unknown) => {
+        requestFailed = true;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        debugCollectionSyncInFlightRef.current = false;
+        setLoading(false);
+        if (!requestFailed) {
+          syncDebugCollectionRef.current();
+        }
+      });
+  }, [applySnapshot, desktopApi]);
+
+  useEffect(() => {
+    syncDebugCollectionRef.current = syncDebugCollection;
+  }, [syncDebugCollection]);
 
   useEffect(() => {
     document.title = "Logs";
@@ -250,24 +292,14 @@ export function LogsWindow() {
     (value: LogLevelFilter) => {
       setMinimumLevel(value);
       const nextDebugCollectionEnabled = value === "debug";
-      const setter = desktopApi?.setAppLogDebugCollectionEnabled;
-      if (!setter || nextDebugCollectionEnabled === debugCollectionEnabled) {
+      if (desiredDebugCollectionRef.current === nextDebugCollectionEnabled) {
         return;
       }
 
-      setLoading(true);
-      void setter(nextDebugCollectionEnabled)
-        .then((snapshot) => {
-          applySnapshot(snapshot);
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : String(err));
-        })
-        .finally(() => {
-          setLoading(false);
-        });
+      desiredDebugCollectionRef.current = nextDebugCollectionEnabled;
+      syncDebugCollection();
     },
-    [applySnapshot, debugCollectionEnabled, desktopApi],
+    [syncDebugCollection],
   );
 
   const handleCopyLogFilePath = useCallback(() => {
