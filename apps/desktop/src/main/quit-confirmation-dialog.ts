@@ -31,6 +31,12 @@ export async function showQuitConfirmationDialog(
     modal: Boolean(parent),
     parent,
     title: "Quit PwrAgent?",
+    // A modal confirmation has no business showing the application menu. On
+    // Windows the native menu bar otherwise renders inside this window — both
+    // wrong for a modal and the cause of a vertical scrollbar: it eats ~20px
+    // the 312px height (tuned for the menu-bar-less macOS/Linux dialog) didn't
+    // budget for, overflowing the content. Hiding it fixes both.
+    autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
