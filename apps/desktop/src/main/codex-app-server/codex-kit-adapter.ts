@@ -344,6 +344,14 @@ export function codexEventToNotifications(
             turn: { id: event.turnId, status: "completed", output: [] },
           },
         } as AppServerNotification,
+        // The kit's neutral event stream has no thread-status event, so Codex's
+        // `thread/status/changed` notifications are dropped at the kit boundary.
+        // The registry relies on a non-"active" status to sweep its synthetic
+        // `pending:<threadId>` turn/started placeholder out of `activeTurnKeys`
+        // (the thread-list "thinking" driver) — without this, that placeholder
+        // leaks and the list stays stuck "thinking" while the transcript (which
+        // reads threadStatus=idle) does not. Synthesize idle at turn end.
+        idleStatusNotification(event.threadId),
       ];
     case "error":
       return [
@@ -359,6 +367,9 @@ export function codexEventToNotifications(
             },
           },
         } as AppServerNotification,
+        ...(event.threadId !== undefined
+          ? [idleStatusNotification(event.threadId)]
+          : []),
       ];
     default:
       return [];
@@ -367,6 +378,18 @@ export function codexEventToNotifications(
 
 function codexItemType(kind: string): string {
   return kind === "command" ? "commandExecution" : "fileChange";
+}
+
+/**
+ * A `thread/status/changed` → idle notification. Emitted at turn end so the
+ * registry sweeps its synthetic `pending:<threadId>` placeholder from
+ * `activeTurnKeys` (the wholesale sweep only fires for a non-"active" status).
+ */
+function idleStatusNotification(threadId: string): AppServerNotification {
+  return {
+    method: "thread/status/changed",
+    params: { threadId, status: { type: "idle" } },
+  } as AppServerNotification;
 }
 
 /** Map a PwrAgent turn-input item onto the kit's Codex `UserInput` shape. */

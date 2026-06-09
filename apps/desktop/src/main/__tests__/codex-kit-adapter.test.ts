@@ -49,7 +49,33 @@ describe("codexEventToNotifications", () => {
       "item/agentMessage/delta",
       "item/completed",
       "turn/completed",
+      // idle status at turn end — sweeps the registry's synthetic pending turn
+      "thread/status/changed",
     ]);
+  });
+
+  it("emits an idle thread/status/changed at turn end (clears the pending placeholder)", () => {
+    const [completed, status] = codexEventToNotifications({
+      kind: "turn_completed",
+      threadId: "t1",
+      turnId: "u1",
+      status: "completed",
+    });
+    expect(completed?.method).toBe("turn/completed");
+    expect(status).toMatchObject({
+      method: "thread/status/changed",
+      params: { threadId: "t1", status: { type: "idle" } },
+    });
+  });
+
+  it("emits idle status after a turn error too", () => {
+    const methods = codexEventToNotifications({
+      kind: "error",
+      threadId: "t1",
+      turnId: "u1",
+      message: "boom",
+    }).map((n) => n.method);
+    expect(methods).toEqual(["turn/failed", "thread/status/changed"]);
   });
 
   it("carries the streaming delta through verbatim", () => {
