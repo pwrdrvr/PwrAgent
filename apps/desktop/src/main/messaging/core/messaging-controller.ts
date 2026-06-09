@@ -11313,9 +11313,13 @@ function assistantDeltaForBackendEvent(
   const params = event.notification.params as {
     delta?: unknown;
     itemId?: unknown;
+    phase?: unknown;
     threadId?: unknown;
     turnId?: unknown;
   };
+  if (params.phase === "commentary") {
+    return undefined;
+  }
   if (
     typeof params.threadId !== "string" ||
     typeof params.turnId !== "string" ||

@@ -5894,6 +5894,63 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([]);
   });
 
+  it("keeps commentary assistant deltas off messaging providers while delivering the final response", async () => {
+    const harness = await createHarness();
+    await bindThreadToBackend(harness, "acp:kimi");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:kimi",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant:turn-1:0",
+          delta: "I should inspect prior context before answering.",
+          phase: "commentary",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:kimi",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "It is 10:57 PM.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "It is 10:57 PM.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("falls back with a final assistant message per binding", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({

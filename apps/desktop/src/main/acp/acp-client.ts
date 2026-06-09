@@ -2,6 +2,7 @@ import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
+  AppServerTranscriptPhase,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
@@ -86,6 +87,7 @@ type AcpRolloutStoreLike = {
 
 type AcpActiveTurn = {
   activeAssistantMessageItemId?: string;
+  activeAssistantMessagePhase?: AppServerTranscriptPhase;
   assistantText: string;
   assistantMessageSequence: number;
   turnId: string;
@@ -624,18 +626,28 @@ export class AcpAgentClient {
     this.appendHistoryUpdate(sessionId, receivedAt, update);
     const isAssistantTextUpdate =
       updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+    const shouldTrackAssistantTextUpdate =
+      updateKind === "agent_message_chunk" ||
+      (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
     let assistantMessageItemId: string | undefined;
-    if (isAssistantTextUpdate && activeTurn && text) {
+    if (shouldTrackAssistantTextUpdate && activeTurn && text) {
+      const phase: AppServerTranscriptPhase =
+        updateKind === "agent_thought_chunk" ? "commentary" : "final";
       assistantMessageItemId = assistantMessageItemIdForUpdate({
         activeTurn,
+        phase,
         update,
       });
       if (updateKind === "agent_message_chunk") {
         activeTurn.assistantText += text;
       }
-    } else if (!isAssistantTextUpdate && activeTurn) {
+    } else if (
+      (!isAssistantTextUpdate || !shouldTrackAssistantTextUpdate) &&
+      activeTurn
+    ) {
       activeTurn.activeAssistantMessageItemId = undefined;
+      activeTurn.activeAssistantMessagePhase = undefined;
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
@@ -1309,8 +1321,13 @@ function textPrompt(text: string): AcpPromptContentBlock[] {
 
 function assistantMessageItemIdForUpdate(params: {
   activeTurn: AcpActiveTurn;
+  phase: AppServerTranscriptPhase;
   update: Record<string, unknown>;
 }): string {
+  if (params.activeTurn.activeAssistantMessagePhase !== params.phase) {
+    params.activeTurn.activeAssistantMessageItemId = undefined;
+    params.activeTurn.activeAssistantMessagePhase = params.phase;
+  }
   const explicitId =
     typeof params.update.messageId === "string"
       ? params.update.messageId
