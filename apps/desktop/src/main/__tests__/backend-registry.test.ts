@@ -11227,6 +11227,8 @@ command = "pnpm dev"
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.4-mini");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");
     expect(String(payload.parentAgentGuidance)).toContain("session/process id");
+    expect(String(payload.parentAgentGuidance)).toContain("about 30 seconds");
+    expect(String(payload.parentAgentGuidance)).toContain("repeatable check");
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("typecheck, lint, tests, builds");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
