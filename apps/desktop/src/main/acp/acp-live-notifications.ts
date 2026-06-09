@@ -1,9 +1,9 @@
 import type { AppServerNotification } from "@pwragent/shared";
 import { readAcpContentText, readAcpTopicTitle } from "./acp-session-normalizer";
 import {
-  extractCommandFromText,
   isGenericShellToolTitle,
   readAcpToolCommand,
+  readAcpToolContentCommand,
 } from "./acp-command-extraction.js";
 
 export function acpToolUpdateNotifications(params: {
@@ -133,7 +133,7 @@ function readAcpToolOutput(record: Record<string, unknown>): string | undefined 
     readString(record, "stdout") ??
     readString(record, "stderr") ??
     readString(record, "result") ??
-    (extractCommandFromText(contentText) ? undefined : contentText)
+    (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 

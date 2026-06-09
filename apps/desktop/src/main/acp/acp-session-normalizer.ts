@@ -10,9 +10,9 @@ import type {
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
 import {
-  extractCommandFromText,
   isGenericShellToolTitle,
   readAcpToolCommand,
+  readAcpToolContentCommand,
 } from "./acp-command-extraction.js";
 
 export type AcpSessionUpdate = {
@@ -596,7 +596,7 @@ function readToolOutput(record: Record<string, unknown>): string | undefined {
     readString(record, "stdout") ??
     readString(record, "stderr") ??
     readString(record, "result") ??
-    (extractCommandFromText(contentText) ? undefined : contentText)
+    (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 

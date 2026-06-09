@@ -4,8 +4,16 @@ export function readAcpToolCommand(
   return (
     readDirectCommand(record) ??
     readDirectCommand(asRecord(record.rawInput)) ??
-    extractCommandFromText(readAcpToolText(record.content))
+    readAcpToolContentCommand(record)
   );
+}
+
+export function readAcpToolContentCommand(
+  record: Record<string, unknown>,
+): string | undefined {
+  return isShellLikeAcpTool(record)
+    ? extractCommandFromText(readAcpToolText(record.content))
+    : undefined;
 }
 
 export function readAcpToolText(value: unknown): string | undefined {
@@ -63,6 +71,26 @@ export function isGenericShellToolTitle(value: string | undefined): boolean {
   return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(value?.trim() ?? "");
 }
 
+function isShellLikeAcpTool(record: Record<string, unknown>): boolean {
+  return (
+    isShellLikeToolKind(readString(record, "kind")) ||
+    isShellLikeToolKind(readString(record, "toolKind")) ||
+    isShellLikeToolKind(readString(record, "toolName")) ||
+    isShellLikeToolKind(readString(record, "name")) ||
+    isShellToolTitle(readString(record, "title"))
+  );
+}
+
+function isShellLikeToolKind(value: string | undefined): boolean {
+  return /^(?:execute|exec|command|commandexecution|command_execution|shell|bash|sh|zsh|terminal)$/i.test(
+    value?.trim() ?? "",
+  );
+}
+
+function isShellToolTitle(value: string | undefined): boolean {
+  return /^(?:bash|shell|sh|zsh|terminal)$/i.test(value?.trim() ?? "");
+}
+
 function readDirectCommand(
   record: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -82,6 +110,14 @@ function readDirectCommand(
     }
   }
   return undefined;
+}
+
+function readString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function extractCommandFromJsonText(text: string): string | undefined {

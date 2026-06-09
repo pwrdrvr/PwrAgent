@@ -24,8 +24,8 @@ import {
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
 import {
-  extractCommandFromText,
   readAcpToolCommand,
+  readAcpToolContentCommand,
   readAcpToolText,
 } from "./acp-command-extraction.js";
 import type {
@@ -1225,7 +1225,7 @@ function permissionPrompt(
   const contentText = readToolCallText(toolCall.content);
   if (
     contentText &&
-    (!extractCommandFromText(contentText) || isApprovalPromptText(contentText))
+    (!readAcpToolContentCommand(toolCall) || isApprovalPromptText(contentText))
   ) {
     return contentText;
   }

@@ -86,6 +86,46 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("keeps non-shell ACP content with command fields as live output", () => {
+    const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "search-1",
+        kind: "search",
+        title: "Search package metadata",
+        status: "completed",
+        content: {
+          type: "text",
+          text: output,
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "search-1",
+            command: "Search package metadata",
+            data: {
+              output,
+            },
+            commandActions: [
+              {
+                type: "search",
+                name: "Search package metadata",
+              },
+            ],
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("maps Kimi snake_case ACP tool updates to stable live item ids", () => {
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",

@@ -667,6 +667,53 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("keeps non-shell ACP content with command fields as transcript output", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "package.json",
+        status: "completed",
+        locations: [{ path: "/repo/package.json" }],
+        content: {
+          type: "text",
+          text: output,
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "read-file-1",
+        summary: "package.json",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: "package.json",
+            path: "/repo/package.json",
+            command: expect.objectContaining({
+              displayCommand: "package.json",
+              output,
+            }),
+          }),
+        ],
+      }),
+    ]);
+    const activity = replay.entries[0] as
+      | { details?: Array<{ command?: { rawCommand?: string } }> }
+      | undefined;
+    const detail = activity?.details?.[0];
+    expect(detail?.command?.rawCommand).toBeUndefined();
+  });
+
   it("extracts Kimi shell commands from raw input and command JSON content", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
