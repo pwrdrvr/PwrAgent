@@ -1512,53 +1512,73 @@ describe("DesktopMessagingRuntime", () => {
       slowMode: true,
       threadId: "thread-1",
     };
-
-    (
+    const handleDeliveryBudgetEvent = (
       runtime as unknown as {
         handleDeliveryBudgetEvent: (
           event: MessagingControllerDeliveryBudgetEvent,
         ) => void;
       }
-    ).handleDeliveryBudgetEvent(event);
+    ).handleDeliveryBudgetEvent.bind(runtime);
+
+    handleDeliveryBudgetEvent(event);
+    handleDeliveryBudgetEvent({
+      ...event,
+      at: event.at + 1000,
+      bindingId: "binding:telegram:topic:-1003841603622:9387:codex:thread-2",
+      intentId: "status:2",
+      threadId: "thread-2",
+    });
 
     expect(runtime.getPlatformStatuses()).toEqual([
       expect.objectContaining({
         health: "degraded",
-        degradationReasons: [
+        degradationReasons: expect.arrayContaining([
           expect.objectContaining({
             message: expect.stringContaining("binding binding:te...thread-1"),
             scope: expect.objectContaining({
               id: "telegram:group:-1003841603622",
             }),
           }),
-        ],
+          expect.objectContaining({
+            message: expect.stringContaining("binding binding:te...thread-2"),
+            scope: expect.objectContaining({
+              id: "telegram:group:-1003841603622",
+            }),
+          }),
+        ]),
       }),
     ]);
+    expect(runtime.getPlatformStatuses()[0]?.degradationReasons).toHaveLength(2);
 
     const { getAppStateDb } = await import("../state/app-state");
-    const row = getAppStateDb().raw
+    const rows = getAppStateDb().raw
       .prepare(
         `SELECT binding_id, thread_id, summary, payload
          FROM messaging_activity_log
          WHERE kind = ?
          ORDER BY id DESC
-         LIMIT 1`,
+         LIMIT 2`,
       )
-      .get("diagnostic") as
-        | {
+      .all("diagnostic") as
+        {
             binding_id: string;
             payload: string;
             summary: string;
             thread_id: string;
-          }
-        | undefined;
+          }[];
 
-    expect(row).toMatchObject({
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      binding_id: "binding:telegram:topic:-1003841603622:9387:codex:thread-2",
+      summary: expect.stringContaining("binding binding:te...thread-2"),
+      thread_id: "thread-2",
+    });
+    expect(rows[1]).toMatchObject({
       binding_id: event.bindingId,
       summary: expect.stringContaining("binding binding:te...thread-1"),
       thread_id: "thread-1",
     });
-    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+    expect(JSON.parse(rows[1]?.payload ?? "{}")).toMatchObject({
       bindingId: event.bindingId,
       scopeId: "telegram:group:-1003841603622",
       scopeKind: "group",

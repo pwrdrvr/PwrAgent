@@ -1349,10 +1349,12 @@ export class DesktopMessagingRuntime {
     const isCoolOff = reason === "cool-off";
     const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
     const targetPhrase = describeDeliveryBudgetTarget(event);
+    const targetKey = deliveryBudgetTargetKey(event);
 
     const diagnosticKey = [
       event.channel,
       scopeId,
+      targetKey,
       event.outcome,
       event.reason ?? "deferred",
       event.priority,
@@ -1385,7 +1387,11 @@ export class DesktopMessagingRuntime {
     const expiresAt = event.outcome === "deferred"
       ? event.retryAt
       : event.at + DELIVERY_BUDGET_WARNING_TTL_MS;
-    const key = degradationKey(event.channel, "warning", `delivery-budget:${scopeId}`);
+    const key = degradationKey(
+      event.channel,
+      "warning",
+      `delivery-budget:${scopeId}:${targetKey}`,
+    );
     this.addPlatformDegradationReason(event.channel, {
       kind: "warning",
       key,
@@ -2178,6 +2184,19 @@ function describeDeliveryBudgetTarget(
     pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id)}`);
   }
   return pieces.length > 0 ? ` for ${pieces.join(", ")}` : "";
+}
+
+function deliveryBudgetTargetKey(
+  event: MessagingControllerDeliveryBudgetEvent,
+): string {
+  const pieces: string[] = [];
+  if (event.bindingId) {
+    pieces.push(`binding:${encodeURIComponent(event.bindingId)}`);
+  }
+  if (event.threadId) {
+    pieces.push(`thread:${encodeURIComponent(event.threadId)}`);
+  }
+  return pieces.length > 0 ? pieces.join("|") : "scope";
 }
 
 function shortIdentifier(value: string): string {
