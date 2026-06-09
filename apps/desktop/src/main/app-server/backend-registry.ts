@@ -10108,7 +10108,7 @@ export class DesktopBackendRegistry {
             "Task monitor delegations must originate from an active Codex turn.",
         });
       }
-      backendRegistryLog.info("handling task monitor dynamic tool call", {
+      backendRegistryLog.debug("handling task monitor dynamic tool call", {
         backend,
         callId: taskMonitorToolCall.callId,
         namespace: taskMonitorToolCall.namespace,
