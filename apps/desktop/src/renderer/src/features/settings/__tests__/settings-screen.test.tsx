@@ -2883,6 +2883,48 @@ describe("SettingsScreen", () => {
     expect(settings.replaceSecret).not.toHaveBeenCalled();
   });
 
+  it("does not check for updates again when the selected channel version is already downloaded", async () => {
+    const settings = createSettingsState(
+      createSnapshot({
+        updates: {
+          channel: { value: "prerelease", source: "config" },
+        },
+      }),
+    );
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "available" as const,
+        version: "1.0.0-beta.8",
+      })),
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        latest: { version: "v1.0.0" },
+        prerelease: { version: "v1.0.0-beta.7" },
+      })),
+      readAppUpdateStatus: vi.fn(async () => ({
+        status: "downloaded" as const,
+        version: "1.0.0-beta.7",
+      })),
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(
+      await screen.findByText("Update ready: v1.0.0-beta.7. Restart to install."),
+    ).toBeInTheDocument();
+    expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(desktopApi.checkForAppUpdates).not.toHaveBeenCalled();
+  });
+
   it("blocks settings edits when the config file cannot be parsed", () => {
     render(
       <SettingsScreen

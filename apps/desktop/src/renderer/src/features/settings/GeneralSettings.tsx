@@ -7,6 +7,7 @@ import type {
   AppUpdateCheckResult,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
+  AppUpdateStatus,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
@@ -95,6 +96,23 @@ const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
 
 function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
   return release?.version ?? "Unavailable";
+}
+
+function normalizedUpdateVersion(version: string | undefined): string | undefined {
+  return version?.trim().replace(/^v/i, "");
+}
+
+function downloadedVersionMatchesRelease(
+  status: AppUpdateStatus | undefined,
+  release: AppUpdateReleaseInfo | undefined,
+): status is Extract<AppUpdateStatus, { status: "downloaded" }> {
+  if (status?.status !== "downloaded" || !release?.version) {
+    return false;
+  }
+  return (
+    normalizedUpdateVersion(status.version) ===
+    normalizedUpdateVersion(release.version)
+  );
 }
 
 function releaseHelpText(
@@ -186,6 +204,20 @@ export function GeneralSettings(props: {
     setUpdateChecking(true);
     setUpdateResult(undefined);
     try {
+      let currentStatus: AppUpdateStatus | undefined;
+      try {
+        currentStatus = await props.desktopApi?.readAppUpdateStatus?.();
+      } catch {
+        currentStatus = undefined;
+      }
+      const selectedRelease = releaseVersions?.[updateChannel.value];
+      if (downloadedVersionMatchesRelease(currentStatus, selectedRelease)) {
+        setUpdateResult({
+          status: "downloaded",
+          version: currentStatus.version,
+        });
+        return;
+      }
       setUpdateResult(await checkForUpdates());
     } catch (err) {
       setUpdateResult({
