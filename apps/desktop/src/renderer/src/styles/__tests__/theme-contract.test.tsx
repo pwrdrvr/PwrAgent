@@ -581,8 +581,15 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
     );
+    // The main sidebar masthead drops the stoplight gutter on every non-macOS
+    // platform now: Linux has a normal frame, and on Windows the masthead is
+    // hidden entirely (its wordmark + action buttons moved into the custom
+    // .app-titlebar strip), so there is no left reservation to keep.
     expect(css).toMatch(
-      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.sidebar__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\)\s*\.sidebar__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\]\s*\.sidebar__masthead\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
     );
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
