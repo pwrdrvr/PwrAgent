@@ -581,6 +581,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
     );
+    // On Windows the aux windows are frameless with the OS caption buttons at
+    // the top-right, so .activity-titlebar drops the left stoplight gutter and
+    // instead reserves the caption-button width on the right.
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\]\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?padding-right:\s*var\(--win-caption-w[\s\S]*?\}/,
+    );
     // The main sidebar masthead drops the stoplight gutter on every non-macOS
     // platform now: Linux has a normal frame, and on Windows the masthead is
     // hidden entirely (its wordmark + action buttons moved into the custom

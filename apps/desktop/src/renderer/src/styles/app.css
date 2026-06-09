@@ -1049,6 +1049,18 @@ textarea,
   padding-left: 14px;
 }
 
+/* On Windows the aux windows (Changelog / License / Logs / Activity) are
+   frameless with the OS caption buttons at the top-right, so the
+   .activity-titlebar header IS the title strip: drop the macOS stoplight
+   reservation on the left, reserve the caption-button width on the right, and
+   match the WCO overlay color (--bg-sidebar) so the buttons blend in. It's
+   already draggable + min-height 44px from the base rule. */
+:root[data-platform="win32"] .activity-titlebar {
+  padding-left: 14px;
+  padding-right: var(--win-caption-w, 140px);
+  background: var(--bg-sidebar);
+}
+
 .activity-titlebar button,
 .activity-titlebar [role="button"] {
   -webkit-app-region: no-drag;

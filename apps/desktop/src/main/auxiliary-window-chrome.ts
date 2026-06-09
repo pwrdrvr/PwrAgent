@@ -2,6 +2,10 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
 } from "electron";
+import {
+  readBootstrapAppearance,
+  themedTitleBarOverlay,
+} from "./settings/appearance-bootstrap";
 
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
@@ -19,12 +23,29 @@ const auxiliaryWindowRaiseRetryTimers = new Map<
 
 export function auxiliaryWindowChromeOptions(): Pick<
   BrowserWindowConstructorOptions,
-  "autoHideMenuBar" | "titleBarStyle" | "trafficLightPosition"
+  | "autoHideMenuBar"
+  | "titleBarStyle"
+  | "trafficLightPosition"
+  | "titleBarOverlay"
 > {
   if (process.platform === "darwin") {
     return {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: { x: 20, y: 18 },
+    };
+  }
+
+  if (process.platform === "win32") {
+    // Frameless + Window Controls Overlay, like the main window — the native
+    // title bar (and the white system band) is gone; the OS draws themed
+    // min/max/close at the top-right, blended into the renderer's
+    // `.activity-titlebar` header. Aux windows have NO application menu, so
+    // there's no painted menu bar here — just the seamless caption buttons.
+    // autoHideMenuBar stays true so no phantom native bar can appear.
+    return {
+      titleBarStyle: "hidden",
+      titleBarOverlay: themedTitleBarOverlay(readBootstrapAppearance()),
+      autoHideMenuBar: true,
     };
   }
 
