@@ -6876,12 +6876,22 @@ export class MessagingController {
       "medium",
       "high",
     ];
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const currentReasoningEffort =
+      thread?.reasoningEffort ??
+      binding.preferences?.reasoningEffort ??
+      navigation.launchpadDefaults.reasoningEffort;
+
     await this.deliver(
       buildStatusReasoningPickerIntent({
         id: this.newIntentId("status-reasoning-picker"),
         capabilityProfile: this.capabilityProfile,
         binding,
         createdAt: this.now(),
+        currentReasoningEffort,
         efforts,
       }),
       binding,
@@ -7023,6 +7033,9 @@ export class MessagingController {
       return;
     }
 
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const updatedBinding = await this.updateBindingPreferences(binding, {
       reasoningEffort,
     });
@@ -7034,8 +7047,16 @@ export class MessagingController {
       reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    // Refresh handled by the thread-state update bus on
-    // thread/modelSettings/updated — see refreshStatusSurfacesForThread.
+    const optimisticNavigation: NavigationSnapshot = {
+      ...navigation,
+      threads: navigation.threads.map((candidate) =>
+        candidate.source === binding.backend && candidate.id === binding.threadId
+          ? { ...candidate, reasoningEffort }
+          : candidate,
+      ),
+    };
+    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async setBindingAcpRuntimeMode(

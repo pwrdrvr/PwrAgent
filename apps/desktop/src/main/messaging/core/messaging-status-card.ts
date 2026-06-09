@@ -1111,6 +1111,7 @@ export function buildStatusReasoningPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
+  currentReasoningEffort?: string;
   id: string;
   efforts: string[];
 }): MessagingSingleSelectIntent {
@@ -1130,7 +1131,7 @@ export function buildStatusReasoningPickerIntent(params: {
       [
         ...params.efforts.map((effort, index) => ({
           id: "status:set-reasoning",
-          label: effort,
+          label: `${effort}${effort === params.currentReasoningEffort ? " (current)" : ""}`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
           priority: 10 + index,

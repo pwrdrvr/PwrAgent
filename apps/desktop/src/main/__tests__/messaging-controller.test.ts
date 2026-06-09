@@ -7820,7 +7820,9 @@ describe("MessagingController", () => {
   });
 
   it("opens a reasoning picker and stores the selected effort", async () => {
-    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults.reasoningEffort = "medium";
+    const harness = await createHarness({ navigation });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -7829,6 +7831,11 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
       prompt: "Select Reasoning",
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "low" }),
+        expect.objectContaining({ label: "medium (current)" }),
+        expect.objectContaining({ label: "high" }),
+      ]),
     });
 
     await harness.controller.handleInboundEvent(
@@ -7850,6 +7857,23 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Reasoning: high"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:reasoning",
+          label: "Reasoning: high",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:reasoning" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "medium" }),
+        expect.objectContaining({ label: "high (current)" }),
+      ]),
     });
   });
 
