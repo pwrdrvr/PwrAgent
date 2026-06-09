@@ -7107,7 +7107,7 @@ export class MessagingController {
         : currentRuntime?.currentModeId,
       updatedAt: this.now(),
     };
-    await this.updateBindingPreferences(binding, {
+    const updatedBinding = await this.updateBindingPreferences(binding, {
       acpRuntime,
     });
     await this.options.backend.setAcpSessionRuntimeOption({
@@ -7117,7 +7117,16 @@ export class MessagingController {
       optionId: selection.optionId,
       value: selection.value,
     });
-    // Refresh handled by thread/acpRuntime/updated or queue audit refresh.
+    const optimisticNavigation: NavigationSnapshot = {
+      ...navigation,
+      threads: navigation.threads.map((candidate) =>
+        candidate.source === binding.backend && candidate.id === binding.threadId
+          ? { ...candidate, acpRuntime }
+          : candidate,
+      ),
+    };
+    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async toggleFastMode(

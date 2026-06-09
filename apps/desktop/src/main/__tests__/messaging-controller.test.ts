@@ -9614,6 +9614,16 @@ describe("MessagingController", () => {
       optionId: "mode",
       value: "yolo",
     });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Yolo"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:permissions",
+          label: "Permissions: Yolo",
+        }),
+      ]),
+    });
   });
 
   it("uses Kimi config-option permissions in the status picker", async () => {
