@@ -1695,6 +1695,23 @@ export function Composer(props: ComposerProps) {
     setDraft("");
     setSkillTokens([]);
   };
+  const createEmptyComposerDraftSnapshot = (): ComposerDraftSnapshot => ({
+    draft: "",
+    editorDocument: undefined,
+    imageAttachments: [],
+    skillTokens: [],
+  });
+  const clearSubmittedComposerDraftForStart = (
+    scopeKey: string,
+  ): void => {
+    clearComposerDraftSnapshot(scopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey,
+      snapshot: createEmptyComposerDraftSnapshot(),
+    };
+    clearComposerDraft();
+    setImageAttachments([]);
+  };
   const hasLiveComposerContent = (): boolean => {
     const latest = latestDraftSnapshotRef.current;
     return Boolean(
@@ -1827,6 +1844,47 @@ export function Composer(props: ComposerProps) {
         inputRef.current?.setSelectionRange(0, 0);
       });
     });
+  };
+  const hasNewLiveComposerContentSinceSubmittedClear = (
+    submittedSnapshot: ComposerDraftSnapshot,
+  ): boolean => {
+    const latest = latestDraftSnapshotRef.current;
+    const latestSnapshot =
+      latest.scopeKey === composerScopeKey
+        ? latest.snapshot
+        : createEmptyComposerDraftSnapshot();
+    const liveDraft = inputRef.current?.value ?? latestSnapshot.draft;
+    const liveSkillTokenCount =
+      inputRef.current?.skillTokenCount ?? latestSnapshot.skillTokens.length;
+    const latestSnapshotIsCleared =
+      !latestSnapshot.draft.trim() &&
+      latestSnapshot.skillTokens.length === 0 &&
+      latestSnapshot.imageAttachments.length === 0;
+
+    if (
+      latestSnapshotIsCleared &&
+      liveDraft === submittedSnapshot.draft &&
+      liveSkillTokenCount === submittedSnapshot.skillTokens.length
+    ) {
+      return false;
+    }
+
+    return Boolean(
+      liveDraft.trim() ||
+        liveSkillTokenCount > 0 ||
+        latestSnapshot.imageAttachments.length > 0,
+    );
+  };
+  const recoverSubmittedComposerDraft = (
+    snapshot: ComposerDraftSnapshot,
+  ): boolean => {
+    if (hasNewLiveComposerContentSinceSubmittedClear(snapshot)) {
+      recordComposerDraftHistory(composerScopeKey, snapshot, "unsent");
+      return false;
+    }
+
+    applyRecoveredComposerDraft(snapshot);
+    return true;
   };
   const clearRecoveredComposerDraft = (): void => {
     recoveryCycleRef.current = undefined;
@@ -2873,8 +2931,7 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(optimisticReviewId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     if (!options?.queued) {
-      clearComposerDraftSnapshot(composerScopeKey);
-      clearComposerDraft();
+      clearSubmittedComposerDraftForStart(composerScopeKey);
       setReviewConfig(undefined);
     }
     try {
@@ -2884,6 +2941,7 @@ export function Composer(props: ComposerProps) {
         target: reviewCommand.target,
         delivery: "inline",
       });
+      inFlightReviewSubmissionKeyRef.current = undefined;
       updateActiveTurnId(response.turnId, { review: true });
       props.onActiveTurnIdChange?.(response.turnId);
       if (options?.queued) {
@@ -2903,7 +2961,7 @@ export function Composer(props: ComposerProps) {
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
-        applyRecoveredComposerDraft(submittedSnapshot);
+        recoverSubmittedComposerDraft(submittedSnapshot);
       }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -3093,9 +3151,7 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(optimisticMessageId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     if (!queued) {
-      clearComposerDraftSnapshot(composerScopeKey);
-      clearComposerDraft();
-      setImageAttachments([]);
+      clearSubmittedComposerDraftForStart(composerScopeKey);
       if (collaborationMode) {
         setPlanModeEnabled(false);
       }
@@ -3137,8 +3193,9 @@ export function Composer(props: ComposerProps) {
         props.removeOptimisticMessage?.(optimisticMessageId);
       }
       if (!queued) {
-        applyRecoveredComposerDraft(submittedSnapshot);
-        if (collaborationMode) {
+        const recoveredSubmittedDraft =
+          recoverSubmittedComposerDraft(submittedSnapshot);
+        if (collaborationMode && recoveredSubmittedDraft) {
           setPlanModeEnabled(true);
         }
       }
