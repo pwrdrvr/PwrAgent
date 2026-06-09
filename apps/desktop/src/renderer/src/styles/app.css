@@ -8700,6 +8700,15 @@ textarea,
   background: var(--bg-panel-elevated);
 }
 
+/* On Windows the OS draws the min/max/close caption buttons in a reserved
+   overlay at the window's top-right — exactly where this fixed spine pins its
+   hamburger. Drop the spine's top content below the caption strip so the
+   hamburger never sits under the close button. env(titlebar-area-height) is
+   the overlay height (TITLE_BAR_OVERLAY_HEIGHT); falls back to 48px. */
+:root[data-platform="win32"] .context-rail__spine {
+  padding-top: calc(8px + env(titlebar-area-height, 48px));
+}
+
 .context-rail.is-open .context-rail__spine {
   display: none;
 }
