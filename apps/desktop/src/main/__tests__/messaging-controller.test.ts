@@ -7176,6 +7176,60 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not resurrect a revoked binding after a failed status refresh returns a surface", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "telegram",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "Bad Request: chat not found",
+        surface: {
+          channel: "telegram",
+          id: "stale-status-surface",
+        },
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+      statusSurface: {
+        channel: "telegram",
+        id: "existing-status-surface",
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+  });
+
   it("does not revoke a binding from a failure result for another channel", async () => {
     const harness = await createHarness({
       deliver: async () => ({

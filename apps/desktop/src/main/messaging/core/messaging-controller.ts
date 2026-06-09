@@ -8414,16 +8414,21 @@ export class MessagingController {
       toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
     });
     const result = await this.deliver(intent, binding, event);
+    const latestBinding = await this.options.store.getBinding(binding.id);
+    if (latestBinding?.revokedAt) {
+      return latestBinding;
+    }
     if (!result.surface) {
-      return binding;
+      return latestBinding ?? binding;
     }
 
+    const currentBinding = latestBinding ?? binding;
     return await this.options.store.upsertBinding({
-      ...binding,
+      ...currentBinding,
       pinnedStatusSurface:
         result.outcome === "pinned"
           ? result.surface
-          : binding.pinnedStatusSurface,
+          : currentBinding.pinnedStatusSurface,
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
