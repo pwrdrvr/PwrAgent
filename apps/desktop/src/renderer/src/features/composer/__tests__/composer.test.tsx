@@ -1440,6 +1440,7 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
     expect(textarea).toBeEnabled();
+    expect(textarea).toHaveValue("");
 
     await act(async () => {
       resolveStartTurn?.({
@@ -1447,6 +1448,81 @@ describe("Composer", () => {
         threadId: "thread-1",
         turnId: "turn-1",
       });
+    });
+  });
+
+  it("restores the reply draft when starting a turn fails after clearing", async () => {
+    const startTurn = vi.fn(async () => {
+      throw new Error("Start failed");
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Failed send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Restore this draft" } });
+    await clickButton("Send");
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue("Restore this draft");
+      expect(screen.getByText("Start failed")).toBeInTheDocument();
+    });
+  });
+
+  it("preserves newer reply edits when starting a turn fails after clearing", async () => {
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(() => startTurnDeferred.promise);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Failed send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Submitted draft" } });
+    await clickButton("Send");
+    expect(textarea).toHaveValue("");
+
+    fireEvent.change(textarea, { target: { value: "Next draft" } });
+    await act(async () => {
+      startTurnDeferred.reject(new Error("Start failed"));
+    });
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue("Next draft");
+      expect(screen.getByText("Start failed")).toBeInTheDocument();
     });
   });
 
@@ -4047,6 +4123,177 @@ describe("Composer", () => {
     });
     expect(addOptimisticReviewEntry).toHaveBeenCalledWith("Review changes against main");
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("ignores a duplicate slash review submit while the review start is pending", async () => {
+    const startTurn = vi.fn();
+    const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");
+    const startReviewDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      reviewThreadId: string;
+      turnId: string;
+    }>();
+    const startReview = vi.fn(() => startReviewDeferred.promise);
+
+    render(
+      <Composer
+        addOptimisticReviewEntry={addOptimisticReviewEntry}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    const form = textarea.closest("form");
+    expect(form).not.toBeNull();
+
+    fireEvent.change(textarea, {
+      target: { value: "/review main" },
+    });
+
+    await act(async () => {
+      fireEvent.submit(form!);
+      fireEvent.submit(form!);
+      await Promise.resolve();
+    });
+
+    expect(startReview).toHaveBeenCalledTimes(1);
+    expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("");
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+
+    await act(async () => {
+      startReviewDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      });
+    });
+  });
+
+  it("preserves newer reply edits when starting a review fails after clearing", async () => {
+    const startReviewDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      reviewThreadId: string;
+      turnId: string;
+    }>();
+    const startReview = vi.fn(() => startReviewDeferred.promise);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+    expect(textarea).toHaveValue("");
+
+    fireEvent.change(textarea, { target: { value: "Next draft" } });
+    await act(async () => {
+      startReviewDeferred.reject(new Error("Review failed"));
+    });
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue("Next draft");
+      expect(screen.getByText("Review failed")).toBeInTheDocument();
+    });
+  });
+
+  it("queues an identical slash review after the previous review start is accepted", async () => {
+    const startTurn = vi.fn();
+    const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");
+    const startReviewDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      reviewThreadId: string;
+      turnId: string;
+    }>();
+    const startReview = vi.fn(() => startReviewDeferred.promise);
+
+    render(
+      <Composer
+        addOptimisticReviewEntry={addOptimisticReviewEntry}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+
+    await act(async () => {
+      startReviewDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      });
+    });
+
+    fireEvent.change(textarea, {
+      target: { value: "/review main" },
+    });
+    await clickButton("Queue");
+
+    expect(startReview).toHaveBeenCalledTimes(1);
+    expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Review changes against main")).toBeInTheDocument();
   });
 
   it("keeps review completion tied to the review/start turn id", async () => {

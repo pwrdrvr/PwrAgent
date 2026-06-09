@@ -1020,6 +1020,22 @@ function reviewCommandToDraftText(command: {
   return `/review --custom ${target.instructions}`;
 }
 
+function reviewSubmissionKey(command: {
+  target: AppServerReviewTarget;
+}): string {
+  const target = command.target;
+  switch (target.type) {
+    case "baseBranch":
+      return `review:baseBranch:${target.branch}`;
+    case "commit":
+      return `review:commit:${target.sha}:${target.title ?? ""}`;
+    case "custom":
+      return `review:custom:${target.instructions}`;
+    default:
+      return `review:${JSON.stringify(target)}`;
+  }
+}
+
 function HighlightedAutocompleteLabel(props: {
   label: string;
   query: string;
@@ -1403,6 +1419,7 @@ export function Composer(props: ComposerProps) {
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
+  const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
@@ -1678,6 +1695,23 @@ export function Composer(props: ComposerProps) {
     setDraft("");
     setSkillTokens([]);
   };
+  const createEmptyComposerDraftSnapshot = (): ComposerDraftSnapshot => ({
+    draft: "",
+    editorDocument: undefined,
+    imageAttachments: [],
+    skillTokens: [],
+  });
+  const clearSubmittedComposerDraftForStart = (
+    scopeKey: string,
+  ): void => {
+    clearComposerDraftSnapshot(scopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey,
+      snapshot: createEmptyComposerDraftSnapshot(),
+    };
+    clearComposerDraft();
+    setImageAttachments([]);
+  };
   const hasLiveComposerContent = (): boolean => {
     const latest = latestDraftSnapshotRef.current;
     return Boolean(
@@ -1810,6 +1844,47 @@ export function Composer(props: ComposerProps) {
         inputRef.current?.setSelectionRange(0, 0);
       });
     });
+  };
+  const hasNewLiveComposerContentSinceSubmittedClear = (
+    submittedSnapshot: ComposerDraftSnapshot,
+  ): boolean => {
+    const latest = latestDraftSnapshotRef.current;
+    const latestSnapshot =
+      latest.scopeKey === composerScopeKey
+        ? latest.snapshot
+        : createEmptyComposerDraftSnapshot();
+    const liveDraft = inputRef.current?.value ?? latestSnapshot.draft;
+    const liveSkillTokenCount =
+      inputRef.current?.skillTokenCount ?? latestSnapshot.skillTokens.length;
+    const latestSnapshotIsCleared =
+      !latestSnapshot.draft.trim() &&
+      latestSnapshot.skillTokens.length === 0 &&
+      latestSnapshot.imageAttachments.length === 0;
+
+    if (
+      latestSnapshotIsCleared &&
+      liveDraft === submittedSnapshot.draft &&
+      liveSkillTokenCount === submittedSnapshot.skillTokens.length
+    ) {
+      return false;
+    }
+
+    return Boolean(
+      liveDraft.trim() ||
+        liveSkillTokenCount > 0 ||
+        latestSnapshot.imageAttachments.length > 0,
+    );
+  };
+  const recoverSubmittedComposerDraft = (
+    snapshot: ComposerDraftSnapshot,
+  ): boolean => {
+    if (hasNewLiveComposerContentSinceSubmittedClear(snapshot)) {
+      recordComposerDraftHistory(composerScopeKey, snapshot, "unsent");
+      return false;
+    }
+
+    applyRecoveredComposerDraft(snapshot);
+    return true;
   };
   const clearRecoveredComposerDraft = (): void => {
     recoveryCycleRef.current = undefined;
@@ -2777,6 +2852,15 @@ export function Composer(props: ComposerProps) {
     queueClaimed?: boolean;
     queued?: QueuedTurnDraft;
   }): Promise<void> => {
+    const submissionKey = reviewSubmissionKey(reviewCommand);
+    if (
+      sendingRef.current &&
+      inFlightReviewSubmissionKeyRef.current === submissionKey
+    ) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      return;
+    }
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -2798,6 +2882,7 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
+    inFlightReviewSubmissionKeyRef.current = submissionKey;
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -2821,6 +2906,7 @@ export function Composer(props: ComposerProps) {
         setReviewConfig(undefined);
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
+        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -2843,6 +2929,11 @@ export function Composer(props: ComposerProps) {
       reviewCommand.displayText
     );
     setActiveOptimisticMessageId(optimisticReviewId);
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    if (!options?.queued) {
+      clearSubmittedComposerDraftForStart(composerScopeKey);
+      setReviewConfig(undefined);
+    }
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -2850,6 +2941,7 @@ export function Composer(props: ComposerProps) {
         target: reviewCommand.target,
         delivery: "inline",
       });
+      inFlightReviewSubmissionKeyRef.current = undefined;
       updateActiveTurnId(response.turnId, { review: true });
       props.onActiveTurnIdChange?.(response.turnId);
       if (options?.queued) {
@@ -2859,16 +2951,17 @@ export function Composer(props: ComposerProps) {
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
+          submittedSnapshot,
           "sent",
         );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setReviewConfig(undefined);
       }
     } catch (error) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
+      }
+      inFlightReviewSubmissionKeyRef.current = undefined;
+      if (!options?.queued) {
+        recoverSubmittedComposerDraft(submittedSnapshot);
       }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -3056,6 +3149,13 @@ export function Composer(props: ComposerProps) {
       payload.imageParts
     );
     setActiveOptimisticMessageId(optimisticMessageId);
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    if (!queued) {
+      clearSubmittedComposerDraftForStart(composerScopeKey);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
+    }
 
     try {
       const response = await props.desktopApi.startTurn({
@@ -3084,19 +3184,20 @@ export function Composer(props: ComposerProps) {
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
+          submittedSnapshot,
           "sent",
         );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setImageAttachments([]);
-        if (collaborationMode) {
-          setPlanModeEnabled(false);
-        }
       }
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
+      }
+      if (!queued) {
+        const recoveredSubmittedDraft =
+          recoverSubmittedComposerDraft(submittedSnapshot);
+        if (collaborationMode && recoveredSubmittedDraft) {
+          setPlanModeEnabled(true);
+        }
       }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -3376,6 +3477,13 @@ export function Composer(props: ComposerProps) {
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
+    if (
+      reviewCommand &&
+      sendingRef.current &&
+      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+    ) {
+      return;
+    }
     if (isCompactCommand) {
       await submitCompactThread();
       return;
