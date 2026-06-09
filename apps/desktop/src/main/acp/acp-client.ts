@@ -23,6 +23,11 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
+import {
+  readAcpToolCommand,
+  readAcpToolContentCommand,
+  readAcpToolText,
+} from "./acp-command-extraction.js";
 import type {
   AcpSessionMetadata,
   AcpSessionStore,
@@ -696,6 +701,7 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
+    const command = permissionCommand(title, toolCall);
 
     return {
       method: "item/commandExecution/requestApproval",
@@ -705,8 +711,8 @@ export class AcpAgentClient {
         requestId,
         prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
         reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        command: title,
-        displayCommand: title,
+        command,
+        displayCommand: command,
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
@@ -1217,7 +1223,10 @@ function permissionPrompt(
   toolCall: Record<string, unknown>,
 ): string {
   const contentText = readToolCallText(toolCall.content);
-  if (contentText) {
+  if (
+    contentText &&
+    (!readAcpToolContentCommand(toolCall) || isApprovalPromptText(contentText))
+  ) {
     return contentText;
   }
   const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
@@ -1226,20 +1235,19 @@ function permissionPrompt(
     : `${requesterName} wants to run ${title}`;
 }
 
+function isApprovalPromptText(text: string): boolean {
+  return /^Requesting approval to Running:\s*/imu.test(text);
+}
+
 function readToolCallText(value: unknown): string | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const text = value
-    .flatMap((item) => {
-      const record = asRecord(item);
-      return record?.type === "text" && typeof record.text === "string"
-        ? [record.text.trim()]
-        : [];
-    })
-    .filter(Boolean)
-    .join("\n\n");
-  return text || undefined;
+  return readAcpToolText(value);
+}
+
+function permissionCommand(
+  title: string,
+  toolCall: Record<string, unknown>,
+): string {
+  return readAcpToolCommand(toolCall) ?? title;
 }
 
 function permissionOutcomeFromResponse(

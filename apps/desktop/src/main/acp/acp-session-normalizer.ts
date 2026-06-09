@@ -9,6 +9,11 @@ import type {
   AppServerThreadStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
+import {
+  isGenericShellToolTitle,
+  readAcpToolCommand,
+  readAcpToolContentCommand,
+} from "./acp-command-extraction.js";
 
 export type AcpSessionUpdate = {
   sessionId: string;
@@ -585,12 +590,13 @@ function normalizeUserPrompt(
 }
 
 function readToolOutput(record: Record<string, unknown>): string | undefined {
+  const contentText = readContentText(record, "content");
   return (
     readString(record, "output") ??
     readString(record, "stdout") ??
     readString(record, "stderr") ??
     readString(record, "result") ??
-    readContentText(record, "content")
+    (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 
@@ -683,14 +689,16 @@ function toolActivity(
     readString(update.update, "itemId") ??
     readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
-  const label =
+  const command = readAcpToolCommand(update.update);
+  const labelCandidate =
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
+  const label =
+    command && isGenericShellToolTitle(labelCandidate) ? command : labelCandidate;
   const status = readString(update.update, "status");
   const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
-  const command = readString(update.update, "command");
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
   const detailKind = command
@@ -755,12 +763,16 @@ function mergeActivity(
                 existingDetail.command || incomingDetail.command
                   ? {
                       displayCommand:
-                        existingDetail.command?.displayCommand ??
-                        incomingDetail.command?.displayCommand ??
+                        preferSpecificCommand(
+                          existingDetail.command?.displayCommand,
+                          incomingDetail.command?.displayCommand,
+                        ) ??
                         preferSpecificLabel(existingDetail.label, incomingDetail.label),
                       rawCommand:
-                        existingDetail.command?.rawCommand ??
-                        incomingDetail.command?.rawCommand,
+                        preferSpecificCommand(
+                          existingDetail.command?.rawCommand,
+                          incomingDetail.command?.rawCommand,
+                        ),
                       output:
                         incomingDetail.command?.output ??
                         existingDetail.command?.output,
@@ -786,6 +798,10 @@ function mergeActivity(
 
 function preferSpecificLabel(existing: string, incoming: string): string {
   const generic = new Set([
+    "bash",
+    "shell",
+    "sh",
+    "zsh",
     "execute",
     "read",
     "write",
@@ -799,6 +815,16 @@ function preferSpecificLabel(existing: string, incoming: string): string {
   return generic.has(existing.toLowerCase()) && incoming
     ? incoming
     : existing || incoming;
+}
+
+function preferSpecificCommand(
+  existing: string | undefined,
+  incoming: string | undefined,
+): string | undefined {
+  if (!existing || isGenericShellToolTitle(existing)) {
+    return incoming ?? existing;
+  }
+  return existing;
 }
 
 function toolDetailKind(

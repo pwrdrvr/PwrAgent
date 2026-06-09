@@ -1,5 +1,10 @@
 import type { AppServerNotification } from "@pwragent/shared";
 import { readAcpContentText, readAcpTopicTitle } from "./acp-session-normalizer";
+import {
+  isGenericShellToolTitle,
+  readAcpToolCommand,
+  readAcpToolContentCommand,
+} from "./acp-command-extraction.js";
 
 export function acpToolUpdateNotifications(params: {
   threadId: string;
@@ -55,8 +60,12 @@ function liveItemForAcpToolUpdate(
   const path = readString(update, "path") ?? readFirstLocationPath(update);
   const status = normalizeAcpToolStatus(readString(update, "status"));
   const output = readAcpToolOutput(update);
-  const command = readString(update, "command") ?? title;
-  const commandActions = acpCommandActions({ kind: toolKind, path, title });
+  const command = readAcpToolCommand(update) ?? title;
+  const commandActions = acpCommandActions({
+    kind: toolKind,
+    path,
+    title: isGenericShellToolTitle(title) ? command : title,
+  });
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",
@@ -118,12 +127,13 @@ function isTerminalToolStatus(status: unknown): boolean {
 }
 
 function readAcpToolOutput(record: Record<string, unknown>): string | undefined {
+  const contentText = readAcpContentText(record.content);
   return (
     readString(record, "output") ??
     readString(record, "stdout") ??
     readString(record, "stderr") ??
     readString(record, "result") ??
-    readAcpContentText(record.content)
+    (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 
