@@ -80,6 +80,51 @@ describe("MessagingActivityScreen", () => {
       .toHaveTextContent("Topic ID");
   });
 
+  it("shows friendly provider, conversation, and thread chips for diagnostics", async () => {
+    const desktopApi = {
+      listMessagingActivity: vi.fn(async () => ({
+        entries: [
+          {
+            id: 1,
+            platform: "telegram",
+            kind: "diagnostic",
+            backend: "codex",
+            bindingId:
+              "binding:telegram:topic:-1003841603622:56:codex:019ead15-b0bf-7f43-bfff-eb70c8cc1250",
+            conversationId: "56",
+            conversationTitle: "PwrAgent Mini Dev Group / Test Thread",
+            summary:
+              "Slow Mode dropped stream_partial: slow-mode for conversation PwrAgent Mini Dev Group / Test Thread, thread Rate Limit Test",
+            threadId: "019ead15-b0bf-7f43-bfff-eb70c8cc1250",
+            createdAt: Date.now(),
+            payload: {
+              conversationKind: "topic",
+              conversationParentId: "-1003841603622",
+              conversationTitle: "PwrAgent Mini Dev Group / Test Thread",
+              localThreadTitle: "Rate Limit Test",
+            },
+          },
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<MessagingActivityScreen desktopApi={desktopApi} />);
+
+    await waitFor(() => {
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+    });
+    expect((await screen.findByText("Telegram")).closest("button"))
+      .toHaveTextContent("Provider");
+    expect(screen.getByText("PwrAgent Mini Dev Group / Test Thread").closest("button"))
+      .toHaveTextContent("Conversation");
+    expect(screen.getByText("Rate Limit Test").closest("button"))
+      .toHaveTextContent("Thread");
+    expect(screen.getByText("-1003841603622").closest("button"))
+      .toHaveTextContent("Supergroup ID");
+    expect(screen.getByText("56").closest("button"))
+      .toHaveTextContent("Topic ID");
+  });
+
   it("shows Slack workspace IDs from bucket metadata", async () => {
     const desktopApi = {
       listMessagingActivity: vi.fn(async () => ({

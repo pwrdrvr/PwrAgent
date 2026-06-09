@@ -861,7 +861,9 @@ export class DesktopMessagingRuntime {
       fullAccessControls: async () =>
         (await this.loadConfig()).fullAccessControls,
       onBindingChanged: () => this.broadcastBindingsChanged(),
-      onDeliveryBudgetEvent: (event) => this.handleDeliveryBudgetEvent(event),
+      onDeliveryBudgetEvent: (event) => {
+        void this.handleDeliveryBudgetEvent(event);
+      },
       onFullAccessPolicyViolation: (event) =>
         this.recordFullAccessPolicyViolation(adapter.channel, event),
     });
@@ -1338,9 +1340,9 @@ export class DesktopMessagingRuntime {
     });
   }
 
-  private handleDeliveryBudgetEvent(
+  private async handleDeliveryBudgetEvent(
     event: MessagingControllerDeliveryBudgetEvent,
-  ): void {
+  ): Promise<void> {
     const scopeId = event.scope?.id ?? "unknown";
     const reason = event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
     const retryDelayMs = event.retryAt !== undefined
@@ -1348,7 +1350,6 @@ export class DesktopMessagingRuntime {
       : undefined;
     const isCoolOff = reason === "cool-off";
     const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
-    const targetPhrase = describeDeliveryBudgetTarget(event);
     const targetKey = deliveryBudgetTargetKey(event);
 
     const diagnosticKey = [
@@ -1368,6 +1369,8 @@ export class DesktopMessagingRuntime {
       return;
     }
     this.deliveryBudgetDiagnosticLastLoggedAt.set(diagnosticKey, event.at);
+    const localThreadTitle = await this.resolveDeliveryBudgetThreadTitle(event);
+    const targetPhrase = describeDeliveryBudgetTarget(event, localThreadTitle);
 
     messagingLog.info("messaging delivery budget constrained", {
       bindingId: event.bindingId,
@@ -1407,6 +1410,7 @@ export class DesktopMessagingRuntime {
       backend: event.backend,
       threadId: event.threadId,
       bindingId: event.bindingId,
+      conversation: event.conversation,
       summary: event.outcome === "deferred"
         ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
         : `${modeLabel} dropped ${event.priority}: ${reason}${targetPhrase}`,
@@ -1414,8 +1418,14 @@ export class DesktopMessagingRuntime {
       payload: {
         type: isCoolOff ? "cool-off" : "slow-mode",
         bindingId: event.bindingId,
+        conversationKind: event.conversation?.kind,
+        conversationParentId: event.conversation?.parentId,
+        conversationTitle: event.conversation
+          ? describeConversation(event.conversation)
+          : undefined,
         intentId: event.intentId,
         intentKind: event.intentKind,
+        localThreadTitle,
         outcome: event.outcome,
         priority: event.priority,
         reason,
@@ -1446,6 +1456,31 @@ export class DesktopMessagingRuntime {
       lastFailureReason: clipStatusText(info.lastFailureReason),
       startedAt: info.observedAt ?? Date.now(),
     });
+  }
+
+  private async resolveDeliveryBudgetThreadTitle(
+    event: MessagingControllerDeliveryBudgetEvent,
+  ): Promise<string | undefined> {
+    if (!event.backend || !event.threadId) {
+      return undefined;
+    }
+    try {
+      const snapshot = await this.options.backendBridge.getNavigationSnapshot({
+        backend: "all",
+      });
+      const thread = snapshot.threads.find(
+        (candidate) =>
+          candidate.source === event.backend && candidate.id === event.threadId,
+      );
+      return clipStatusText(thread?.title);
+    } catch (error) {
+      messagingLog.debug("messaging budget diagnostic thread-title lookup failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: event.threadId,
+      });
+      return undefined;
+    }
   }
 
   private addPlatformDegradationReason(
@@ -1784,7 +1819,9 @@ export class DesktopMessagingRuntime {
         threadId: params.threadId,
         bindingId: params.bindingId,
         conversationId: params.conversation?.id,
-        conversationTitle: params.conversation?.title,
+        conversationTitle: params.conversation
+          ? describeConversation(params.conversation)
+          : undefined,
         actorId: params.actor?.platformUserId,
         actorDisplayName: params.actor?.displayName,
         summary: params.summary,
@@ -2172,16 +2209,21 @@ function sanitizeDeliveryScope(
 
 function describeDeliveryBudgetTarget(
   event: MessagingControllerDeliveryBudgetEvent,
+  localThreadTitle?: string,
 ): string {
   const pieces: string[] = [];
-  if (event.bindingId) {
+  if (event.conversation) {
+    pieces.push(`conversation ${shortIdentifier(describeConversation(event.conversation), 80)}`);
+  } else if (event.bindingId) {
     pieces.push(`binding ${shortIdentifier(event.bindingId)}`);
   }
-  if (event.threadId) {
+  if (localThreadTitle) {
+    pieces.push(`thread ${shortIdentifier(localThreadTitle, 48)}`);
+  } else if (event.threadId) {
     pieces.push(`thread ${shortIdentifier(event.threadId)}`);
   }
-  if (event.scope) {
-    pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id)}`);
+  if (event.scope && !event.conversation) {
+    pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id, 48)}`);
   }
   return pieces.length > 0 ? ` for ${pieces.join(", ")}` : "";
 }
@@ -2199,12 +2241,14 @@ function deliveryBudgetTargetKey(
   return pieces.length > 0 ? pieces.join("|") : "scope";
 }
 
-function shortIdentifier(value: string): string {
+function shortIdentifier(value: string, maxLength = 24): string {
   const normalized = clipStatusText(value) ?? value;
-  if (normalized.length <= 24) {
+  if (normalized.length <= maxLength) {
     return normalized;
   }
-  return `${normalized.slice(0, 10)}...${normalized.slice(-8)}`;
+  const prefixLength = Math.max(10, Math.ceil((maxLength - 3) * 0.6));
+  const suffixLength = Math.max(8, maxLength - 3 - prefixLength);
+  return `${normalized.slice(0, prefixLength)}...${normalized.slice(-suffixLength)}`;
 }
 
 function clipStatusText(value: string | undefined): string | undefined {
@@ -2216,7 +2260,7 @@ function clipStatusText(value: string | undefined): string | undefined {
 }
 
 function describeConversation(
-  conversation: MessagingBindingRecord["channel"]["conversation"],
+  conversation: MessagingChannelRef["conversation"],
 ): string {
   const pieces = [
     conversation.ancestorTitle,

@@ -1498,6 +1498,13 @@ describe("DesktopMessagingRuntime", () => {
       backend: "codex",
       bindingId: "binding:telegram:topic:-1003841603622:10345:codex:thread-1",
       channel: "telegram",
+      conversation: {
+        id: "10345",
+        kind: "topic",
+        parentId: "-1003841603622",
+        parentTitle: "PwrAgent Mini Dev Group",
+        title: "Test Thread",
+      },
       intentId: "status:1",
       intentKind: "status",
       outcome: "dropped",
@@ -1516,15 +1523,22 @@ describe("DesktopMessagingRuntime", () => {
       runtime as unknown as {
         handleDeliveryBudgetEvent: (
           event: MessagingControllerDeliveryBudgetEvent,
-        ) => void;
+        ) => Promise<void>;
       }
     ).handleDeliveryBudgetEvent.bind(runtime);
 
-    handleDeliveryBudgetEvent(event);
-    handleDeliveryBudgetEvent({
+    await handleDeliveryBudgetEvent(event);
+    await handleDeliveryBudgetEvent({
       ...event,
       at: event.at + 1000,
       bindingId: "binding:telegram:topic:-1003841603622:9387:codex:thread-2",
+      conversation: {
+        id: "9387",
+        kind: "topic",
+        parentId: "-1003841603622",
+        parentTitle: "PwrAgent Mini Dev Group",
+        title: "Release Thread",
+      },
       intentId: "status:2",
       threadId: "thread-2",
     });
@@ -1534,13 +1548,13 @@ describe("DesktopMessagingRuntime", () => {
         health: "degraded",
         degradationReasons: expect.arrayContaining([
           expect.objectContaining({
-            message: expect.stringContaining("binding binding:te...thread-1"),
+            message: expect.stringContaining("conversation PwrAgent Mini Dev Group / Test Thread"),
             scope: expect.objectContaining({
               id: "telegram:group:-1003841603622",
             }),
           }),
           expect.objectContaining({
-            message: expect.stringContaining("binding binding:te...thread-2"),
+            message: expect.stringContaining("conversation PwrAgent Mini Dev Group / Release Thread"),
             scope: expect.objectContaining({
               id: "telegram:group:-1003841603622",
             }),
@@ -1553,7 +1567,7 @@ describe("DesktopMessagingRuntime", () => {
     const { getAppStateDb } = await import("../state/app-state");
     const rows = getAppStateDb().raw
       .prepare(
-        `SELECT binding_id, thread_id, summary, payload
+        `SELECT binding_id, conversation_id, conversation_title, thread_id, summary, payload
          FROM messaging_activity_log
          WHERE kind = ?
          ORDER BY id DESC
@@ -1562,6 +1576,8 @@ describe("DesktopMessagingRuntime", () => {
       .all("diagnostic") as
         {
             binding_id: string;
+            conversation_id: string | null;
+            conversation_title: string | null;
             payload: string;
             summary: string;
             thread_id: string;
@@ -1570,16 +1586,22 @@ describe("DesktopMessagingRuntime", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       binding_id: "binding:telegram:topic:-1003841603622:9387:codex:thread-2",
-      summary: expect.stringContaining("binding binding:te...thread-2"),
+      summary: expect.stringContaining("conversation PwrAgent Mini Dev Group / Release Thread"),
       thread_id: "thread-2",
     });
     expect(rows[1]).toMatchObject({
       binding_id: event.bindingId,
-      summary: expect.stringContaining("binding binding:te...thread-1"),
+      conversation_id: "10345",
+      conversation_title: "PwrAgent Mini Dev Group / Test Thread",
+      summary: expect.stringContaining("conversation PwrAgent Mini Dev Group / Test Thread"),
       thread_id: "thread-1",
     });
     expect(JSON.parse(rows[1]?.payload ?? "{}")).toMatchObject({
       bindingId: event.bindingId,
+      conversationKind: "topic",
+      conversationParentId: "-1003841603622",
+      conversationTitle: "PwrAgent Mini Dev Group / Test Thread",
+      localThreadTitle: "Thread one",
       scopeId: "telegram:group:-1003841603622",
       scopeKind: "group",
       threadId: "thread-1",

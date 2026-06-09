@@ -421,6 +421,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   backend?: AppServerBackendKind;
   bindingId?: string;
   channel: MessagingChannelKind;
+  conversation?: MessagingChannelRef["conversation"];
   intentId: string;
   intentKind: MessagingSurfaceIntent["kind"];
   outcome: "deferred" | "dropped";
@@ -9434,6 +9435,7 @@ export class MessagingController {
             backend: binding?.backend,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
+            conversation: binding?.channel.conversation,
             intentId: routedIntent.id,
             intentKind: routedIntent.kind,
             outcome: "deferred",
@@ -9468,6 +9470,7 @@ export class MessagingController {
             backend: binding?.backend,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
+            conversation: binding?.channel.conversation,
             intentId: routedIntent.id,
             intentKind: routedIntent.kind,
             outcome: "dropped",
