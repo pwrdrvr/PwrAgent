@@ -122,6 +122,7 @@ import {
   isAcpBackendId,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
+  DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   TASK_MONITOR_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
@@ -165,6 +166,7 @@ import {
   buildTaskMonitorDynamicToolErrorResponse,
   buildTaskMonitorDynamicToolSpecs,
   handleTaskMonitorDynamicToolCall,
+  normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
   normalizePreferredMonitorModel,
   normalizePreferredMonitorReasoningEffort,
@@ -1423,6 +1425,7 @@ type TaskMonitorDelegationRecord = {
   monitorId: string;
   monitorThreadId?: string;
   parentThreadId: string;
+  heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
@@ -10220,18 +10223,23 @@ export class DesktopBackendRegistry {
     const monitorId = `monitor-${randomUUID()}`;
     const pollIntervalSeconds =
       normalizePollIntervalSeconds(args.pollIntervalSeconds) ?? 20;
+    const heartbeatIntervalSeconds =
+      normalizeHeartbeatIntervalSeconds(args.heartbeatIntervalSeconds) ??
+      DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
     const preferredModel = normalizePreferredMonitorModel(args.preferredModel);
     const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
       args.preferredReasoningEffort,
     );
     const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
     const parentAgentGuidance = buildMonitorParentAgentGuidance({
+      heartbeatIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
       finalHandoffPrompt: args.finalHandoffPrompt,
+      heartbeatIntervalSeconds,
       monitorContext: args.monitorContext,
       monitorId,
       parentThreadId,
@@ -10244,6 +10252,7 @@ export class DesktopBackendRegistry {
       backend: "codex",
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
+      heartbeatIntervalSeconds,
       monitorId,
       parentThreadId,
       pollIntervalSeconds,
@@ -10262,6 +10271,7 @@ export class DesktopBackendRegistry {
         preferredModel,
         preferredReasoningEffort,
         pollIntervalSeconds,
+        heartbeatIntervalSeconds,
         startupTimeoutSeconds,
         parentAgentGuidance,
         prompt,
