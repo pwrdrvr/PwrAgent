@@ -281,6 +281,9 @@ function approvalDisplayCommand(params: Record<string, unknown>): string {
     return parsedCommand;
   }
 
+  const promptCommand =
+    commandFromApprovalText(firstStringByKeys(params, ["prompt"])) ||
+    commandFromApprovalText(firstStringByKeys(params, ["reason"]));
   const rawCommand = firstStringByKeys(params, [
     "command",
     "cmd",
@@ -289,7 +292,19 @@ function approvalDisplayCommand(params: Record<string, unknown>): string {
     "shellCommand",
   ]);
 
+  if (promptCommand && (!rawCommand || isGenericShellToolTitle(rawCommand))) {
+    return promptCommand;
+  }
   return rawCommand ? stripShellLauncher(rawCommand) : "";
+}
+
+function commandFromApprovalText(text: string): string {
+  const match = /^Requesting approval to Running:\s*(.+)$/imu.exec(text);
+  return match?.[1]?.trim() || "";
+}
+
+function isGenericShellToolTitle(command: string): boolean {
+  return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
 function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {

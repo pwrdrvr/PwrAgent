@@ -58,6 +58,27 @@ describe("buildApprovalIntent", () => {
     expect(intent.body).not.toContain("```shell\nBash\n```");
   });
 
+  it("derives Kimi approval commands from prompt text when command is a shell title", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-kimi-running",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-1",
+          prompt: "Requesting approval to Running: npm view pnpm",
+          command: "Bash",
+        },
+      },
+    });
+
+    expect(intent.body).toContain("Requesting approval to Running: npm view pnpm");
+    expect(intent.body).toContain("```shell\nnpm view pnpm\n```");
+    expect(intent.body).not.toContain("```shell\nBash\n```");
+  });
+
   it("preserves backend-provided decision labels when they map to known decisions", () => {
     const intent = buildApprovalIntent({
       id: "approval-2",

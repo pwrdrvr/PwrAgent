@@ -127,10 +127,19 @@ function decisionFromOption(
 }
 
 function extractCommand(params: AppServerPendingRequestNotification["params"]): string | undefined {
+  const promptCommand =
+    commandFromApprovalText(stringField(params.prompt)) ??
+    commandFromApprovalText(stringField(params.reason));
   const direct =
     stringField(params.command) ??
     stringField(params.shellCommand) ??
     stringField(params.commandText);
+  if (direct && !isGenericShellToolTitle(direct)) {
+    return direct;
+  }
+  if (promptCommand) {
+    return promptCommand;
+  }
   if (direct) {
     return direct;
   }
@@ -138,10 +147,23 @@ function extractCommand(params: AppServerPendingRequestNotification["params"]): 
   const command = params.command;
   if (command && typeof command === "object" && !Array.isArray(command)) {
     const record = command as Record<string, unknown>;
-    return stringField(record.command) ?? stringField(record.cmd) ?? stringField(record.text);
+    return (
+      stringField(record.command) ??
+      stringField(record.cmd) ??
+      stringField(record.text)
+    );
   }
 
   return undefined;
+}
+
+function commandFromApprovalText(text: string | undefined): string | undefined {
+  const match = /^Requesting approval to Running:\s*(.+)$/imu.exec(text ?? "");
+  return match?.[1]?.trim() || undefined;
+}
+
+function isGenericShellToolTitle(command: string): boolean {
+  return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
 function extractFileContext(

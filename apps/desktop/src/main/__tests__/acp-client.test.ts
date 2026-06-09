@@ -478,6 +478,59 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("extracts Kimi shell commands from approval prompt text", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      agentDisplayName: "Kimi Code CLI",
+      store,
+      transport,
+      now: () => 1000,
+      onRequest: (request) => {
+        requests.push(request);
+        return { decision: "accept" };
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "run_shell_command_1",
+          kind: "execute",
+          title: "Bash",
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: "Requesting approval to Running: npm view pnpm",
+              },
+            },
+          ],
+        },
+        options: [{ optionId: "proceed_once", kind: "allow_once" }],
+      },
+      0,
+    );
+
+    expect(requests[0]).toMatchObject({
+      params: {
+        prompt: "Requesting approval to Running: npm view pnpm",
+        command: "npm view pnpm",
+        displayCommand: "npm view pnpm",
+      },
+    });
+  });
+
   it("captures ACP runtime modes and models from session setup", async () => {
     const runtimeEvents: unknown[] = [];
     const transport = new FakeAcpAgentTransport({

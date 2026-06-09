@@ -113,6 +113,37 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("extracts Kimi shell commands from raw input and command JSON content", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "2:tool_FepVvUHmSL1YkNrQrdMD9alt",
+        kind: "execute",
+        title: "Bash",
+        status: "in_progress",
+        rawInput: { command: "npm view pnpm" },
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "{\"command\":\"npm view pnpm\"}",
+            },
+          },
+        ],
+      },
+    });
+
+    const item = notifications[0]?.params.item as Record<string, unknown> | undefined;
+    expect(item).toMatchObject({
+      id: "2:tool_FepVvUHmSL1YkNrQrdMD9alt",
+      command: "npm view pnpm",
+    });
+    expect(item?.data).toBeUndefined();
+  });
+
   it("does not render ACP topic updates as live tool activity", () => {
     expect(
       acpToolUpdateNotifications({

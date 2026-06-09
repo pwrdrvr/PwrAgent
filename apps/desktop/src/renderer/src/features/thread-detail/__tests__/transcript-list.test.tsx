@@ -2986,6 +2986,36 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("derives Kimi approval commands from prompt text when command is a shell title", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            prompt: "Requesting approval to Running: npm view pnpm",
+            command: "Bash",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Requesting approval to Running: npm view pnpm/)).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "npm view pnpm"
+    );
+    expect(container.querySelector(".transcript-request pre code")).not.toHaveTextContent(
+      "Bash"
+    );
+  });
+
   it("prefers parsed command actions for command approval display", () => {
     const { container } = render(
       <TranscriptList

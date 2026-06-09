@@ -23,6 +23,11 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
+import {
+  extractCommandFromText,
+  readAcpToolCommand,
+  readAcpToolText,
+} from "./acp-command-extraction.js";
 import type {
   AcpSessionMetadata,
   AcpSessionStore,
@@ -1218,7 +1223,10 @@ function permissionPrompt(
   toolCall: Record<string, unknown>,
 ): string {
   const contentText = readToolCallText(toolCall.content);
-  if (contentText && !extractCommandFromText(contentText)) {
+  if (
+    contentText &&
+    (!extractCommandFromText(contentText) || isApprovalPromptText(contentText))
+  ) {
     return contentText;
   }
   const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
@@ -1227,84 +1235,19 @@ function permissionPrompt(
     : `${requesterName} wants to run ${title}`;
 }
 
+function isApprovalPromptText(text: string): boolean {
+  return /^Requesting approval to Running:\s*/imu.test(text);
+}
+
 function readToolCallText(value: unknown): string | undefined {
-  return readAcpContentText(value)?.trim() || undefined;
+  return readAcpToolText(value);
 }
 
 function permissionCommand(
   title: string,
   toolCall: Record<string, unknown>,
 ): string {
-  return (
-    readDirectToolCommand(toolCall) ??
-    extractCommandFromText(readToolCallText(toolCall.content)) ??
-    title
-  );
-}
-
-function readDirectToolCommand(
-  toolCall: Record<string, unknown>,
-): string | undefined {
-  for (const key of [
-    "command",
-    "cmd",
-    "displayCommand",
-    "shellCommand",
-    "commandText",
-  ]) {
-    const value = toolCall[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function extractCommandFromText(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  const trimmed = text.trim();
-  const parsedCommand = extractCommandFromJsonText(trimmed);
-  if (parsedCommand) {
-    return parsedCommand;
-  }
-  const match = /"command"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(trimmed);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(`"${match[1]}"`);
-  } catch {
-    return (
-      match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim() || undefined
-    );
-  }
-}
-
-function extractCommandFromJsonText(text: string): string | undefined {
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-    const record = parsed as Record<string, unknown>;
-    for (const key of [
-      "command",
-      "cmd",
-      "displayCommand",
-      "shellCommand",
-      "commandText",
-    ]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) {
-        return value.trim();
-      }
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
+  return readAcpToolCommand(toolCall) ?? title;
 }
 
 function permissionOutcomeFromResponse(
