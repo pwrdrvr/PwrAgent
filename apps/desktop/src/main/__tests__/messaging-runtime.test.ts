@@ -21,6 +21,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import type { MessagingControllerDeliveryBudgetEvent } from "../messaging/core/messaging-controller";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,
@@ -1485,6 +1486,83 @@ describe("DesktopMessagingRuntime", () => {
     expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
       eventId: "evt_entered",
       eventType: "im.chat.access_event.bot_p2p_chat_entered_v1",
+    });
+  });
+
+  it("names the constrained binding in delivery budget diagnostics", async () => {
+    const { runtime } = await createRuntimeHarness();
+    await runtime.start();
+
+    const event: MessagingControllerDeliveryBudgetEvent = {
+      at: Date.now(),
+      backend: "codex",
+      bindingId: "binding:telegram:topic:-1003841603622:10345:codex:thread-1",
+      channel: "telegram",
+      intentId: "status:1",
+      intentKind: "status",
+      outcome: "dropped",
+      priority: "routine_status",
+      reason: "budget-exhausted",
+      scope: {
+        platform: "telegram",
+        id: "telegram:group:-1003841603622",
+        kind: "group",
+        label: "PwrAgent Mini Dev",
+      },
+      slowMode: true,
+      threadId: "thread-1",
+    };
+
+    (
+      runtime as unknown as {
+        handleDeliveryBudgetEvent: (
+          event: MessagingControllerDeliveryBudgetEvent,
+        ) => void;
+      }
+    ).handleDeliveryBudgetEvent(event);
+
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        health: "degraded",
+        degradationReasons: [
+          expect.objectContaining({
+            message: expect.stringContaining("binding binding:te...thread-1"),
+            scope: expect.objectContaining({
+              id: "telegram:group:-1003841603622",
+            }),
+          }),
+        ],
+      }),
+    ]);
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT binding_id, thread_id, summary, payload
+         FROM messaging_activity_log
+         WHERE kind = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("diagnostic") as
+        | {
+            binding_id: string;
+            payload: string;
+            summary: string;
+            thread_id: string;
+          }
+        | undefined;
+
+    expect(row).toMatchObject({
+      binding_id: event.bindingId,
+      summary: expect.stringContaining("binding binding:te...thread-1"),
+      thread_id: "thread-1",
+    });
+    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+      bindingId: event.bindingId,
+      scopeId: "telegram:group:-1003841603622",
+      scopeKind: "group",
+      threadId: "thread-1",
     });
   });
 

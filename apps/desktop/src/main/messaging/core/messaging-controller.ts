@@ -674,11 +674,18 @@ export class MessagingController {
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
     const threadId = threadIdForBackendEvent(event);
-    if (!threadId && isBackendAccountMetadataEvent(event)) {
+    if (!threadId && event.notification.method === "account/updated") {
       await this.refreshStatusSurfacesForBackend(
         event.backend,
         event.notification.method,
       );
+      return;
+    }
+    if (!threadId && event.notification.method === "account/rateLimits/updated") {
+      this.logger.debug?.("messaging skipped bound status refresh for backend rate limits", {
+        backend: event.backend,
+        method: event.notification.method,
+      });
       return;
     }
     if (!threadId) {
@@ -10889,11 +10896,6 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
     return params.threadId;
   }
   return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
-}
-
-function isBackendAccountMetadataEvent(event: AgentEvent): boolean {
-  return event.notification.method === "account/updated" ||
-    event.notification.method === "account/rateLimits/updated";
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {

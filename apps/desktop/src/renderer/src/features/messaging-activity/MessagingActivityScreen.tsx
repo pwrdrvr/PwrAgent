@@ -221,6 +221,22 @@ function copyFieldsForEntry(
       value: entry.actorId,
     });
   }
+  if (entry.kind === "diagnostic") {
+    if (entry.bindingId) {
+      fields.push({
+        key: "binding",
+        label: "Binding ID",
+        value: entry.bindingId,
+      });
+    }
+    if (entry.threadId) {
+      fields.push({
+        key: "thread",
+        label: "Thread ID",
+        value: entry.threadId,
+      });
+    }
+  }
 
   const conversationKind =
     typeof entry.payload?.conversationKind === "string"

@@ -1348,6 +1348,7 @@ export class DesktopMessagingRuntime {
       : undefined;
     const isCoolOff = reason === "cool-off";
     const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
+    const targetPhrase = describeDeliveryBudgetTarget(event);
 
     const diagnosticKey = [
       event.channel,
@@ -1389,8 +1390,8 @@ export class DesktopMessagingRuntime {
       kind: "warning",
       key,
       message: event.outcome === "deferred"
-        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}.`
-        : `${modeLabel} active; dropped ${event.priority} (${reason}).`,
+        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
+        : `${modeLabel} active; dropped ${event.priority} (${reason})${targetPhrase}.`,
       scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
       startedAt: event.at,
       expiresAt,
@@ -1401,11 +1402,12 @@ export class DesktopMessagingRuntime {
       threadId: event.threadId,
       bindingId: event.bindingId,
       summary: event.outcome === "deferred"
-        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}`
-        : `${modeLabel} dropped ${event.priority}: ${reason}`,
+        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
+        : `${modeLabel} dropped ${event.priority}: ${reason}${targetPhrase}`,
       createdAt: event.at,
       payload: {
         type: isCoolOff ? "cool-off" : "slow-mode",
+        bindingId: event.bindingId,
         intentId: event.intentId,
         intentKind: event.intentKind,
         outcome: event.outcome,
@@ -1414,7 +1416,10 @@ export class DesktopMessagingRuntime {
         retryAt: event.retryAt,
         retryDelayMs,
         scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
+        scopeId,
+        scopeKind: event.scope?.kind,
         slowModeActive: event.slowMode,
+        threadId: event.threadId,
       },
     });
   }
@@ -2157,6 +2162,30 @@ function sanitizeDeliveryScope(
     label: clipStatusText(scope.label),
     bucketId: clipStatusText(scope.bucketId),
   };
+}
+
+function describeDeliveryBudgetTarget(
+  event: MessagingControllerDeliveryBudgetEvent,
+): string {
+  const pieces: string[] = [];
+  if (event.bindingId) {
+    pieces.push(`binding ${shortIdentifier(event.bindingId)}`);
+  }
+  if (event.threadId) {
+    pieces.push(`thread ${shortIdentifier(event.threadId)}`);
+  }
+  if (event.scope) {
+    pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id)}`);
+  }
+  return pieces.length > 0 ? ` for ${pieces.join(", ")}` : "";
+}
+
+function shortIdentifier(value: string): string {
+  const normalized = clipStatusText(value) ?? value;
+  if (normalized.length <= 24) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 10)}...${normalized.slice(-8)}`;
 }
 
 function clipStatusText(value: string | undefined): string | undefined {

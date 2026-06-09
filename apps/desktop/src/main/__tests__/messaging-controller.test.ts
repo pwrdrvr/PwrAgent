@@ -2666,6 +2666,26 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("does not refresh every bound status surface for backend rate-limit metadata", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    harness.getNavigationSnapshot.mockClear();
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "account/rateLimits/updated",
+        params: {
+          rateLimits: [],
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses the thread rename event title when the navigation snapshot is stale", async () => {
     const staleNavigation = buildNavigationSnapshot();
     staleNavigation.threads[0] = {
