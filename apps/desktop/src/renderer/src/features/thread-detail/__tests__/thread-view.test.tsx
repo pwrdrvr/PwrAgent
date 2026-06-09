@@ -264,7 +264,6 @@ describe("ThreadView", () => {
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     // Backend availability + account + rate limits now live under their own
     // Provider status tab (covered in ProviderStatusPanel.test.tsx). Here we
     // just confirm the tab is present in the rail.

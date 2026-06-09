@@ -2378,7 +2378,6 @@ export function ThreadView(props: ThreadViewProps) {
           backends={props.backends}
           desktopApi={props.desktopApi}
           onActiveTabChange={onActiveContextTabChange}
-          onPinnedChange={onContextRailPinnedChange}
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}

@@ -16,7 +16,6 @@ import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
   InfoIcon,
-  PinIcon,
   ProjectsIcon,
   PullRequestIcon,
   ServerIcon,
@@ -58,7 +57,6 @@ type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
   desktopApi?: DesktopApi;
-  onPinnedChange?: (pinned: boolean) => void;
   onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -340,10 +338,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     });
   }, [tooltip]);
 
-  const updatePinned = (nextPinned: boolean): void => {
-    props.onPinnedChange?.(nextPinned);
-  };
-
   const selectTab = (tab: ContextTabId): void => {
     props.onActiveTabChange(tab);
     if (!pinned) {
@@ -465,28 +459,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             <div className="context-rail__tablist-spacer" aria-hidden="true" />
           ) : null}
           {bottomTabs.map((tab) => renderTab(tab))}
-        </div>
-        <div className="context-rail__spine-footer">
-          <button
-            aria-label={pinned ? "Unpin context rail" : "Pin context rail"}
-            aria-pressed={pinned}
-            className={`context-rail__pin${pinned ? " is-active" : ""}`}
-            title={pinned ? "Unpin context rail" : "Pin context rail"}
-            type="button"
-            onClick={() => {
-              const next = !pinned;
-              updatePinned(next);
-              if (next) {
-                setRevealed(true);
-              } else {
-                clearTimeout(hideTimerRef.current);
-                clearRevealTimer();
-                setRevealed(false);
-              }
-            }}
-          >
-            <PinIcon size={16} filled={pinned} aria-hidden="true" />
-          </button>
         </div>
       </div>
 

@@ -754,6 +754,14 @@ textarea,
   padding: 2px;
   border-radius: 8px;
   background: transparent;
+}
+
+/* The thread header is a window-drag region (`.thread-header * { drag }`),
+   which would re-mark the chip's glyph as draggable and eat clicks on it.
+   Force the whole control no-drag so every pixel is clickable — mirrors
+   `.messaging-status-bar *`. */
+.panel-toggle,
+.panel-toggle * {
   -webkit-app-region: no-drag;
 }
 
@@ -8968,13 +8976,6 @@ textarea,
   flex: 1 1 auto;
 }
 
-.context-rail__spine-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
 .context-rail__resize-handle {
   top: 0;
   bottom: 0;
@@ -8982,8 +8983,7 @@ textarea,
   z-index: 3;
 }
 
-.context-rail__tab,
-.context-rail__pin {
+.context-rail__tab {
   position: relative;
   display: inline-flex;
   width: 34px;
@@ -9002,9 +9002,7 @@ textarea,
 }
 
 .context-rail__tab:hover,
-.context-rail__tab:focus-visible,
-.context-rail__pin:hover,
-.context-rail__pin:focus-visible {
+.context-rail__tab:focus-visible {
   border-color: var(--border-subtle);
   background: var(--bg-row-active);
   color: var(--text-primary);
@@ -9025,12 +9023,6 @@ textarea,
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: var(--accent);
-}
-
-.context-rail__pin.is-active {
-  color: var(--accent-bright);
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
 }
 
 /* Portal-rendered tooltip rendered by the useViewportTooltip hook.
@@ -11829,11 +11821,6 @@ textarea,
 
   .context-rail__tablist-spacer {
     display: none;
-  }
-
-  .context-rail__spine-footer {
-    flex-direction: row;
-    margin-left: auto;
   }
 
   .context-panel {
