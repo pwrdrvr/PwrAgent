@@ -165,6 +165,7 @@ import {
   handleTaskMonitorDynamicToolCall,
   normalizePollIntervalSeconds,
   normalizePreferredMonitorModel,
+  normalizePreferredMonitorReasoningEffort,
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
@@ -1422,6 +1423,7 @@ type TaskMonitorDelegationRecord = {
   parentThreadId: string;
   pollIntervalSeconds: number;
   preferredModel: string;
+  preferredReasoningEffort: string;
   task: string;
 };
 
@@ -10216,12 +10218,17 @@ export class DesktopBackendRegistry {
     const pollIntervalSeconds =
       normalizePollIntervalSeconds(args.pollIntervalSeconds) ?? 20;
     const preferredModel = normalizePreferredMonitorModel(args.preferredModel);
+    const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
+      args.preferredReasoningEffort,
+    );
     const prompt = buildMonitorDelegationPrompt({
       finalHandoffPrompt: args.finalHandoffPrompt,
       monitorContext: args.monitorContext,
       monitorId,
       parentThreadId,
       pollIntervalSeconds,
+      preferredModel,
+      preferredReasoningEffort,
       task,
     });
     this.taskMonitorDelegations.set(monitorId, {
@@ -10232,6 +10239,7 @@ export class DesktopBackendRegistry {
       parentThreadId,
       pollIntervalSeconds,
       preferredModel,
+      preferredReasoningEffort,
       task,
     });
 
@@ -10242,6 +10250,7 @@ export class DesktopBackendRegistry {
         monitorId,
         parentThreadId,
         preferredModel,
+        preferredReasoningEffort,
         pollIntervalSeconds,
         prompt,
       },

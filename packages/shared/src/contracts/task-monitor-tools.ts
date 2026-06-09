@@ -3,6 +3,7 @@ import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-se
 export const TASK_MONITOR_TOOL_NAMESPACE = "pwragent_task_monitors";
 
 export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.4-mini";
+export const DEFAULT_TASK_MONITOR_REASONING_EFFORT = "low";
 export const DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS = 20;
 
 export const TASK_MONITOR_OPERATION_NAMES = [
@@ -24,6 +25,7 @@ export type CreateMonitorDelegationToolArgs = {
   monitorContext?: string;
   pollIntervalSeconds?: number;
   preferredModel?: string;
+  preferredReasoningEffort?: string;
   finalHandoffPrompt?: string;
 };
 
@@ -65,6 +67,7 @@ export type TaskMonitorDelegationData = {
   monitorId: string;
   parentThreadId: ThreadIdentifier;
   preferredModel: string;
+  preferredReasoningEffort: string;
   pollIntervalSeconds: number;
   prompt: string;
 };
@@ -133,4 +136,3 @@ export function isTaskMonitorOperationName(
     TASK_MONITOR_OPERATION_NAMES.includes(value as TaskMonitorOperationName)
   );
 }
-
