@@ -299,10 +299,10 @@ describe("MessagingController", () => {
           directoryLabel: "PwrAgent",
           directoryPath: "/repo/pwragent",
           executionMode: "default",
-          fastMode: undefined,
-          model: undefined,
+          fastMode: false,
+          model: "gpt-5.3-codex",
           prompt: "",
-          reasoningEffort: undefined,
+          reasoningEffort: "low",
           serviceTier: undefined,
           workMode: "local",
         }),
@@ -3432,6 +3432,9 @@ describe("MessagingController", () => {
     };
     const harness = await createHarness({
       navigation,
+      updateDirectoryLaunchpad: async () => {
+        throw new Error("sticky update failed");
+      },
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [
@@ -3491,6 +3494,20 @@ describe("MessagingController", () => {
         expect.objectContaining({ id: "browse:new:reasoning" }),
       ]),
     });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Kimi"));
+
+    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    expect(materializeRequest).toMatchObject({
+      launchpad: expect.objectContaining({
+        backend: "acp:kimi",
+        executionMode: "default",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    });
+    expect(materializeRequest?.launchpad.fastMode).toBeUndefined();
+    expect(materializeRequest?.launchpad.reasoningEffort).toBeUndefined();
+    expect(materializeRequest?.launchpad.serviceTier).toBeUndefined();
   });
 
   it("includes enabled ACP backends in the messaging new-thread provider picker", async () => {
