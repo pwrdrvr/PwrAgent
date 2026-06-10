@@ -109,6 +109,7 @@ import {
   type ThreadExecutionMode,
   type ThreadIdentifier,
   type ThreadOverlayState,
+  type ThreadSubAgentSummary,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -122,6 +123,18 @@ import {
   isAcpBackendId,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
+  DEFAULT_TASK_MONITOR_MODEL,
+  DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
+  DEFAULT_TASK_MONITOR_REASONING_EFFORT,
+  DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
+  TASK_MONITOR_TOOL_NAMESPACE,
+  type CompleteMonitoringToolArgs,
+  type CreateMonitorDelegationToolArgs,
+  type InjectMonitorProgressToolArgs,
+  type TaskMonitorCompletionSource,
+  type TaskMonitorRequest,
+  type TaskMonitorResponse,
+  type TaskMonitorUsageSnapshot,
 } from "@pwragent/shared";
 import {
   ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
@@ -152,6 +165,18 @@ import {
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
+import {
+  buildMonitorParentAgentGuidance,
+  buildMonitorDelegationPrompt,
+  buildTaskMonitorDynamicToolErrorResponse,
+  buildTaskMonitorDynamicToolSpecs,
+  handleTaskMonitorDynamicToolCall,
+  normalizeHeartbeatIntervalSeconds,
+  normalizePollIntervalSeconds,
+  normalizePreferredMonitorModel,
+  normalizePreferredMonitorReasoningEffort,
+  readTaskMonitorDynamicToolCall,
+} from "./task-monitor-codex-tools";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
@@ -329,6 +354,7 @@ type BackendClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
+  injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
     ephemeral?: boolean;
@@ -1374,6 +1400,365 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+function readNotificationItemType(notification: AppServerNotification): string | undefined {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const params = readRecord(notification.params);
+  const item = readRecord(params?.item);
+  const type = item?.type;
+  return typeof type === "string" ? type : undefined;
+}
+
+const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
+const TASK_MONITOR_STALE_GRACE_MS = 15_000;
+
+type TaskMonitorDelegationRecord = {
+  activeCommandCount: number;
+  backend: "codex";
+  createdAt: number;
+  cwd?: string;
+  executionMode?: ThreadExecutionMode;
+  finalHandoffPrompt?: string;
+  lastActivityAt: number;
+  latestUsage?: TaskMonitorUsageSnapshot;
+  monitorId: string;
+  monitorThreadId?: string;
+  monitorTurnId?: string;
+  parentThreadId: string;
+  heartbeatIntervalSeconds: number;
+  pollIntervalSeconds: number;
+  preferredModel: string;
+  preferredReasoningEffort: string;
+  recoveryAttempted?: boolean;
+  staleInterruptAttempted?: boolean;
+  startupTimeoutSeconds: number;
+  task: string;
+};
+
+function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
+  operation: TOperation,
+  code: "forbidden" | "internal_error" | "invalid_arguments" | "not_found" | "unsupported_operation",
+  message: string,
+): TaskMonitorResponse<TOperation> {
+  return {
+    ok: false,
+    operation,
+    error: {
+      code,
+      message,
+    },
+  } as TaskMonitorResponse<TOperation>;
+}
+
+function formatTaskMonitorProgressMessage(params: {
+  message: string;
+  status?: InjectMonitorProgressToolArgs["status"];
+  task: string;
+}): string {
+  return [
+    "PwrAgent monitor update",
+    `Task: ${params.task}`,
+    params.status ? `Status: ${params.status}` : undefined,
+    params.message,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatTaskMonitorCompletionMessage(params: {
+  completionSource?: TaskMonitorCompletionSource;
+  details?: string;
+  outcome: CompleteMonitoringToolArgs["outcome"];
+  summary: string;
+  task: string;
+}): string {
+  return [
+    "PwrAgent monitor complete",
+    `Task: ${params.task}`,
+    `Outcome: ${params.outcome}`,
+    params.completionSource?.type === "pwragent_fallback"
+      ? "Completion source: PwrAgent fallback"
+      : undefined,
+    params.summary,
+    params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildTaskMonitorFinalHandoffInput(params: {
+  completionSource?: TaskMonitorCompletionSource;
+  details?: string;
+  finalHandoffPrompt?: string;
+  outcome: CompleteMonitoringToolArgs["outcome"];
+  summary: string;
+  task: string;
+}): string {
+  return [
+    "A lightweight PwrAgent monitor subagent finished a long-running task.",
+    "",
+    `Task: ${params.task}`,
+    `Outcome: ${params.outcome}`,
+    params.completionSource?.type === "pwragent_fallback"
+      ? "Completion source: pwragent_fallback"
+      : undefined,
+    `Summary: ${params.summary}`,
+    params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
+    params.finalHandoffPrompt?.trim()
+      ? ["", "Requested parent-agent follow-up:", params.finalHandoffPrompt.trim()].join("\n")
+      : "",
+    "",
+    "Process this final monitor result. Do not resume polling unless the result explicitly says monitoring is still required.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildTaskMonitorRecoveryPrompt(params: {
+  monitorId: string;
+  task: string;
+  terminalStatus: "completed" | "failed" | "cancelled";
+}): string {
+  return [
+    "PwrAgent monitor recovery instruction:",
+    "",
+    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent_task_monitors.complete_monitoring.`,
+    "You must now report the final monitor result. Use only the monitor task context you already have.",
+    "",
+    `Monitor id: ${params.monitorId}`,
+    `Task: ${params.task}`,
+    "",
+    "Call pwragent_task_monitors.complete_monitoring exactly once.",
+    "If you cannot determine a successful final outcome from the context you have, use outcome \"failure\" and explain that monitoring ended without a determinate result.",
+    "Do not sleep, poll indefinitely, or do unrelated work in this recovery turn.",
+  ].join("\n");
+}
+
+type TaskMonitorTokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  uncachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+type TaskMonitorPricingCatalogEntry = {
+  cachedInputUsdPerMillion: number;
+  inputUsdPerMillion: number;
+  model: string;
+  outputUsdPerMillion: number;
+};
+
+const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = [
+  {
+    model: "gpt-5.5",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
+  },
+  {
+    model: "gpt-5.4",
+    inputUsdPerMillion: 2.5,
+    cachedInputUsdPerMillion: 0.25,
+    outputUsdPerMillion: 15,
+  },
+  {
+    model: "gpt-5.4-mini",
+    inputUsdPerMillion: 0.75,
+    cachedInputUsdPerMillion: 0.075,
+    outputUsdPerMillion: 4.5,
+  },
+];
+
+function buildTaskMonitorUsageSnapshot(params: {
+  model?: string;
+  tokenUsage: unknown;
+}): TaskMonitorUsageSnapshot | undefined {
+  const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
+  if (!tokens) {
+    return undefined;
+  }
+
+  const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  const cost = estimateTaskMonitorUsageCost({
+    cachedInputTokens,
+    model: params.model,
+    outputTokens,
+    uncachedInputTokens,
+  });
+
+  const summary = [
+    `${formatTaskMonitorTokenCount(uncachedInputTokens)} uncached in`,
+    `${formatTaskMonitorTokenCount(cachedInputTokens)} cached`,
+    reasoningOutputTokens > 0
+      ? `${formatTaskMonitorTokenCount(outputTokens)} out (${formatTaskMonitorTokenCount(
+          reasoningOutputTokens,
+        )} reasoning)`
+      : `${formatTaskMonitorTokenCount(outputTokens)} out`,
+    cost ? `${formatTaskMonitorUsd(cost.totalUsd)} list price` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return {
+    ...(cost ? { cost } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    summary,
+    tokenUsage: {
+      cachedInputTokens,
+      inputTokens,
+      outputTokens,
+      reasoningOutputTokens,
+      totalTokens,
+      uncachedInputTokens,
+    },
+  };
+}
+
+function normalizeTaskMonitorTokenUsage(
+  tokenUsage: unknown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const root = readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const container =
+    readRecord(root.tokenUsage) ??
+    readRecord(root.token_usage) ??
+    readRecord(root.info) ??
+    root;
+  const current =
+    readRecord(container.total) ??
+    readRecord(container.total_token_usage) ??
+    readRecord(container.last) ??
+    readRecord(container.last_token_usage) ??
+    container;
+  const direct = readTaskMonitorTokenBreakdown(current);
+  if (direct) {
+    return direct;
+  }
+
+  for (const key of ["data", "payload", "info", "usage", "result"]) {
+    const nested = normalizeTaskMonitorTokenUsage(root[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readTaskMonitorTokenBreakdown(
+  record: Record<string, unknown>,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const explicitTotal = readTaskMonitorNumber(record, "totalTokens", "total_tokens");
+  const inputTokens = readTaskMonitorNumber(record, "inputTokens", "input_tokens");
+  const cachedInputTokens = readTaskMonitorNumber(
+    record,
+    "cachedInputTokens",
+    "cached_input_tokens",
+  );
+  const outputTokens = readTaskMonitorNumber(record, "outputTokens", "output_tokens");
+  const reasoningOutputTokens = readTaskMonitorNumber(
+    record,
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  );
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function readTaskMonitorNumber(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function estimateTaskMonitorUsageCost(params: {
+  cachedInputTokens: number;
+  model?: string;
+  outputTokens: number;
+  uncachedInputTokens: number;
+}): { model: string; totalUsd: number } | undefined {
+  const model = params.model?.trim();
+  if (!model) {
+    return undefined;
+  }
+  const entry = TASK_MONITOR_PRICING_CATALOG.find(
+    (candidate) => candidate.model === model,
+  );
+  if (!entry) {
+    return undefined;
+  }
+  const totalUsd =
+    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
+    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
+    (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
+  return { model, totalUsd };
+}
+
+function formatTaskMonitorTokenCount(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function formatTaskMonitorUsd(value: number): string {
+  if (value > 0 && value < 0.001) {
+    return "<$0.001";
+  }
+  if (value < 0.1) {
+    return new Intl.NumberFormat(undefined, {
+      currency: "USD",
+      maximumFractionDigits: 3,
+      minimumFractionDigits: 3,
+      style: "currency",
+    }).format(Math.ceil(value * 1_000) / 1_000);
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(Math.ceil(value * 100) / 100);
+}
+
 function readTurnStatus(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || !("status" in value)) {
     return undefined;
@@ -1934,15 +2319,19 @@ function isUsageActivityEntry(
       entry.id.startsWith("live-turn-usage-") ||
       entry.summary.startsWith("Latest request usage:") ||
       entry.summary.startsWith("Turn usage:") ||
+      entry.summary.startsWith("Monitor usage:") ||
       entry.summary.startsWith("Usage:"))
   );
 }
 
 function usageActivityScope(
   entry: AppServerThreadActivityEntry,
-): "latest-request" | "total" | "turn" | undefined {
+): "latest-request" | "monitor" | "total" | "turn" | undefined {
   if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
     return "turn";
+  }
+  if (entry.summary.startsWith("Monitor usage:")) {
+    return "monitor";
   }
   if (entry.summary.startsWith("Latest request usage:")) {
     return "latest-request";
@@ -1990,15 +2379,18 @@ function mergeImmutableUsageActivities(params: {
   replay: AppServerThreadReplay;
   activities?: AppServerThreadActivityEntry[];
 }): AppServerThreadReplay {
-  const immutableTurnUsageActivities = params.activities?.filter(
-    (activity) => usageActivityScope(activity) === "turn",
+  const immutableUsageActivities = params.activities?.filter(
+    (activity) => {
+      const scope = usageActivityScope(activity);
+      return scope === "turn" || scope === "monitor";
+    },
   );
-  if (!immutableTurnUsageActivities?.length) {
+  if (!immutableUsageActivities?.length) {
     return params.replay;
   }
 
   let entries = params.replay.entries;
-  for (const activity of immutableTurnUsageActivities) {
+  for (const activity of immutableUsageActivities) {
     const activityScope = usageActivityScope(activity);
     const activityTurnId = activity.turn?.id;
     entries = entries.filter((entry) => {
@@ -2477,6 +2869,11 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly taskMonitorDelegations = new Map<
+    string,
+    TaskMonitorDelegationRecord
+  >();
+  private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   /**
    * Best-effort cache of thread labels keyed by `${backend}:${threadId}`, used
    * only to label native attention/terminal notifications so multiple
@@ -2749,6 +3146,14 @@ export class DesktopBackendRegistry {
         backend === "codex" ? this.threadHasActiveTurn(threadId) : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
+    this.taskMonitorWatchdogTimer = setInterval(() => {
+      void this.checkStaleTaskMonitors().catch((error) => {
+        backendRegistryLog.warn("task monitor stale watchdog failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, TASK_MONITOR_STALE_CHECK_INTERVAL_MS);
+    this.taskMonitorWatchdogTimer.unref?.();
 
     this.isCodexBootstrapDeferredFn =
       options?.isCodexBootstrapDeferred ??
@@ -4785,9 +5190,14 @@ export class DesktopBackendRegistry {
       runtime: acpRuntimeWithModel,
     });
     const dynamicTools =
-      backend === "codex" ? buildAutomationInspectionDynamicToolSpecs() : undefined;
+      backend === "codex"
+        ? [
+            ...buildAutomationInspectionDynamicToolSpecs(),
+            ...buildTaskMonitorDynamicToolSpecs("parent"),
+          ]
+        : undefined;
     if (dynamicTools?.length) {
-      backendRegistryLog.info("attaching automation inspection dynamic tools", {
+      backendRegistryLog.info("attaching codex dynamic tools", {
         backend,
         toolCount: dynamicTools.length,
         tools: dynamicTools.map((tool) => tool.name),
@@ -7711,6 +8121,9 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    if (this.taskMonitorWatchdogTimer) {
+      clearInterval(this.taskMonitorWatchdogTimer);
+    }
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
@@ -8248,6 +8661,7 @@ export class DesktopBackendRegistry {
       method === "thread/parent/cleared" ||
       method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
@@ -8891,6 +9305,135 @@ export class DesktopBackendRegistry {
       ],
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
+  }
+
+  private async recordTaskMonitorUsage(notification: AppServerNotification): Promise<void> {
+    if (notification.method !== "thread/tokenUsage/updated") {
+      return;
+    }
+
+    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
+      (record) => record.monitorThreadId === notification.params.threadId,
+    );
+    if (!monitorRecord) {
+      return;
+    }
+
+    monitorRecord.lastActivityAt = Date.now();
+    const usageSnapshot = buildTaskMonitorUsageSnapshot({
+      model: monitorRecord.preferredModel,
+      tokenUsage: notification.params.tokenUsage,
+    });
+    if (usageSnapshot) {
+      monitorRecord.latestUsage = usageSnapshot;
+      await this.persistTaskMonitorSubAgent(monitorRecord, {
+        monitorUsage: usageSnapshot,
+      });
+    }
+  }
+
+  private async persistTaskMonitorSubAgent(
+    record: TaskMonitorDelegationRecord,
+    patch: Partial<
+      Pick<
+        ThreadSubAgentSummary,
+        | "completedAt"
+        | "completionSource"
+        | "lastMessage"
+        | "monitorUsage"
+        | "outcome"
+        | "status"
+        | "updatedAt"
+      >
+    > = {},
+  ): Promise<void> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === record.monitorId,
+    );
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId: record.monitorId,
+      task: record.task,
+      status:
+        patch.status ??
+        existing?.status ??
+        (record.monitorThreadId ? "running" : "pending"),
+      createdAt: record.createdAt,
+      updatedAt: patch.updatedAt ?? Date.now(),
+      preferredModel: record.preferredModel,
+      preferredReasoningEffort: record.preferredReasoningEffort,
+      ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+      ...(record.monitorTurnId ? { monitorTurnId: record.monitorTurnId } : {}),
+      ...(patch.lastMessage ?? existing?.lastMessage
+        ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
+        : {}),
+      ...(patch.outcome ?? existing?.outcome
+        ? { outcome: patch.outcome ?? existing?.outcome }
+        : {}),
+      ...(patch.completedAt ?? existing?.completedAt
+        ? { completedAt: patch.completedAt ?? existing?.completedAt }
+        : {}),
+      ...(patch.completionSource ?? existing?.completionSource
+        ? { completionSource: patch.completionSource ?? existing?.completionSource }
+        : {}),
+      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+        ? {
+            monitorUsage:
+              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+          }
+        : {}),
+      pollIntervalSeconds: record.pollIntervalSeconds,
+      heartbeatIntervalSeconds: record.heartbeatIntervalSeconds,
+      startupTimeoutSeconds: record.startupTimeoutSeconds,
+    };
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+      subAgent,
+    });
+    this.invalidateThreadListCache(record.backend);
+    await this.emit({
+      backend: record.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: record.parentThreadId,
+        },
+      },
+    });
+  }
+
+  private recordTaskMonitorActivity(notification: AppServerNotification): void {
+    const params = readRecord(notification.params);
+    const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+    if (!threadId) {
+      return;
+    }
+
+    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
+      (record) => record.monitorThreadId === threadId,
+    );
+    if (!monitorRecord) {
+      return;
+    }
+
+    monitorRecord.lastActivityAt = Date.now();
+    const itemType = readNotificationItemType(notification);
+    if (itemType !== "commandExecution") {
+      return;
+    }
+
+    if (notification.method === "item/started") {
+      monitorRecord.activeCommandCount += 1;
+    } else if (notification.method === "item/completed") {
+      monitorRecord.activeCommandCount = Math.max(
+        0,
+        monitorRecord.activeCommandCount - 1,
+      );
+    }
   }
 
   private async describeSingleBackend(
@@ -9928,7 +10471,7 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (dynamicToolCall?.namespace === "pwragent_automations") {
-      if (!this.isLiveAutomationInspectionToolCall(backend, dynamicToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
         backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
           backend,
           callId: dynamicToolCall.callId,
@@ -9955,6 +10498,53 @@ export class DesktopBackendRegistry {
         backend,
         call: dynamicToolCall,
         handler: this.automationInspectionHandler,
+      });
+    }
+
+    const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (taskMonitorToolCall?.namespace === TASK_MONITOR_TOOL_NAMESPACE) {
+      if (backend !== "codex") {
+        return buildTaskMonitorDynamicToolErrorResponse({
+          code: "forbidden",
+          message: "Task monitor dynamic tools are only available for Codex threads.",
+        });
+      }
+      const requiresActiveTurn =
+        taskMonitorToolCall.tool === "create_monitor_delegation";
+      if (
+        requiresActiveTurn &&
+        !this.isLiveDynamicToolCall(backend, taskMonitorToolCall)
+      ) {
+        backendRegistryLog.warn("rejecting task monitor dynamic tool call", {
+          backend,
+          callId: taskMonitorToolCall.callId,
+          namespace: taskMonitorToolCall.namespace,
+          threadId: taskMonitorToolCall.threadId,
+          tool: taskMonitorToolCall.tool,
+          turnId: taskMonitorToolCall.turnId,
+        });
+        return buildTaskMonitorDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Task monitor delegations must originate from an active Codex turn.",
+        });
+      }
+      backendRegistryLog.debug("handling task monitor dynamic tool call", {
+        backend,
+        callId: taskMonitorToolCall.callId,
+        namespace: taskMonitorToolCall.namespace,
+        threadId: taskMonitorToolCall.threadId,
+        tool: taskMonitorToolCall.tool,
+        turnId: taskMonitorToolCall.turnId,
+      });
+      return await handleTaskMonitorDynamicToolCall({
+        backend,
+        call: taskMonitorToolCall,
+        handler: async (monitorRequest) =>
+          await this.handleTaskMonitorRequest(monitorRequest),
       });
     }
 
@@ -10005,13 +10595,843 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private isLiveAutomationInspectionToolCall(
+  private isLiveDynamicToolCall(
     backend: AppServerBackendKind,
     call: { threadId: string; turnId?: string },
   ): boolean {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private async handleTaskMonitorRequest(
+    request: TaskMonitorRequest,
+  ): Promise<TaskMonitorResponse> {
+    if (request.operation === "create_monitor_delegation") {
+      return await this.createTaskMonitorDelegation(
+        request.context,
+        request.args as CreateMonitorDelegationToolArgs,
+      );
+    }
+    if (request.operation === "inject_progress") {
+      return await this.injectTaskMonitorProgress(
+        request.context.threadId,
+        request.args as InjectMonitorProgressToolArgs,
+      );
+    }
+    return await this.completeTaskMonitoring(
+      request.context.threadId,
+      request.args as CompleteMonitoringToolArgs,
+    );
+  }
+
+  private async createTaskMonitorDelegation(
+    context: TaskMonitorRequest<"create_monitor_delegation">["context"],
+    args: CreateMonitorDelegationToolArgs,
+  ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
+    const parentThreadId = context.threadId;
+    const task = args.task?.trim();
+    if (!task) {
+      return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
+    }
+
+    const monitorId = `monitor-${randomUUID()}`;
+    const pollIntervalSeconds =
+      normalizePollIntervalSeconds(args.pollIntervalSeconds) ??
+      DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+    const heartbeatIntervalSeconds = pollIntervalSeconds;
+    const requestedModel = normalizePreferredMonitorModel(args.preferredModel);
+    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
+      args.preferredReasoningEffort,
+    );
+    const { preferredModel, preferredReasoningEffort } =
+      await this.resolveTaskMonitorModelSettings({
+        preferredModel: requestedModel,
+        preferredReasoningEffort: requestedReasoningEffort,
+      });
+    const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
+    const parentAgentGuidance = buildMonitorParentAgentGuidance({
+      pollIntervalSeconds,
+      preferredModel,
+      preferredReasoningEffort,
+      startupTimeoutSeconds,
+    });
+    const prompt = buildMonitorDelegationPrompt({
+      finalHandoffPrompt: args.finalHandoffPrompt,
+      monitorContext: args.monitorContext,
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      preferredModel,
+      preferredReasoningEffort,
+      task,
+    });
+    if (
+      preferredModel !== requestedModel ||
+      preferredReasoningEffort !== requestedReasoningEffort
+    ) {
+      backendRegistryLog.info("adjusted task monitor model settings", {
+        monitorId,
+        parentThreadId,
+        preferredModel,
+        preferredReasoningEffort,
+        requestedModel,
+        requestedReasoningEffort,
+      });
+    }
+    const record: TaskMonitorDelegationRecord = {
+      activeCommandCount: 0,
+      backend: "codex",
+      createdAt: Date.now(),
+      finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
+      heartbeatIntervalSeconds,
+      lastActivityAt: Date.now(),
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      preferredModel,
+      preferredReasoningEffort,
+      startupTimeoutSeconds,
+      task,
+    };
+    this.taskMonitorDelegations.set(monitorId, record);
+    backendRegistryLog.info("created task monitor delegation", {
+      heartbeatIntervalSeconds,
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      startupTimeoutSeconds,
+    });
+
+    let startedMonitor: {
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      threadId: string;
+      turnId: string;
+    };
+    try {
+      startedMonitor = await this.startManagedTaskMonitor({
+        context,
+        cwd: args.cwd,
+        monitorId,
+        preferredModel,
+        preferredReasoningEffort,
+        prompt,
+      });
+    } catch (error) {
+      this.taskMonitorDelegations.delete(monitorId);
+      backendRegistryLog.error("failed to start managed task monitor", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId,
+        parentThreadId,
+      });
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "internal_error",
+        `Failed to start managed task monitor: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    record.cwd = startedMonitor.cwd;
+    record.executionMode = startedMonitor.executionMode;
+    record.lastActivityAt = Date.now();
+    record.monitorThreadId = startedMonitor.threadId;
+    record.monitorTurnId = startedMonitor.turnId;
+    await this.persistTaskMonitorSubAgent(record, { status: "running" });
+
+    return {
+      ok: true,
+      operation: "create_monitor_delegation",
+      data: {
+        monitorId,
+        parentThreadId,
+        preferredModel,
+        preferredReasoningEffort,
+        pollIntervalSeconds,
+        heartbeatIntervalSeconds,
+        startupTimeoutSeconds,
+        startedByPwrAgent: true,
+        monitorThreadId: startedMonitor.threadId,
+        monitorTurnId: startedMonitor.turnId,
+        parentAgentGuidance,
+        prompt,
+      },
+    };
+  }
+
+  private async resolveTaskMonitorModelSettings(params: {
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): Promise<{ preferredModel: string; preferredReasoningEffort: string }> {
+    const requestedModel = normalizePreferredMonitorModel(params.preferredModel);
+    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
+      params.preferredReasoningEffort,
+    );
+    const options = await this.getBackendLaunchpadOptions("codex", "task-monitor");
+    const models = options?.models ?? [];
+    const selectedModel =
+      models.find((model) => model.id === requestedModel) ??
+      models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
+      models.find((model) => model.id.toLowerCase().includes("mini")) ??
+      models.find((model) => model.current) ??
+      models.find((model) => model.supportsReasoning) ??
+      models[0];
+    const preferredModel = selectedModel?.id ?? DEFAULT_TASK_MONITOR_MODEL;
+    const reasoningEfforts = options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
+    const preferredReasoningEffort = reasoningEfforts.includes(
+      requestedReasoningEffort,
+    )
+      ? requestedReasoningEffort
+      : reasoningEfforts.includes(DEFAULT_TASK_MONITOR_REASONING_EFFORT)
+        ? DEFAULT_TASK_MONITOR_REASONING_EFFORT
+        : (reasoningEfforts[0] ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT);
+
+    return {
+      preferredModel,
+      preferredReasoningEffort,
+    };
+  }
+
+  private async startManagedTaskMonitor(params: {
+    context: TaskMonitorRequest<"create_monitor_delegation">["context"];
+    cwd?: string;
+    monitorId: string;
+    preferredModel: string;
+    preferredReasoningEffort: string;
+    prompt: string;
+  }): Promise<{
+    cwd?: string;
+    executionMode: ThreadExecutionMode;
+    threadId: string;
+    turnId: string;
+  }> {
+    const executionMode =
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
+      ) ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(
+        params.context.threadId,
+      ));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.context.threadId,
+    });
+    const cwd =
+      params.cwd?.trim() ||
+      (await this.resolveThreadEnvironmentCwd(
+        "codex",
+        params.context.threadId,
+        overlay,
+      ));
+    const client = this.getClient("codex", executionMode);
+    const dynamicTools = buildTaskMonitorDynamicToolSpecs("monitor");
+
+    backendRegistryLog.info("starting managed task monitor thread", {
+      cwd: cwd ?? null,
+      executionMode,
+      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
+      shellEnvironmentKeyCount: overlay?.codexEnvironmentRuntime?.shellEnvironment
+        ? Object.keys(overlay.codexEnvironmentRuntime.shellEnvironment).length
+        : 0,
+      monitorId: params.monitorId,
+      model: params.preferredModel,
+      parentThreadId: params.context.threadId,
+      reasoningEffort: params.preferredReasoningEffort,
+      toolCount: dynamicTools.length,
+    });
+
+    const thread = await client.startThread({
+      ...(cwd ? { cwd } : {}),
+      approvalPolicy: modeSettings.approvalPolicy,
+      dynamicTools,
+      ephemeral: true,
+      model: params.preferredModel,
+      reasoningEffort: params.preferredReasoningEffort,
+      sandbox: modeSettings.sandbox,
+      ...(overlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
+    });
+    const turn = await client.startTurn({
+      threadId: thread.threadId,
+      input: [{ type: "text", text: params.prompt }],
+      ...(cwd ? { cwd } : {}),
+      approvalPolicy: modeSettings.approvalPolicy,
+      model: params.preferredModel,
+      reasoningEffort: params.preferredReasoningEffort,
+      sandbox: modeSettings.sandbox,
+      ...(overlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        : {}),
+    });
+
+    backendRegistryLog.info("managed task monitor turn started", {
+      executionMode,
+      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
+      monitorId: params.monitorId,
+      monitorThreadId: turn.threadId,
+      monitorTurnId: turn.turnId,
+      parentThreadId: params.context.threadId,
+    });
+
+    return {
+      cwd,
+      executionMode,
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+    };
+  }
+
+  private async injectTaskMonitorProgress(
+    callerThreadId: string,
+    args: InjectMonitorProgressToolArgs,
+  ): Promise<TaskMonitorResponse<"inject_progress">> {
+    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    if (!bound.ok) {
+      return taskMonitorFailure("inject_progress", bound.code, bound.message);
+    }
+    const message = args.message?.trim();
+    if (!message) {
+      return taskMonitorFailure("inject_progress", "invalid_arguments", "message is required.");
+    }
+
+    bound.record.lastActivityAt = Date.now();
+    await this.persistTaskMonitorSubAgent(bound.record, {
+      lastMessage: message,
+      status: args.status ?? "running",
+    });
+    await this.emitTaskMonitorProgressMessage({
+      monitorId: bound.record.monitorId,
+      parentThreadId: bound.record.parentThreadId,
+      text: formatTaskMonitorProgressMessage({
+        message,
+        status: args.status,
+        task: bound.record.task,
+      }),
+      usage: bound.record.latestUsage,
+    });
+
+    return {
+      ok: true,
+      operation: "inject_progress",
+      data: {
+        monitorId: bound.record.monitorId,
+        parentThreadId: bound.record.parentThreadId,
+        injected: true,
+        ...(bound.record.latestUsage
+          ? { monitorUsage: bound.record.latestUsage }
+          : {}),
+      },
+    };
+  }
+
+  private async completeTaskMonitoring(
+    callerThreadId: string,
+    args: CompleteMonitoringToolArgs,
+  ): Promise<TaskMonitorResponse<"complete_monitoring">> {
+    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    if (!bound.ok) {
+      return taskMonitorFailure("complete_monitoring", bound.code, bound.message);
+    }
+    const summary = args.summary?.trim();
+    if (!summary) {
+      return taskMonitorFailure("complete_monitoring", "invalid_arguments", "summary is required.");
+    }
+
+    bound.record.lastActivityAt = Date.now();
+    const parentTurn = await this.finishTaskMonitorDelegation({
+      completionSource: { type: "monitor_tool" },
+      details: args.details,
+      outcome: args.outcome,
+      record: bound.record,
+      summary,
+      triggerParentTurn: args.triggerParentTurn !== false,
+    });
+
+    return {
+      ok: true,
+      operation: "complete_monitoring",
+      data: {
+        monitorId: bound.record.monitorId,
+        parentThreadId: bound.record.parentThreadId,
+        injected: true,
+        outcome: args.outcome,
+        completionSource: { type: "monitor_tool" },
+        ...(bound.record.latestUsage
+          ? { monitorUsage: bound.record.latestUsage }
+          : {}),
+        ...(parentTurn ? { parentTurn } : {}),
+      },
+    };
+  }
+
+  private async finishTaskMonitorDelegation(params: {
+    completionSource: TaskMonitorCompletionSource;
+    details?: string;
+    outcome: CompleteMonitoringToolArgs["outcome"];
+    record: TaskMonitorDelegationRecord;
+    summary: string;
+    triggerParentTurn: boolean;
+  }): Promise<
+    | {
+        status: "started" | "queued";
+        turnId?: string;
+        queueEntryId?: string;
+        position?: number;
+      }
+    | undefined
+  > {
+    const finalText = formatTaskMonitorCompletionMessage({
+      completionSource: params.completionSource,
+      details: params.details,
+      outcome: params.outcome,
+      summary: params.summary,
+      task: params.record.task,
+    });
+    await this.persistTaskMonitorSubAgent(params.record, {
+      completedAt: Date.now(),
+      completionSource: params.completionSource,
+      lastMessage: params.summary,
+      monitorUsage: params.record.latestUsage,
+      outcome: params.outcome,
+      status: params.outcome,
+    });
+    await this.injectCodexMonitorMessage({
+      parentThreadId: params.record.parentThreadId,
+      text: finalText,
+    });
+    if (params.record.latestUsage) {
+      await this.emitTaskMonitorUsageActivity({
+        monitorId: params.record.monitorId,
+        parentThreadId: params.record.parentThreadId,
+        phase: "completion",
+        usage: params.record.latestUsage,
+      });
+    }
+    await this.emitTaskMonitorCompletionState({
+      completionSource: params.completionSource,
+      monitorId: params.record.monitorId,
+      outcome: params.outcome,
+      parentThreadId: params.record.parentThreadId,
+    });
+
+    let parentTurn:
+      | {
+          status: "started" | "queued";
+          turnId?: string;
+          queueEntryId?: string;
+          position?: number;
+        }
+      | undefined;
+    if (params.triggerParentTurn) {
+      const submitted = await this.submitTurn({
+        backend: "codex",
+        threadId: params.record.parentThreadId,
+        input: [
+          {
+            type: "text",
+            text: buildTaskMonitorFinalHandoffInput({
+              completionSource: params.completionSource,
+              details: params.details,
+              finalHandoffPrompt: params.record.finalHandoffPrompt,
+              outcome: params.outcome,
+              summary: params.summary,
+              task: params.record.task,
+            }),
+          },
+        ],
+        origin: "manual",
+      });
+      parentTurn =
+        submitted.status === "started"
+          ? {
+              status: "started",
+              turnId: submitted.turnId,
+              queueEntryId: submitted.entry.id,
+            }
+          : {
+              status: "queued",
+              queueEntryId: submitted.entry.id,
+              position: submitted.position,
+            };
+    }
+
+    this.taskMonitorDelegations.delete(params.record.monitorId);
+    return parentTurn;
+  }
+
+  private async handleTaskMonitorTerminalNotification(
+    notification: Extract<
+      AppServerNotification,
+      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+    >,
+  ): Promise<void> {
+    const threadId = notification.params.threadId;
+    const turnId = turnIdFromTerminalNotification(notification);
+    const terminalStatus =
+      notification.method === "turn/completed"
+        ? "completed"
+        : notification.method === "turn/failed"
+          ? "failed"
+          : "cancelled";
+    const record = Array.from(this.taskMonitorDelegations.values()).find(
+      (candidate) =>
+        candidate.monitorThreadId === threadId &&
+        (!candidate.monitorTurnId || !turnId || candidate.monitorTurnId === turnId),
+    );
+    if (!record) {
+      return;
+    }
+
+    if (!record.recoveryAttempted) {
+      await this.startTaskMonitorRecoveryTurn({
+        record,
+        terminalStatus,
+      });
+      return;
+    }
+
+    await this.synthesizeTaskMonitorFallbackCompletion({
+      record,
+      reason: "monitor_recovery_turn_ended_without_completion",
+      terminalStatus,
+    });
+  }
+
+  private async checkStaleTaskMonitors(now = Date.now()): Promise<void> {
+    for (const record of Array.from(this.taskMonitorDelegations.values())) {
+      if (!record.monitorThreadId || !record.monitorTurnId) {
+        continue;
+      }
+      if (record.activeCommandCount > 0) {
+        continue;
+      }
+
+      const staleAfterMs =
+        Math.max(
+          record.heartbeatIntervalSeconds * 2,
+          record.pollIntervalSeconds * 2,
+          record.startupTimeoutSeconds,
+        ) *
+          1000 +
+        TASK_MONITOR_STALE_GRACE_MS;
+      const idleMs = now - record.lastActivityAt;
+      if (idleMs < staleAfterMs) {
+        continue;
+      }
+
+      if (record.recoveryAttempted) {
+        await this.synthesizeTaskMonitorFallbackCompletion({
+          record,
+          reason: "monitor_recovery_turn_stale_without_completion",
+        });
+        continue;
+      }
+
+      if (record.staleInterruptAttempted) {
+        await this.synthesizeTaskMonitorFallbackCompletion({
+          record,
+          reason: "monitor_stale_interrupt_no_terminal",
+        });
+        continue;
+      }
+
+      await this.interruptStaleTaskMonitor(record, idleMs);
+    }
+  }
+
+  private async interruptStaleTaskMonitor(
+    record: TaskMonitorDelegationRecord,
+    idleMs: number,
+  ): Promise<void> {
+    if (!record.monitorThreadId || !record.monitorTurnId) {
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_thread_missing_for_stale_recovery",
+      });
+      return;
+    }
+
+    record.lastActivityAt = Date.now();
+    record.staleInterruptAttempted = true;
+    backendRegistryLog.warn("task monitor stale; interrupting for recovery", {
+      idleMs,
+      monitorId: record.monitorId,
+      monitorThreadId: record.monitorThreadId,
+      monitorTurnId: record.monitorTurnId,
+      parentThreadId: record.parentThreadId,
+    });
+
+    try {
+      const executionMode = record.executionMode ?? "default";
+      await this.getClient("codex", executionMode).interruptTurn({
+        threadId: record.monitorThreadId,
+        turnId: record.monitorTurnId,
+      });
+    } catch (error) {
+      backendRegistryLog.error("failed to interrupt stale task monitor", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+      });
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_stale_interrupt_failed",
+      });
+    }
+  }
+
+  private async startTaskMonitorRecoveryTurn(params: {
+    record: TaskMonitorDelegationRecord;
+    terminalStatus: "completed" | "failed" | "cancelled";
+  }): Promise<void> {
+    const { record } = params;
+    if (!record.monitorThreadId) {
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_thread_missing_for_recovery",
+        terminalStatus: params.terminalStatus,
+      });
+      return;
+    }
+
+    record.recoveryAttempted = true;
+    record.activeCommandCount = 0;
+    record.lastActivityAt = Date.now();
+    record.staleInterruptAttempted = false;
+    const executionMode = record.executionMode ?? "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const client = this.getClient("codex", executionMode);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: record.parentThreadId,
+    });
+
+    try {
+      const turn = await client.startTurn({
+        threadId: record.monitorThreadId,
+        input: [
+          {
+            type: "text",
+            text: buildTaskMonitorRecoveryPrompt({
+              monitorId: record.monitorId,
+              task: record.task,
+              terminalStatus: params.terminalStatus,
+            }),
+          },
+        ],
+        ...(record.cwd ? { cwd: record.cwd } : {}),
+        approvalPolicy: modeSettings.approvalPolicy,
+        model: record.preferredModel,
+        reasoningEffort: record.preferredReasoningEffort,
+        sandbox: modeSettings.sandbox,
+        ...(overlay?.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+          : {}),
+      });
+      record.monitorTurnId = turn.turnId;
+      record.lastActivityAt = Date.now();
+      backendRegistryLog.warn("started task monitor recovery turn", {
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+        terminalStatus: params.terminalStatus,
+      });
+    } catch (error) {
+      backendRegistryLog.error("failed to start task monitor recovery turn", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        parentThreadId: record.parentThreadId,
+      });
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_recovery_turn_start_failed",
+        terminalStatus: params.terminalStatus,
+      });
+    }
+  }
+
+  private async synthesizeTaskMonitorFallbackCompletion(params: {
+    record: TaskMonitorDelegationRecord;
+    reason: string;
+    terminalStatus?: "completed" | "failed" | "cancelled";
+  }): Promise<void> {
+    const completionSource: TaskMonitorCompletionSource = {
+      type: "pwragent_fallback",
+      reason: params.reason,
+      recoveryAttempted: Boolean(params.record.recoveryAttempted),
+      ...(params.terminalStatus ? { terminalStatus: params.terminalStatus } : {}),
+    };
+    const outcome =
+      params.terminalStatus === "cancelled" ? "cancelled" : "failure";
+    await this.finishTaskMonitorDelegation({
+      completionSource,
+      details: [
+        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent_task_monitors.complete_monitoring.",
+        `Fallback reason: ${params.reason}.`,
+        params.terminalStatus
+          ? `Last monitor turn status: ${params.terminalStatus}.`
+          : "No terminal monitor turn status was observed.",
+      ].join("\n"),
+      outcome,
+      record: params.record,
+      summary:
+        "Monitor subagent stopped without reporting a final result through the required completion tool.",
+      triggerParentTurn: true,
+    });
+  }
+
+  private bindTaskMonitorCaller(
+    monitorId: string,
+    callerThreadId: string,
+  ):
+    | { ok: true; record: TaskMonitorDelegationRecord }
+    | { ok: false; code: "forbidden" | "invalid_arguments" | "not_found"; message: string } {
+    const normalizedMonitorId = monitorId?.trim();
+    if (!normalizedMonitorId) {
+      return { ok: false, code: "invalid_arguments", message: "monitorId is required." };
+    }
+    const record = this.taskMonitorDelegations.get(normalizedMonitorId);
+    if (!record) {
+      return { ok: false, code: "not_found", message: "Unknown or completed monitorId." };
+    }
+    if (record.monitorThreadId && record.monitorThreadId !== callerThreadId) {
+      return {
+        ok: false,
+        code: "forbidden",
+        message: "This monitorId is already bound to another monitor thread.",
+      };
+    }
+    if (!record.monitorThreadId) {
+      record.monitorThreadId = callerThreadId;
+    }
+    return { ok: true, record };
+  }
+
+  private async emitTaskMonitorProgressMessage(params: {
+    monitorId: string;
+    parentThreadId: string;
+    text: string;
+    usage?: TaskMonitorUsageSnapshot;
+  }): Promise<void> {
+    const now = Date.now();
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.parentThreadId,
+          turnId: `monitor:${params.monitorId}`,
+          item: {
+            id: `${params.monitorId}:progress:${now}`,
+            type: "agentMessage",
+            text: params.text,
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: params.monitorId,
+              ...(params.usage
+                ? {
+                    monitorUsage: {
+                      ...params.usage,
+                      phase: "progress",
+                    },
+                  }
+                : {}),
+              transient: true,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async emitTaskMonitorUsageActivity(params: {
+    monitorId: string;
+    parentThreadId: string;
+    phase: "completion" | "progress";
+    usage: TaskMonitorUsageSnapshot;
+  }): Promise<void> {
+    const now = Date.now();
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.parentThreadId,
+          turnId: `monitor:${params.monitorId}`,
+          item: {
+            id: `${params.monitorId}:usage:${params.phase}:${now}`,
+            type: "taskMonitorUsage",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: params.monitorId,
+              monitorUsage: {
+                ...params.usage,
+                phase: params.phase,
+              },
+              transient: params.phase !== "completion",
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async emitTaskMonitorCompletionState(params: {
+    completionSource: TaskMonitorCompletionSource;
+    monitorId: string;
+    outcome: CompleteMonitoringToolArgs["outcome"];
+    parentThreadId: string;
+  }): Promise<void> {
+    const now = Date.now();
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.parentThreadId,
+          turnId: `monitor:${params.monitorId}`,
+          item: {
+            id: `${params.monitorId}:completion:${now}`,
+            type: "taskMonitorCompletion",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: params.monitorId,
+              outcome: params.outcome,
+              completionSource: params.completionSource,
+              fallbackGenerated:
+                params.completionSource.type === "pwragent_fallback",
+              transient: false,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async injectCodexMonitorMessage(params: {
+    parentThreadId: string;
+    text: string;
+  }): Promise<void> {
+    await this.withCodexThreadClient(params.parentThreadId, async (client) => {
+      if (!client.injectThreadItems) {
+        throw new Error("Codex thread item injection is not available.");
+      }
+      await client.injectThreadItems({
+        threadId: params.parentThreadId,
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: params.text }],
+          },
+        ],
+      });
+    });
   }
 
   private notificationsEnabled(): boolean {
@@ -10323,6 +11743,11 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    if (event.backend === "codex") {
+      this.recordTaskMonitorActivity(event.notification);
+      await this.recordTaskMonitorUsage(event.notification);
+    }
+
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
     }
@@ -10453,6 +11878,19 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
       }
+    }
+    if (
+      event.backend === "codex" &&
+      (event.notification.method === "turn/completed" ||
+        event.notification.method === "turn/failed" ||
+        event.notification.method === "turn/cancelled")
+    ) {
+      await this.handleTaskMonitorTerminalNotification(
+        event.notification as Extract<
+          AppServerNotification,
+          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+        >,
+      );
     }
 
     if (

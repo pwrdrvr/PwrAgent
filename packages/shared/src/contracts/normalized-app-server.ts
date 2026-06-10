@@ -1073,6 +1073,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/subAgents/updated";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
       method: "automation/run/updated";
       params: {
         threadId: string;

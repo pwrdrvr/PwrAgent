@@ -222,7 +222,7 @@ function logAgentEventSummary(summary: Record<string, unknown>): void {
     return;
   }
 
-  appServerLog.info("agentEventCoalesced", {
+  appServerLog.debug("agentEventCoalesced", {
     ...existing.latestSummary,
     coalescedDurationMs: existing.lastSuppressedAt - existing.firstSuppressedAt,
     suppressedCount: existing.suppressedCount,

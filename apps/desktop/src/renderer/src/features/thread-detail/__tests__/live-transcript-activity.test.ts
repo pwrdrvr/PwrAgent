@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLiveToolDetails,
+  buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
   summarizeLiveActivity,
 } from "../live-transcript-activity";
@@ -108,6 +109,45 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry?.summary).toBe("Usage: 80 uncached in · 20 cached · 30 out");
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost unavailable: no local pricing entry for custom-model",
+    );
+  });
+});
+
+describe("buildTaskMonitorUsageActivityEntry", () => {
+  it("renders structured monitor usage metadata as a top-level activity", () => {
+    const entry = buildTaskMonitorUsageActivityEntry({
+      id: "monitor-usage-1",
+      item: {
+        id: "monitor-progress-1",
+        type: "agentMessage",
+        text: "Still running.",
+        data: {
+          source: "pwragent_task_monitor",
+          monitorId: "monitor-1",
+          monitorUsage: {
+            phase: "progress",
+            model: "gpt-5.4-mini",
+            tokenUsage: {
+              inputTokens: 1_000,
+              cachedInputTokens: 200,
+              outputTokens: 50,
+              reasoningOutputTokens: 10,
+            },
+          },
+        },
+      },
+      turn: { id: "monitor:monitor-1", status: "completed" },
+    });
+
+    expect(entry).toMatchObject({
+      type: "activity",
+      id: "monitor-usage-1",
+      summary: "Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+      status: "completed",
+      turn: { id: "monitor:monitor-1" },
+    });
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost: <$0.001 list price for gpt-5.4-mini",
     );
   });
 });

@@ -1479,6 +1479,319 @@ describe("useThreadSessionState", () => {
     expect(readThread).toHaveBeenCalledTimes(1);
   });
 
+  it("renders task monitor usage metadata as a sibling activity entry", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-progress-1",
+              type: "agentMessage",
+              text: "Still running.",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                monitorUsage: {
+                  phase: "progress",
+                  model: "gpt-5.4-mini",
+                  tokenUsage: {
+                    inputTokens: 1_000,
+                    cachedInputTokens: 200,
+                    outputTokens: 50,
+                    reasoningOutputTokens: 10,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Still running.",
+      "activity:Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+    ]);
+  });
+
+  it("keeps completion monitor usage as top-level activity after hydration", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let readCount = 0;
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => {
+        readCount += 1;
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries:
+              readCount === 1
+                ? []
+                : [
+                    {
+                      type: "message" as const,
+                      id: "assistant-final",
+                      role: "assistant" as const,
+                      text: "Parent processed monitor result.",
+                      createdAt: 20_000,
+                      turn: {
+                        id: "parent-turn-1",
+                        status: "completed" as const,
+                      },
+                    },
+                  ],
+            messages:
+              readCount === 1
+                ? []
+                : [
+                    {
+                      id: "assistant-final",
+                      role: "assistant" as const,
+                      text: "Parent processed monitor result.",
+                      createdAt: 20_000,
+                    },
+                  ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const initialThread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const updatedThread = buildThread({ id: "thread-1", updatedAt: 2_000 });
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: initialThread,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-completion-usage-1",
+              type: "taskMonitorUsage",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                monitorUsage: {
+                  phase: "completion",
+                  model: "gpt-5.4-mini",
+                  tokenUsage: {
+                    inputTokens: 1_000,
+                    cachedInputTokens: 200,
+                    outputTokens: 50,
+                    reasoningOutputTokens: 10,
+                  },
+                },
+                transient: false,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+    ]);
+
+    rerender({ currentThread: updatedThread });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+        "message:Parent processed monitor result.",
+      ]);
+    });
+  });
+
+  it("persists completion monitor usage as durable transcript metadata", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-completion-usage-1",
+              type: "taskMonitorUsage",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                monitorUsage: {
+                  phase: "completion",
+                  model: "gpt-5.4-mini",
+                  tokenUsage: {
+                    inputTokens: 1_000,
+                    cachedInputTokens: 200,
+                    outputTokens: 50,
+                    reasoningOutputTokens: 10,
+                  },
+                },
+                transient: false,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+    ]);
+    expect(persistThreadUsageActivity).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      activity: expect.objectContaining({
+        id: "monitor-completion-usage-1:usage",
+        summary:
+          "Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+      }),
+    });
+  });
+
   it("keeps live read activity in receipt order between assistant messages", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

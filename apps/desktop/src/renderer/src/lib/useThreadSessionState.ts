@@ -36,6 +36,7 @@ import {
   buildLiveActivityEntry,
   buildLiveToolDetails,
   buildMcpProgressDetail,
+  buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
   formatChangedFileSummary,
   getNotificationItem,
@@ -216,7 +217,8 @@ function persistFinalizedUsageEntry(params: {
   if (
     !params.entry ||
     params.entry.status !== "completed" ||
-    tokenUsageActivityScope(params.entry) !== "turn"
+    (tokenUsageActivityScope(params.entry) !== "turn" &&
+      !isDurableMonitorUsageActivity(params.entry))
   ) {
     return;
   }
@@ -252,6 +254,22 @@ function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
       entry.summary.startsWith("Usage:") ||
       entry.summary.startsWith("Latest request usage:"))
   );
+}
+
+function isMonitorUsageActivityEntry(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity" &&
+    (entry.summary.startsWith("Monitor usage:") ||
+      entry.summary.startsWith("Monitor usage so far:"))
+  );
+}
+
+function isDurableMonitorUsageActivity(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return entry.type === "activity" && entry.summary.startsWith("Monitor usage:");
 }
 
 function tokenUsageActivityScope(
@@ -368,6 +386,24 @@ function mergeTranscriptEntries(
         continue;
       }
 
+      const usageTimedIndex =
+        typeof optimisticCreatedAt === "number"
+          ? merged.findIndex((entry) => {
+              const entryCreatedAt =
+                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+              return (
+                typeof entryCreatedAt === "number" &&
+                entryCreatedAt > optimisticCreatedAt
+              );
+            })
+          : -1;
+      if (usageTimedIndex !== -1) {
+        merged.splice(usageTimedIndex, 0, optimisticEntry);
+        continue;
+      }
+    }
+
+    if (isMonitorUsageActivityEntry(optimisticEntry)) {
       const usageTimedIndex =
         typeof optimisticCreatedAt === "number"
           ? merged.findIndex((entry) => {
@@ -940,6 +976,20 @@ function carryForwardTranscriptEntryOrder(
       continue;
     }
 
+    const alreadyHydrated = entries.some(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && activityEntriesMatch(entry, source)
+    );
+    if (alreadyHydrated) {
+      continue;
+    }
+
+    changed = true;
+    entries = mergeTranscriptEntries(entries, [source]);
+  }
+
+  const durableMonitorUsageSources = sources.filter(isDurableMonitorUsageActivity);
+  for (const source of durableMonitorUsageSources) {
     const alreadyHydrated = entries.some(
       (entry): entry is AppServerThreadActivityEntry =>
         entry.type === "activity" && activityEntriesMatch(entry, source)
@@ -3454,9 +3504,27 @@ export function useThreadSessionState(params: {
             itemParams: event.notification.params,
             turn: assistantTurn,
           });
+          const item = getNotificationItem(event.notification.params);
+          const taskMonitorUsageEntry = item
+            ? buildTaskMonitorUsageActivityEntry({
+                id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
+                item,
+                turn: assistantTurn,
+              })
+            : undefined;
           if (assistantMessageEntry) {
+            const responseWithUsage = taskMonitorUsageEntry
+              ? appendThreadEntries(
+                  current.response,
+                  {
+                    backend: event.backend,
+                    threadId: notificationThreadId,
+                  },
+                  [taskMonitorUsageEntry]
+                )
+              : current.response;
             const nextResponse = appendMessageEntries(
-              current.response,
+              responseWithUsage,
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
@@ -3481,6 +3549,31 @@ export function useThreadSessionState(params: {
                 current.pendingAssistantMessage?.id === assistantMessageEntry.id
                   ? undefined
                   : current.pendingAssistantMessage,
+              response: nextResponse,
+            };
+          }
+
+          if (taskMonitorUsageEntry) {
+            persistFinalizedUsageEntry({
+              backend: event.backend,
+              desktopApi,
+              entry: taskMonitorUsageEntry,
+              threadId: notificationThreadId,
+            });
+            const nextResponse = appendThreadEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [taskMonitorUsageEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
               response: nextResponse,
             };
           }
@@ -3530,7 +3623,6 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const item = getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({

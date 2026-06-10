@@ -257,29 +257,26 @@ describe("DesktopBackendRegistry replay integration", () => {
       threadId: "thread-1"
     });
     await replayClient.advance({ stepId: "req-input-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        method: "item/tool/requestUserInput",
-        params: expect.objectContaining({
-          requestId: "input-request-1",
-          itemId: "input-1",
-          questions: [
-            expect.objectContaining({
-              id: "approach",
-              options: [
-                expect.objectContaining({
-                  label: "Small patch (Recommended)"
-                }),
-                expect.objectContaining({
-                  label: "Large refactor"
-                })
-              ]
-            })
-          ]
-        })
-      })
+    const inputEvent = events.find(
+      (event) => event.params.requestId === "input-request-1",
     );
+    expect(inputEvent?.method).toBe("item/tool/requestUserInput");
+    expect(inputEvent?.params).toMatchObject({
+      requestId: "input-request-1",
+      itemId: "input-1",
+    });
+    const [question] =
+      (inputEvent?.params.questions as Array<{
+        id?: string;
+        options?: Array<{ label?: string }>;
+      }> | undefined) ?? [];
+    expect(question?.id).toBe("approach");
+    expect(question?.options?.map((option) => option.label)).toEqual([
+      "Small patch (Recommended)",
+      "Large refactor"
+    ]);
 
     await registry.submitServerRequest({
       backend: "codex",
@@ -381,22 +378,22 @@ describe("DesktopBackendRegistry replay integration", () => {
       threadId: "thread-1"
     });
     await replayClient.advance({ stepId: "req-mcp-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        method: "mcpServer/elicitation/request",
-        params: expect.objectContaining({
-          requestId: "mcp-request-1",
-          serverName: "playwright",
-          mode: "form",
-          message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
-          requestedSchema: {
-            type: "object",
-            properties: {}
-          }
-        })
-      })
+    const mcpEvent = events.find(
+      (event) => event.params.requestId === "mcp-request-1",
     );
+    expect(mcpEvent?.method).toBe("mcpServer/elicitation/request");
+    expect(mcpEvent?.params).toMatchObject({
+      requestId: "mcp-request-1",
+      serverName: "playwright",
+      mode: "form",
+      message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+      requestedSchema: {
+        type: "object",
+        properties: {}
+      }
+    });
 
     await registry.submitServerRequest({
       backend: "codex",

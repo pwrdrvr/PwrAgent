@@ -356,6 +356,35 @@ export function buildTokenUsageActivityEntry(params: {
   };
 }
 
+export function buildTaskMonitorUsageActivityEntry(params: {
+  id: string;
+  item: Record<string, unknown>;
+  turn?: AppServerThreadTurnMetadata;
+}): AppServerThreadActivityEntry | undefined {
+  const data = readRecord(params.item.data);
+  const monitorUsage =
+    readRecord(data?.monitorUsage) ??
+    readRecord(params.item.monitorUsage);
+  if (!monitorUsage) {
+    return undefined;
+  }
+
+  const tokenUsage = readRecord(monitorUsage.tokenUsage);
+  if (!tokenUsage) {
+    return undefined;
+  }
+
+  const phase = readString(monitorUsage, "phase");
+  const model = readString(monitorUsage, "model");
+  return buildTokenUsageActivityEntry({
+    id: params.id,
+    model,
+    summaryPrefix: phase === "completion" ? "Monitor usage" : "Monitor usage so far",
+    tokenUsage: { total: tokenUsage },
+    turn: params.turn,
+  });
+}
+
 function normalizeTokenUsage(tokenUsage: unknown): NormalizedTokenUsage | undefined {
   const root =
     readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
