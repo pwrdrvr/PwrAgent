@@ -16,6 +16,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
+  ThreadSubAgentSummary,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
@@ -135,6 +136,7 @@ export class SqliteOverlayStore {
             current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
+          subAgents: current?.subAgents,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -386,6 +388,32 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return { overlay: nextState, persisted: true };
+  }
+
+  async upsertThreadSubAgent(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    subAgent: ThreadSubAgentSummary;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextSubAgents = [
+      params.subAgent,
+      ...(current.subAgents ?? []).filter(
+        (subAgent) => subAgent.monitorId !== params.subAgent.monitorId,
+      ),
+    ].sort((left, right) => right.createdAt - left.createdAt);
+    const nextState: ThreadOverlayState = {
+      ...current,
+      subAgents: nextSubAgents,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
   }
 
   async setThreadReaction(params: {
@@ -1259,6 +1287,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayStates"
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
+  | "upsertThreadSubAgent"
   | "setThreadReaction"
   | "setThreadPin"
   | "setThreadParent"

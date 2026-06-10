@@ -280,6 +280,34 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return { overlay: next, persisted: true };
     },
+    upsertThreadSubAgent: async ({
+      backend,
+      threadId,
+      subAgent,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      subAgent: NonNullable<ThreadOverlayState["subAgents"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        subAgents: [
+          subAgent,
+          ...(current.subAgents ?? []).filter(
+            (entry) => entry.monitorId !== subAgent.monitorId,
+          ),
+        ].sort((left, right) => right.createdAt - left.createdAt),
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadExecutionMode: async ({
       backend,
       threadId,
@@ -11448,12 +11476,13 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
       startThreadResult: { threadId: "monitor-thread" },
     });
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
     const events: AgentEvent[] = [];
     const unsubscribeEvents = registry.onEvent((event) => {
@@ -11489,6 +11518,21 @@ command = "pnpm dev"
       (delegationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ).monitorId as string;
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          monitorId,
+          monitorThreadId: "monitor-thread",
+          status: "running",
+          task: "Watch PR #123 checks until they finish.",
+        },
+      ],
+    });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -11500,6 +11544,8 @@ command = "pnpm dev"
         },
       },
     });
+    const expectedUsageSummary =
+      "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price";
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -11534,9 +11580,28 @@ command = "pnpm dev"
         },
       },
     } as AppServerPendingRequestNotification);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          lastMessage: "lint is running",
+          monitorId,
+          monitorUsage: {
+            cost: {
+              model: "gpt-5.4-mini",
+              totalUsd: 0.00084,
+            },
+            summary: expectedUsageSummary,
+          },
+          status: "running",
+        },
+      ],
+    });
 
-    const expectedUsageSummary =
-      "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price";
     const progressEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -11705,6 +11770,30 @@ command = "pnpm dev"
         status: "started",
         turnId: "turn-1",
       },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          completedAt: expect.any(Number),
+          lastMessage: "Tests failed in CI.",
+          monitorId,
+          monitorThreadId: "monitor-thread",
+          monitorUsage: {
+            cost: {
+              model: "gpt-5.4-mini",
+              totalUsd: 0.00084,
+            },
+            summary: expectedUsageSummary,
+          },
+          outcome: "failure",
+          status: "failure",
+        },
+      ],
     });
 
     unsubscribeEvents();

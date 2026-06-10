@@ -480,6 +480,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             worktreeSnapshots: Array.isArray(threadRecord.worktreeSnapshots)
               ? (threadRecord.worktreeSnapshots as ThreadOverlayState["worktreeSnapshots"])
               : [],
+            subAgents: Array.isArray(threadRecord.subAgents)
+              ? (threadRecord.subAgents as ThreadOverlayState["subAgents"])
+              : [],
             permissionTransitionLog: migratePermissionTransitionLog(
               threadRecord.permissionTransitionLog,
             ),

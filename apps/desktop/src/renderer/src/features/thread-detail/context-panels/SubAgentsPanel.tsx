@@ -12,13 +12,7 @@ type SubAgentsPanelProps = {
   onViewSubAgent?: (subAgent: SubAgentSummary) => void;
 };
 
-/**
- * Sub-Agents tab — lists task-monitor delegations spawned from this
- * thread and offers to open each one's history. The data source is a
- * placeholder until `feat/subagent-task-monitoring` exposes monitors
- * over IPC; the layout + interactivity are built so that integration is
- * a one-line swap in {@link useSubAgents}.
- */
+/** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
 
@@ -28,27 +22,35 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       {loading ? (
         <p className="context-empty">Loading sub-agents…</p>
       ) : subAgents.length > 0 ? (
-        <ul className="context-list context-list--rows">
+        <ul className="context-list context-list--cards">
           {subAgents.map((subAgent) => (
-            <li key={subAgent.monitorId} className="subagent-row">
-              <div className="subagent-row__main">
-                <span
-                  aria-hidden="true"
-                  className={`subagent-row__dot subagent-row__dot--${statusTone(subAgent.status)}`}
-                />
-                <div className="subagent-row__text">
+            <li key={subAgent.monitorId} className="subagent-card">
+              <div className="subagent-card__header">
+                <div className="subagent-card__title-row">
+                  <span
+                    aria-hidden="true"
+                    className={`subagent-card__dot subagent-card__dot--${statusTone(subAgent.status)}`}
+                  />
                   <p className="context-list__label">{subAgent.task}</p>
-                  <p className="context-list__meta">
-                    {statusLabel(subAgent.status)}
-                    {subAgent.preferredModel ? ` · ${subAgent.preferredModel}` : ""}
-                    {" · "}
-                    {formatTimestamp(subAgent.createdAt)}
-                  </p>
-                  {subAgent.lastMessage ? (
-                    <p className="subagent-row__message">{subAgent.lastMessage}</p>
-                  ) : null}
                 </div>
+                <span
+                  className={`subagent-card__status subagent-card__status--${statusTone(subAgent.status)}`}
+                >
+                  {statusLabel(subAgent.status)}
+                </span>
               </div>
+              <p className="context-list__meta">
+                {subAgent.preferredModel ? `${subAgent.preferredModel} · ` : ""}
+                {formatTimestamp(subAgent.createdAt)}
+              </p>
+              {subAgent.lastMessage ? (
+                <p className="subagent-card__message">{subAgent.lastMessage}</p>
+              ) : null}
+              {subAgent.monitorUsage?.summary ? (
+                <p className="subagent-card__usage">
+                  Monitor usage: {subAgent.monitorUsage.summary}
+                </p>
+              ) : null}
               <button
                 className="context-list__action"
                 type="button"

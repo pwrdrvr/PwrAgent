@@ -194,6 +194,64 @@ describe("ThreadContextPanel", () => {
     expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
   });
 
+  it("renders persisted sub-agent cards with monitor usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "monitor-2",
+            task: "Watch CI until it completes.",
+            status: "running",
+            createdAt: 2000,
+            updatedAt: 2500,
+            preferredModel: "gpt-5.4-mini",
+            monitorThreadId: "monitor-thread-2",
+            lastMessage: "Lint is still running.",
+            monitorUsage: {
+              model: "gpt-5.4-mini",
+              summary:
+                "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+              tokenUsage: {
+                inputTokens: 1000,
+                cachedInputTokens: 200,
+                uncachedInputTokens: 800,
+                outputTokens: 50,
+                reasoningOutputTokens: 10,
+                totalTokens: 1060,
+              },
+              cost: {
+                model: "gpt-5.4-mini",
+                totalUsd: 0.00084,
+              },
+            },
+          },
+          {
+            monitorId: "monitor-1",
+            task: "Older monitor.",
+            status: "success",
+            createdAt: 1000,
+            updatedAt: 1500,
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Lint is still running.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(
+      "Watch CI until it completes.",
+    );
+  });
+
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
 

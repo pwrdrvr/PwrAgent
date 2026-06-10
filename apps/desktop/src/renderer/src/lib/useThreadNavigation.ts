@@ -449,6 +449,13 @@ function reactionsEqual(
   );
 }
 
+function subAgentsEqual(
+  left: NavigationThreadSummary["subAgents"],
+  right: NavigationThreadSummary["subAgents"]
+): boolean {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function permissionTransitionLogsEqual(
   left: NavigationThreadSummary["permissionTransitionLog"],
   right: NavigationThreadSummary["permissionTransitionLog"]
@@ -550,6 +557,7 @@ function threadSummariesEqual(
     threadAgentsEqual(left.agent, right.agent) &&
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
+    subAgentsEqual(left.subAgents, right.subAgents) &&
     permissionTransitionLogsEqual(
       left.permissionTransitionLog,
       right.permissionTransitionLog

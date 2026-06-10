@@ -1,7 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -307,6 +310,78 @@ describe("SqliteOverlayStore — thread reactions", () => {
     expect(overlay?.immutableUsageActivities?.[0]?.summary).toBe(
       "Monitor usage: 100 uncached in · 200 cached · 30 out",
     );
+  });
+
+  it("reloads sub-agent summaries with exact usage and list price data", async () => {
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId: "monitor-1",
+      task: "Watch a long-running command.",
+      status: "success",
+      createdAt: 1500,
+      updatedAt: 2500,
+      preferredModel: "gpt-5.4-mini",
+      preferredReasoningEffort: "low",
+      monitorThreadId: "monitor-thread-1",
+      monitorTurnId: "monitor-turn-1",
+      lastMessage: "The command completed.",
+      outcome: "success",
+      completedAt: 2500,
+      completionSource: {
+        type: "monitor_tool",
+      },
+      monitorUsage: {
+        model: "gpt-5.4-mini",
+        summary:
+          "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+        tokenUsage: {
+          inputTokens: 1000,
+          cachedInputTokens: 200,
+          uncachedInputTokens: 800,
+          outputTokens: 50,
+          reasoningOutputTokens: 10,
+          totalTokens: 1060,
+        },
+        cost: {
+          model: "gpt-5.4-mini",
+          totalUsd: 0.00084,
+        },
+      },
+      pollIntervalSeconds: 30,
+      heartbeatIntervalSeconds: 30,
+      startupTimeoutSeconds: 45,
+    };
+
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      subAgent,
+    });
+    await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 3000,
+      threads: [buildThreadSummary({ updatedAt: 2000 })],
+    });
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    const reopenedStore = new SqliteOverlayStore(reopened);
+    const overlay = await reopenedStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const snapshot = await reopenedStore.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 4000,
+      threads: [buildThreadSummary({ updatedAt: 2000 })],
+    });
+    expect(overlay?.subAgents).toEqual([subAgent]);
+    expect(snapshot.threads[0]?.subAgents).toEqual([subAgent]);
+    reopened.close();
+
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
   });
 
   it("preserves reactions when another sqlite handle performs an unrelated overlay write", async () => {

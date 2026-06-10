@@ -21,6 +21,10 @@ import type {
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
+import type {
+  TaskMonitorCompletionSource,
+  TaskMonitorUsageSnapshot,
+} from "./task-monitor-tools";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -111,6 +115,41 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * navigation refreshes and thread chrome honest.
    */
   automationSummary?: AutomationThreadSummary;
+  /**
+   * Durable summaries of delegated sub-agents (task monitors) spawned from
+   * this thread. Stored in the thread overlay so monitor status and cost
+   * survive app restart exactly as reported by the monitor lifecycle.
+   */
+  subAgents?: ThreadSubAgentSummary[];
+};
+
+export type ThreadSubAgentStatus =
+  | "pending"
+  | "running"
+  | "blocked"
+  | "failed"
+  | "success"
+  | "failure"
+  | "cancelled";
+
+export type ThreadSubAgentSummary = {
+  monitorId: string;
+  task: string;
+  status: ThreadSubAgentStatus;
+  createdAt: number;
+  updatedAt: number;
+  preferredModel?: string;
+  preferredReasoningEffort?: string;
+  monitorThreadId?: ThreadIdentifier;
+  monitorTurnId?: ThreadIdentifier;
+  lastMessage?: string;
+  outcome?: "success" | "failure" | "cancelled";
+  completedAt?: number;
+  completionSource?: TaskMonitorCompletionSource;
+  monitorUsage?: TaskMonitorUsageSnapshot;
+  pollIntervalSeconds?: number;
+  heartbeatIntervalSeconds?: number;
+  startupTimeoutSeconds?: number;
 };
 
 /**
@@ -820,6 +859,8 @@ export type ThreadOverlayState = {
    * narrower per-request usage payload for the same completed turn.
    */
   immutableUsageActivities?: AppServerThreadActivityEntry[];
+  /** Durable delegated sub-agent/task-monitor summaries for this thread. */
+  subAgents?: ThreadSubAgentSummary[];
   /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize

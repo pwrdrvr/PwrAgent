@@ -109,6 +109,7 @@ import {
   type ThreadExecutionMode,
   type ThreadIdentifier,
   type ThreadOverlayState,
+  type ThreadSubAgentSummary,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -8660,6 +8661,7 @@ export class DesktopBackendRegistry {
       method === "thread/parent/cleared" ||
       method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
@@ -9305,7 +9307,7 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private recordTaskMonitorUsage(notification: AppServerNotification): void {
+  private async recordTaskMonitorUsage(notification: AppServerNotification): Promise<void> {
     if (notification.method !== "thread/tokenUsage/updated") {
       return;
     }
@@ -9324,7 +9326,84 @@ export class DesktopBackendRegistry {
     });
     if (usageSnapshot) {
       monitorRecord.latestUsage = usageSnapshot;
+      await this.persistTaskMonitorSubAgent(monitorRecord, {
+        monitorUsage: usageSnapshot,
+      });
     }
+  }
+
+  private async persistTaskMonitorSubAgent(
+    record: TaskMonitorDelegationRecord,
+    patch: Partial<
+      Pick<
+        ThreadSubAgentSummary,
+        | "completedAt"
+        | "completionSource"
+        | "lastMessage"
+        | "monitorUsage"
+        | "outcome"
+        | "status"
+        | "updatedAt"
+      >
+    > = {},
+  ): Promise<void> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === record.monitorId,
+    );
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId: record.monitorId,
+      task: record.task,
+      status:
+        patch.status ??
+        existing?.status ??
+        (record.monitorThreadId ? "running" : "pending"),
+      createdAt: record.createdAt,
+      updatedAt: patch.updatedAt ?? Date.now(),
+      preferredModel: record.preferredModel,
+      preferredReasoningEffort: record.preferredReasoningEffort,
+      ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+      ...(record.monitorTurnId ? { monitorTurnId: record.monitorTurnId } : {}),
+      ...(patch.lastMessage ?? existing?.lastMessage
+        ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
+        : {}),
+      ...(patch.outcome ?? existing?.outcome
+        ? { outcome: patch.outcome ?? existing?.outcome }
+        : {}),
+      ...(patch.completedAt ?? existing?.completedAt
+        ? { completedAt: patch.completedAt ?? existing?.completedAt }
+        : {}),
+      ...(patch.completionSource ?? existing?.completionSource
+        ? { completionSource: patch.completionSource ?? existing?.completionSource }
+        : {}),
+      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+        ? {
+            monitorUsage:
+              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+          }
+        : {}),
+      pollIntervalSeconds: record.pollIntervalSeconds,
+      heartbeatIntervalSeconds: record.heartbeatIntervalSeconds,
+      startupTimeoutSeconds: record.startupTimeoutSeconds,
+    };
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+      subAgent,
+    });
+    this.invalidateThreadListCache(record.backend);
+    await this.emit({
+      backend: record.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: record.parentThreadId,
+        },
+      },
+    });
   }
 
   private recordTaskMonitorActivity(notification: AppServerNotification): void {
@@ -10657,6 +10736,7 @@ export class DesktopBackendRegistry {
     record.lastActivityAt = Date.now();
     record.monitorThreadId = startedMonitor.threadId;
     record.monitorTurnId = startedMonitor.turnId;
+    await this.persistTaskMonitorSubAgent(record, { status: "running" });
 
     return {
       ok: true,
@@ -10816,6 +10896,10 @@ export class DesktopBackendRegistry {
     }
 
     bound.record.lastActivityAt = Date.now();
+    await this.persistTaskMonitorSubAgent(bound.record, {
+      lastMessage: message,
+      status: args.status ?? "running",
+    });
     await this.emitTaskMonitorProgressMessage({
       monitorId: bound.record.monitorId,
       parentThreadId: bound.record.parentThreadId,
@@ -10903,6 +10987,14 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       summary: params.summary,
       task: params.record.task,
+    });
+    await this.persistTaskMonitorSubAgent(params.record, {
+      completedAt: Date.now(),
+      completionSource: params.completionSource,
+      lastMessage: params.summary,
+      monitorUsage: params.record.latestUsage,
+      outcome: params.outcome,
+      status: params.outcome,
     });
     await this.injectCodexMonitorMessage({
       parentThreadId: params.record.parentThreadId,
@@ -11653,7 +11745,7 @@ export class DesktopBackendRegistry {
   private async emit(event: AgentEvent): Promise<void> {
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
-      this.recordTaskMonitorUsage(event.notification);
+      await this.recordTaskMonitorUsage(event.notification);
     }
 
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
