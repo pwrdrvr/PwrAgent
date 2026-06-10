@@ -1004,8 +1004,8 @@ function buildMessageCopyText(
   }
 
   return parts
-    .filter((part): part is Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> =>
-      part.type !== "image"
+    .filter((part): part is AppServerThreadTextPart =>
+      part.type === "text"
     )
     .map((part) => part.text)
     .join("\n\n");
