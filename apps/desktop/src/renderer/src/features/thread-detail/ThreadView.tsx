@@ -1969,14 +1969,13 @@ export function ThreadView(props: ThreadViewProps) {
       (sameWorktreeSubthread && selectedLaunchpad.branchName
         ? "Git worktree"
         : "Directory context only");
-    const launchpadRunningCodexEnvironmentSetup = Boolean(
-      selectedLaunchpad.codexEnvironmentId &&
-        selectedLaunchpad.codexEnvironmentSetupEnabled,
-    );
     const selectedLaunchpadCodexEnvironment =
       selectedLaunchpad.codexEnvironmentOptions?.find(
         (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
       );
+    const launchpadRunningCodexEnvironmentSetup = Boolean(
+      selectedLaunchpadCodexEnvironment?.setupScript,
+    );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
     > = async (directoryKey, input, collaborationMode, reviewTarget) => {

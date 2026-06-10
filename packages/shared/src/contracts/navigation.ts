@@ -360,6 +360,11 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   parentThreadTitle?: string;
   codexEnvironmentId?: string;
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  /**
+   * @deprecated Environment setup execution is config-driven from the selected
+   * environment's setup script. This field is kept only so old persisted
+   * launchpad rows can deserialize.
+   */
   codexEnvironmentSetupEnabled?: boolean;
   codexEnvironmentActionId?: string;
   codexEnvironmentOptions?: CodexEnvironmentOption[];

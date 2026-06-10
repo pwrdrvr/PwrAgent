@@ -3802,7 +3802,6 @@ describe("MessagingController", () => {
         workMode: "local",
         codexEnvironmentId: "repo",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentSetupEnabled: true,
         codexEnvironmentOptions: [
           {
             id: "repo",
@@ -3896,7 +3895,6 @@ describe("MessagingController", () => {
         launchpad: expect.objectContaining({
           codexEnvironmentId: "ci",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentSetupEnabled: true,
         }),
       }),
       expectMaterializeOptions(),
@@ -4609,7 +4607,6 @@ describe("MessagingController", () => {
       patch: expect.objectContaining({
         codexEnvironmentId: "dev-env",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentSetupEnabled: true,
       }),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -4637,7 +4634,6 @@ describe("MessagingController", () => {
         launchpad: expect.objectContaining({
           codexEnvironmentId: "dev-env",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentSetupEnabled: true,
         }),
       }),
       expectMaterializeOptions(),
@@ -4660,7 +4656,6 @@ describe("MessagingController", () => {
         workMode: "local",
         codexEnvironmentId: "repo",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentSetupEnabled: true,
         codexEnvironmentActionId: "repo-setup",
         codexEnvironmentOptions: [
           {
@@ -4708,7 +4703,6 @@ describe("MessagingController", () => {
       patch: expect.objectContaining({
         codexEnvironmentId: "ci",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentSetupEnabled: true,
         codexEnvironmentActionId: undefined,
       }),
     });
@@ -4719,7 +4713,6 @@ describe("MessagingController", () => {
     expect(materializeRequest?.launchpad).toMatchObject({
       codexEnvironmentId: "ci",
       codexEnvironmentExecutionTarget: "local",
-      codexEnvironmentSetupEnabled: true,
     });
     expect(materializeRequest?.launchpad.codexEnvironmentActionId).toBeUndefined();
   });

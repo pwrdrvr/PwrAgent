@@ -958,6 +958,11 @@ export type MessagingBindingPreferences = {
   codexEnvironmentActionId?: string | null;
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
   codexEnvironmentId?: string | null;
+  /**
+   * @deprecated Environment setup execution is config-driven from the selected
+   * environment's setup script. This field is kept only for old persisted
+   * messaging preference records.
+   */
   codexEnvironmentSetupEnabled?: boolean;
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
@@ -1179,6 +1184,11 @@ export type MessagingBrowseSessionRecord = {
   branchName?: string;
   codexEnvironmentId?: string | null;
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  /**
+   * @deprecated Environment setup execution is config-driven from the selected
+   * environment's setup script. This field is kept only for old persisted
+   * browse sessions.
+   */
   codexEnvironmentSetupEnabled?: boolean;
   codexEnvironmentActionId?: string;
   selectedProject?: MessagingBrowseSelectedProject;

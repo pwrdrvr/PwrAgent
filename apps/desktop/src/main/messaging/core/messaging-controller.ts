@@ -4581,11 +4581,6 @@ export class MessagingController {
       await this.deliverInvalidBrowseSelection(event);
       return;
     }
-    const codexEnvironmentSetupEnabled = environment
-      ? directory?.launchpad?.codexEnvironmentId === environment.id
-        ? directory.launchpad.codexEnvironmentSetupEnabled ?? Boolean(environment.setupScript)
-        : Boolean(environment.setupScript)
-      : false;
     const codexEnvironmentActionId =
       environment && directory?.launchpad?.codexEnvironmentId === environment.id
         ? directory.launchpad.codexEnvironmentActionId
@@ -4593,7 +4588,6 @@ export class MessagingController {
     await this.updateNewThreadStickySettings(session, {
       codexEnvironmentId: environment?.id,
       codexEnvironmentExecutionTarget: environment ? "local" : undefined,
-      codexEnvironmentSetupEnabled,
       codexEnvironmentActionId,
     });
     await this.presentNewThreadPromptGate(
@@ -4603,7 +4597,6 @@ export class MessagingController {
           ...session.preferences,
           codexEnvironmentId: environment?.id ?? null,
           codexEnvironmentExecutionTarget: environment ? "local" : undefined,
-          codexEnvironmentSetupEnabled,
           codexEnvironmentActionId: codexEnvironmentActionId ?? null,
           updatedAt: this.now(),
         },
@@ -10973,7 +10966,6 @@ type NewThreadOptionsSummary = {
   codexEnvironmentExecutionTarget?: "local" | "remote";
   codexEnvironmentId?: string | null;
   codexEnvironmentOptions: CodexEnvironmentOption[];
-  codexEnvironmentSetupEnabled?: boolean;
   executionMode: ThreadExecutionMode;
   executionModeSource: "session" | "directory-launchpad" | "launchpad-defaults";
   fastMode: boolean;
@@ -11050,11 +11042,6 @@ function newThreadOptionsForSession(
   const selectedEnvironment = codexEnvironmentOptions.find(
     (environment) => environment.id === codexEnvironmentId,
   );
-  const codexEnvironmentSetupEnabled = selectedEnvironment
-    ? session.preferences?.codexEnvironmentSetupEnabled ??
-      directoryLaunchpad?.codexEnvironmentSetupEnabled ??
-      Boolean(selectedEnvironment.setupScript)
-    : false;
   return {
     backend: backend.kind,
     backendLabel: backend.label,
@@ -11071,7 +11058,6 @@ function newThreadOptionsForSession(
       : undefined,
     codexEnvironmentId: selectedEnvironment?.id ?? (codexEnvironmentId === null ? null : undefined),
     codexEnvironmentOptions,
-    codexEnvironmentSetupEnabled,
     executionMode,
     executionModeSource,
     fastMode:
@@ -12151,10 +12137,6 @@ function launchpadForMessagingProject(params: {
       params.preferences?.codexEnvironmentId === null
         ? undefined
         : params.options.codexEnvironmentExecutionTarget,
-    codexEnvironmentSetupEnabled:
-      params.preferences?.codexEnvironmentId === null
-        ? false
-        : params.options.codexEnvironmentSetupEnabled,
     codexEnvironmentActionId:
       params.preferences?.codexEnvironmentId === null
         ? undefined

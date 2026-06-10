@@ -1048,7 +1048,6 @@ describe("Composer", () => {
           prompt: "",
           workMode: "local",
           codexEnvironmentId: "environment",
-          codexEnvironmentSetupEnabled: true,
           codexEnvironmentOptions: [
             {
               id: "environment",
@@ -1123,7 +1122,6 @@ describe("Composer", () => {
       expect.objectContaining({
         codexEnvironmentId: "environment",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentSetupEnabled: true,
       }),
       expect.any(Object),
     );

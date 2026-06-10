@@ -2529,7 +2529,6 @@ describe("useThreadNavigation", () => {
       branchName: "main",
       codexEnvironmentId: "environment",
       codexEnvironmentExecutionTarget: "local" as const,
-      codexEnvironmentSetupEnabled: true,
       codexEnvironmentOptions: [
         {
           id: "environment",
@@ -2599,7 +2598,6 @@ describe("useThreadNavigation", () => {
           prompt: "typing",
           codexEnvironmentId: undefined,
           codexEnvironmentExecutionTarget: undefined,
-          codexEnvironmentSetupEnabled: undefined,
           codexEnvironmentOptions: [],
           updatedAt: 2,
         },
@@ -2611,7 +2609,6 @@ describe("useThreadNavigation", () => {
       prompt: "typing",
       codexEnvironmentId: "environment",
       codexEnvironmentExecutionTarget: "local",
-      codexEnvironmentSetupEnabled: true,
       codexEnvironmentOptions: [
         expect.objectContaining({
           id: "environment",

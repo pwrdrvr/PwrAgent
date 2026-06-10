@@ -3771,7 +3771,6 @@ script = "echo setup"
           model: "kimi-for-coding",
           codexEnvironmentId: "environment",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentSetupEnabled: true,
           createdAt: 1_000,
           updatedAt: 2_000,
         },
@@ -6336,7 +6335,6 @@ script = "pnpm install"
           backend: "acp:kimi" as AcpBackendId,
           codexEnvironmentId: undefined,
           codexEnvironmentExecutionTarget: undefined,
-          codexEnvironmentSetupEnabled: false,
           codexEnvironmentActionId: undefined,
         },
       });
@@ -7774,8 +7772,10 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
         if (
           a?.status === "exited" &&
           b?.status === "exited" &&
-          a.output === "A-output-marker" &&
-          b.output === "B-output-marker"
+          a.output?.includes("A-output-marker") &&
+          !a.output.includes("B-output-marker") &&
+          b.output?.includes("B-output-marker") &&
+          !b.output.includes("A-output-marker")
         ) {
           // Sanity-check the runId attribution: each invocation's return
           // value's run should match the overlay's persisted entry.
@@ -8102,7 +8102,6 @@ script = "printf setup-output"
           reasoningEffort: "high",
           codexEnvironmentId: "environment",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentSetupEnabled: true,
           createdAt: 1_000,
           updatedAt: 2_000,
         },
@@ -8705,7 +8704,8 @@ script = "printf setup-failed && exit 42"
           model: "gpt-5.5",
           reasoningEffort: "high",
           codexEnvironmentId: "environment",
-          codexEnvironmentSetupEnabled: true,
+          // Deprecated persisted flag must not suppress config-driven setup.
+          codexEnvironmentSetupEnabled: false,
           createdAt: 1_000,
           updatedAt: 2_000,
         },
