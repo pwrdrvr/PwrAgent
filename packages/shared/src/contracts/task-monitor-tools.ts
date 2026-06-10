@@ -47,6 +47,23 @@ export type CompleteMonitoringToolArgs = {
   triggerParentTurn?: boolean;
 };
 
+export type TaskMonitorUsageSnapshot = {
+  cost?: {
+    model: string;
+    totalUsd: number;
+  };
+  model?: string;
+  summary: string;
+  tokenUsage: {
+    cachedInputTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningOutputTokens?: number;
+    totalTokens?: number;
+    uncachedInputTokens?: number;
+  };
+};
+
 export type TaskMonitorToolArgsByOperation = {
   create_monitor_delegation: CreateMonitorDelegationToolArgs;
   inject_progress: InjectMonitorProgressToolArgs;
@@ -86,6 +103,7 @@ export type TaskMonitorProgressData = {
   monitorId: string;
   parentThreadId: ThreadIdentifier;
   injected: true;
+  monitorUsage?: TaskMonitorUsageSnapshot;
 };
 
 export type TaskMonitorCompletionData = TaskMonitorProgressData & {

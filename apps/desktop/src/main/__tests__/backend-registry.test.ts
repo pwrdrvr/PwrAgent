@@ -11544,7 +11544,7 @@ command = "pnpm dev"
       progressEvent?.notification.method === "item/completed"
         ? (progressEvent.notification.params.item as { text?: string }).text
         : undefined,
-    ).toContain(`Monitor usage so far: ${expectedUsageSummary}`);
+    ).not.toContain("Monitor usage");
     expect(progressEvent).toMatchObject({
       backend: "codex",
       notification: {
@@ -11557,6 +11557,23 @@ command = "pnpm dev"
             data: {
               source: "pwragent_task_monitor",
               monitorId,
+              monitorUsage: {
+                model: "gpt-5.4-mini",
+                summary: expectedUsageSummary,
+                tokenUsage: {
+                  cachedInputTokens: 200,
+                  inputTokens: 1_000,
+                  outputTokens: 50,
+                  reasoningOutputTokens: 10,
+                  totalTokens: 1_060,
+                  uncachedInputTokens: 800,
+                },
+                cost: {
+                  model: "gpt-5.4-mini",
+                  totalUsd: 0.00084,
+                },
+                phase: "progress",
+              },
               transient: true,
             },
           },
@@ -11599,11 +11616,46 @@ command = "pnpm dev"
           content: [
             {
               type: "output_text",
-              text: expect.stringContaining(`Monitor usage: ${expectedUsageSummary}`),
+              text: expect.not.stringContaining("Monitor usage"),
             },
           ],
         },
       ],
+    });
+    const completionUsageEvent = events.find((event) => {
+      if (event.notification.method !== "item/completed") {
+        return false;
+      }
+      const item = event.notification.params.item as {
+        data?: Record<string, unknown>;
+        type?: string;
+      };
+      return (
+        event.notification.params.threadId === "thread-1" &&
+        item.type === "taskMonitorUsage"
+      );
+    });
+    expect(completionUsageEvent).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            type: "taskMonitorUsage",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              monitorUsage: {
+                summary: expectedUsageSummary,
+                phase: "completion",
+              },
+              transient: false,
+            },
+          },
+        },
+      },
     });
     expect(codexClient.startTurnCallCount).toBe(2);
     expect(codexClient.lastStartTurnParams).toMatchObject({
@@ -11621,7 +11673,7 @@ command = "pnpm dev"
           ? codexClient.lastStartTurnParams.input[0].text
           : "",
       ),
-    ).toContain(`Monitor usage: ${expectedUsageSummary}`);
+    ).not.toContain("Monitor usage");
     expect(
       String(
         codexClient.lastStartTurnParams?.input[0]?.type === "text"
@@ -11635,6 +11687,9 @@ command = "pnpm dev"
       monitorId,
       parentThreadId: "thread-1",
       outcome: "failure",
+      monitorUsage: {
+        summary: expectedUsageSummary,
+      },
       parentTurn: {
         status: "started",
         turnId: "turn-1",

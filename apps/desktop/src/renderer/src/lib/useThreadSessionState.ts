@@ -36,6 +36,7 @@ import {
   buildLiveActivityEntry,
   buildLiveToolDetails,
   buildMcpProgressDetail,
+  buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
   formatChangedFileSummary,
   getNotificationItem,
@@ -3454,9 +3455,27 @@ export function useThreadSessionState(params: {
             itemParams: event.notification.params,
             turn: assistantTurn,
           });
+          const item = getNotificationItem(event.notification.params);
+          const taskMonitorUsageEntry = item
+            ? buildTaskMonitorUsageActivityEntry({
+                id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
+                item,
+                turn: assistantTurn,
+              })
+            : undefined;
           if (assistantMessageEntry) {
+            const responseWithUsage = taskMonitorUsageEntry
+              ? appendThreadEntries(
+                  current.response,
+                  {
+                    backend: event.backend,
+                    threadId: notificationThreadId,
+                  },
+                  [taskMonitorUsageEntry]
+                )
+              : current.response;
             const nextResponse = appendMessageEntries(
-              current.response,
+              responseWithUsage,
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
@@ -3481,6 +3500,25 @@ export function useThreadSessionState(params: {
                 current.pendingAssistantMessage?.id === assistantMessageEntry.id
                   ? undefined
                   : current.pendingAssistantMessage,
+              response: nextResponse,
+            };
+          }
+
+          if (taskMonitorUsageEntry) {
+            const nextResponse = appendThreadEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [taskMonitorUsageEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
               response: nextResponse,
             };
           }
@@ -3530,7 +3568,6 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const item = getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({

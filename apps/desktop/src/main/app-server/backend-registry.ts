@@ -132,6 +132,7 @@ import {
   type InjectMonitorProgressToolArgs,
   type TaskMonitorRequest,
   type TaskMonitorResponse,
+  type TaskMonitorUsageSnapshot,
 } from "@pwragent/shared";
 import {
   ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
@@ -1401,7 +1402,7 @@ type TaskMonitorDelegationRecord = {
   backend: "codex";
   createdAt: number;
   finalHandoffPrompt?: string;
-  latestUsageSummary?: string;
+  latestUsage?: TaskMonitorUsageSnapshot;
   monitorId: string;
   monitorThreadId?: string;
   monitorTurnId?: string;
@@ -1433,13 +1434,11 @@ function formatTaskMonitorProgressMessage(params: {
   message: string;
   status?: InjectMonitorProgressToolArgs["status"];
   task: string;
-  usageSummary?: string;
 }): string {
   return [
     "PwrAgent monitor update",
     `Task: ${params.task}`,
     params.status ? `Status: ${params.status}` : undefined,
-    params.usageSummary ? `Monitor usage so far: ${params.usageSummary}` : undefined,
     params.message,
   ]
     .filter(Boolean)
@@ -1451,13 +1450,11 @@ function formatTaskMonitorCompletionMessage(params: {
   outcome: CompleteMonitoringToolArgs["outcome"];
   summary: string;
   task: string;
-  usageSummary?: string;
 }): string {
   return [
     "PwrAgent monitor complete",
     `Task: ${params.task}`,
     `Outcome: ${params.outcome}`,
-    params.usageSummary ? `Monitor usage: ${params.usageSummary}` : undefined,
     params.summary,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
   ]
@@ -1471,14 +1468,12 @@ function buildTaskMonitorFinalHandoffInput(params: {
   outcome: CompleteMonitoringToolArgs["outcome"];
   summary: string;
   task: string;
-  usageSummary?: string;
 }): string {
   return [
     "A lightweight PwrAgent monitor subagent finished a long-running task.",
     "",
     `Task: ${params.task}`,
     `Outcome: ${params.outcome}`,
-    params.usageSummary ? `Monitor usage: ${params.usageSummary}` : undefined,
     `Summary: ${params.summary}`,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
     params.finalHandoffPrompt?.trim()
@@ -1494,6 +1489,7 @@ function buildTaskMonitorFinalHandoffInput(params: {
 type TaskMonitorTokenUsageBreakdown = {
   cachedInputTokens?: number;
   inputTokens?: number;
+  uncachedInputTokens?: number;
   outputTokens?: number;
   reasoningOutputTokens?: number;
   totalTokens?: number;
@@ -1527,10 +1523,10 @@ const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = 
   },
 ];
 
-function formatTaskMonitorUsageSummary(params: {
+function buildTaskMonitorUsageSnapshot(params: {
   model?: string;
   tokenUsage: unknown;
-}): string | undefined {
+}): TaskMonitorUsageSnapshot | undefined {
   const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
   if (!tokens) {
     return undefined;
@@ -1541,6 +1537,10 @@ function formatTaskMonitorUsageSummary(params: {
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
   const cost = estimateTaskMonitorUsageCost({
     cachedInputTokens,
     model: params.model,
@@ -1548,7 +1548,7 @@ function formatTaskMonitorUsageSummary(params: {
     uncachedInputTokens,
   });
 
-  return [
+  const summary = [
     `${formatTaskMonitorTokenCount(uncachedInputTokens)} uncached in`,
     `${formatTaskMonitorTokenCount(cachedInputTokens)} cached`,
     reasoningOutputTokens > 0
@@ -1560,6 +1560,20 @@ function formatTaskMonitorUsageSummary(params: {
   ]
     .filter(Boolean)
     .join(" · ");
+
+  return {
+    ...(cost ? { cost } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    summary,
+    tokenUsage: {
+      cachedInputTokens,
+      inputTokens,
+      outputTokens,
+      reasoningOutputTokens,
+      totalTokens,
+      uncachedInputTokens,
+    },
+  };
 }
 
 function normalizeTaskMonitorTokenUsage(
@@ -9233,12 +9247,12 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const usageSummary = formatTaskMonitorUsageSummary({
+    const usageSnapshot = buildTaskMonitorUsageSnapshot({
       model: monitorRecord.preferredModel,
       tokenUsage: notification.params.tokenUsage,
     });
-    if (usageSummary) {
-      monitorRecord.latestUsageSummary = usageSummary;
+    if (usageSnapshot) {
+      monitorRecord.latestUsage = usageSnapshot;
     }
   }
 
@@ -10685,8 +10699,8 @@ export class DesktopBackendRegistry {
         message,
         status: args.status,
         task: bound.record.task,
-        usageSummary: bound.record.latestUsageSummary,
       }),
+      usage: bound.record.latestUsage,
     });
 
     return {
@@ -10696,6 +10710,9 @@ export class DesktopBackendRegistry {
         monitorId: bound.record.monitorId,
         parentThreadId: bound.record.parentThreadId,
         injected: true,
+        ...(bound.record.latestUsage
+          ? { monitorUsage: bound.record.latestUsage }
+          : {}),
       },
     };
   }
@@ -10718,12 +10735,19 @@ export class DesktopBackendRegistry {
       outcome: args.outcome,
       summary,
       task: bound.record.task,
-      usageSummary: bound.record.latestUsageSummary,
     });
     await this.injectCodexMonitorMessage({
       parentThreadId: bound.record.parentThreadId,
       text: finalText,
     });
+    if (bound.record.latestUsage) {
+      await this.emitTaskMonitorUsageActivity({
+        monitorId: bound.record.monitorId,
+        parentThreadId: bound.record.parentThreadId,
+        phase: "completion",
+        usage: bound.record.latestUsage,
+      });
+    }
 
     let parentTurn:
       | {
@@ -10746,7 +10770,6 @@ export class DesktopBackendRegistry {
               outcome: args.outcome,
               summary,
               task: bound.record.task,
-              usageSummary: bound.record.latestUsageSummary,
             }),
           },
         ],
@@ -10775,6 +10798,9 @@ export class DesktopBackendRegistry {
         parentThreadId: bound.record.parentThreadId,
         injected: true,
         outcome: args.outcome,
+        ...(bound.record.latestUsage
+          ? { monitorUsage: bound.record.latestUsage }
+          : {}),
         ...(parentTurn ? { parentTurn } : {}),
       },
     };
@@ -10811,6 +10837,7 @@ export class DesktopBackendRegistry {
     monitorId: string;
     parentThreadId: string;
     text: string;
+    usage?: TaskMonitorUsageSnapshot;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
@@ -10827,7 +10854,47 @@ export class DesktopBackendRegistry {
             data: {
               source: "pwragent_task_monitor",
               monitorId: params.monitorId,
+              ...(params.usage
+                ? {
+                    monitorUsage: {
+                      ...params.usage,
+                      phase: "progress",
+                    },
+                  }
+                : {}),
               transient: true,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async emitTaskMonitorUsageActivity(params: {
+    monitorId: string;
+    parentThreadId: string;
+    phase: "completion" | "progress";
+    usage: TaskMonitorUsageSnapshot;
+  }): Promise<void> {
+    const now = Date.now();
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.parentThreadId,
+          turnId: `monitor:${params.monitorId}`,
+          item: {
+            id: `${params.monitorId}:usage:${params.phase}:${now}`,
+            type: "taskMonitorUsage",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: params.monitorId,
+              monitorUsage: {
+                ...params.usage,
+                phase: params.phase,
+              },
+              transient: params.phase !== "completion",
             },
           },
         },

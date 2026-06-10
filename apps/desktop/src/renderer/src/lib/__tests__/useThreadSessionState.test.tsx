@@ -1479,6 +1479,95 @@ describe("useThreadSessionState", () => {
     expect(readThread).toHaveBeenCalledTimes(1);
   });
 
+  it("renders task monitor usage metadata as a sibling activity entry", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-progress-1",
+              type: "agentMessage",
+              text: "Still running.",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                monitorUsage: {
+                  phase: "progress",
+                  model: "gpt-5.4-mini",
+                  tokenUsage: {
+                    inputTokens: 1_000,
+                    cachedInputTokens: 200,
+                    outputTokens: 50,
+                    reasoningOutputTokens: 10,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Still running.",
+      "activity:Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+    ]);
+  });
+
   it("keeps live read activity in receipt order between assistant messages", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
