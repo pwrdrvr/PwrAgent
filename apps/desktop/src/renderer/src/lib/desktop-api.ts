@@ -72,6 +72,8 @@ import type {
   MarkThreadSeenRequest,
   OpenFederationWindowRequest,
   OpenFederationWindowResponse,
+  ReadFederationHealthRequest,
+  ReadFederationHealthResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -355,6 +357,9 @@ export type DesktopApi = {
   openFederationWindow?: (
     request: OpenFederationWindowRequest,
   ) => Promise<OpenFederationWindowResponse>;
+  readFederationHealth?: (
+    request?: ReadFederationHealthRequest,
+  ) => Promise<ReadFederationHealthResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

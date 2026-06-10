@@ -181,6 +181,8 @@ import type {
   OpenPathResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReadFederationHealthRequest,
+  ReadFederationHealthResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -306,6 +308,7 @@ import {
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
   PATH_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
@@ -652,6 +655,10 @@ const desktopApi = Object.freeze({
     request: OpenFederationWindowRequest,
   ): Promise<OpenFederationWindowResponse> =>
     await ipcRenderer.invoke(FEDERATION_OPEN_WINDOW_CHANNEL, request),
+  readFederationHealth: async (
+    request?: ReadFederationHealthRequest,
+  ): Promise<ReadFederationHealthResponse> =>
+    await ipcRenderer.invoke(FEDERATION_GET_HEALTH_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
