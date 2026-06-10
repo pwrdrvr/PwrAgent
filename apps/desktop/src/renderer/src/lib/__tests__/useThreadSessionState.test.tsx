@@ -6297,6 +6297,103 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("repairs a stray launchpad start when optimistic review metadata arrives after events", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result, rerender } = renderHook(
+      ({ includeOptimisticReview }: { includeOptimisticReview: boolean }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+            ...(includeOptimisticReview
+              ? {
+                  optimisticActiveTurn: {
+                    id: "turn-review",
+                    statusText: "Reviewing",
+                    startedAt: 1_500,
+                    reviewDisplayText: "Review changes against main",
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeOptimisticReview: false } }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-stray");
+
+    rerender({ includeOptimisticReview: true });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Reviewing");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+  });
+
   it("seeds launchpad active turns alongside optimistic user messages", async () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,

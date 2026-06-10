@@ -2744,6 +2744,8 @@ export function useThreadNavigation(
         buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           ? {
               ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
+              optimisticActiveTurn:
+                thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
               optimisticUserMessage:
                 thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
             }
