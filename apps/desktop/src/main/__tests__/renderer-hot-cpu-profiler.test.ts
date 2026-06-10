@@ -135,6 +135,7 @@ describe("RendererHotCpuProfiler", () => {
     if (!sessionResult.ok) return;
 
     const { target, debuggerApi } = createTarget();
+    const onProfileWritten = vi.fn(async () => undefined);
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -152,6 +153,7 @@ describe("RendererHotCpuProfiler", () => {
         error: vi.fn(),
       },
       now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+      onProfileWritten,
     });
 
     await profiler.start();
@@ -176,6 +178,14 @@ describe("RendererHotCpuProfiler", () => {
 
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
     expect(debuggerApi.detach).toHaveBeenCalled();
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+        sessionDirectory: sessionResult.session.directoryPath,
+        sessionDirectoryName: sessionResult.session.directoryName,
+      }),
+    );
 
     const profile = JSON.parse(
       await fs.readFile(

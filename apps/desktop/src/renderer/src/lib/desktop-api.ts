@@ -6,6 +6,7 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../../../shared/image-normalization";
+import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type {
   AgentEvent,
   AutomationIdRequest,
@@ -241,6 +242,9 @@ export type DesktopApi = {
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
+  onHotCpuProfileCaptured?: (
+    callback: (event: HotCpuProfileCapturedEvent) => void,
+  ) => () => void;
   installAppUpdate?: () => Promise<AppUpdateInstallResult>;
   listAutomations?: (
     request?: ListAutomationsRequest,

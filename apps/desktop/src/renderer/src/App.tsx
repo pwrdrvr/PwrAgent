@@ -43,6 +43,7 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import { buildHotCpuProfileHandoffMessage } from "../../shared/hot-cpu-profile";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
@@ -188,6 +189,8 @@ function DesktopAppShell(props: {
   // AppNoticeToast in the toast stack below, separate from the navigation
   // archive notice so the two never clobber each other.
   const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
+  const [hotCpuProfileNotice, setHotCpuProfileNotice] =
+    useState<AppNoticeToastNotice>();
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -197,6 +200,17 @@ function DesktopAppShell(props: {
   // OS window with its own lifecycle.
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
+  }, [desktopApi]);
+
+  useEffect(() => {
+    return desktopApi?.onHotCpuProfileCaptured?.((event) => {
+      setHotCpuProfileNotice({
+        id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
+        title: "CPU profile captured",
+        message: `Saved ${event.profileFilename}. Copy this notice to hand off the profile path.`,
+        detail: buildHotCpuProfileHandoffMessage(event),
+      });
+    });
   }, [desktopApi]);
   const revealSelectedThreadInList = useCallback(() => {
     const selectedRow = document.querySelector<HTMLElement>(
@@ -845,6 +859,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={composerNotice}
             onDismiss={() => setComposerNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={hotCpuProfileNotice}
+            onDismiss={() => setHotCpuProfileNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>

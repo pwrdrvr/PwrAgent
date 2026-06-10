@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
+import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
@@ -59,6 +60,9 @@ export class RendererHotCpuProfiler {
   private readonly logger: Logger;
   private readonly now: () => Date;
   private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
+  private readonly onProfileWritten?: (
+    event: HotCpuProfileCapturedEvent,
+  ) => void | Promise<void>;
   private readonly session: HotCpuProfileSession;
   private readonly target: RendererHotCpuTarget;
 
@@ -84,12 +88,14 @@ export class RendererHotCpuProfiler {
     logger?: Logger;
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
+    onProfileWritten?: (event: HotCpuProfileCapturedEvent) => void | Promise<void>;
   }) {
     this.config = options.config;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
     this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
+    this.onProfileWritten = options.onProfileWritten;
     this.session = options.session;
     this.target = options.target;
   }
@@ -418,6 +424,13 @@ export class RendererHotCpuProfiler {
       ) {
         await this.captureHeapSnapshot(index, "stop");
       }
+      await this.onProfileWritten?.({
+        capturedAt: this.now().toISOString(),
+        profileFilename,
+        profilePath,
+        sessionDirectory: this.session.directoryPath,
+        sessionDirectoryName: this.session.directoryName,
+      });
     } catch (error) {
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
