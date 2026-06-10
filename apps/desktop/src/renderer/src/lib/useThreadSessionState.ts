@@ -255,6 +255,22 @@ function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
   );
 }
 
+function isMonitorUsageActivityEntry(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity" &&
+    (entry.summary.startsWith("Monitor usage:") ||
+      entry.summary.startsWith("Monitor usage so far:"))
+  );
+}
+
+function isDurableMonitorUsageActivity(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return entry.type === "activity" && entry.summary.startsWith("Monitor usage:");
+}
+
 function tokenUsageActivityScope(
   entry: AppServerThreadActivityEntry
 ): "latest-request" | "total" | "turn" | undefined {
@@ -369,6 +385,24 @@ function mergeTranscriptEntries(
         continue;
       }
 
+      const usageTimedIndex =
+        typeof optimisticCreatedAt === "number"
+          ? merged.findIndex((entry) => {
+              const entryCreatedAt =
+                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+              return (
+                typeof entryCreatedAt === "number" &&
+                entryCreatedAt > optimisticCreatedAt
+              );
+            })
+          : -1;
+      if (usageTimedIndex !== -1) {
+        merged.splice(usageTimedIndex, 0, optimisticEntry);
+        continue;
+      }
+    }
+
+    if (isMonitorUsageActivityEntry(optimisticEntry)) {
       const usageTimedIndex =
         typeof optimisticCreatedAt === "number"
           ? merged.findIndex((entry) => {
@@ -941,6 +975,20 @@ function carryForwardTranscriptEntryOrder(
       continue;
     }
 
+    const alreadyHydrated = entries.some(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && activityEntriesMatch(entry, source)
+    );
+    if (alreadyHydrated) {
+      continue;
+    }
+
+    changed = true;
+    entries = mergeTranscriptEntries(entries, [source]);
+  }
+
+  const durableMonitorUsageSources = sources.filter(isDurableMonitorUsageActivity);
+  for (const source of durableMonitorUsageSources) {
     const alreadyHydrated = entries.some(
       (entry): entry is AppServerThreadActivityEntry =>
         entry.type === "activity" && activityEntriesMatch(entry, source)
