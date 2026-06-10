@@ -7607,8 +7607,15 @@ describe("MessagingController", () => {
       ...resumeRepost,
       id: "assistant-message-1",
     } satisfies MessagingSurfaceIntent;
+    const importantResumeRepost = {
+      ...resumeRepost,
+      id: "assistant-resume-repost-important-1",
+    } satisfies MessagingSurfaceIntent;
 
     expect(messagingDeliveryPriority(resumeRepost)).toBe("routine_status");
+    expect(messagingDeliveryPriority(importantResumeRepost)).toBe(
+      "user_command",
+    );
     expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
   });
 

@@ -2895,6 +2895,7 @@ export class MessagingController {
 
   private async repostLastAssistantMessageForResume(
     binding: MessagingBindingRecord,
+    options?: { important?: boolean },
   ): Promise<void> {
     const readLastAssistantReply = this.options.backend.readThreadLastAssistantReply;
     const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
@@ -2932,7 +2933,11 @@ export class MessagingController {
 
     await this.deliver(
       {
-        id: this.newIntentId("assistant-resume-repost"),
+        id: this.newIntentId(
+          options?.important
+            ? "assistant-resume-repost-important"
+            : "assistant-resume-repost",
+        ),
         kind: "message",
         bindingId: binding.id,
         createdAt: this.now(),
@@ -10298,7 +10303,9 @@ export class MessagingController {
       targetKind,
     });
     const visibleBinding = await this.renderBindingStatus(binding);
-    await this.repostLastAssistantMessageForResume(visibleBinding);
+    await this.repostLastAssistantMessageForResume(visibleBinding, {
+      important: true,
+    });
     return {
       ok: true,
       data: {
@@ -12129,6 +12136,9 @@ export function messagingDeliveryPriority(
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
     case "message":
+      if (intent.id.startsWith("assistant-resume-repost-important")) {
+        return "user_command";
+      }
       if (intent.id.startsWith("assistant-resume-repost")) {
         return "routine_status";
       }
