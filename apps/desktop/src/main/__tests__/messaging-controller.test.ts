@@ -991,6 +991,7 @@ describe("MessagingController", () => {
       updatedAt: now,
     });
     harness.delivered.length = 0;
+    sleeps.length = 0;
     now = 6000;
     budgetEvents.length = 0;
 
@@ -1081,6 +1082,7 @@ describe("MessagingController", () => {
       updatedAt: now,
     });
     harness.delivered.length = 0;
+    sleeps.length = 0;
     now = 6000;
     budgetEvents.length = 0;
 
