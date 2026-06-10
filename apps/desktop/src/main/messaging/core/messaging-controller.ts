@@ -11839,7 +11839,11 @@ function isTurnInProgressStartError(error: unknown): boolean {
 function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
   return (
     result.outcome === "failed" &&
-    Boolean(result.errorMessage?.match(/\bUnknown Channel\b|chat not found/i))
+    Boolean(
+      result.errorMessage?.match(
+        /\bUnknown Channel\b|chat not found|message thread not found/i,
+      ),
+    )
   );
 }
 
