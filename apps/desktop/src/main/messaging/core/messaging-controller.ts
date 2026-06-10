@@ -1426,6 +1426,7 @@ export class MessagingController {
     if (await this.isTurnOccupied(currentBinding, bundle.threadKey)) {
       await this.queuePreparedInput({
         binding: consumedSkillBinding,
+        event: bundle.events[0],
         input: preparedWithSkill.input,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
@@ -1791,6 +1792,7 @@ export class MessagingController {
         if (params.queueOnConcurrentStart !== false) {
           await this.queuePreparedInput({
             binding: params.binding,
+            event: params.event,
             input: params.input,
             preview: params.preview,
             threadKey: params.threadKey,
@@ -1874,6 +1876,7 @@ export class MessagingController {
 
   private async queuePreparedInput(params: {
     binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     preview: string;
     threadKey: string;
@@ -2055,6 +2058,7 @@ export class MessagingController {
 
     const startResult = await this.startPreparedInput({
       binding: entry.binding,
+      event: entry.event,
       input: entry.input,
       preview: entry.preview,
       queueOnConcurrentStart: false,

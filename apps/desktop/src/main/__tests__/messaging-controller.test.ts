@@ -356,6 +356,88 @@ describe("MessagingController", () => {
     );
   });
 
+  it("preserves the messaging location for queued Agent-thread turns", async () => {
+    const harness = await createHarness();
+    harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
+      const turnId = harness.startTurn.mock.calls.length === 1 ? "turn-1" : "turn-2";
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId,
+      };
+    });
+    const event = buildTextEvent("first request");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    await harness.controller.handleInboundEvent(buildTextEvent("queued request"));
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Message queued",
+      }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_location",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-2",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          binding: {
+            backend: "codex",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+      },
+    });
+  });
+
   it("creates a native Telegram topic, attaches a target thread, and posts resume status there", async () => {
     const now = Date.UTC(2026, 5, 9, 23, 5);
     const navigation = buildNavigationSnapshot();
