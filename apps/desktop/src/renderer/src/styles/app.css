@@ -748,29 +748,12 @@ textarea,
      22px matches the v2 design's `.pa-thread__header { padding:
      14px 22px }`. */
   padding-left: 22px;
-  /* Reserve space for the position:fixed context-rail spine (48px wide,
-     pinned top-right). Without this padding, anything we render in the
-     header's right-aligned region (messaging status icons, on/off
-     toggle) gets covered by the spine's hamburger button. */
-  padding-right: 56px;
-}
-
-/* Reserve the rail's gutter on the header so the right-aligned messaging
-   indicators never slide under the fixed rail. Two selectors, identical
-   value: the explicit `.has-pinned-context-rail` class is the robust path
-   (set by `ThreadView` straight from the pinned state, so the reserve is
-   correct in every render branch — even before the position:fixed panel
-   mounts, which a freshly-created subthread passes through), and the
-   `:has(.context-rail.is-open)` path covers the transient hover-reveal
-   overlay while unpinned.
-
-   The reserve is the panel's shared effective width (see `.thread-view`)
-   plus the 48px spine, or the panel renders wider than the gutter and
-   covers the chat + MSG cluster. The extra 12px (60 vs the layout's 48)
-   keeps the status indicators a hair clear of the rail edge. */
-.thread-view.has-pinned-context-rail .thread-header,
-.thread-view:has(.context-rail.is-open) .thread-header {
-  padding-right: calc(var(--context-rail-effective, 380px) + 60px);
+  /* The context rail now lives BELOW the header (anchored to
+     `.thread-view__layout`, not the window), so the header owns its full
+     width — no rail gutter to reserve and nothing to squash the toggles /
+     MSG against. Just a small right inset so they don't sit flush to the
+     window edge. */
+  padding-right: 16px;
 }
 
 .thread-header button,
@@ -8970,14 +8953,21 @@ textarea,
 
 .context-rail {
   display: flex;
-  position: fixed;
+  /* Anchored to `.thread-view__layout` (position: relative), NOT the window,
+     so the rail starts BELOW the thread header and spans only the chat area.
+     The header then keeps its full width and never has to reserve a gutter
+     or squash its toggles/MSG to clear a rail that overlaps the title line.
+     `right: 0` lands on the layout's padding edge = the window's right edge;
+     the layout's padding-right reserves the gutter so the transcript /
+     composer sit flush against the rail's left border when pinned. */
+  position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
   z-index: 10;
   flex: 0 0 auto;
   width: max-content;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100% - 32px);
   min-width: 0;
   min-height: 0;
   overflow: visible;
@@ -9002,13 +8992,6 @@ textarea,
 .context-rail.is-pinned {
   z-index: 10;
   box-shadow: none;
-}
-
-/* On Windows the context-rail is position:fixed top:0 — it would slide under
-   the custom title strip (and its tabs under the OS caption buttons). Pin it
-   below the strip instead. */
-:root[data-platform="win32"] .context-rail {
-  top: var(--win-titlebar-h);
 }
 
 /* Vertical tab rail pinned to the window's right edge — always visible. Tool
@@ -11917,13 +11900,12 @@ textarea,
     grid-template-columns: minmax(280px, min(var(--sidebar-width, 360px), 360px)) minmax(0, 1fr);
   }
 
-  /* No rail-gutter overrides here. The context rail is `position: fixed`,
-     so its gutter is reserved by `.thread-view__layout` /
-     `.thread-header` from the shared `--context-rail-effective` width,
-     which already scales down with the viewport (it leaves the chat ~400px
-     after the sidebar). Zeroing the reserve at narrow widths (as this
-     block used to) only removed the gutter while the fixed panel kept
-     rendering — covering the chat + MSG cluster. Let the capped reserve
+  /* No rail-gutter override here. The context rail is anchored to
+     `.thread-view__layout`, which reserves its gutter from the shared
+     `--context-rail-effective` width — already sidebar-aware and scaling
+     down with the viewport (it leaves the chat ~400px). Zeroing the reserve
+     at narrow widths (as this block used to) only removed the gutter while
+     the panel kept rendering, covering the chat. Let the capped reserve
      ride the window down instead. */
 
   .transcript-list__scroll-bottom {

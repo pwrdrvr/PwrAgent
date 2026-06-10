@@ -2168,9 +2168,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section
-      className={`thread-view${
-        contextRailPinned ? " has-pinned-context-rail" : ""
-      }`}
+      className="thread-view"
       style={
         {
           "--context-rail-width": `${contextRailWidth}px`,
