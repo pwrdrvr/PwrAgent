@@ -11,6 +11,7 @@ export * from "./contracts/task-monitor-tools";
 export * from "./contracts/branch-drift";
 export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
+export * from "./contracts/federation";
 export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
 export * from "./contracts/navigation";

@@ -6,6 +6,7 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexProfileModel,
+  DesktopFederationMode,
   DesktopGitDiscoverySnapshot,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
@@ -29,6 +30,7 @@ import {
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+  DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
@@ -445,6 +447,31 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const federationInstancePrivateKey = await this.readSecretState(
+      "federationInstancePrivateKey",
+      undefined,
+      secretStorage.available,
+    );
+    const federationCloudflareClientCertificate = await this.readSecretState(
+      "federationCloudflareClientCertificate",
+      undefined,
+      secretStorage.available,
+    );
+    const federationCloudflareClientPrivateKey = await this.readSecretState(
+      "federationCloudflareClientPrivateKey",
+      undefined,
+      secretStorage.available,
+    );
+    const federationCloudflareAccessClientId = await this.readSecretState(
+      "federationCloudflareAccessClientId",
+      undefined,
+      secretStorage.available,
+    );
+    const federationCloudflareAccessClientSecret = await this.readSecretState(
+      "federationCloudflareAccessClientSecret",
+      undefined,
+      secretStorage.available,
+    );
     const codexDiscovery = await this.discoverCodexCommandsCached(
       config.models?.codex?.path,
     );
@@ -626,6 +653,29 @@ export class DesktopSettingsService {
           value: config.ui?.actionRunsDock ?? "above",
           source: config.ui?.actionRunsDock === undefined ? "default" : "config",
         },
+      },
+      federation: {
+        mode: this.resolveFederationMode(config.federation?.mode),
+        listenHost: this.resolveConfigStringWithDefault(
+          config.federation?.listenHost,
+          "127.0.0.1",
+        ),
+        listenPort: this.resolveConfigNumber(config.federation?.listenPort, 47830),
+        publicUrl: this.resolveConfigString(config.federation?.publicUrl),
+        gatewayUrl: this.resolveConfigString(config.federation?.gatewayUrl),
+        cloudflareMtlsEnabled: this.resolveConfigBoolean(
+          config.federation?.cloudflareMtlsEnabled,
+          false,
+        ),
+        cloudflareAccessServiceAuthEnabled: this.resolveConfigBoolean(
+          config.federation?.cloudflareAccessServiceAuthEnabled,
+          false,
+        ),
+        instancePrivateKey: federationInstancePrivateKey,
+        cloudflareClientCertificate: federationCloudflareClientCertificate,
+        cloudflareClientPrivateKey: federationCloudflareClientPrivateKey,
+        cloudflareAccessClientId: federationCloudflareAccessClientId,
+        cloudflareAccessClientSecret: federationCloudflareAccessClientSecret,
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
@@ -1571,6 +1621,15 @@ export class DesktopSettingsService {
     };
   }
 
+  private resolveFederationMode(
+    configValue: DesktopFederationMode | undefined,
+  ): DesktopSettingsValue<DesktopFederationMode> {
+    return {
+      value: configValue ?? DESKTOP_FEDERATION_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
   private resolveNumber(
     configValue: number | undefined,
     defaultValue: number,
@@ -1822,6 +1881,26 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<string> {
     return {
       value: configValue ?? "",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveConfigStringWithDefault(
+    configValue: string | undefined,
+    defaultValue: string,
+  ): DesktopSettingsValue<string> {
+    return {
+      value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveConfigNumber(
+    configValue: number | undefined,
+    defaultValue: number,
+  ): DesktopSettingsValue<number> {
+    return {
+      value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
     };
   }

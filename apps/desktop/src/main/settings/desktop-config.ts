@@ -7,6 +7,7 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
+  DesktopFederationMode,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -24,11 +25,13 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+  DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
   isDesktopCodexProfileModel,
+  isDesktopFederationMode,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
@@ -123,6 +126,15 @@ export type DesktopSettingsConfig = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+  };
+  federation?: {
+    mode?: DesktopFederationMode;
+    listenHost?: string;
+    listenPort?: number;
+    publicUrl?: string;
+    gatewayUrl?: string;
+    cloudflareMtlsEnabled?: boolean;
+    cloudflareAccessServiceAuthEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;
@@ -834,6 +846,62 @@ export function desktopSettingsPatchToEdits(
     }
   }
 
+  if (patch.federation?.mode !== undefined) {
+    if (patch.federation.mode === DESKTOP_FEDERATION_MODE_DEFAULT) {
+      edits.push({ op: "delete", path: ["federation", "mode"] });
+    } else {
+      set(["federation", "mode"], patch.federation.mode);
+    }
+  }
+  if (patch.federation?.listenHost !== undefined) {
+    if (patch.federation.listenHost.trim() === "") {
+      edits.push({ op: "delete", path: ["federation", "listen_host"] });
+    } else {
+      set(["federation", "listen_host"], patch.federation.listenHost);
+    }
+  }
+  if (patch.federation?.listenPort !== undefined) {
+    if (patch.federation.listenPort === 0) {
+      edits.push({ op: "delete", path: ["federation", "listen_port"] });
+    } else {
+      set(["federation", "listen_port"], patch.federation.listenPort);
+    }
+  }
+  if (patch.federation?.publicUrl !== undefined) {
+    if (patch.federation.publicUrl.trim() === "") {
+      edits.push({ op: "delete", path: ["federation", "public_url"] });
+    } else {
+      set(["federation", "public_url"], patch.federation.publicUrl);
+    }
+  }
+  if (patch.federation?.gatewayUrl !== undefined) {
+    if (patch.federation.gatewayUrl.trim() === "") {
+      edits.push({ op: "delete", path: ["federation", "gateway_url"] });
+    } else {
+      set(["federation", "gateway_url"], patch.federation.gatewayUrl);
+    }
+  }
+  if (patch.federation?.cloudflareMtlsEnabled !== undefined) {
+    if (patch.federation.cloudflareMtlsEnabled) {
+      set(["federation", "cloudflare_mtls_enabled"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["federation", "cloudflare_mtls_enabled"],
+      });
+    }
+  }
+  if (patch.federation?.cloudflareAccessServiceAuthEnabled !== undefined) {
+    if (patch.federation.cloudflareAccessServiceAuthEnabled) {
+      set(["federation", "cloudflare_access_service_auth_enabled"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["federation", "cloudflare_access_service_auth_enabled"],
+      });
+    }
+  }
+
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
   }
@@ -1193,6 +1261,7 @@ function normalizeDesktopConfig(
   const updates = tables["updates"];
   const integratedTerminal = tables["integrated_terminal"];
   const ui = tables["ui"];
+  const federation = tables["federation"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -1295,6 +1364,19 @@ function normalizeDesktopConfig(
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
+    },
+    federation: {
+      mode: readFederationMode(federation?.mode),
+      listenHost: readString(federation?.listen_host),
+      listenPort: readNumber(federation?.listen_port),
+      publicUrl: readString(federation?.public_url),
+      gatewayUrl: readString(federation?.gateway_url),
+      cloudflareMtlsEnabled: readBoolean(
+        federation?.cloudflare_mtls_enabled,
+      ),
+      cloudflareAccessServiceAuthEnabled: readBoolean(
+        federation?.cloudflare_access_service_auth_enabled,
+      ),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
@@ -1585,6 +1667,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.ui = config.ui;
   }
 
+  if (config.federation && hasDefinedValue(config.federation)) {
+    pruned.federation = config.federation;
+  }
+
   const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
@@ -1804,6 +1890,15 @@ function readHotCpuProfileTriggerMode(
   value: TomlScalar | undefined,
 ): DesktopHotCpuProfileTriggerMode | undefined {
   return typeof value === "string" && isDesktopHotCpuProfileTriggerMode(value)
+    ? value
+    : undefined;
+}
+
+function readFederationMode(
+  value: TomlScalar | undefined,
+): DesktopFederationMode | undefined {
+  if (value === "child") return "client";
+  return typeof value === "string" && isDesktopFederationMode(value)
     ? value
     : undefined;
 }

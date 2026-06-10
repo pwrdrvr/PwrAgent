@@ -48,6 +48,15 @@ describe("DesktopSettingsService", () => {
         "[updates]",
         'channel = "prerelease"',
         "",
+        "[federation]",
+        'mode = "gateway"',
+        'listen_host = "127.0.0.1"',
+        "listen_port = 47830",
+        'public_url = "https://pwragent.example.com"',
+        'gateway_url = "https://pwragent.example.com"',
+        "cloudflare_mtls_enabled = true",
+        "cloudflare_access_service_auth_enabled = true",
+        "",
         "[messaging.attachments]",
         'image_profile = "high"',
         "",
@@ -131,6 +140,42 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.updates.channel).toEqual({
       value: "prerelease",
       source: "config",
+    });
+    expect(snapshot.federation).toMatchObject({
+      mode: { value: "gateway", source: "config" },
+      listenHost: { value: "127.0.0.1", source: "config" },
+      listenPort: { value: 47830, source: "config" },
+      publicUrl: {
+        value: "https://pwragent.example.com",
+        source: "config",
+      },
+      gatewayUrl: {
+        value: "https://pwragent.example.com",
+        source: "config",
+      },
+      cloudflareMtlsEnabled: { value: true, source: "config" },
+      cloudflareAccessServiceAuthEnabled: { value: true, source: "config" },
+      instancePrivateKey: { configured: false, source: "unset", writable: true },
+      cloudflareClientCertificate: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareClientPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareAccessClientId: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareAccessClientSecret: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
     });
     expect(snapshot.messaging.attachments.imageProfile).toEqual({
       value: "high",
@@ -233,6 +278,54 @@ describe("DesktopSettingsService", () => {
     expect((await service.readSettings()).updates.channel).toEqual({
       value: "latest",
       source: "default",
+    });
+  });
+
+  it("defaults federation settings and exposes stored federation secrets", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const secretStore = new MemoryDesktopSecretStore();
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.federation).toMatchObject({
+      mode: { value: "disabled", source: "default" },
+      listenHost: { value: "127.0.0.1", source: "default" },
+      listenPort: { value: 47830, source: "default" },
+      publicUrl: { value: "", source: "default" },
+      gatewayUrl: { value: "", source: "default" },
+      cloudflareMtlsEnabled: { value: false, source: "default" },
+      cloudflareAccessServiceAuthEnabled: {
+        value: false,
+        source: "default",
+      },
+      instancePrivateKey: { configured: false, source: "unset", writable: true },
+    });
+
+    await service.writeConfigPatch({
+      federation: {
+        mode: "child",
+        gatewayUrl: "https://pwragent.example.com",
+      },
+    });
+    await service.replaceSecret("federationInstancePrivateKey", "private-key");
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.federation).toMatchObject({
+      mode: { value: "child", source: "config" },
+      gatewayUrl: {
+        value: "https://pwragent.example.com",
+        source: "config",
+      },
+      instancePrivateKey: {
+        configured: true,
+        source: "keychain",
+        writable: true,
+      },
     });
   });
 

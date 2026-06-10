@@ -24,6 +24,11 @@ import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type {
+  FederatedThreadRef,
+  FederationPeerSummary,
+  FederationTarget,
+} from "./federation";
+import type {
   TaskMonitorCompletionSource,
   TaskMonitorUsageSnapshot,
 } from "./task-monitor-tools";
@@ -48,6 +53,12 @@ export type ThreadAgentMetadata = {
 };
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  /** Present when this row describes a thread owned by another PwrAgent instance. */
+  federation?: {
+    ref: FederatedThreadRef;
+    instanceLabel: string;
+    peerStatus?: FederationPeerSummary["status"];
+  };
   inbox: ThreadInboxState;
   /**
    * Optional Agent/persona marker. When present, this thread is intended
@@ -729,6 +740,8 @@ export function parseThreadIdentityKey(
 export type NavigationSnapshot = {
   backend: AppServerBackendScope;
   fetchedAt: number;
+  /** Source instance for this snapshot. Omitted for the local default instance. */
+  federationTarget?: FederationTarget;
   unchanged: boolean;
   threads: NavigationThreadSummary[];
   inboxThreadKeys: string[];
@@ -738,6 +751,7 @@ export type NavigationSnapshot = {
 
 export type GetNavigationSnapshotRequest = {
   backend?: AppServerBackendScope;
+  federationTarget?: FederationTarget;
   filter?: string;
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";

@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 22;
+export const CURRENT_STATE_DB_USER_VERSION = 23;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -621,6 +621,50 @@ CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
 );
 `;
 
+export const FEDERATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS federation_peers (
+  peer_id       TEXT PRIMARY KEY,
+  label         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER,
+  revoked_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_peers_status_updated
+  ON federation_peers(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS federation_enrollment_tokens (
+  enrollment_id  TEXT PRIMARY KEY,
+  token_hmac     TEXT NOT NULL UNIQUE,
+  status         TEXT NOT NULL,
+  generated_at   INTEGER NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  used_at        INTEGER,
+  peer_id        TEXT,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_status_expires
+  ON federation_enrollment_tokens(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_peer
+  ON federation_enrollment_tokens(peer_id);
+
+CREATE TABLE IF NOT EXISTS federation_session_audit (
+  event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  peer_id     TEXT,
+  session_id  TEXT,
+  kind        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_peer_created
+  ON federation_session_audit(peer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_session_created
+  ON federation_session_audit(session_id, created_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -799,6 +843,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 22) {
       db.transaction(() => {
         repairOpenAiThreadUsagePricing(db);
+        db.pragma("user_version = 22");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 23) {
+      db.transaction(() => {
+        db.exec(FEDERATION_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -954,6 +1004,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
+    ensureThreadUsagePricingIndexes(db);
+    db.exec(FEDERATION_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
