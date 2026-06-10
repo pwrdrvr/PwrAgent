@@ -22,10 +22,12 @@ import { attachWindowFocusSync } from "./window-focus-sync";
 import {
   WINDOW_KIND_MAIN,
   registerWindowChannels,
+  subscribersForChannel,
 } from "./window-channels";
 import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
+  HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
@@ -439,6 +441,13 @@ export function createMainWindow(options?: {
         });
         syncHotCpuProfilersFromSettings("heap-snapshot-limit-reached");
       },
+      onProfileWritten: (event) => {
+        for (const subscriber of subscribersForChannel(
+          HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
+        )) {
+          subscriber.send(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, event);
+        }
+      },
       session: created.session,
       target: webContents,
     });
@@ -468,8 +477,11 @@ export function createMainWindow(options?: {
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
   ): string => {
     return JSON.stringify({
+      startDelayMs: hotCpuConfig.startDelayMs,
+      triggerMode: hotCpuConfig.triggerMode,
       intervalMs: hotCpuConfig.intervalMs,
       thresholdPercent: hotCpuConfig.thresholdPercent,
+      slowburnThresholdPercent: hotCpuConfig.slowburnThresholdPercent,
       consecutiveSamples: hotCpuConfig.consecutiveSamples,
       profileDurationMs: hotCpuConfig.profileDurationMs,
       cooldownMs: hotCpuConfig.cooldownMs,
@@ -497,6 +509,10 @@ export function createMainWindow(options?: {
           settingsService.resolveHotCpuProfilingHeapSnapshotLimit(),
         outputRoot: resolveHotCpuProfileOutputRoot(),
         repoRoot: resolveRepoRoot(),
+        slowburnThresholdPercent:
+          settingsService.resolveHotCpuProfilingSlowburnThresholdPercent(),
+        startDelayMs: settingsService.resolveHotCpuProfilingStartDelayMs(),
+        triggerMode: settingsService.resolveHotCpuProfilingTriggerMode(),
       });
 
       if (!hotCpuConfig.enabled) {
@@ -674,6 +690,7 @@ export function createMainWindow(options?: {
   registerWindowChannels(window, WINDOW_KIND_MAIN, [
     AGENT_EVENT_CHANNEL,
     APPEARANCE_CHANGED_EVENT_CHANNEL,
+    HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
     MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
     MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
     MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,

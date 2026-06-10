@@ -7,6 +7,8 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexProfileModel,
   DesktopGitDiscoverySnapshot,
+  DesktopHotCpuProfileStartDelayMs,
+  DesktopHotCpuProfileTriggerMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopOnboardingCompletedSource,
@@ -25,6 +27,9 @@ import {
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+  DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+  DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+  DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
@@ -403,6 +408,15 @@ export class DesktopSettingsService {
         hotCpuProfilingEnabled: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingEnabled,
           false,
+        ),
+        hotCpuProfilingStartDelayMs: this.resolveHotCpuProfileStartDelayMs(
+          config.general?.hotCpuProfilingStartDelayMs,
+        ),
+        hotCpuProfilingTriggerMode: this.resolveHotCpuProfileTriggerMode(
+          config.general?.hotCpuProfilingTriggerMode,
+        ),
+        hotCpuProfilingSlowburnThresholdPercent: this.resolveHotCpuSlowburnThresholdPercent(
+          config.general?.hotCpuProfilingSlowburnThresholdPercent,
         ),
         hotCpuProfilingCaptureHeapSnapshot: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingCaptureHeapSnapshot,
@@ -870,6 +884,24 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.hotCpuProfilingCaptureHeapSnapshot,
       false,
+    ).value;
+  }
+
+  resolveHotCpuProfilingStartDelayMs(): DesktopHotCpuProfileStartDelayMs {
+    return this.resolveHotCpuProfileStartDelayMs(
+      this.readConfig().config.general?.hotCpuProfilingStartDelayMs,
+    ).value;
+  }
+
+  resolveHotCpuProfilingTriggerMode(): DesktopHotCpuProfileTriggerMode {
+    return this.resolveHotCpuProfileTriggerMode(
+      this.readConfig().config.general?.hotCpuProfilingTriggerMode,
+    ).value;
+  }
+
+  resolveHotCpuProfilingSlowburnThresholdPercent(): number {
+    return this.resolveHotCpuSlowburnThresholdPercent(
+      this.readConfig().config.general?.hotCpuProfilingSlowburnThresholdPercent,
     ).value;
   }
 
@@ -1341,6 +1373,37 @@ export class DesktopSettingsService {
         Math.max(rounded, MIN_HOT_CPU_HEAP_SNAPSHOT_LIMIT),
         MAX_HOT_CPU_HEAP_SNAPSHOT_LIMIT,
       ),
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveHotCpuProfileStartDelayMs(
+    configValue: DesktopHotCpuProfileStartDelayMs | undefined,
+  ): DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs> {
+    return {
+      value: configValue ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveHotCpuProfileTriggerMode(
+    configValue: DesktopHotCpuProfileTriggerMode | undefined,
+  ): DesktopSettingsValue<DesktopHotCpuProfileTriggerMode> {
+    return {
+      value: configValue ?? DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveHotCpuSlowburnThresholdPercent(
+    configValue: number | undefined,
+  ): DesktopSettingsValue<number> {
+    const rounded =
+      configValue === undefined
+        ? DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT
+        : Math.round(configValue);
+    return {
+      value: Math.min(Math.max(rounded, 1), 100),
       source: configValue === undefined ? "default" : "config",
     };
   }

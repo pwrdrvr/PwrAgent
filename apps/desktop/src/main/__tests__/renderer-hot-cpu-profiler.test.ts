@@ -135,6 +135,7 @@ describe("RendererHotCpuProfiler", () => {
     if (!sessionResult.ok) return;
 
     const { target, debuggerApi } = createTarget();
+    const onProfileWritten = vi.fn(async () => undefined);
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -152,6 +153,7 @@ describe("RendererHotCpuProfiler", () => {
         error: vi.fn(),
       },
       now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+      onProfileWritten,
     });
 
     await profiler.start();
@@ -176,6 +178,18 @@ describe("RendererHotCpuProfiler", () => {
 
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
     expect(debuggerApi.detach).toHaveBeenCalled();
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+        sessionDirectory: sessionResult.session.directoryPath,
+        sessionDirectoryName: sessionResult.session.directoryName,
+        triggerConsecutiveSamples: 2,
+        triggerCpuPercent: 75,
+        triggerMode: "sustained",
+        triggerThresholdPercent: 50,
+      }),
+    );
 
     const profile = JSON.parse(
       await fs.readFile(
@@ -206,6 +220,182 @@ describe("RendererHotCpuProfiler", () => {
           electronCpuPercent: 4,
           cumulativeCpuDeltaSeconds: 1.5,
           wallDeltaSeconds: 2,
+        }),
+      ]),
+    );
+  });
+
+  it("waits for the configured delay before sampling", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "100",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const { target } = createTarget();
+    const getAppMetrics = vi.fn(() => [createMetric(0, 100)]);
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics,
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await profiler.start();
+    await vi.advanceTimersByTimeAsync(99);
+    expect(getAppMetrics).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getAppMetrics).toHaveBeenCalledTimes(1);
+
+    await profiler.stop("test-complete");
+  });
+
+  it("starts a profile after one hot sample in spike mode", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const { target, debuggerApi } = createTarget();
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.2),
+    ];
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+    });
+
+    await profiler.start();
+    await vi.waitFor(() => {
+      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
+    });
+    await profiler.stop("test-complete");
+
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "profile-started",
+          detail: expect.objectContaining({
+            triggerMode: "spike",
+            triggerConsecutiveSamples: 1,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("starts a profile after consecutive slowburn samples", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "slowburn",
+      PWRAGENT_HOT_CPU_PROFILING_SLOWBURN_THRESHOLD_PERCENT: "15",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const { target, debuggerApi } = createTarget();
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(2, 100.4),
+      createMetric(2, 100.8),
+    ];
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+    });
+
+    await profiler.start();
+    await vi.waitFor(() => {
+      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
+    });
+    await profiler.stop("test-complete");
+
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "profile-started",
+          detail: expect.objectContaining({
+            triggerMode: "slowburn",
+            triggerThresholdPercent: 15,
+            triggerConsecutiveSamples: 2,
+          }),
         }),
       ]),
     );

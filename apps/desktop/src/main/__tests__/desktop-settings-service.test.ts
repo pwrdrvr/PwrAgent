@@ -283,6 +283,18 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.general.hotCpuProfilingStartDelayMs).toEqual({
+      value: 0,
+      source: "default",
+    });
+    expect(initial.general.hotCpuProfilingTriggerMode).toEqual({
+      value: "sustained",
+      source: "default",
+    });
+    expect(initial.general.hotCpuProfilingSlowburnThresholdPercent).toEqual({
+      value: 15,
+      source: "default",
+    });
     expect(initial.general.hotCpuProfilingCaptureHeapSnapshot).toEqual({
       value: false,
       source: "default",
@@ -292,12 +304,18 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(service.resolveHotCpuProfilingEnabled()).toBe(false);
+    expect(service.resolveHotCpuProfilingStartDelayMs()).toBe(0);
+    expect(service.resolveHotCpuProfilingTriggerMode()).toBe("sustained");
+    expect(service.resolveHotCpuProfilingSlowburnThresholdPercent()).toBe(15);
     expect(service.resolveHotCpuProfilingCaptureHeapSnapshot()).toBe(false);
     expect(service.resolveHotCpuProfilingHeapSnapshotLimit()).toBe(2);
 
     await service.writeConfigPatch({
       general: {
         hotCpuProfilingEnabled: true,
+        hotCpuProfilingStartDelayMs: 5000,
+        hotCpuProfilingTriggerMode: "slowburn",
+        hotCpuProfilingSlowburnThresholdPercent: 20,
         hotCpuProfilingCaptureHeapSnapshot: true,
         hotCpuProfilingHeapSnapshotLimit: 3,
       },
@@ -306,10 +324,31 @@ describe("DesktopSettingsService", () => {
     const saved = fs.readFileSync(configPath, "utf8");
     expect(saved).toContain("[general]");
     expect(saved).toContain("hot_cpu_profiling_enabled = true");
+    expect(saved).toContain("hot_cpu_profiling_start_delay_ms = 5000");
+    expect(saved).toContain('hot_cpu_profiling_trigger_mode = "slowburn"');
+    expect(saved).toContain("hot_cpu_profiling_slowburn_threshold_percent = 20");
     expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
     expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
     expect((await service.readSettings()).general.hotCpuProfilingEnabled).toEqual({
       value: true,
+      source: "config",
+    });
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingStartDelayMs,
+    ).toEqual({
+      value: 5000,
+      source: "config",
+    });
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingTriggerMode,
+    ).toEqual({
+      value: "slowburn",
+      source: "config",
+    });
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingSlowburnThresholdPercent,
+    ).toEqual({
+      value: 20,
       source: "config",
     });
     expect(
@@ -325,6 +364,9 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(service.resolveHotCpuProfilingEnabled()).toBe(true);
+    expect(service.resolveHotCpuProfilingStartDelayMs()).toBe(5000);
+    expect(service.resolveHotCpuProfilingTriggerMode()).toBe("slowburn");
+    expect(service.resolveHotCpuProfilingSlowburnThresholdPercent()).toBe(20);
     expect(service.resolveHotCpuProfilingCaptureHeapSnapshot()).toBe(true);
     expect(service.resolveHotCpuProfilingHeapSnapshotLimit()).toBe(3);
   });

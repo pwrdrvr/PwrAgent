@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
+import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
@@ -32,6 +33,14 @@ type CpuUsageReading = {
   wallDeltaSeconds?: number;
 };
 
+type ActiveProfileTrigger = Pick<
+  HotCpuProfileCapturedEvent,
+  | "triggerConsecutiveSamples"
+  | "triggerCpuPercent"
+  | "triggerMode"
+  | "triggerThresholdPercent"
+>;
+
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -59,6 +68,9 @@ export class RendererHotCpuProfiler {
   private readonly logger: Logger;
   private readonly now: () => Date;
   private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
+  private readonly onProfileWritten?: (
+    event: HotCpuProfileCapturedEvent,
+  ) => void | Promise<void>;
   private readonly session: HotCpuProfileSession;
   private readonly target: RendererHotCpuTarget;
 
@@ -74,6 +86,7 @@ export class RendererHotCpuProfiler {
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private profiling = false;
+  private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private stopped = false;
 
   constructor(options: {
@@ -84,12 +97,14 @@ export class RendererHotCpuProfiler {
     logger?: Logger;
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
+    onProfileWritten?: (event: HotCpuProfileCapturedEvent) => void | Promise<void>;
   }) {
     this.config = options.config;
     this.getAppMetrics = options.getAppMetrics;
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
     this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
+    this.onProfileWritten = options.onProfileWritten;
     this.session = options.session;
     this.target = options.target;
   }
@@ -104,7 +119,10 @@ export class RendererHotCpuProfiler {
       type: "monitor-started",
       detail: {
         intervalMs: this.config.intervalMs,
+        startDelayMs: this.config.startDelayMs,
+        triggerMode: this.config.triggerMode,
         thresholdPercent: this.config.thresholdPercent,
+        slowburnThresholdPercent: this.config.slowburnThresholdPercent,
         consecutiveSamples: this.config.consecutiveSamples,
         profileDurationMs: this.config.profileDurationMs,
         captureHeapSnapshot: this.config.captureHeapSnapshot,
@@ -113,10 +131,13 @@ export class RendererHotCpuProfiler {
     });
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       sessionDirectory: this.session.directoryPath,
+      startDelayMs: this.config.startDelayMs,
+      triggerMode: this.config.triggerMode,
       thresholdPercent: this.config.thresholdPercent,
+      slowburnThresholdPercent: this.config.slowburnThresholdPercent,
       profileDurationMs: this.config.profileDurationMs,
     });
-    this.scheduleNextSample();
+    this.scheduleNextSample(this.config.startDelayMs);
   }
 
   async stop(reason = "stopped"): Promise<void> {
@@ -144,12 +165,12 @@ export class RendererHotCpuProfiler {
     });
   }
 
-  private scheduleNextSample(): void {
+  private scheduleNextSample(delayMs = this.config.intervalMs): void {
     if (this.stopped) {
       return;
     }
 
-    this.intervalTimer = setTimeout(() => this.captureSample(), this.config.intervalMs);
+    this.intervalTimer = setTimeout(() => this.captureSample(), delayMs);
   }
 
   private async captureSample(): Promise<void> {
@@ -182,8 +203,9 @@ export class RendererHotCpuProfiler {
         electronCpuPercent: metric.cpu.percentCPUUsage,
       });
       const cpuPercent = cpuUsage.cpuPercent;
+      const triggerThresholdPercent = this.triggerThresholdPercent();
       this.consecutiveHotSamples =
-        cpuPercent >= this.config.thresholdPercent
+        cpuPercent >= triggerThresholdPercent
           ? this.consecutiveHotSamples + 1
           : 0;
 
@@ -271,11 +293,11 @@ export class RendererHotCpuProfiler {
   }
 
   private shouldStartProfile(cpuPercent: number, capturedAt: string): boolean {
-    if (this.profiling || cpuPercent < this.config.thresholdPercent) {
+    if (this.profiling || cpuPercent < this.triggerThresholdPercent()) {
       return false;
     }
 
-    if (this.consecutiveHotSamples < this.config.consecutiveSamples) {
+    if (this.consecutiveHotSamples < this.triggerConsecutiveSamples()) {
       return false;
     }
 
@@ -288,6 +310,16 @@ export class RendererHotCpuProfiler {
       this.lastProfileAtMs === null ||
       capturedAtMs - this.lastProfileAtMs >= this.config.cooldownMs
     );
+  }
+
+  private triggerThresholdPercent(): number {
+    return this.config.triggerMode === "slowburn"
+      ? this.config.slowburnThresholdPercent
+      : this.config.thresholdPercent;
+  }
+
+  private triggerConsecutiveSamples(): number {
+    return this.config.triggerMode === "spike" ? 1 : this.config.consecutiveSamples;
   }
 
   private async startProfile(options: {
@@ -315,6 +347,12 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.enable");
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
+      this.activeProfileTrigger = {
+        triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
+        triggerCpuPercent: options.cpuPercent,
+        triggerMode: this.config.triggerMode,
+        triggerThresholdPercent: this.triggerThresholdPercent(),
+      };
       this.profileCount += 1;
       const index = this.profileCount;
       this.lastProfileAtMs = Date.parse(options.capturedAt);
@@ -324,6 +362,9 @@ export class RendererHotCpuProfiler {
         detail: {
           index,
           cpuPercent: options.cpuPercent,
+          triggerMode: this.config.triggerMode,
+          triggerThresholdPercent: this.triggerThresholdPercent(),
+          triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
           pid: options.pid,
           durationMs: this.config.profileDurationMs,
         },
@@ -350,6 +391,8 @@ export class RendererHotCpuProfiler {
         this.config.profileDurationMs,
       );
     } catch (error) {
+      this.activeProfileTrigger = null;
+      this.profiling = false;
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "profile-start-failed",
@@ -371,6 +414,13 @@ export class RendererHotCpuProfiler {
     const index = this.profileCount;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
+    const activeProfileTrigger =
+      this.activeProfileTrigger ?? {
+        triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
+        triggerCpuPercent: 0,
+        triggerMode: this.config.triggerMode,
+        triggerThresholdPercent: this.triggerThresholdPercent(),
+      };
 
     try {
       const result = (await this.target.debugger.sendCommand("Profiler.stop")) as {
@@ -398,6 +448,14 @@ export class RendererHotCpuProfiler {
       ) {
         await this.captureHeapSnapshot(index, "stop");
       }
+      await this.onProfileWritten?.({
+        capturedAt: this.now().toISOString(),
+        profileFilename,
+        profilePath,
+        sessionDirectory: this.session.directoryPath,
+        sessionDirectoryName: this.session.directoryName,
+        ...activeProfileTrigger,
+      });
     } catch (error) {
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -410,6 +468,7 @@ export class RendererHotCpuProfiler {
       });
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
+      this.activeProfileTrigger = null;
       this.detachDebugger();
     }
   }

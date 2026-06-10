@@ -206,6 +206,7 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
+import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -275,6 +276,7 @@ import {
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
+  HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -439,6 +441,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(APP_UPDATE_STATUS_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(APP_UPDATE_STATUS_EVENT_CHANNEL, listener);
+    };
+  },
+  onHotCpuProfileCaptured: (
+    callback: (event: HotCpuProfileCapturedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: HotCpuProfileCapturedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, listener);
     };
   },
   installAppUpdate: async (): Promise<AppUpdateInstallResult> =>

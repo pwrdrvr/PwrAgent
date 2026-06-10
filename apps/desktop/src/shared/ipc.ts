@@ -264,6 +264,8 @@ export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
+export const HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL =
+  "hot-cpu-profile:captured";
 /** Main → renderer push: appearance (theme + density) was written to
  *  the per-profile config.toml by a settings update. Every BrowserWindow
  *  subscribes so secondary windows (changelog, app-log, license,

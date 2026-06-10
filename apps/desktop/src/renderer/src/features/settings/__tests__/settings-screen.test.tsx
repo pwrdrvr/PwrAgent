@@ -76,6 +76,18 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      hotCpuProfilingStartDelayMs: {
+        value: 0,
+        source: "default",
+      },
+      hotCpuProfilingTriggerMode: {
+        value: "sustained",
+        source: "default",
+      },
+      hotCpuProfilingSlowburnThresholdPercent: {
+        value: 15,
+        source: "default",
+      },
       hotCpuProfilingCaptureHeapSnapshot: {
         value: false,
         source: "default",
@@ -447,8 +459,8 @@ describe("SettingsScreen", () => {
       "false",
     );
     expect(
-      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
-    ).toHaveAttribute("aria-checked", "false");
+      screen.getByRole("button", { name: "Start Capture (Immediate)" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads are in progress",
@@ -476,9 +488,7 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Start Capture (Immediate)" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -487,6 +497,8 @@ describe("SettingsScreen", () => {
       });
     });
 
+    expect(screen.getByRole("radio", { name: /5 seconds/ })).not.toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Smart heap snapshots" }),
     ).toHaveAttribute("aria-checked", "false");
@@ -500,7 +512,6 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           hotCpuProfilingCaptureHeapSnapshot: true,
-          hotCpuProfilingEnabled: true,
         },
       });
     });
@@ -753,6 +764,38 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           hotCpuProfilingHeapSnapshotLimit: 3,
+        },
+      });
+    });
+  });
+
+  it("saves hot CPU profiling delay and trigger mode presets", async () => {
+    const baseSnapshot = createSnapshot();
+    const settings = createSettingsState(
+      createSnapshot({
+        general: {
+          ...baseSnapshot.general,
+          hotCpuProfilingEnabled: { value: true, source: "config" },
+        },
+      }),
+    );
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /5 seconds/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingStartDelayMs: 5000,
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /Slowburn/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingTriggerMode: "slowburn",
         },
       });
     });

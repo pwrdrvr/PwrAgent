@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
+  DesktopHotCpuProfileStartDelayMs,
+  DesktopHotCpuProfileTriggerMode,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
 } from "@pwragent/shared";
@@ -94,6 +96,26 @@ const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
   { label: "3 snapshots", meta: "Extra sample", value: 3 },
 ];
 
+const HOT_CPU_START_DELAY_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: DesktopHotCpuProfileStartDelayMs;
+}> = [
+  { label: "Immediate", meta: "Arm now", value: 0 },
+  { label: "5 seconds", meta: "Short setup", value: 5_000 },
+  { label: "10 seconds", meta: "Long setup", value: 10_000 },
+];
+
+const HOT_CPU_TRIGGER_MODE_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: DesktopHotCpuProfileTriggerMode;
+}> = [
+  { label: "Spike", meta: "> 50%", value: "spike" },
+  { label: "Sustained", meta: "2x > 50%", value: "sustained" },
+  { label: "Slowburn", meta: "2x > 15%", value: "slowburn" },
+];
+
 function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
   return release?.version ?? "Unavailable";
 }
@@ -126,6 +148,10 @@ function updateResultText(result: AppUpdateCheckResult): string {
   return `Update available: v${result.version}. Downloading in the background.`;
 }
 
+function formatHotCpuStartDelay(delayMs: DesktopHotCpuProfileStartDelayMs): string {
+  return delayMs === 0 ? "Immediate" : `Delay ${Math.round(delayMs / 1_000)}s`;
+}
+
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -133,6 +159,12 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onDeveloperModeChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingEnabledChange: (value: boolean) => Promise<void>;
+  onHotCpuProfilingStartDelayMsChange: (
+    value: DesktopHotCpuProfileStartDelayMs,
+  ) => Promise<void>;
+  onHotCpuProfilingTriggerModeChange: (
+    value: DesktopHotCpuProfileTriggerMode,
+  ) => Promise<void>;
   onHotCpuProfilingCaptureHeapSnapshotChange: (value: boolean) => Promise<void>;
   onHotCpuProfilingHeapSnapshotLimitChange: (value: number) => Promise<void>;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
@@ -155,6 +187,11 @@ export function GeneralSettings(props: {
   const [updateRestartError, setUpdateRestartError] = useState<
     string | undefined
   >();
+  const [hotCpuCountdownEndsAt, setHotCpuCountdownEndsAt] = useState<
+    number | null
+  >(null);
+  const [hotCpuCountdownRemainingMs, setHotCpuCountdownRemainingMs] =
+    useState(0);
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
@@ -162,6 +199,12 @@ export function GeneralSettings(props: {
   const developerMode = props.snapshot.general.developerMode;
   const hotCpuProfilingEnabled =
     props.snapshot.general.hotCpuProfilingEnabled;
+  const hotCpuProfilingStartDelayMs =
+    props.snapshot.general.hotCpuProfilingStartDelayMs;
+  const hotCpuProfilingTriggerMode =
+    props.snapshot.general.hotCpuProfilingTriggerMode;
+  const hotCpuProfilingSlowburnThresholdPercent =
+    props.snapshot.general.hotCpuProfilingSlowburnThresholdPercent;
   const hotCpuProfilingCaptureHeapSnapshot =
     props.snapshot.general.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
@@ -173,6 +216,49 @@ export function GeneralSettings(props: {
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
     (option) => option.value === pastedImageMaxPatches.value,
   );
+  const hotCpuCountdownActive = hotCpuCountdownRemainingMs > 0;
+  const hotCpuCountdownSeconds = Math.ceil(hotCpuCountdownRemainingMs / 1_000);
+  const hotCpuStartDelayText = formatHotCpuStartDelay(
+    hotCpuProfilingStartDelayMs.value,
+  );
+
+  useEffect(() => {
+    if (hotCpuCountdownEndsAt === null) {
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remainingMs = Math.max(0, hotCpuCountdownEndsAt - Date.now());
+      setHotCpuCountdownRemainingMs(remainingMs);
+      if (remainingMs === 0) {
+        setHotCpuCountdownEndsAt(null);
+      }
+    };
+
+    updateCountdown();
+    const interval = window.setInterval(updateCountdown, 250);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [hotCpuCountdownEndsAt]);
+
+  const startHotCpuCapture = async () => {
+    await props.onHotCpuProfilingEnabledChange(true);
+    if (hotCpuProfilingStartDelayMs.value > 0) {
+      const endsAt = Date.now() + hotCpuProfilingStartDelayMs.value;
+      setHotCpuCountdownEndsAt(endsAt);
+      setHotCpuCountdownRemainingMs(hotCpuProfilingStartDelayMs.value);
+    } else {
+      setHotCpuCountdownEndsAt(null);
+      setHotCpuCountdownRemainingMs(0);
+    }
+  };
+
+  const stopHotCpuCapture = async () => {
+    setHotCpuCountdownEndsAt(null);
+    setHotCpuCountdownRemainingMs(0);
+    await props.onHotCpuProfilingEnabledChange(false);
+  };
 
   useEffect(() => {
     let canceled = false;
@@ -608,23 +694,126 @@ export function GeneralSettings(props: {
           />
           <SettingsField
             label="Hot renderer CPU profiling"
-            sub="Capture a short Chrome CPU profile when the renderer stays hot."
+            sub="Start an armed capture only after the presets below are ready."
             source={sourceBadge(hotCpuProfilingEnabled)}
             control={
-              <SettingsSwitch
-                checked={hotCpuProfilingEnabled.value}
-                disabled={props.saving}
-                label="Hot renderer CPU profiling"
-                onChange={(next) => {
-                  void props.onHotCpuProfilingEnabledChange(next);
-                }}
-              />
+              <div className="settings-hot-cpu-capture">
+                {hotCpuProfilingEnabled.value || hotCpuCountdownActive ? (
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    disabled={props.saving}
+                    onClick={() => {
+                      void stopHotCpuCapture();
+                    }}
+                  >
+                    Stop Capture
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    disabled={props.saving}
+                    onClick={() => {
+                      void startHotCpuCapture();
+                    }}
+                  >
+                    Start Capture ({hotCpuStartDelayText})
+                  </button>
+                )}
+                <span className="settings-hot-cpu-capture__status" aria-live="polite">
+                  {hotCpuCountdownActive
+                    ? `Starting in ${hotCpuCountdownSeconds}s`
+                    : hotCpuProfilingEnabled.value
+                      ? "Monitoring"
+                      : "Not armed"}
+                </span>
+              </div>
+            }
+          />
+          <SettingsField
+            label="Profiling start delay"
+            sub="Wait before the monitor starts sampling so you can trigger the scenario."
+            source={sourceBadge(hotCpuProfilingStartDelayMs)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Profiling start delay"
+              >
+                {HOT_CPU_START_DELAY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={
+                      hotCpuProfilingStartDelayMs.value === option.value
+                    }
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      hotCpuProfilingStartDelayMs.value === option.value
+                        ? " is-active"
+                        : ""
+                    }`}
+                    disabled={props.saving}
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onHotCpuProfilingStartDelayMsChange(
+                        option.value,
+                      );
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {option.meta}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            }
+          />
+          <SettingsField
+            label="CPU profile trigger"
+            sub="Choose whether one spike, two hot samples, or a lower slowburn starts the capture."
+            help={`Slowburn currently uses ${hotCpuProfilingSlowburnThresholdPercent.value}% across the same consecutive-sample window.`}
+            source={sourceBadge(hotCpuProfilingTriggerMode)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="CPU profile trigger"
+              >
+                {HOT_CPU_TRIGGER_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={
+                      hotCpuProfilingTriggerMode.value === option.value
+                    }
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      hotCpuProfilingTriggerMode.value === option.value
+                        ? " is-active"
+                        : ""
+                    }`}
+                    disabled={props.saving}
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onHotCpuProfilingTriggerModeChange(
+                        option.value,
+                      );
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {option.meta}
+                    </span>
+                  </button>
+                ))}
+              </div>
             }
           />
           <SettingsField
             label="Smart heap snapshots"
             sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
-            help="This also enables hot renderer CPU profiling so it can arm immediately while the current instance keeps running."
+            help="Arms heap snapshots for the next explicit CPU capture start."
             source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
             control={
               <SettingsSwitch

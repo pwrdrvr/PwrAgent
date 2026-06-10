@@ -47,8 +47,11 @@ type HotCpuProfileSessionManifest = {
   outputRoot: string;
   artifacts: string[];
   config: {
+    startDelayMs: number;
+    triggerMode: string;
     intervalMs: number;
     thresholdPercent: number;
+    slowburnThresholdPercent: number;
     consecutiveSamples: number;
     profileDurationMs: number;
     cooldownMs: number;
@@ -106,8 +109,11 @@ export async function createHotCpuProfileSession(options: {
     outputRoot: options.config.outputRoot,
     artifacts,
     config: {
+      startDelayMs: options.config.startDelayMs,
+      triggerMode: options.config.triggerMode,
       intervalMs: options.config.intervalMs,
       thresholdPercent: options.config.thresholdPercent,
+      slowburnThresholdPercent: options.config.slowburnThresholdPercent,
       consecutiveSamples: options.config.consecutiveSamples,
       profileDurationMs: options.config.profileDurationMs,
       cooldownMs: options.config.cooldownMs,

@@ -1,4 +1,6 @@
 import type {
+  DesktopHotCpuProfileStartDelayMs,
+  DesktopHotCpuProfileTriggerMode,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
@@ -324,15 +326,26 @@ function SettingsSectionBody(props: {
             general: { hotCpuProfilingEnabled },
           });
         }}
+        onHotCpuProfilingStartDelayMsChange={async (
+          hotCpuProfilingStartDelayMs: DesktopHotCpuProfileStartDelayMs,
+        ) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingStartDelayMs },
+          });
+        }}
+        onHotCpuProfilingTriggerModeChange={async (
+          hotCpuProfilingTriggerMode: DesktopHotCpuProfileTriggerMode,
+        ) => {
+          await props.settings.writeConfig({
+            general: { hotCpuProfilingTriggerMode },
+          });
+        }}
         onHotCpuProfilingCaptureHeapSnapshotChange={async (
           hotCpuProfilingCaptureHeapSnapshot: boolean,
         ) => {
           await props.settings.writeConfig({
             general: {
               hotCpuProfilingCaptureHeapSnapshot,
-              ...(hotCpuProfilingCaptureHeapSnapshot
-                ? { hotCpuProfilingEnabled: true }
-                : {}),
             },
           });
         }}

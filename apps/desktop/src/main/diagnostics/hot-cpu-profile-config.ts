@@ -1,4 +1,11 @@
 import path from "node:path";
+import type { DesktopHotCpuProfileTriggerMode } from "@pwragent/shared";
+import {
+  DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+  DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+  DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+  isDesktopHotCpuProfileTriggerMode,
+} from "@pwragent/shared";
 
 const DEFAULT_INTERVAL_MS = 2_000;
 const DEFAULT_THRESHOLD_PERCENT = 50;
@@ -16,8 +23,11 @@ export type HotCpuProfileConfig =
       enabled: true;
       repoRoot: string;
       outputRoot: string;
+      startDelayMs: number;
+      triggerMode: DesktopHotCpuProfileTriggerMode;
       intervalMs: number;
       thresholdPercent: number;
+      slowburnThresholdPercent: number;
       consecutiveSamples: number;
       profileDurationMs: number;
       cooldownMs: number;
@@ -41,6 +51,16 @@ function parsePositiveInteger(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseNonNegativeInteger(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) return fallback;
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function parsePositiveNumber(
   value: string | undefined,
   fallback: number,
@@ -55,6 +75,19 @@ function clampHeapSnapshotLimit(value: number): number {
   return Math.min(Math.max(Math.round(value), 1), MAX_HEAP_SNAPSHOT_LIMIT);
 }
 
+function clampPercent(value: number): number {
+  return Math.min(Math.max(value, 1), 100);
+}
+
+function parseTriggerMode(
+  value: string | undefined,
+  fallback: DesktopHotCpuProfileTriggerMode,
+): DesktopHotCpuProfileTriggerMode {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  return isDesktopHotCpuProfileTriggerMode(normalized) ? normalized : fallback;
+}
+
 export function resolveHotCpuProfileConfig(options?: {
   captureHeapSnapshot?: boolean;
   enabled?: boolean;
@@ -62,6 +95,9 @@ export function resolveHotCpuProfileConfig(options?: {
   heapSnapshotLimit?: number;
   outputRoot?: string;
   repoRoot?: string;
+  slowburnThresholdPercent?: number;
+  startDelayMs?: number;
+  triggerMode?: DesktopHotCpuProfileTriggerMode;
 }): HotCpuProfileConfig {
   const env = options?.env ?? process.env;
   if (!options?.enabled && !isEnabled(env.PWRAGENT_HOT_CPU_PROFILING)) {
@@ -77,6 +113,14 @@ export function resolveHotCpuProfileConfig(options?: {
     enabled: true,
     repoRoot,
     outputRoot,
+    startDelayMs: parseNonNegativeInteger(
+      env.PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS,
+      options?.startDelayMs ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+    ),
+    triggerMode: parseTriggerMode(
+      env.PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE,
+      options?.triggerMode ?? DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+    ),
     intervalMs: parsePositiveInteger(
       env.PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS,
       DEFAULT_INTERVAL_MS,
@@ -84,6 +128,13 @@ export function resolveHotCpuProfileConfig(options?: {
     thresholdPercent: parsePositiveNumber(
       env.PWRAGENT_HOT_CPU_PROFILING_THRESHOLD_PERCENT,
       DEFAULT_THRESHOLD_PERCENT,
+    ),
+    slowburnThresholdPercent: clampPercent(
+      parsePositiveNumber(
+        env.PWRAGENT_HOT_CPU_PROFILING_SLOWBURN_THRESHOLD_PERCENT,
+        options?.slowburnThresholdPercent ??
+          DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+      ),
     ),
     consecutiveSamples: parsePositiveInteger(
       env.PWRAGENT_HOT_CPU_PROFILING_CONSECUTIVE_SAMPLES,

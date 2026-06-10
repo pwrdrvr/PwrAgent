@@ -6,6 +6,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 const AUTO_DISMISS_MS = 9_000;
 
 export type AppNoticeToastNotice = {
+  autoDismiss?: boolean;
   id: string;
   title: string;
   message: string;
@@ -20,6 +21,7 @@ export function AppNoticeToast(props: {
   const [paused, setPaused] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
   const onDismissRef = useRef(props.onDismiss);
+  const autoDismiss = props.notice?.autoDismiss !== false;
 
   useEffect(() => {
     onDismissRef.current = props.onDismiss;
@@ -34,7 +36,7 @@ export function AppNoticeToast(props: {
   }, [props.notice?.id]);
 
   useEffect(() => {
-    if (!props.notice || paused) {
+    if (!props.notice || !autoDismiss || paused) {
       return;
     }
 
@@ -49,7 +51,7 @@ export function AppNoticeToast(props: {
         timeoutRef.current = undefined;
       }
     };
-  }, [paused, props.notice?.id]);
+  }, [autoDismiss, paused, props.notice?.id]);
 
   if (!props.notice) {
     return null;
@@ -102,11 +104,13 @@ export function AppNoticeToast(props: {
           <CloseIcon size={14} aria-hidden="true" />
         </button>
       </div>
-      <span
-        className="app-notice-toast__timer"
-        aria-hidden="true"
-        data-paused={paused ? "true" : undefined}
-      />
+      {autoDismiss ? (
+        <span
+          className="app-notice-toast__timer"
+          aria-hidden="true"
+          data-paused={paused ? "true" : undefined}
+        />
+      ) : null}
     </aside>
   );
 }

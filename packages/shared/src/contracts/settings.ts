@@ -50,6 +50,23 @@ export type DesktopCodexProfileModel =
 export const DESKTOP_CODEX_PROFILE_MODEL_DEFAULT: DesktopCodexProfileModel =
   "shared";
 
+export const DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS = [0, 5_000, 10_000] as const;
+export type DesktopHotCpuProfileStartDelayMs =
+  (typeof DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS)[number];
+export const DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS: DesktopHotCpuProfileStartDelayMs =
+  0;
+
+export const DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODES = [
+  "spike",
+  "sustained",
+  "slowburn",
+] as const;
+export type DesktopHotCpuProfileTriggerMode =
+  (typeof DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODES)[number];
+export const DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT: DesktopHotCpuProfileTriggerMode =
+  "sustained";
+export const DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT = 15;
+
 /**
  * Persisted record that the operator acknowledged the messaging-safety
  * preamble in the first-run wizard. Audit-trail oriented: timestamp + the
@@ -226,6 +243,9 @@ export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
+  hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
+  hotCpuProfilingTriggerMode: DesktopSettingsValue<DesktopHotCpuProfileTriggerMode>;
+  hotCpuProfilingSlowburnThresholdPercent: DesktopSettingsValue<number>;
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
@@ -619,6 +639,9 @@ export type DesktopSettingsConfigPatch = {
     confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
+    hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
+    hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
+    hotCpuProfilingSlowburnThresholdPercent?: number;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
@@ -1132,6 +1155,22 @@ export function isDesktopCodexProfileModel(
 ): value is DesktopCodexProfileModel {
   return DESKTOP_CODEX_PROFILE_MODELS.includes(
     value as DesktopCodexProfileModel,
+  );
+}
+
+export function isDesktopHotCpuProfileStartDelayMs(
+  value: number,
+): value is DesktopHotCpuProfileStartDelayMs {
+  return DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS.includes(
+    value as DesktopHotCpuProfileStartDelayMs,
+  );
+}
+
+export function isDesktopHotCpuProfileTriggerMode(
+  value: string,
+): value is DesktopHotCpuProfileTriggerMode {
+  return DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODES.includes(
+    value as DesktopHotCpuProfileTriggerMode,
   );
 }
 
