@@ -5072,6 +5072,27 @@ script = "echo setup"
           namespace: "pwragent_threads",
           name: "get_thread_status",
         }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "get_current_location",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+      ]),
+    );
+    expect(
+      new Set(
+        (codexClient.lastStartThreadParams?.dynamicTools as Array<{
+          namespace: string;
+        }>).map((tool) => tool.namespace),
+      ),
+    ).toEqual(
+      new Set([
+        "pwragent_automations",
+        "pwragent_threads",
+        "pwragent_messaging",
       ]),
     );
     expect(
@@ -6791,6 +6812,69 @@ script = "pnpm install"
       model: "gpt-5.4",
       reasoningEffort: "medium",
     });
+
+    await registry.close();
+  });
+
+  it("passes Agent dynamic tools when materializing Agent Codex launchpads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:/tmp/pwragent-scratch",
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Shared messaging context.",
+      },
+      input: [{ type: "text", text: "Start the Agent thread." }],
+      launchpad: {
+        directoryKey: "workspace:/tmp/pwragent-scratch",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/tmp/pwragent-scratch",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "get_current_location",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+      ]),
+    );
 
     await registry.close();
   });
