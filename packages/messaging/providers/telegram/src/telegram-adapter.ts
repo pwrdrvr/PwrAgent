@@ -100,6 +100,7 @@ type TelegramTypingSignal = {
 
 export type TelegramProviderLogger = {
   debug(message: string, data?: Record<string, unknown>): void;
+  info?(message: string, data?: Record<string, unknown>): void;
   warn?(message: string, data?: Record<string, unknown>): void;
 };
 
@@ -1384,14 +1385,27 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     const serviceMessageReason = telegramServiceMessageReason(message);
-    if (serviceMessageReason || this.isOwnBotUser(message.from)) {
+    if (serviceMessageReason) {
       // Forum topic create/edit service messages carry the topic name
       // — capture it before the early-return so the next regular
       // message in that topic can populate `channel.conversation.title`
       // for the binding chip. Telegram has no other API to fetch this.
       this.captureForumTopicNameIfPresent(message);
+      const logServiceMessage = this.options.logger?.info ?? this.options.logger?.debug;
+      logServiceMessage?.("telegram inbound ignored service message", {
+        chatId: message.chat.id,
+        messageId: message.message_id,
+        messageThreadId: message.message_thread_id,
+        reason: serviceMessageReason,
+        updateId,
+      });
+      return;
+    }
+
+    if (this.isOwnBotUser(message.from)) {
+      this.captureForumTopicNameIfPresent(message);
       this.options.logger?.debug(
-        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${serviceMessageReason ?? "own_bot"} chat=${message.chat.id}`,
+        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=own_bot chat=${message.chat.id}`,
       );
       return;
     }

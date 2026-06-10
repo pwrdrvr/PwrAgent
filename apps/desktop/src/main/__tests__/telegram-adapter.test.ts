@@ -2412,6 +2412,10 @@ describe("TelegramAdapter", () => {
   it("ignores Telegram forum topic rename service messages", async () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+    };
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
       config: {
@@ -2419,6 +2423,7 @@ describe("TelegramAdapter", () => {
         botToken: "telegram-token",
         authorizedActorIds: [{ id: "42", displayName: "" }],
       },
+      logger,
       pollOnStart: false,
     });
 
@@ -2447,6 +2452,16 @@ describe("TelegramAdapter", () => {
     });
 
     expect(events).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "telegram inbound ignored service message",
+      {
+        chatId: -100777,
+        messageId: 106,
+        messageThreadId: 12,
+        reason: "forum_topic_edited",
+        updateId: 7,
+      },
+    );
   });
 
   it("preserves Telegram General topic id in opaque routing state", async () => {
