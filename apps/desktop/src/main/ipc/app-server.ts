@@ -791,7 +791,7 @@ class DesktopAppServerService {
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
-    const snapshotThreads = this.applyCanonicalPrStatuses(snapshot.threads);
+    const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
@@ -818,9 +818,10 @@ class DesktopAppServerService {
 
     return {
       ...snapshot,
-      threads: snapshotThreads,
+      threads: canonicalSnapshot.threads,
       directories,
-      unchanged: snapshot.unchanged && directoriesUnchanged,
+      unchanged:
+        snapshot.unchanged && directoriesUnchanged && !canonicalSnapshot.changed,
     };
   }
 
@@ -1147,6 +1148,17 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
+    if (lookupEntry && lookupEntry.fetchedAt > 0) {
+      await this.persistPullRequestLookupHit({
+        backend,
+        request,
+        requestKey,
+        persistedPrs,
+        persistedRefreshKey: existing?.prsRefreshKey,
+        prs: currentLookupPrs,
+        fetchedAt: lookupEntry.fetchedAt,
+      });
+    }
     // Terminal-state short-circuit: once every cached PR for a lookup is
     // merged or closed, we do not need to re-query gh for the same
     // branch/directory lookup.
@@ -1337,6 +1349,39 @@ class DesktopAppServerService {
     );
   }
 
+  private async persistPullRequestLookupHit(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    persistedPrs: PrSummary[];
+    persistedRefreshKey?: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): Promise<void> {
+    if (
+      params.persistedRefreshKey === params.requestKey
+      && prSummariesEqual(params.persistedPrs, params.prs)
+    ) {
+      return;
+    }
+
+    await this.getOverlayStore().setThreadPullRequests({
+      backend: params.backend,
+      threadId: params.request.threadId,
+      prs: params.prs,
+      fetchedAt: params.fetchedAt,
+      refreshKey: params.requestKey,
+    });
+
+    if (!prSummariesEqual(params.persistedPrs, params.prs)) {
+      await this.publishThreadPullRequestsUpdated({
+        backend: params.backend,
+        threadId: params.request.threadId,
+        prs: params.prs,
+      });
+    }
+  }
+
   private claimPullRequestLookupRefreshKey(
     lookupKey: string,
     trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
@@ -1469,14 +1514,21 @@ class DesktopAppServerService {
 
   private applyCanonicalPrStatuses(
     threads: NavigationSnapshot["threads"],
-  ): NavigationSnapshot["threads"] {
-    return threads.map((thread) => {
+  ): { threads: NavigationSnapshot["threads"]; changed: boolean } {
+    let changed = false;
+    const canonicalThreads = threads.map((thread) => {
       if (!thread.prs?.length) {
         return thread;
       }
       const prs = this.canonicalizePrs(thread.prs);
-      return prSummariesEqual(thread.prs, prs) ? thread : { ...thread, prs };
+      if (prSummariesEqual(thread.prs, prs)) {
+        return thread;
+      }
+      changed = true;
+      return { ...thread, prs };
     });
+
+    return { threads: canonicalThreads, changed };
   }
 
   private async publishThreadPullRequestsUpdated(params: {
