@@ -2618,6 +2618,7 @@ export function useThreadSessionState(params: {
     ? buildThreadIdentityKey(thread.source, thread.id)
     : undefined;
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
+  const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
@@ -2915,6 +2916,75 @@ export function useThreadSessionState(params: {
             ...current.optimisticEntries,
             optimisticEntry,
           ],
+        };
+      });
+    }
+
+    const optimisticActiveTurn = thread.optimisticActiveTurn;
+    if (optimisticActiveTurn) {
+      updateSession(threadKey, (current) => {
+        const optimisticActiveTurnKey = `${threadKey}:${optimisticActiveTurn.id}`;
+        if (consumedOptimisticActiveTurnKeysRef.current.has(optimisticActiveTurnKey)) {
+          return current;
+        }
+
+        const activeTurnStartedAt =
+          optimisticActiveTurn.startedAt ?? current.activeTurnStartedAt ?? Date.now();
+        const optimisticReviewEntry: AppServerThreadReviewEntry | undefined =
+          optimisticActiveTurn.reviewDisplayText
+            ? {
+                type: "review",
+                id: `optimistic-launchpad-review-${threadKey}`,
+                review: optimisticActiveTurn.reviewDisplayText,
+                displayText: optimisticActiveTurn.reviewDisplayText,
+                createdAt: activeTurnStartedAt,
+                turn: {
+                  id: optimisticActiveTurn.id,
+                  status: "in_progress",
+                  startedAt: activeTurnStartedAt,
+                },
+              }
+            : undefined;
+        const responseReviewExists =
+          optimisticReviewEntry &&
+          current.response?.replay.entries.some(
+            (entry) =>
+              entry.type === "review" &&
+              reviewEntriesMatch(entry, optimisticReviewEntry)
+          );
+        const optimisticReviewExists =
+          optimisticReviewEntry &&
+          current.optimisticEntries.some(
+            (entry) =>
+              entry.type === "review" &&
+              reviewEntriesMatch(entry, optimisticReviewEntry)
+          );
+        const nextOptimisticEntries =
+          optimisticReviewEntry &&
+          !responseReviewExists &&
+          !optimisticReviewExists
+            ? [...current.optimisticEntries, optimisticReviewEntry]
+            : current.optimisticEntries;
+
+        if (
+          current.activeTurnId === optimisticActiveTurn.id &&
+          current.pendingStatusText === optimisticActiveTurn.statusText &&
+          nextOptimisticEntries === current.optimisticEntries
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          activeTurnId: optimisticActiveTurn.id,
+          activeTurnStartedAt,
+          expectOwnUpdate: true,
+          interacted: true,
+          lastTouchedAt: Date.now(),
+          optimisticEntries: nextOptimisticEntries,
+          pendingStatusText:
+            optimisticActiveTurn.statusText ?? current.pendingStatusText,
+          pendingTurnUsage: undefined,
         };
       });
     }
@@ -3466,6 +3536,11 @@ export function useThreadSessionState(params: {
             current,
             completedTurn?.id,
           );
+          if (completedTurnMatchesActive && completedTurn?.id) {
+            consumedOptimisticActiveTurnKeysRef.current.add(
+              `${targetThreadKey}:${completedTurn.id}`
+            );
+          }
           if (liveTranscriptEventFiltering && isUnfocusedThread) {
             return {
               ...current,
@@ -3682,6 +3757,11 @@ export function useThreadSessionState(params: {
           ) {
             return current;
           }
+          if (event.notification.params.turnId) {
+            consumedOptimisticActiveTurnKeysRef.current.add(
+              `${targetThreadKey}:${event.notification.params.turnId}`
+            );
+          }
 
           const errorMessage =
             typeof event.notification.params.turn.error?.message === "string" &&
@@ -3716,6 +3796,11 @@ export function useThreadSessionState(params: {
             )
           ) {
             return current;
+          }
+          if (event.notification.params.turnId) {
+            consumedOptimisticActiveTurnKeysRef.current.add(
+              `${targetThreadKey}:${event.notification.params.turnId}`
+            );
           }
 
           return {

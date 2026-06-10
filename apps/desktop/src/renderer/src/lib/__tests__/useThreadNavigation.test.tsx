@@ -1554,6 +1554,91 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
+  it("carries the started review turn from launchpad materialization", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "codex",
+            executionMode: "default",
+            prompt: "/review main",
+            workMode: "worktree",
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-review",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+      turnId: "turn-review",
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe("/review main");
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(
+        directoryKey,
+        undefined,
+        undefined,
+        { type: "baseBranch", branch: "main" }
+      );
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey,
+      launchpad: expect.objectContaining({
+        prompt: "/review main",
+      }),
+      input: undefined,
+      collaborationMode: undefined,
+      reviewTarget: { type: "baseBranch", branch: "main" },
+    });
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-review",
+      optimisticActiveTurn: {
+        id: "turn-review",
+        statusText: "Reviewing",
+        reviewDisplayText: "Review changes against main",
+      },
+    });
+    expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
+  });
+
   it("rejects materialize failures after recording the launchpad error", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const getNavigationSnapshot = vi.fn(async () => ({

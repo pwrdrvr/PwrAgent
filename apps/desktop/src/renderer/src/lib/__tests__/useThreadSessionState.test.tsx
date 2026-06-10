@@ -6178,6 +6178,151 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("seeds launchpad review turns before stray turn starts arrive", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          optimisticActiveTurn: {
+            id: "turn-review",
+            statusText: "Reviewing",
+            startedAt: 1_500,
+            reviewDisplayText: "Review changes against main",
+          },
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Reviewing");
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          type: "review",
+          review: "Review changes against main",
+          turn: expect.objectContaining({
+            id: "turn-review",
+            status: "in_progress",
+          }),
+        }),
+      ]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+  });
+
+  it("seeds launchpad active turns alongside optimistic user messages", async () => {
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          optimisticUserMessage: {
+            text: "Start from launchpad",
+            createdAt: 1_500,
+          },
+          optimisticActiveTurn: {
+            id: "turn-1",
+            statusText: "Thinking",
+            startedAt: 1_500,
+          },
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-1");
+      expect(result.current.pendingStatusText).toBe("Thinking");
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          type: "message",
+          role: "user",
+          text: "Start from launchpad",
+        }),
+      ]);
+    });
+  });
+
   it("stores context window usage from token usage notifications", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
