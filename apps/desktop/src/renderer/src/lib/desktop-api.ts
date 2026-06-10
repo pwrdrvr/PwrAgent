@@ -24,6 +24,8 @@ import type {
   CreateAutomationRequest,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  ThreadSearchRequest,
+  ThreadSearchResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   ForkThreadRequest,
@@ -485,6 +487,9 @@ export type DesktopApi = {
   listThreads?: (
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;
+  searchThreads?: (
+    request?: ThreadSearchRequest,
+  ) => Promise<ThreadSearchResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
     request: SetThreadReactionRequest

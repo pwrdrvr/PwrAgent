@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 12;
+export const CURRENT_STATE_DB_USER_VERSION = 13;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -394,6 +394,47 @@ CREATE TABLE IF NOT EXISTS messaging_activity_summary (
 );
 `;
 
+const THREAD_SEARCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_search_documents (
+  identity_key            TEXT PRIMARY KEY,
+  backend                 TEXT NOT NULL,
+  thread_id               TEXT NOT NULL,
+  title                   TEXT NOT NULL,
+  title_source            TEXT,
+  summary                 TEXT,
+  project_key             TEXT,
+  created_at              INTEGER,
+  updated_at              INTEGER,
+  archived_at             INTEGER,
+  git_branch              TEXT,
+  git_origin_url          TEXT,
+  model                   TEXT,
+  linked_directories_json TEXT NOT NULL,
+  display_json            TEXT NOT NULL,
+  indexed_at              INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_backend_updated
+  ON thread_search_documents(backend, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_project_updated
+  ON thread_search_documents(project_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_archived
+  ON thread_search_documents(archived_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS thread_search_fts USING fts5(
+  identity_key UNINDEXED,
+  title,
+  summary,
+  project_key,
+  directory_labels,
+  directory_paths,
+  git_branch,
+  git_origin_url,
+  model,
+  backend,
+  tokenize = "unicode61 remove_diacritics 2 tokenchars '-_./:'"
+);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -511,6 +552,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 12) {
       db.transaction(() => {
         db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+        db.pragma("user_version = 12");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 13) {
+      db.transaction(() => {
+        db.exec(THREAD_SEARCH_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -659,6 +706,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+    db.exec(THREAD_SEARCH_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

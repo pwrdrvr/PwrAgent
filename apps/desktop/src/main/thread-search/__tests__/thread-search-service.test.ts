@@ -1,0 +1,153 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
+import { StateDb } from "../../state/state-db";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search-provider-adapters";
+import { ThreadSearchService } from "../thread-search-service";
+import { ThreadSearchStore } from "../thread-search-store";
+
+let stateDb: StateDb;
+let tempDir: string;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-thread-search-service-"));
+  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+});
+
+afterEach(() => {
+  stateDb.close();
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+describe("ThreadSearchService", () => {
+  it("hydrates projections from thread summaries and searches them", async () => {
+    const service = buildService([
+      threadSummary({ id: "thread-1", title: "Branch drift dialog" }),
+      threadSummary({
+        id: "thread-2",
+        title: "Release notes",
+        summary: "Prepared beta release notes",
+      }),
+    ]);
+
+    const response = await service.search({ query: "branch drift" });
+
+    expect(response.results.map((result) => result.threadId)).toEqual(["thread-1"]);
+    expect(response.searchedScopes).toEqual(["metadata", "projection"]);
+    expect(response.unavailableScopes).toEqual([
+      expect.objectContaining({ scope: "provider_content", reason: "unsupported" }),
+    ]);
+  });
+
+  it("applies project filters after projection search", async () => {
+    const service = buildService([
+      threadSummary({ id: "pwragent", projectKey: "PwrAgent" }),
+      threadSummary({ id: "docs", projectKey: "Docs" }),
+    ]);
+
+    const response = await service.search({
+      filters: { projectKeys: ["Docs"] },
+      query: "branch",
+    });
+
+    expect(response.results.map((result) => result.threadId)).toEqual(["docs"]);
+  });
+
+  it("reports semantic search as disabled when requested", async () => {
+    const service = buildService([threadSummary({ id: "thread-1" })]);
+
+    const response = await service.search({ semanticMode: "required" });
+
+    expect(response.unavailableScopes).toContainEqual(
+      expect.objectContaining({ scope: "semantic", reason: "disabled" }),
+    );
+  });
+
+  it("uses provider transcripts for bounded recent candidates", async () => {
+    const service = buildService(
+      [
+        threadSummary({
+          id: "thread-1",
+          title: "Release notes",
+          summary: "Prepared beta release notes",
+        }),
+      ],
+      "We talked about local vector models for thread search.",
+    );
+
+    const response = await service.search({ query: "vector models" });
+
+    expect(response.results.map((result) => result.threadId)).toEqual(["thread-1"]);
+    expect(response.results[0]?.matchReasons).toContainEqual(
+      expect.objectContaining({ kind: "provider_content_match" }),
+    );
+    expect(response.unavailableScopes).not.toContainEqual(
+      expect.objectContaining({ scope: "provider_content", reason: "unsupported" }),
+    );
+  });
+});
+
+function buildService(
+  threads: AppServerThreadSummary[],
+  transcriptText?: string,
+): ThreadSearchService {
+  return new ThreadSearchService(
+    new ThreadSearchStore(stateDb),
+    async () => threads,
+    transcriptText
+      ? new ProviderTranscriptThreadSearchAdapter(async () =>
+          readThreadResponse(transcriptText),
+        )
+      : undefined,
+  );
+}
+
+function threadSummary(
+  overrides: Partial<AppServerThreadSummary>,
+): AppServerThreadSummary {
+  return {
+    id: "thread",
+    title: "Thread",
+    titleSource: "derived",
+    summary: "Asked about branch drift dialog screenshots",
+    projectKey: "PwrAgent",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    linkedDirectories: [
+      {
+        id: "dir-1",
+        label: "PwrAgent",
+        path: "/repo/PwrAgent",
+        kind: "local",
+      },
+    ],
+    source: "codex",
+    gitBranch: "feat/branch-drift",
+    model: "gpt-5.5",
+    ...overrides,
+  };
+}
+
+function readThreadResponse(text: string): AppServerReadThreadResponse {
+  return {
+    backend: "codex",
+    fetchedAt: 1_000,
+    threadId: "thread-1",
+    replay: {
+      entries: [],
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text,
+        },
+      ],
+      pagination: {
+        hasPreviousPage: false,
+        supportsPagination: false,
+      },
+    },
+  };
+}
