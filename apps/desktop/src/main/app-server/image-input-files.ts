@@ -52,13 +52,21 @@ export async function materializeLocalImageInputs(
       );
       await deps.writeFile(filePath, dataImage.buffer);
       materializedFilePaths.add(filePath);
-      materialized.push({ type: "localImage", path: filePath });
+      materialized.push({
+        type: "localImage",
+        ...(item.name ? { name: item.name } : {}),
+        path: filePath,
+      });
       continue;
     }
 
     const filePath = filePathFromFileUrl(item.url);
     if (filePath && isSupportedImagePath(filePath)) {
-      materialized.push({ type: "localImage", path: filePath });
+      materialized.push({
+        type: "localImage",
+        ...(item.name ? { name: item.name } : {}),
+        path: filePath,
+      });
       continue;
     }
 

@@ -12,7 +12,7 @@ describe("image input files", () => {
       const first = await materializeLocalImageInputs(
         [
           { type: "text", text: "Describe it" },
-          { type: "image", url: dataUrl },
+          { type: "image", name: "original-paste.png", url: dataUrl },
         ],
         { resolveRoot: () => tempDir },
       );
@@ -22,9 +22,9 @@ describe("image input files", () => {
       );
 
       expect(first[0]).toEqual({ type: "text", text: "Describe it" });
-      expect(first[1]).toMatchObject({ type: "localImage" });
-      expect(second[0]).toEqual(first[1]);
+      expect(first[1]).toMatchObject({ type: "localImage", name: "original-paste.png" });
       const imagePath = first[1]?.type === "localImage" ? first[1].path : "";
+      expect(second[0]).toEqual({ type: "localImage", path: imagePath });
       expect(path.basename(imagePath)).toMatch(/^[a-f0-9]{64}\.png$/);
       await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
@@ -49,11 +49,11 @@ describe("image input files", () => {
 
   it("converts file URLs for supported local image paths", async () => {
     const result = await materializeLocalImageInputs([
-      { type: "image", url: "file:///tmp/screenshot%20one.jpg" },
+      { type: "image", name: "friendly screenshot.jpg", url: "file:///tmp/screenshot%20one.jpg" },
     ]);
 
     expect(result).toEqual([
-      { type: "localImage", path: "/tmp/screenshot one.jpg" },
+      { type: "localImage", name: "friendly screenshot.jpg", path: "/tmp/screenshot one.jpg" },
     ]);
   });
 

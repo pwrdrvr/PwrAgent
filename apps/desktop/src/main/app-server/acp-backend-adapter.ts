@@ -613,7 +613,11 @@ export function inputToAcpPrompt(
     }
 
     if (item.type === "image") {
-      parts.push({ type: "image", url: item.url });
+      const name = item.name?.trim();
+      if (name) {
+        promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
+      }
+      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: item.url });
       const image = parseImageDataUrl(item.url);
       if (image) {
         promptContent.push({
@@ -627,7 +631,7 @@ export function inputToAcpPrompt(
       continue;
     }
 
-    const fileName = path.basename(item.path);
+    const fileName = item.name?.trim() || path.basename(item.path);
     const text = `[Local image: ${fileName}]`;
     promptContent.push({ type: "text", text });
     parts.push({ type: "text", text });

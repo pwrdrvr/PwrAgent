@@ -6029,6 +6029,45 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes image filenames to Codex as adjacent text context", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [
+        {
+          type: "image",
+          name: "pwrsagent-workspace-setup-in-progress-high.png",
+          url: "data:image/png;base64,AQID",
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown } })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStartPayload?.params?.input).toEqual([
+      {
+        type: "text",
+        text: "Attached image filename: pwrsagent-workspace-setup-in-progress-high.png",
+        text_elements: [],
+      },
+      {
+        type: "image",
+        url: "data:image/png;base64,AQID",
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("forwards approvalPolicy and sandboxPolicy on every turn/start so per-thread permission profile refreshes", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

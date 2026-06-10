@@ -4605,16 +4605,44 @@ function buildCollaborationModeOverrides(params: {
   };
 }
 
-function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
+function imageAttachmentNameInput(name: string): CodexUserInput {
+  return {
+    type: "text",
+    text: `Attached image filename: ${name}`,
+    text_elements: [],
+  };
+}
+
+function toCodexUserInputs(input: AppServerTurnInputItem): CodexUserInput[] {
   if (input.type === "text") {
-    return {
-      type: "text",
-      text: input.text,
-      text_elements: [],
-    };
+    return [
+      {
+        type: "text",
+        text: input.text,
+        text_elements: [],
+      },
+    ];
   }
 
-  return input;
+  const name = input.name?.trim();
+  const prefix = name ? [imageAttachmentNameInput(name)] : [];
+  if (input.type === "image") {
+    return [
+      ...prefix,
+      {
+        type: "image",
+        url: input.url,
+      },
+    ];
+  }
+
+  return [
+    ...prefix,
+    {
+      type: "localImage",
+      path: input.path,
+    },
+  ];
 }
 
 function buildTurnStartPayload(params: {
@@ -4634,7 +4662,7 @@ function buildTurnStartPayload(params: {
 }): CodexTurnStartParams {
   const base: CodexTurnStartParams = {
     threadId: params.threadId,
-    input: params.input.map(toCodexUserInput),
+    input: params.input.flatMap(toCodexUserInputs),
   };
 
   if (params.cwd?.trim()) {
@@ -6005,7 +6033,7 @@ export class CodexAppServerClient {
 
     const payload: CodexTurnSteerParams = {
       threadId: params.threadId,
-      input: params.input.map(toCodexUserInput),
+      input: params.input.flatMap(toCodexUserInputs),
       expectedTurnId: params.expectedTurnId,
     };
     const result = await requestWithFallbacks({

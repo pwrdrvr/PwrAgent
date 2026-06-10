@@ -15,11 +15,15 @@ export type AppServerTextInputItem = {
 
 export type AppServerImageInputItem = {
   type: "image";
+  /** User-visible filename / attachment label when available. */
+  name?: string;
   url: string;
 };
 
 export type AppServerLocalImageInputItem = {
   type: "localImage";
+  /** User-visible filename / attachment label when available. */
+  name?: string;
   path: string;
 };
 

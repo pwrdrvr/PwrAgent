@@ -3140,7 +3140,11 @@ export function Composer(props: ComposerProps) {
     }));
     const input: AppServerTurnInputItem[] = [
       ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
-      ...imageParts.map(({ url }) => ({ type: "image" as const, url })),
+      ...attachments.map((attachment) => ({
+        type: "image" as const,
+        name: attachment.name,
+        url: attachment.url,
+      })),
     ];
 
     return { displayText, imageParts, input };

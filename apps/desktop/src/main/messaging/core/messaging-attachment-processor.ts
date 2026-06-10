@@ -160,6 +160,7 @@ export async function processMessagingAttachments(params: {
         }
         mediaInput.push({
           type: "image",
+          name: downloaded.fileName,
           url: normalized.dataUrl,
         });
         continue;
