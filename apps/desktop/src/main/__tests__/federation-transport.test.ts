@@ -1,13 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import WebSocket from "ws";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
 import {
+  buildFederationProofMessage,
   createFederationEnrollmentInvite,
 } from "../federation/federation-enrollment";
 import {
   generateFederationIdentityKeyPair,
+  signFederationMessage,
 } from "../federation/federation-identity";
 import { FederationStore } from "../federation/federation-store";
 import {
@@ -132,4 +135,85 @@ describe("federation transport", () => {
       }),
     ).rejects.toThrow("unknown_peer");
   });
+
+  it("rejects auth proofs signed with a client-selected nonce", async () => {
+    const childKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-stale-nonce",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      host: "127.0.0.1",
+      port: 0,
+      store,
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    const challenge = nextSocketMessage(socket);
+    await waitForSocketOpen(socket);
+    await expect(challenge).resolves.toMatchObject({
+      kind: "auth.challenge",
+      gatewayInstanceId: "gateway_one",
+    });
+
+    const nonce = "nonce:client-selected";
+    socket.send(
+      JSON.stringify({
+        kind: "auth",
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "child_one",
+        protocolVersion: 1,
+        nonce,
+        capabilities: ["remote_window"],
+        signatureBase64: signFederationMessage({
+          privateKeyPem: childKeyPair.privateKeyPem,
+          message: buildFederationProofMessage({
+            purpose: "enroll",
+            gatewayInstanceId: "gateway_one",
+            peerInstanceId: "child_one",
+            publicKeyPem: childKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce,
+            capabilities: ["remote_window"],
+          }),
+        }),
+        inviteToken: invite.token,
+        publicKeyPem: childKeyPair.publicKeyPem,
+        label: "Child",
+        role: "child",
+      }),
+    );
+
+    await expect(nextSocketMessage(socket)).resolves.toMatchObject({
+      kind: "auth.rejected",
+      failure: { code: "policy_denied" },
+    });
+    socket.close();
+    expect(store.getPeer("child_one")).toBeUndefined();
+  });
 });
+
+function waitForSocketOpen(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.once("open", () => resolve());
+    socket.once("error", reject);
+  });
+}
+
+function nextSocketMessage(socket: WebSocket): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (raw) => {
+      try {
+        resolve(JSON.parse(raw.toString()));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.once("error", reject);
+  });
+}

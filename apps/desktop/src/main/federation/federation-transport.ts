@@ -42,6 +42,13 @@ type FederationSocketAuthMessage = {
   profileName?: string;
 };
 
+type FederationSocketChallengeMessage = {
+  kind: "auth.challenge";
+  gatewayInstanceId: FederationInstanceId;
+  protocolVersion: number;
+  nonce: string;
+};
+
 type FederationSocketAcceptedMessage = {
   kind: "auth.accepted";
   sessionId: FederationSessionId;
@@ -61,6 +68,7 @@ type FederationSocketEnvelopeMessage = {
 
 type FederationSocketMessage =
   | FederationSocketAuthMessage
+  | FederationSocketChallengeMessage
   | FederationSocketAcceptedMessage
   | FederationSocketRejectedMessage
   | FederationSocketEnvelopeMessage;
@@ -140,9 +148,24 @@ export class FederationGatewayWebSocketServer {
 
   private handleSocket(socket: WebSocket): void {
     let connection: FederationGatewayConnection | undefined;
+    const challengeNonce = `challenge:${randomUUID()}`;
+    sendSocketMessage(socket, {
+      kind: "auth.challenge",
+      gatewayInstanceId: this.options.gatewayInstanceId,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      nonce: challengeNonce,
+    });
     socket.once("message", (raw) => {
       const message = parseSocketMessage(raw);
       if (!message || message.kind !== "auth") {
+        sendSocketMessage(socket, {
+          kind: "auth.rejected",
+          failure: federationFailure("policy_denied"),
+        });
+        socket.close();
+        return;
+      }
+      if (message.nonce !== challengeNonce) {
         sendSocketMessage(socket, {
           kind: "auth.rejected",
           failure: federationFailure("policy_denied"),
@@ -272,14 +295,27 @@ export async function connectFederationChild(params: {
   headers?: Record<string, string>;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
 }): Promise<FederationChildWebSocketClient> {
-  const nonce = `nonce:${randomUUID()}`;
+  const socket = new WebSocket(params.url, {
+    headers: params.headers,
+  });
+  const [challenge] = await Promise.all([
+    waitForAuthChallenge(socket),
+    waitForOpen(socket),
+  ]);
+  if (
+    challenge.gatewayInstanceId !== params.gatewayInstanceId ||
+    challenge.protocolVersion !== FEDERATION_PROTOCOL_VERSION
+  ) {
+    socket.close();
+    throw new Error("Invalid federation auth challenge");
+  }
   const messageToSign = buildFederationProofMessage({
     purpose: params.mode === "enroll" ? "enroll" : "reconnect",
     gatewayInstanceId: params.gatewayInstanceId,
     peerInstanceId: params.peerInstanceId,
     publicKeyPem: params.publicKeyPem,
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
-    nonce,
+    nonce: challenge.nonce,
     capabilities: params.capabilities,
   });
   const authMessage: FederationSocketAuthMessage = {
@@ -288,7 +324,7 @@ export async function connectFederationChild(params: {
     gatewayInstanceId: params.gatewayInstanceId,
     peerInstanceId: params.peerInstanceId,
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
-    nonce,
+    nonce: challenge.nonce,
     capabilities: params.capabilities.slice(),
     signatureBase64: signFederationMessage({
       privateKeyPem: params.privateKeyPem,
@@ -302,10 +338,6 @@ export async function connectFederationChild(params: {
     profileName: params.profileName,
   };
 
-  const socket = new WebSocket(params.url, {
-    headers: params.headers,
-  });
-  await waitForOpen(socket);
   sendSocketMessage(socket, authMessage);
   const accepted = await waitForAuthResult(socket);
   socket.on("message", (raw) => {
@@ -327,6 +359,24 @@ export async function connectFederationChild(params: {
 function waitForOpen(socket: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
     socket.once("open", () => resolve());
+    socket.once("error", reject);
+  });
+}
+
+function waitForAuthChallenge(socket: WebSocket): Promise<FederationSocketChallengeMessage> {
+  return new Promise((resolve, reject) => {
+    socket.once("message", (raw) => {
+      const message = parseSocketMessage(raw);
+      if (message?.kind === "auth.challenge") {
+        resolve(message);
+        return;
+      }
+      if (message?.kind === "auth.rejected") {
+        reject(new Error(message.failure.code));
+        return;
+      }
+      reject(new Error("Unexpected federation auth challenge"));
+    });
     socket.once("error", reject);
   });
 }
@@ -358,6 +408,7 @@ function parseSocketMessage(raw: WebSocket.RawData): FederationSocketMessage | u
   try {
     const parsed = JSON.parse(raw.toString()) as Partial<FederationSocketMessage>;
     if (parsed.kind === "auth" && isAuthMessage(parsed)) return parsed;
+    if (parsed.kind === "auth.challenge" && isChallengeMessage(parsed)) return parsed;
     if (parsed.kind === "auth.accepted" && isAcceptedMessage(parsed)) return parsed;
     if (parsed.kind === "auth.rejected" && parsed.failure) {
       return parsed as FederationSocketRejectedMessage;
@@ -382,6 +433,17 @@ function isAuthMessage(value: Partial<FederationSocketAuthMessage>): value is Fe
     typeof value.signatureBase64 === "string" &&
     Array.isArray(value.capabilities) &&
     value.capabilities.every(isFederationCapability)
+  );
+}
+
+function isChallengeMessage(
+  value: Partial<FederationSocketChallengeMessage>,
+): value is FederationSocketChallengeMessage {
+  return (
+    value.kind === "auth.challenge" &&
+    typeof value.gatewayInstanceId === "string" &&
+    typeof value.protocolVersion === "number" &&
+    typeof value.nonce === "string"
   );
 }
 

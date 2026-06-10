@@ -72,6 +72,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -4883,7 +4884,7 @@ export function Composer(props: ComposerProps) {
           notificationThreadId,
         );
         const queueEventIsCurrentThread =
-          event.backend === thread.source && notificationThreadId === thread.id;
+          agentEventMatchesThread(event, thread, notificationThreadId);
         if (
           queueEventIsCurrentThread &&
           (turnQueueRecord.status === "started" ||
@@ -4938,7 +4939,7 @@ export function Composer(props: ComposerProps) {
         }
       }
 
-      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
+      if (!agentEventMatchesThread(event, thread, notificationThreadId)) {
         return;
       }
 

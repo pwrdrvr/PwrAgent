@@ -103,6 +103,7 @@ Back in the master profile:
 3. The new window is scoped to the child instance for thread list, thread read,
    skill list, and prompt submission.
 
-The MVP does not yet stream remote live events into the master window. After
-submitting a prompt to a remote thread, refresh/reopen the thread to inspect the
-updated transcript.
+Remote backend events stream back into the matching remote window, so prompt
+submission should show live turn status, tool activity, and assistant deltas
+without reopening the thread. The MVP still expects you to test against an
+existing child thread; remote new-thread creation is not wired yet.
