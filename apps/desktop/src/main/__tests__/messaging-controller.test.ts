@@ -478,6 +478,69 @@ describe("MessagingController", () => {
     });
   });
 
+  it("keeps new-thread creation in Agent mode after switching from /agent to recents", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:recents",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing recent PwrAgent threads."),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
+        ]),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+      }),
+      expect.objectContaining({
+        onThreadMaterialized: expect.any(Function),
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      targetKind: "agent_thread",
+    });
+  });
+
   it("returns from the nested new-thread picker back to the resume browser", async () => {
     const harness = await createHarness();
 

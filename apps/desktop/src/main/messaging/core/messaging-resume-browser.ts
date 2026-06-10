@@ -69,6 +69,12 @@ export function isNewAgentThreadLaunchAction(
   return launchAction === "start_new_agent_thread";
 }
 
+export function shouldStartNewAgentThreadFromSession(
+  session: MessagingBrowseSessionRecord,
+): boolean {
+  return session.mode === "agents" || session.returnTo?.mode === "agents";
+}
+
 export function parseResumeCommandArgs(args: string[]): ParsedResumeCommand {
   const tokens = normalizeOptionDashes(args.join(" "))
     .split(/\s+/)
@@ -520,7 +526,7 @@ function navigationActions(
   if (session.mode !== "agents" && !isNewThreadLaunchAction(session.launchAction)) {
     actions.push({
       id: "browse:mode:new",
-      label: "New",
+      label: shouldStartNewAgentThreadFromSession(session) ? "New Agent" : "New",
       style: "secondary",
       fallbackText: "new",
       layout: { row: FOOTER_ROW },

@@ -124,6 +124,7 @@ import {
   resumeReturnTargetForSession,
   selectProjectFromValue,
   selectThreadFromValue,
+  shouldStartNewAgentThreadFromSession,
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
@@ -3230,6 +3231,9 @@ export class MessagingController {
           launchAction: "resume_thread",
           mode: "projects",
           pageIndex: 0,
+          returnTo: shouldStartNewAgentThreadFromSession(session)
+            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            : undefined,
           selectedProject: undefined,
         },
         navigation,
@@ -3244,6 +3248,9 @@ export class MessagingController {
           launchAction: "resume_thread",
           mode: "recents",
           pageIndex: 0,
+          returnTo: shouldStartNewAgentThreadFromSession(session)
+            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            : undefined,
           selectedProject: undefined,
         },
         navigation,
@@ -3280,12 +3287,12 @@ export class MessagingController {
         {
           ...nextSession,
           backend: selectedBackend.kind,
-          launchAction: session.mode === "agents"
+          launchAction: shouldStartNewAgentThreadFromSession(session)
             ? "start_new_agent_thread"
             : "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
-          returnTo: resumeReturnTargetForSession(nextSession),
+          returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
         },
         navigation,
