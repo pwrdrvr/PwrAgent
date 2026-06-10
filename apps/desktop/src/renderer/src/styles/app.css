@@ -409,11 +409,48 @@ textarea,
   display: none;
 }
 
-/* macOS floats the traffic lights over the top-left and the sidebar
-   masthead normally reserves that space. With the sidebar gone, clear it on
-   the thread header so the breadcrumb doesn't sit under the stoplights.
-   Windows/Linux start content at the edge (no overlay), so darwin-only. */
-:root[data-platform="darwin"] .app-shell[data-sidebar-hidden="true"] .thread-header {
+/* With the sidebar gone, its wordmark + action buttons relocate into the
+   thread header's left as a sidebar-colored cluster (see ThreadHeader).
+   Drop the header's own left/top padding so the cluster sits flush in the
+   top-left corner; the cluster reserves the macOS stoplight strip itself. */
+.app-shell[data-sidebar-hidden="true"] .thread-header {
+  padding-top: 0;
+  padding-left: 0;
+}
+
+.app-shell[data-sidebar-hidden="true"] .thread-header__top {
+  min-height: 44px;
+}
+
+.app-shell[data-sidebar-hidden="true"] .thread-header__main {
+  padding-left: 16px;
+}
+
+.thread-header__masthead {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.thread-header__masthead .sidebar__brand {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.masthead-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* macOS floats the traffic lights over the cluster's left; reserve their
+   strip like the sidebar masthead did. Windows keeps the wordmark +
+   buttons in the title bar, so the cluster never renders there. */
+:root[data-platform="darwin"] .thread-header__masthead {
   padding-left: 80px;
 }
 

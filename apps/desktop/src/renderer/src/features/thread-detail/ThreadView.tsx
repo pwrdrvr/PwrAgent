@@ -54,6 +54,7 @@ import {
   DEFAULT_CONTEXT_TAB,
   type ContextTabId,
 } from "./context-panels/context-tab";
+import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -882,6 +883,11 @@ export type ThreadViewProps = {
   onActiveContextTabChange?: (tab: ContextTabId) => void;
   sidebarHidden?: boolean;
   onToggleSidebar?: () => void;
+  /**
+   * The sidebar masthead's wordmark + action buttons, relocated into the
+   * thread header when the sidebar is hidden (macOS/Linux).
+   */
+  mastheadActions?: MastheadActionsProps;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -2172,6 +2178,7 @@ export function ThreadView(props: ThreadViewProps) {
           onToggleSidebar,
           onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
         }}
+        masthead={props.mastheadActions}
       />
 
       <div

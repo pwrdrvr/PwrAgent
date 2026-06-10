@@ -9,6 +9,7 @@ import { formatAccessModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
+import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 
 type ThreadHeaderLayoutControls = {
@@ -32,6 +33,13 @@ type ThreadHeaderProps = {
    * is skipped to avoid a duplicate control + a second hotkey listener.
    */
   layout?: ThreadHeaderLayoutControls;
+  /**
+   * The wordmark + action buttons that normally live in the sidebar
+   * masthead. When the sidebar is hidden (macOS/Linux), they relocate
+   * here, left of the thread name, so they don't vanish with the sidebar.
+   * Windows keeps them in the AppTitleBar, so this is skipped there.
+   */
+  masthead?: MastheadActionsProps;
 };
 
 function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
@@ -50,13 +58,26 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     props.thread.gitBranch,
     props.thread.observedGitBranch,
   );
-  // On Windows the AppTitleBar strip owns the layout toggles; rendering
-  // them here too would duplicate the control and the ⌘B/⌘⌥B listener.
+  // On Windows the AppTitleBar strip owns the layout toggles + masthead
+  // actions; rendering them here too would duplicate the control and the
+  // ⌘B/⌘⌥B listener.
   const isWindows = getDesktopApi()?.platform === "win32";
+  // When the sidebar is hidden, its wordmark + action buttons relocate
+  // here (macOS/Linux only — Windows keeps them in the title bar).
+  const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
+  const showMasthead = sidebarHidden && !isWindows && Boolean(props.masthead);
 
   return (
     <header className="thread-header">
       <div className="thread-header__top">
+        {showMasthead && props.masthead ? (
+          <div className="thread-header__masthead">
+            <p className="sidebar__brand">
+              Pwr<span className="sidebar__brand-accent">Agent</span>
+            </p>
+            <MastheadActions {...props.masthead} />
+          </div>
+        ) : null}
         <div className="thread-header__main">
           <div className="thread-header__eyebrow-row">
             <div className="thread-header__breadcrumb">

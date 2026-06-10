@@ -417,6 +417,25 @@ function DesktopAppShell(props: {
     launchpad: navigation.selectedLaunchpad,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  // Window-level masthead actions (Automations / Settings / New Thread).
+  // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
+  // thread-header relocation when the sidebar is hidden on macOS/Linux.
+  const mastheadActions = {
+    automationsActive: mainView === "automations",
+    settingsActive: mainView === "settings",
+    creatingThread: Boolean(navigation.creatingThread),
+    onOpenAutomations: () => {
+      setMainView("automations");
+    },
+    onOpenSettings: () => {
+      setSettingsInitialSection(undefined);
+      setMainView("settings");
+    },
+    onCreateThread: async () => {
+      setMainView("thread");
+      await navigation.createThread();
+    },
+  };
   const threadViewProps = {
     activeTurnId: session.activeTurnId,
     activeTurnStartedAt: session.activeTurnStartedAt,
@@ -501,6 +520,7 @@ function DesktopAppShell(props: {
     onActiveContextTabChange: setActiveContextTabPersisted,
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+    mastheadActions,
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
@@ -585,22 +605,7 @@ function DesktopAppShell(props: {
           onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
           onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
         }}
-        actions={{
-          automationsActive: mainView === "automations",
-          settingsActive: mainView === "settings",
-          creatingThread: Boolean(navigation.creatingThread),
-          onOpenAutomations: () => {
-            setMainView("automations");
-          },
-          onOpenSettings: () => {
-            setSettingsInitialSection(undefined);
-            setMainView("settings");
-          },
-          onCreateThread: async () => {
-            setMainView("thread");
-            await navigation.createThread();
-          },
-        }}
+        actions={mastheadActions}
       />
       <div
         className="app-shell"
