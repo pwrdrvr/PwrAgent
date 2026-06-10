@@ -1423,6 +1423,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.updates = config.updates;
   }
 
+  if (config.ui && hasDefinedValue(config.ui)) {
+    pruned.ui = config.ui;
+  }
+
   const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;

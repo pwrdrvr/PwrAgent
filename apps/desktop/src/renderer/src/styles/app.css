@@ -393,16 +393,26 @@ textarea,
   user-select: none;
 }
 
-/* Left sidebar hidden via the layout toggle (⌘B). Collapse its grid track
-   to zero and drop the sidebar (and its resize handle) entirely. The
-   re-show control lives in the header chrome / title bar, never inside the
-   sidebar, so it stays reachable. */
+/* Left sidebar hidden via the layout toggle (⌘B). The sidebar grid item is
+   removed (display:none), so the shell must collapse to a SINGLE column —
+   otherwise grid auto-placement drops the only remaining child (<main>)
+   into the leftover 0-width first track and the whole content area
+   collapses to nothing. The re-show control lives in the header chrome /
+   title bar, never inside the sidebar, so it stays reachable. */
 .app-shell[data-sidebar-hidden="true"] {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .app-shell[data-sidebar-hidden="true"] .sidebar {
   display: none;
+}
+
+/* macOS floats the traffic lights over the top-left and the sidebar
+   masthead normally reserves that space. With the sidebar hidden, clear it
+   on the thread header so the breadcrumb doesn't sit under the stoplights.
+   Windows/Linux start content at the edge (no overlay), so darwin-only. */
+:root[data-platform="darwin"] .app-shell[data-sidebar-hidden="true"] .thread-header {
+  padding-left: 80px;
 }
 
 /* Windows custom title-bar strip (File / View / Profiles / Window / Help).
