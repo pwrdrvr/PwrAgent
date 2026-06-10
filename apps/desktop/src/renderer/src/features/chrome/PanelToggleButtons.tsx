@@ -1,10 +1,5 @@
-import { useEffect, type ReactElement } from "react";
-import {
-  formatPrimaryAccel,
-  isAccelLetter,
-  isEditableTarget,
-  isPrimaryAccel,
-} from "../../lib/keyboard-accel";
+import { type ReactElement } from "react";
+import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 
 /**
  * Window layout chips — show/hide the left sidebar (primary) and the
@@ -15,10 +10,12 @@ import {
  * accent color; when closed only the outline remains. Same idea Apple /
  * VS Code use for their side-bar chips.
  *
- * Presentational: the parent owns the open/hidden state + persistence;
- * these buttons paint the state and dispatch callbacks.
- *
- * Keyboard: ⌘B / ⌃B toggles the sidebar, ⌘⌥B / ⌃⌥B toggles the rail.
+ * Purely presentational: the parent owns the open/hidden state + persistence;
+ * these buttons paint the state, show the chord in their tooltip, and dispatch
+ * click callbacks. The keyboard chords themselves (⌘B / ⌃B sidebar, ⌘⌥B / ⌃⌥B
+ * rail) are bound ONCE at the shell via `useLayoutChordHotkeys` — never here,
+ * so multiple mounted chips (Windows title bar + thread header) can't each bind
+ * a listener and double-toggle to a no-op.
  */
 export type PanelToggleButtonsProps = {
   /** Whether the left sidebar is currently shown. */
@@ -28,8 +25,6 @@ export type PanelToggleButtonsProps = {
   onToggleSidebar: () => void;
   onToggleRail: () => void;
   className?: string;
-  /** Skip the window-level keydown listener (when a parent owns chords). */
-  disableHotkeys?: boolean;
 };
 
 export function PanelToggleButtons({
@@ -38,38 +33,7 @@ export function PanelToggleButtons({
   onToggleSidebar,
   onToggleRail,
   className,
-  disableHotkeys = false,
 }: PanelToggleButtonsProps): ReactElement {
-  useEffect(() => {
-    if (disableHotkeys) {
-      return;
-    }
-    const handler = (event: KeyboardEvent): void => {
-      if (isEditableTarget(event)) {
-        return;
-      }
-      if (!isPrimaryAccel(event)) {
-        return;
-      }
-      // Match the physical "B" via event.code, NOT event.key: on macOS the
-      // Option modifier composes event.key into "∫", so ⌘⌥B (toggle rail)
-      // would never match a literal "b"/"B" check. See isAccelLetter.
-      if (!isAccelLetter(event, "b")) {
-        return;
-      }
-      event.preventDefault();
-      if (event.altKey) {
-        onToggleRail();
-      } else {
-        onToggleSidebar();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => {
-      window.removeEventListener("keydown", handler);
-    };
-  }, [disableHotkeys, onToggleSidebar, onToggleRail]);
-
   return (
     <div
       className={`panel-toggle${className ? ` ${className}` : ""}`}

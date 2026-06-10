@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { formatPrimaryAccel, isAccelLetter } from "../keyboard-accel";
+import {
+  formatPrimaryAccel,
+  isAccelLetter,
+  matchLayoutChord,
+} from "../keyboard-accel";
 
 type PwrWindow = Window & { pwragent?: { platform?: string } };
 
@@ -68,5 +72,54 @@ describe("isAccelLetter", () => {
     expect(
       isAccelLetter(keydown({ code: "KeyV", key: "√", altKey: true }), "b"),
     ).toBe(false);
+  });
+});
+
+describe("matchLayoutChord", () => {
+  const keydown = (init: KeyboardEventInit): KeyboardEvent =>
+    new KeyboardEvent("keydown", init);
+
+  it("classifies ⌘B / ⌃B as the sidebar chord", () => {
+    expect(
+      matchLayoutChord(keydown({ metaKey: true, code: "KeyB", key: "b" })),
+    ).toBe("sidebar");
+    expect(
+      matchLayoutChord(keydown({ ctrlKey: true, code: "KeyB", key: "b" })),
+    ).toBe("sidebar");
+  });
+
+  it("classifies ⌘⌥B as the rail chord even when Option composes the key", () => {
+    // macOS delivers key "∫" while Option is held — the chord must still match.
+    expect(
+      matchLayoutChord(
+        keydown({ metaKey: true, altKey: true, code: "KeyB", key: "∫" }),
+      ),
+    ).toBe("rail");
+    expect(
+      matchLayoutChord(
+        keydown({ ctrlKey: true, altKey: true, code: "KeyB", key: "b" }),
+      ),
+    ).toBe("rail");
+  });
+
+  it("returns null without the primary modifier or for other keys", () => {
+    expect(matchLayoutChord(keydown({ code: "KeyB", key: "b" }))).toBe(null);
+    // Both Cmd and Ctrl held → not a single primary accelerator.
+    expect(
+      matchLayoutChord(
+        keydown({ metaKey: true, ctrlKey: true, code: "KeyB", key: "b" }),
+      ),
+    ).toBe(null);
+    expect(
+      matchLayoutChord(keydown({ metaKey: true, code: "KeyA", key: "a" })),
+    ).toBe(null);
+  });
+
+  it("returns null while typing in an editable field", () => {
+    const event = keydown({ metaKey: true, code: "KeyB", key: "b" });
+    Object.defineProperty(event, "target", {
+      value: document.createElement("input"),
+    });
+    expect(matchLayoutChord(event)).toBe(null);
   });
 });
