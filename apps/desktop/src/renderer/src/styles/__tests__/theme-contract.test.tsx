@@ -350,6 +350,17 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the above-docked live work rail inset to match the chat column", () => {
+    // The bar carries 16px side margins, so its width must leave room for
+    // them (`100% - 32px`). A bare `100%` plus the margins overflows once the
+    // chat column is narrower than --chat-column-max (sidebar + context rail
+    // both open), ramming the bar flush against both edges while the
+    // composer/transcript stay inset.
+    const rule = extractRuleBody(css, ".live-work-rail--dock-above");
+    expect(rule).toContain("width: min(100% - 32px, var(--chat-column-max));");
+    expect(rule).toContain("margin: 0 16px 8px;");
+  });
+
   it("keeps hidden thread row actions from stealing row clicks", () => {
     const actionsRule = extractRuleBody(css, ".thread-row__actions");
 

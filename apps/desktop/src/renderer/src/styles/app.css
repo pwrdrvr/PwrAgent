@@ -7515,8 +7515,13 @@ textarea,
 .live-work-rail--dock-above {
   /* Cap at the same width as the composer + transcript reading
      column (--chat-column-max) so the rail lines up visually with
-     the composer's input. Issue #495 follow-up. */
-  width: min(100%, var(--chat-column-max));
+     the composer's input. Issue #495 follow-up.
+     Subtract the 16px side margins from the 100% term: when the chat
+     column is narrower than --chat-column-max (the usual case once the
+     sidebar + context rail are both open), a bare `100%` plus the margins
+     overflows the column and rams the bar flush against the sidebar +
+     context rail while the composer/transcript stay inset 16px. */
+  width: min(100% - 32px, var(--chat-column-max));
   align-self: center;
   margin: 0 16px 8px;
   /* Bounded height: composer + transcript should still own the
