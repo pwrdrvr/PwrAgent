@@ -7901,6 +7901,53 @@ describe("MessagingController", () => {
     });
   });
 
+  it("revokes stale Telegram topic bindings when the message thread no longer exists", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "telegram",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "405",
+          kind: "topic",
+          parentId: "-1003659063549",
+        },
+      },
+      backend: "acp:kimi",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:kimi",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+  });
+
   it("does not resurrect a revoked binding after a failed status refresh returns a surface", async () => {
     const harness = await createHarness({
       deliver: async () => ({
