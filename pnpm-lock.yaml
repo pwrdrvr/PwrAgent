@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@types/node': ^24.12.4
+  '@pwrdrvr/agent-client': file:/Users/huntharo/pwrdrvr/agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz
   axios: ^1.16.0
   protobufjs: 7.5.8
   qs: 6.15.2
@@ -67,8 +68,8 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0
       '@pwrdrvr/agent-client':
-        specifier: ^0.6.1
-        version: 0.6.1
+        specifier: file:/Users/huntharo/pwrdrvr/agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz
+        version: file:../../../../agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz
       '@pwrdrvr/agent-core':
         specifier: ^0.2.0
         version: 0.2.0
@@ -1174,8 +1175,9 @@ packages:
   '@pwrdrvr/agent-acp@0.12.0':
     resolution: {integrity: sha512-79B0dhU6XTitgYEkQjY0t8bEcOTjfvD2wcjoArVB/uxFr9hvUz3KCb4Y7BHOHtOcIC36P6UUfarwlFh+gahDsw==}
 
-  '@pwrdrvr/agent-client@0.6.1':
-    resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
+  '@pwrdrvr/agent-client@file:../../../../agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz':
+    resolution: {integrity: sha512-D99LUkZ5UlXEs2b4w34SDrZBXlaGGm4i22xASv8WbHbxlvoS5FIC3TzfXcHTfFX4smv6xXv5hDWKCn5G6YFz7g==, tarball: file:../../../../agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz}
+    version: 0.6.1
 
   '@pwrdrvr/agent-core@0.1.3':
     resolution: {integrity: sha512-4yN246yJvMvupOd1R3Z/wo2QfpfpP7WWX3RvATklZVWthrjJgmVSoHn0J8emvJdySJAvvG0eE6TkQB7VNAnqVw==}
@@ -5004,7 +5006,7 @@ snapshots:
       '@pwrdrvr/agent-transport': 0.1.6
       '@zed-industries/agent-client-protocol': 0.4.5
 
-  '@pwrdrvr/agent-client@0.6.1':
+  '@pwrdrvr/agent-client@file:../../../../agent-kit/.worktrees/codex-port/.pack/pwrdrvr-agent-client-0.6.1.tgz':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.6
