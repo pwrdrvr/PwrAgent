@@ -16,6 +16,10 @@ import type {
 } from "@pwragent/messaging-interface";
 import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 import {
+  federatedThreadIdentityKey,
+  type FederatedThreadRef,
+} from "@pwragent/shared";
+import {
   CURRENT_MESSAGING_STORE_VERSION,
   migrateMessagingStoreData,
   type MessagingDeliveryRecord,
@@ -82,6 +86,22 @@ export class MessagingStore {
             !binding.revokedAt &&
             binding.backend === params.backend &&
             binding.threadId === params.threadId,
+        )
+        .map((binding) => structuredClone(binding)),
+    );
+  }
+
+  async findActiveBindingsForFederatedThread(
+    ref: FederatedThreadRef,
+  ): Promise<MessagingBindingRecord[]> {
+    const wanted = federatedThreadIdentityKey(ref);
+    return await this.withReadData((data) =>
+      Object.values(data.bindings)
+        .filter(
+          (binding) =>
+            !binding.revokedAt &&
+            binding.federatedThread !== undefined &&
+            federatedThreadIdentityKey(binding.federatedThread) === wanted,
         )
         .map((binding) => structuredClone(binding)),
     );

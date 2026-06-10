@@ -18,6 +18,10 @@ import type {
   MessagingStoreData,
 } from "../messaging/core/messaging-migrations.js";
 import { CURRENT_MESSAGING_STORE_VERSION } from "../messaging/core/messaging-migrations.js";
+import {
+  federatedThreadIdentityKey,
+  type FederatedThreadRef,
+} from "@pwragent/shared";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -98,6 +102,23 @@ export class SqliteMessagingStore {
         // enough across the user's history).
         if (!binding.backend) return true;
         return binding.backend === params.backend;
+      });
+  }
+
+  async findActiveBindingsForFederatedThread(
+    ref: FederatedThreadRef,
+  ): Promise<MessagingBindingRecord[]> {
+    const wanted = federatedThreadIdentityKey(ref);
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM bindings WHERE status = 'active' AND thread_id = ?",
+      )
+      .all(ref.threadId) as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
+      .filter((binding) => {
+        if (binding.revokedAt || !binding.federatedThread) return false;
+        return federatedThreadIdentityKey(binding.federatedThread) === wanted;
       });
   }
 
