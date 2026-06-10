@@ -6,6 +6,15 @@ import type {
 } from "./normalized-app-server";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type { ThreadAgentMetadata } from "./navigation";
+import type {
+  ThreadSearchContentMode,
+  ThreadSearchConfidenceBand,
+  ThreadSearchMatchReason,
+  ThreadSearchScopeName,
+  ThreadSearchSemanticMode,
+  ThreadSearchSnippet,
+  ThreadSearchUnavailableScope,
+} from "./thread-search";
 
 export const PWRAGENT_THREAD_TOOL_NAMESPACE = "pwragent_threads";
 
@@ -43,6 +52,13 @@ export type SearchThreadsToolArgs = {
   backend?: AppServerBackendKind | "all";
   includeArchived?: boolean;
   agentOnly?: boolean;
+  projectKeys?: string[];
+  directoryPaths?: string[];
+  models?: string[];
+  updatedAfter?: number;
+  updatedBefore?: number;
+  contentMode?: ThreadSearchContentMode;
+  semanticMode?: ThreadSearchSemanticMode;
   limit?: number;
 };
 
@@ -67,6 +83,10 @@ export type ThreadInspectionSummary = {
   serviceTier?: string;
   fastMode?: boolean;
   linkedDirectories: LinkedDirectorySummary[];
+  score?: number;
+  confidence?: ThreadSearchConfidenceBand;
+  matchReasons?: ThreadSearchMatchReason[];
+  snippets?: ThreadSearchSnippet[];
 };
 
 export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
@@ -105,6 +125,11 @@ export type PwrAgentThreadInspectionResponse =
             totalCount: number;
             limit: number;
             truncated: boolean;
+            query?: string;
+            searchedScopes?: ThreadSearchScopeName[];
+            unavailableScopes?: ThreadSearchUnavailableScope[];
+            contentMode?: ThreadSearchContentMode;
+            semanticMode?: ThreadSearchSemanticMode;
           }
         | {
             thread: ThreadStatusInspectionSummary;

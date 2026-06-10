@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
 import { StateDb } from "../../state/state-db";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search-provider-adapters";
@@ -53,6 +53,47 @@ describe("ThreadSearchService", () => {
     });
 
     expect(response.results.map((result) => result.threadId)).toEqual(["docs"]);
+  });
+
+  it("hydrates active and archived threads when archived results are included", async () => {
+    const listThreads = vi.fn(
+      async (request: { archived?: boolean }): Promise<AppServerThreadSummary[]> =>
+        request.archived
+          ? [
+              threadSummary({
+                id: "archived",
+                archivedAt: 2_000,
+                title: "Archived branch drift notes",
+                updatedAt: 2_000,
+              }),
+            ]
+          : [
+              threadSummary({
+                id: "active",
+                title: "Active branch drift notes",
+                updatedAt: 3_000,
+              }),
+            ],
+    );
+    const service = new ThreadSearchService(new ThreadSearchStore(stateDb), listThreads);
+
+    const response = await service.search({
+      filters: { includeArchived: true },
+      query: "branch drift",
+    });
+
+    expect(response.results.map((result) => result.threadId)).toEqual([
+      "active",
+      "archived",
+    ]);
+    expect(listThreads).toHaveBeenCalledWith({
+      archived: false,
+      backend: undefined,
+    });
+    expect(listThreads).toHaveBeenCalledWith({
+      archived: true,
+      backend: undefined,
+    });
   });
 
   it("reports semantic search as disabled when requested", async () => {

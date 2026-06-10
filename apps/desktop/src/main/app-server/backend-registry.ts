@@ -101,6 +101,8 @@ import {
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ThreadInspectionSummary,
+  type ThreadSearchFilters,
+  type ThreadSearchResult,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -132,6 +134,8 @@ import {
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
   PWRAGENT_THREAD_TOOL_NAMESPACE,
+  isThreadSearchContentMode,
+  isThreadSearchSemanticMode,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
@@ -168,6 +172,9 @@ import {
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/client";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ThreadSearchService } from "../thread-search/thread-search-service";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
@@ -2929,6 +2936,7 @@ export class DesktopBackendRegistry {
     };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
+  private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -3028,6 +3036,7 @@ export class DesktopBackendRegistry {
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
     threadTitleGenerationService?: ThreadTitleService | null;
+    threadSearchService?: ThreadSearchService | null;
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     acpWorktreeRepositoryResolver?: (
@@ -3178,6 +3187,12 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
               }));
+    this.threadInspectionSearchService =
+      options && "threadSearchService" in options
+        ? options.threadSearchService ?? null
+        : options?.codexClient || options?.grokClient || replayClients
+          ? null
+          : undefined;
     this.modelCatalog = new BackendModelCatalog({
       codex: this.codexClient,
       grok: this.grokClient,
@@ -11588,6 +11603,30 @@ export class DesktopBackendRegistry {
         };
       }
       const hasQuery = Boolean(request.args.query?.trim());
+      if (
+        request.args.contentMode !== undefined &&
+        !isThreadSearchContentMode(request.args.contentMode)
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "contentMode must be metadata, available, or required.",
+          },
+        };
+      }
+      if (
+        request.args.semanticMode !== undefined &&
+        !isThreadSearchSemanticMode(request.args.semanticMode)
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "semanticMode must be disabled, available, or required.",
+          },
+        };
+      }
       const limit = clampInteger(
         request.args.limit,
         hasQuery
@@ -11595,6 +11634,60 @@ export class DesktopBackendRegistry {
           : DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
         MAX_THREAD_INSPECTION_SEARCH_LIMIT,
       );
+      const searchService = this.getThreadInspectionSearchService();
+      if (searchService) {
+        const projectKeys = nonEmptyStringArray(request.args.projectKeys);
+        const directoryPaths = nonEmptyStringArray(request.args.directoryPaths);
+        const models = nonEmptyStringArray(request.args.models);
+        const filters: ThreadSearchFilters = {
+          ...(backend ? { backend } : {}),
+          includeArchived: request.args.includeArchived === true,
+          ...(projectKeys ? { projectKeys } : {}),
+          ...(directoryPaths ? { directoryPaths } : {}),
+          ...(models ? { models } : {}),
+          ...buildThreadInspectionDateRange({
+            updatedAfter: request.args.updatedAfter,
+            updatedBefore: request.args.updatedBefore,
+          }),
+        };
+        const searchLimit =
+          request.args.agentOnly === true
+            ? MAX_THREAD_INSPECTION_SEARCH_LIMIT
+            : limit;
+        const response = await searchService.search({
+          ...(request.args.query !== undefined ? { query: request.args.query } : {}),
+          filters,
+          limit: searchLimit,
+          ...(request.args.contentMode
+            ? { contentMode: request.args.contentMode }
+            : {}),
+          ...(request.args.semanticMode
+            ? { semanticMode: request.args.semanticMode }
+            : {}),
+        });
+        const enriched = await this.enrichThreadSearchResults(response.results);
+        const filtered =
+          request.args.agentOnly === true
+            ? enriched.filter((thread) => Boolean(thread.agent))
+            : enriched;
+        const threads = filtered
+          .slice(0, limit)
+          .map(toThreadInspectionSearchSummary);
+        return {
+          ok: true,
+          data: {
+            threads,
+            totalCount: filtered.length,
+            limit,
+            truncated: response.truncated === true || filtered.length > limit,
+            query: response.query,
+            searchedScopes: response.searchedScopes,
+            unavailableScopes: response.unavailableScopes,
+            contentMode: response.contentMode,
+            semanticMode: response.semanticMode,
+          },
+        };
+      }
       const listBackend = backend === "all" ? undefined : backend;
       const activeThreads = await this.listThreads({
         backend: listBackend,
@@ -11702,6 +11795,45 @@ export class DesktopBackendRegistry {
         message: "Unsupported PwrAgent thread inspection operation.",
       },
     };
+  }
+
+  private getThreadInspectionSearchService(): ThreadSearchService | null {
+    if (this.threadInspectionSearchService !== undefined) {
+      return this.threadInspectionSearchService;
+    }
+    this.threadInspectionSearchService = new ThreadSearchService(
+      new ThreadSearchStore(getAppStateDb()),
+      async ({ backend, archived }) =>
+        await this.listThreads({
+          backend,
+          archived,
+          callerReason: "agent-thread-inspection-search",
+          enrichDirectories: true,
+        }),
+      new ProviderTranscriptThreadSearchAdapter(
+        async ({ backend, threadId, limit }) =>
+          await this.readThread({
+            backend,
+            threadId,
+            limit,
+          }),
+      ),
+    );
+    return this.threadInspectionSearchService;
+  }
+
+  private async enrichThreadSearchResults(
+    results: ThreadSearchResult[],
+  ): Promise<ThreadInspectionSummary[]> {
+    return await Promise.all(
+      results.map(async (result) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: result.backend,
+          threadId: result.threadId,
+        });
+        return toThreadInspectionSummaryFromSearchResult(result, overlay?.agent);
+      }),
+    );
   }
 
   private async enrichThreadInspectionSummaries(
@@ -12384,6 +12516,29 @@ function toThreadInspectionSummary(
   };
 }
 
+function toThreadInspectionSummaryFromSearchResult(
+  result: ThreadSearchResult,
+  agent: ThreadAgentMetadata | undefined,
+): ThreadInspectionSummary {
+  return {
+    backend: result.backend,
+    threadId: result.threadId,
+    title: result.title,
+    summary: result.summary,
+    projectKey: result.projectKey,
+    createdAt: result.createdAt,
+    updatedAt: result.updatedAt,
+    archivedAt: result.archivedAt,
+    agent,
+    model: result.model,
+    linkedDirectories: result.linkedDirectories,
+    score: result.score,
+    confidence: result.confidence,
+    matchReasons: result.matchReasons,
+    snippets: result.snippets,
+  };
+}
+
 function dedupeThreadInspectionThreadSummaries(
   threads: AppServerThreadSummary[],
 ): AppServerThreadSummary[] {
@@ -12494,6 +12649,21 @@ function toThreadInspectionSearchSummary(
     ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
     ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.agent ? { agent: thread.agent } : {}),
+    ...(thread.score !== undefined ? { score: thread.score } : {}),
+    ...(thread.confidence ? { confidence: thread.confidence } : {}),
+    ...(thread.matchReasons?.length
+      ? { matchReasons: thread.matchReasons.slice(0, 6) }
+      : {}),
+    ...(thread.snippets?.length
+      ? {
+          snippets: thread.snippets.slice(0, 3).map((snippet) => ({
+            scope: snippet.scope,
+            ...(snippet.field ? { field: snippet.field } : {}),
+            text: truncateThreadInspectionText(snippet.text, 360),
+            ...(snippet.truncated ? { truncated: true } : {}),
+          })),
+        }
+      : {}),
     linkedDirectories: thread.linkedDirectories.slice(0, 3).map((directory) => ({
       id: directory.id,
       kind: directory.kind,
@@ -12502,6 +12672,38 @@ function toThreadInspectionSearchSummary(
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
     })),
   };
+}
+
+function nonEmptyStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function buildThreadInspectionDateRange(params: {
+  updatedAfter?: number;
+  updatedBefore?: number;
+}): Pick<ThreadSearchFilters, "dateRange"> {
+  const from =
+    typeof params.updatedAfter === "number" && Number.isFinite(params.updatedAfter)
+      ? Math.floor(params.updatedAfter)
+      : undefined;
+  const to =
+    typeof params.updatedBefore === "number" && Number.isFinite(params.updatedBefore)
+      ? Math.floor(params.updatedBefore)
+      : undefined;
+  return from !== undefined || to !== undefined
+    ? {
+        dateRange: {
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
+        },
+      }
+    : {};
 }
 
 function truncateThreadInspectionText(value: string, maxLength: number): string {

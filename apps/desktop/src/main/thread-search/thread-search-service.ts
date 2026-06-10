@@ -8,6 +8,7 @@ import type {
   ThreadSearchUnavailableScope,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   normalizeThreadSearchContentMode,
   normalizeThreadSearchLimit,
   normalizeThreadSearchSemanticMode,
@@ -40,10 +41,20 @@ export class ThreadSearchService {
     const limit = normalizeThreadSearchLimit(request.limit);
     const query = request.query?.trim() ?? "";
 
-    const threads = await this.listThreads({
-      backend: backend === "all" ? undefined : backend,
-      archived: filters.includeArchived,
+    const listBackend = backend === "all" ? undefined : backend;
+    const activeThreads = await this.listThreads({
+      backend: listBackend,
+      archived: false,
     });
+    const threads = filters.includeArchived
+      ? dedupeThreads([
+          ...activeThreads,
+          ...(await this.listThreads({
+            backend: listBackend,
+            archived: true,
+          })),
+        ])
+      : activeThreads;
     for (const thread of threads) {
       this.store.upsertThread(thread);
     }
@@ -95,6 +106,20 @@ export class ThreadSearchService {
       truncated: results.length >= limit,
     };
   }
+}
+
+function dedupeThreads(threads: AppServerThreadSummary[]): AppServerThreadSummary[] {
+  const seen = new Set<string>();
+  const deduped: AppServerThreadSummary[] = [];
+  for (const thread of threads) {
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(thread);
+  }
+  return deduped;
 }
 
 function normalizeFilters(filters: ThreadSearchFilters | undefined): ThreadSearchFilters {

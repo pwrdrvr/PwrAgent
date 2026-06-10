@@ -46,6 +46,7 @@ import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
+import type { ThreadSearchService } from "../thread-search/thread-search-service";
 
 const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgentRecords: vi.fn(
@@ -11399,6 +11400,160 @@ command = "pnpm dev"
     });
     expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
       callerReason: "agent-thread-inspection",
+    });
+
+    await registry.close();
+  });
+
+  it("routes thread inspection search through the thread search service when available", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [],
+    });
+    const search = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 2_000,
+      query: "branch drift",
+      filters: {
+        backend: "all" as const,
+        includeArchived: true,
+        projectKeys: ["PwrAgent"],
+        directoryPaths: ["/repo/pwragent"],
+        models: ["gpt-5.5"],
+        dateRange: { from: 1_000, to: 3_000 },
+      },
+      contentMode: "required" as const,
+      semanticMode: "required" as const,
+      searchedScopes: ["metadata", "projection"] as const,
+      unavailableScopes: [
+        {
+          scope: "semantic" as const,
+          reason: "disabled" as const,
+          message: "Semantic thread search is disabled.",
+        },
+      ],
+      results: [
+        {
+          backend: "codex" as const,
+          threadId: "thread-1",
+          identityKey: "codex:thread-1",
+          title: "Branch drift dialog screenshots",
+          summary: "Discussed screenshot capture.",
+          projectKey: "PwrAgent",
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "directory:/repo/pwragent",
+              kind: "local" as const,
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+          source: "codex" as const,
+          model: "gpt-5.5",
+          score: 42,
+          confidence: "medium" as const,
+          matchReasons: [{ kind: "provider_content_match" as const }],
+          snippets: [
+            {
+              scope: "provider_content" as const,
+              field: "message:user",
+              text: "We need branch drift dialog screenshots.",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadSearchService: { search } as unknown as ThreadSearchService,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {
+          query: "branch drift",
+          includeArchived: true,
+          projectKeys: ["PwrAgent"],
+          directoryPaths: ["/repo/pwragent"],
+          models: ["gpt-5.5"],
+          updatedAfter: 1_000,
+          updatedBefore: 3_000,
+          contentMode: "required",
+          semanticMode: "required",
+          limit: 5,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(search).toHaveBeenCalledWith({
+      query: "branch drift",
+      filters: {
+        backend: "all",
+        includeArchived: true,
+        projectKeys: ["PwrAgent"],
+        directoryPaths: ["/repo/pwragent"],
+        models: ["gpt-5.5"],
+        dateRange: { from: 1_000, to: 3_000 },
+      },
+      limit: 5,
+      contentMode: "required",
+      semanticMode: "required",
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      query: "branch drift",
+      searchedScopes: ["metadata", "projection"],
+      unavailableScopes: [
+        {
+          scope: "semantic",
+          reason: "disabled",
+        },
+      ],
+      contentMode: "required",
+      semanticMode: "required",
+      threads: [
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          title: "Branch drift dialog screenshots",
+          confidence: "medium",
+          snippets: [
+            {
+              scope: "provider_content",
+              field: "message:user",
+            },
+          ],
+        },
+      ],
+      totalCount: 1,
+      limit: 5,
+      truncated: false,
     });
 
     await registry.close();
