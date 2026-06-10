@@ -5731,6 +5731,56 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes dynamic tool specs when resuming an existing thread before a turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply to the existing thread" }],
+      dynamicTools: [
+        {
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+          description: "Delegate monitoring work.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          deferLoading: false,
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const resumePayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/resume");
+
+    expect(resumePayload?.params).toMatchObject({
+      threadId: "thread-2",
+      dynamicTools: [
+        {
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+          description: "Delegate monitoring work.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          deferLoading: false,
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("sends Fast mode as Codex priority serviceTier when resuming an existing thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

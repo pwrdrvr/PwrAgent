@@ -752,6 +752,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: unknown;
   };
   interruptTurnCallCount = 0;
   lastInterruptTurnParams?: {
@@ -1043,6 +1044,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     if (this.options.startTurnError) {
@@ -5115,6 +5117,48 @@ script = "echo setup"
         name: "Inbox Agent",
       }),
     });
+
+    await registry.close();
+  });
+
+  it("passes task monitor parent tools when continuing existing Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "existing-thread",
+      input: [{ type: "text", text: "continue" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
+      [
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+      ],
+    );
+    expect(
+      (codexClient.lastStartTurnParams?.dynamicTools as Array<{
+        namespace: string;
+        name: string;
+      }> | undefined)
+        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        .map((tool) => tool.name),
+    ).toEqual(["create_monitor_delegation"]);
 
     await registry.close();
   });
@@ -9208,7 +9252,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Use this thread's model settings" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-modelled",
       input: [{ type: "text", text: "Use this thread's model settings" }],
       approvalPolicy: "on-request",
@@ -9226,7 +9270,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-plain",
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
       approvalPolicy: "on-request",
@@ -9601,7 +9645,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Run npm view dive" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
       input: [{ type: "text", text: "Run npm view dive" }],
       approvalPolicy: "never",
@@ -12042,6 +12086,89 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("before the first external poll or sleep");
     expect(String(payload.prompt)).toContain("Every poll should produce one non-waking progress injection");
     expect(String(payload.prompt)).toContain("complete_monitoring exactly once");
+
+    await registry.close();
+  });
+
+  it("tracks managed task monitor turns as in-progress quit work", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "parent-turn",
+        callId: "call-monitor",
+        requestId: "call-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: {
+            id: "parent-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:monitor-thread"],
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
 
     await registry.close();
   });
