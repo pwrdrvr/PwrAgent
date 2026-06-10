@@ -7,6 +7,8 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
+  DesktopHotCpuProfileStartDelayMs,
+  DesktopHotCpuProfileTriggerMode,
   DesktopMessagingAcknowledgment,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
@@ -25,6 +27,8 @@ import {
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
   isDesktopCodexProfileModel,
+  isDesktopHotCpuProfileStartDelayMs,
+  isDesktopHotCpuProfileTriggerMode,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
@@ -69,6 +73,9 @@ export type DesktopSettingsConfig = {
     confirmQuitWithInProgressThreads?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
+    hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
+    hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
+    hotCpuProfilingSlowburnThresholdPercent?: number;
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
@@ -554,6 +561,24 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "hot_cpu_profiling_enabled"],
       patch.general.hotCpuProfilingEnabled,
+    );
+  }
+  if (patch.general?.hotCpuProfilingStartDelayMs !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_start_delay_ms"],
+      patch.general.hotCpuProfilingStartDelayMs,
+    );
+  }
+  if (patch.general?.hotCpuProfilingTriggerMode !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_trigger_mode"],
+      patch.general.hotCpuProfilingTriggerMode,
+    );
+  }
+  if (patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined) {
+    set(
+      ["general", "hot_cpu_profiling_slowburn_threshold_percent"],
+      patch.general.hotCpuProfilingSlowburnThresholdPercent,
     );
   }
   if (patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined) {
@@ -1115,6 +1140,15 @@ function normalizeDesktopConfig(
       ),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
+      hotCpuProfilingStartDelayMs: readHotCpuProfileStartDelayMs(
+        general?.hot_cpu_profiling_start_delay_ms,
+      ),
+      hotCpuProfilingTriggerMode: readHotCpuProfileTriggerMode(
+        general?.hot_cpu_profiling_trigger_mode,
+      ),
+      hotCpuProfilingSlowburnThresholdPercent: readNumber(
+        general?.hot_cpu_profiling_slowburn_threshold_percent,
+      ),
       hotCpuProfilingCaptureHeapSnapshot: readBoolean(
         general?.hot_cpu_profiling_capture_heap_snapshot,
       ),
@@ -1341,6 +1375,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   const developerMode = config.general?.developerMode;
   const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;
+  const hotCpuProfilingStartDelayMs =
+    config.general?.hotCpuProfilingStartDelayMs;
+  const hotCpuProfilingTriggerMode =
+    config.general?.hotCpuProfilingTriggerMode;
+  const hotCpuProfilingSlowburnThresholdPercent =
+    config.general?.hotCpuProfilingSlowburnThresholdPercent;
   const hotCpuProfilingCaptureHeapSnapshot =
     config.general?.hotCpuProfilingCaptureHeapSnapshot;
   const hotCpuProfilingHeapSnapshotLimit =
@@ -1355,6 +1395,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   if (
     developerMode !== undefined ||
     hotCpuProfilingEnabled !== undefined ||
+    hotCpuProfilingStartDelayMs !== undefined ||
+    hotCpuProfilingTriggerMode !== undefined ||
+    hotCpuProfilingSlowburnThresholdPercent !== undefined ||
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
@@ -1369,6 +1412,16 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (hotCpuProfilingEnabled !== undefined) {
       pruned.general.hotCpuProfilingEnabled = hotCpuProfilingEnabled;
+    }
+    if (hotCpuProfilingStartDelayMs !== undefined) {
+      pruned.general.hotCpuProfilingStartDelayMs = hotCpuProfilingStartDelayMs;
+    }
+    if (hotCpuProfilingTriggerMode !== undefined) {
+      pruned.general.hotCpuProfilingTriggerMode = hotCpuProfilingTriggerMode;
+    }
+    if (hotCpuProfilingSlowburnThresholdPercent !== undefined) {
+      pruned.general.hotCpuProfilingSlowburnThresholdPercent =
+        hotCpuProfilingSlowburnThresholdPercent;
     }
     if (hotCpuProfilingCaptureHeapSnapshot !== undefined) {
       pruned.general.hotCpuProfilingCaptureHeapSnapshot =
@@ -1621,6 +1674,22 @@ function readCodexProfileModel(
   value: TomlScalar | undefined,
 ): DesktopCodexProfileModel | undefined {
   return typeof value === "string" && isDesktopCodexProfileModel(value)
+    ? value
+    : undefined;
+}
+
+function readHotCpuProfileStartDelayMs(
+  value: TomlScalar | undefined,
+): DesktopHotCpuProfileStartDelayMs | undefined {
+  return typeof value === "number" && isDesktopHotCpuProfileStartDelayMs(value)
+    ? value
+    : undefined;
+}
+
+function readHotCpuProfileTriggerMode(
+  value: TomlScalar | undefined,
+): DesktopHotCpuProfileTriggerMode | undefined {
+  return typeof value === "string" && isDesktopHotCpuProfileTriggerMode(value)
     ? value
     : undefined;
 }

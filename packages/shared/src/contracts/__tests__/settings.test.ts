@@ -31,6 +31,18 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        hotCpuProfilingStartDelayMs: {
+          value: 0,
+          source: "default",
+        },
+        hotCpuProfilingTriggerMode: {
+          value: "sustained",
+          source: "default",
+        },
+        hotCpuProfilingSlowburnThresholdPercent: {
+          value: 15,
+          source: "default",
+        },
         hotCpuProfilingCaptureHeapSnapshot: {
           value: false,
           source: "default",

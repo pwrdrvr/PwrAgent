@@ -596,6 +596,9 @@ export function bootstrapApp(): void {
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
+          patch.general?.hotCpuProfilingStartDelayMs !== undefined ||
+          patch.general?.hotCpuProfilingTriggerMode !== undefined ||
+          patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined ||
           patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined ||
           patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
         ) {

@@ -76,6 +76,18 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      hotCpuProfilingStartDelayMs: {
+        value: 0,
+        source: "default",
+      },
+      hotCpuProfilingTriggerMode: {
+        value: "sustained",
+        source: "default",
+      },
+      hotCpuProfilingSlowburnThresholdPercent: {
+        value: 15,
+        source: "default",
+      },
       hotCpuProfilingCaptureHeapSnapshot: {
         value: false,
         source: "default",
@@ -753,6 +765,38 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           hotCpuProfilingHeapSnapshotLimit: 3,
+        },
+      });
+    });
+  });
+
+  it("saves hot CPU profiling delay and trigger mode presets", async () => {
+    const baseSnapshot = createSnapshot();
+    const settings = createSettingsState(
+      createSnapshot({
+        general: {
+          ...baseSnapshot.general,
+          hotCpuProfilingEnabled: { value: true, source: "config" },
+        },
+      }),
+    );
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: /5 seconds/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingStartDelayMs: 5000,
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /Slowburn/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          hotCpuProfilingTriggerMode: "slowburn",
         },
       });
     });

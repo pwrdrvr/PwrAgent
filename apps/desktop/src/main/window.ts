@@ -468,8 +468,11 @@ export function createMainWindow(options?: {
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
   ): string => {
     return JSON.stringify({
+      startDelayMs: hotCpuConfig.startDelayMs,
+      triggerMode: hotCpuConfig.triggerMode,
       intervalMs: hotCpuConfig.intervalMs,
       thresholdPercent: hotCpuConfig.thresholdPercent,
+      slowburnThresholdPercent: hotCpuConfig.slowburnThresholdPercent,
       consecutiveSamples: hotCpuConfig.consecutiveSamples,
       profileDurationMs: hotCpuConfig.profileDurationMs,
       cooldownMs: hotCpuConfig.cooldownMs,
@@ -497,6 +500,10 @@ export function createMainWindow(options?: {
           settingsService.resolveHotCpuProfilingHeapSnapshotLimit(),
         outputRoot: resolveHotCpuProfileOutputRoot(),
         repoRoot: resolveRepoRoot(),
+        slowburnThresholdPercent:
+          settingsService.resolveHotCpuProfilingSlowburnThresholdPercent(),
+        startDelayMs: settingsService.resolveHotCpuProfilingStartDelayMs(),
+        triggerMode: settingsService.resolveHotCpuProfilingTriggerMode(),
       });
 
       if (!hotCpuConfig.enabled) {

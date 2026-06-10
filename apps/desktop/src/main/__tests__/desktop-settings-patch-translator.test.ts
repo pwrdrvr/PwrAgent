@@ -23,6 +23,9 @@ describe("desktopSettingsPatchToEdits — general", () => {
     const edits = desktopSettingsPatchToEdits({
       general: {
         hotCpuProfilingEnabled: true,
+        hotCpuProfilingStartDelayMs: 5000,
+        hotCpuProfilingTriggerMode: "slowburn",
+        hotCpuProfilingSlowburnThresholdPercent: 15,
       },
     });
 
@@ -31,6 +34,21 @@ describe("desktopSettingsPatchToEdits — general", () => {
         op: "set",
         path: ["general", "hot_cpu_profiling_enabled"],
         value: true,
+      },
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_start_delay_ms"],
+        value: 5000,
+      },
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_trigger_mode"],
+        value: "slowburn",
+      },
+      {
+        op: "set",
+        path: ["general", "hot_cpu_profiling_slowburn_threshold_percent"],
+        value: 15,
       },
     ]);
   });
