@@ -874,6 +874,20 @@ describe("app server ipc", () => {
       ...baseRequest,
       threadId: "019eb2e4-840b-7fb1-979c-af66091712c0",
     } satisfies RefreshThreadPullRequestsRequest;
+    const threadOneRequestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: threadOneRequest.threadId,
+      branch: baseRequest.branch,
+      directoryPaths: baseRequest.directoryPaths,
+    });
+    const threadTwoRequestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: threadTwoRequest.threadId,
+      branch: baseRequest.branch,
+      directoryPaths: baseRequest.directoryPaths,
+    });
     getThreadOverlayState
       .mockResolvedValueOnce({
         backend: "codex",
@@ -882,7 +896,7 @@ describe("app server ipc", () => {
         extraLinkedDirectories: [],
         prs: [stalePr],
         prsFetchedAt: Date.now() - 120_000,
-        prsRefreshKey: "thread-one-key",
+        prsRefreshKey: threadOneRequestKey,
       })
       .mockResolvedValueOnce({
         backend: "codex",
@@ -891,7 +905,7 @@ describe("app server ipc", () => {
         extraLinkedDirectories: [],
         prs: [stalePr],
         prsFetchedAt: Date.now() - 120_000,
-        prsRefreshKey: "thread-two-key",
+        prsRefreshKey: threadTwoRequestKey,
       });
     detectPullRequestsForThread.mockResolvedValueOnce([passingPr]);
 
@@ -938,6 +952,20 @@ describe("app server ipc", () => {
       ...stalePr,
       state: "passing",
     };
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "scheduled",
+      branch: "hot-cpu-capture-presets",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "hot-cpu-capture-presets",
+      directoryPaths: ["/repo"],
+    });
     readPrStatusCache.mockResolvedValueOnce({
       "openai/codex#727": {
         prKey: "openai/codex#727",
@@ -952,20 +980,14 @@ describe("app server ipc", () => {
       extraLinkedDirectories: [],
       prs: [stalePr],
       prsFetchedAt: Date.now() - 300_000,
-      prsRefreshKey: "thread-key",
+      prsRefreshKey: requestKey,
     });
 
     registerAppServerIpcHandlers();
 
     const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
       {},
-      {
-        backend: "codex",
-        threadId: "thread-1",
-        trigger: "scheduled",
-        branch: "hot-cpu-capture-presets",
-        directoryPaths: ["/repo"],
-      } satisfies RefreshThreadPullRequestsRequest,
+      request,
     );
 
     expect(response).toEqual({
@@ -987,6 +1009,20 @@ describe("app server ipc", () => {
       state: "passing",
       url: "https://github.com/OpenAI/codex/pull/727",
     };
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "hot-cpu-capture-presets",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "hot-cpu-capture-presets",
+      directoryPaths: ["/repo"],
+    });
     readPrStatusCache.mockResolvedValueOnce({
       "openai/codex#727": {
         prKey: "openai/codex#727",
@@ -1001,20 +1037,14 @@ describe("app server ipc", () => {
       extraLinkedDirectories: [],
       prs: [cachedPr],
       prsFetchedAt: Date.now(),
-      prsRefreshKey: "thread-key",
+      prsRefreshKey: requestKey,
     });
 
     registerAppServerIpcHandlers();
 
     const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
       {},
-      {
-        backend: "codex",
-        threadId: "thread-1",
-        trigger: "user",
-        branch: "hot-cpu-capture-presets",
-        directoryPaths: ["/repo"],
-      } satisfies RefreshThreadPullRequestsRequest,
+      request,
     );
 
     expect(response).toEqual({
@@ -1076,6 +1106,127 @@ describe("app server ipc", () => {
       },
     ]);
     expect(setThreadPullRequests).toHaveBeenCalledOnce();
+  });
+
+  it("honors cached empty PR lookups for the same branch and directories", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/no-pr-yet",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/no-pr-yet",
+      directoryPaths: ["/repo"],
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(detectPullRequestsForThread).not.toHaveBeenCalled();
+    expect(setThreadPullRequests).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      ghAvailable: true,
+      prs: [],
+    });
+  });
+
+  it("rechecks PRs when cached PRs belong to a different lookup key", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/new-branch",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/new-branch",
+      directoryPaths: ["/repo"],
+    });
+    const terminalPrs: PrSummary[] = [
+      {
+        number: 433,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "merged",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
+      },
+    ];
+    const newBranchPrs: PrSummary[] = [
+      {
+        number: 438,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "pending",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/438",
+      },
+    ];
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: terminalPrs,
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: JSON.stringify({
+        lookupVersion: 2,
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/old-branch",
+        directoryPaths: ["/repo"],
+      }),
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce(newBranchPrs);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+      fetcher: expect.any(Object),
+      branch: "fix/new-branch",
+      directoryPaths: ["/repo"],
+    });
+    expect(setThreadPullRequests).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: newBranchPrs,
+      fetchedAt: expect.any(Number),
+      refreshKey: requestKey,
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      ghAvailable: true,
+      prs: newBranchPrs,
+    });
   });
 
   it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {

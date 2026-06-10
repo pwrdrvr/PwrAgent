@@ -1086,6 +1086,7 @@ class DesktopAppServerService {
     this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
     const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
+    const existingLookupMatches = existing?.prsRefreshKey === requestKey;
     // Terminal-state short-circuit: once every cached PR for a lookup is
     // merged or closed, we do not need to re-query gh for the same
     // branch/directory lookup.
@@ -1105,7 +1106,7 @@ class DesktopAppServerService {
     if (
       allExistingPrsTerminal
       && branch !== "HEAD"
-      && existing?.prsRefreshKey === requestKey
+      && existingLookupMatches
     ) {
       return {
         backend,
@@ -1125,7 +1126,7 @@ class DesktopAppServerService {
       };
     }
 
-    if (existingPrs.length > 0) {
+    if (existingLookupMatches) {
       if ((request.trigger ?? "scheduled") === "user") {
         this.startCanonicalPullRequestRefresh({
           backend,
