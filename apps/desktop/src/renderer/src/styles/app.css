@@ -11383,6 +11383,10 @@ textarea,
   color: var(--danger-text);
 }
 
+.composer__meta--warning {
+  color: var(--status-warning);
+}
+
 .composer__meta--copyable {
   display: flex;
   align-items: flex-start;

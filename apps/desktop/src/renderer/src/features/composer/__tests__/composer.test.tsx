@@ -8372,6 +8372,56 @@ describe("Composer", () => {
     expect(normalizeImageFile).not.toHaveBeenCalled();
   });
 
+  it("warns when attachments are already present on a model that doesn't support images", async () => {
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                label: "GPT-5.3-Codex-Spark",
+                supportsImage: false,
+              },
+            ],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+          imageAttachments: [
+            {
+              id: "seeded-1",
+              name: "shot.png",
+              size: 24 * 1024,
+              type: "image/png",
+              url: "data:image/png;base64,AAAA",
+            },
+          ],
+        }}
+      />
+    );
+
+    // The thumbnail still renders (non-blocking), but a warning naming the
+    // model appears so the operator knows the image won't be processed.
+    expect(await screen.findByText("24 KB")).toBeInTheDocument();
+    const warning = screen.getByText(/doesn't support image attachments/);
+    expect(warning).toHaveClass("composer__meta--warning");
+    expect(warning.textContent).toContain("GPT-5.3-Codex-Spark");
+  });
+
   it("opens a full-size lightbox when a thumbnail is clicked and closes it via the X", async () => {
     const file = new File([new Uint8Array([1])], "shot.png", {
       type: "image/png",

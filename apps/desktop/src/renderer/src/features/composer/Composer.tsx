@@ -5218,6 +5218,13 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
+      {imageAttachments.length > 0 && !imagesSupported ? (
+        <p className="composer__meta composer__meta--warning" role="status">
+          {imagesUnsupportedLabel} doesn&apos;t support image attachments —
+          remove them or switch models before sending.
+        </p>
+      ) : null}
+
       <div className="composer__input-wrap" ref={inputWrapRef}>
         {isReviewComposerOpen ? (
           <fieldset className="composer__review-config" aria-label="Review target">
