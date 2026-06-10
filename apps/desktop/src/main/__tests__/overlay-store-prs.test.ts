@@ -171,4 +171,33 @@ describe("SqliteOverlayStore — thread PRs", () => {
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
   });
+
+  it("persists branch lookup cache rows across reopen", async () => {
+    await store.writePrLookupCacheEntry({
+      lookupKey: "lookup:repo:branch",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 2345,
+      prs: [prPassing],
+    });
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    const reopenedStore = new SqliteOverlayStore(reopened);
+    await expect(reopenedStore.readPrLookupCache()).resolves.toEqual({
+      "lookup:repo:branch": {
+        lookupKey: "lookup:repo:branch",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        fetchedAt: 2345,
+        prs: [prPassing],
+      },
+    });
+    reopened.close();
+
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+  });
 });

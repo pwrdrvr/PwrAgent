@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
+  PrLookupCacheEntry,
   PrStatusCacheEntry,
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
@@ -88,6 +89,7 @@ import {
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
 } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
   disposeDesktopBackendRegistry,
@@ -345,6 +347,21 @@ function getThreadPullRequestsRequestKey(
   });
 }
 
+function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
+  return [...new Set(directoryPaths.map((path) => path.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function getPullRequestLookupKey(
+  request: Pick<RefreshThreadPullRequestsRequest, "branch" | "directoryPaths">,
+): string {
+  return JSON.stringify({
+    lookupVersion: 1,
+    branch: request.branch.trim(),
+    directoryPaths: normalizePrLookupDirectoryPaths(request.directoryPaths),
+  });
+}
+
 function getPrStatusKey(pr: Pick<PrSummary, "org" | "repo" | "number">): string {
   return `${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
 }
@@ -371,6 +388,22 @@ type PrStatusRegistryEntry = {
   fetchedAt: number;
   lastScheduledRefreshRequestedAt?: number;
   lastUserRefreshRequestedAt?: number;
+};
+
+type PrLookupRegistryEntry = {
+  prs: PrSummary[];
+  fetchedAt: number;
+  branch: string;
+  directoryPaths: string[];
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+type PrLookupSubscriber = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  requestKey: string;
+  previousPrs: PrSummary[];
 };
 
 class PrStatusTokenBucket {
@@ -409,9 +442,15 @@ class DesktopAppServerService {
     Promise<RefreshThreadPullRequestsResponse>
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
-  private readonly pendingPrStatusRefreshes = new Map<string, Promise<void>>();
+  private readonly prLookupRegistry = new Map<string, PrLookupRegistryEntry>();
+  private readonly pendingPrLookupRefreshes = new Map<string, Promise<void>>();
+  private readonly prLookupSubscribers = new Map<
+    string,
+    Map<string, PrLookupSubscriber>
+  >();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private prStatusRegistryLoaded = false;
+  private prLookupRegistryLoaded = false;
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -750,6 +789,7 @@ class DesktopAppServerService {
       workspaceRoots: resolveScratchProjectsRoots(),
     });
     await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const snapshotThreads = this.applyCanonicalPrStatuses(snapshot.threads);
     await this.loadDirectoryGitStatusCache();
@@ -1082,11 +1122,31 @@ class DesktopAppServerService {
       threadId: request.threadId,
     });
     await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
     const persistedPrs = existing?.prs ?? [];
     this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
     const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
+    const lookupKey = getPullRequestLookupKey(request);
+    const lookupDirectoryPaths = normalizePrLookupDirectoryPaths(
+      request.directoryPaths,
+    );
     const existingLookupMatches = existing?.prsRefreshKey === requestKey;
+    if (existingLookupMatches) {
+      this.rememberPrLookup({
+        lookupKey,
+        branch,
+        directoryPaths: lookupDirectoryPaths,
+        prs: existingPrs,
+        fetchedAt: existing?.prsFetchedAt ?? 0,
+      });
+    }
+    const lookupEntry = this.prLookupRegistry.get(lookupKey);
+    const currentLookupPrs = lookupEntry
+      ? this.canonicalizePrs(lookupEntry.prs)
+      : existingLookupMatches
+        ? existingPrs
+        : [];
     // Terminal-state short-circuit: once every cached PR for a lookup is
     // merged or closed, we do not need to re-query gh for the same
     // branch/directory lookup.
@@ -1101,17 +1161,18 @@ class DesktopAppServerService {
     // programmatically can read `shortCircuited: true` off the
     // response.
     const allExistingPrsTerminal =
-      existingPrs.length > 0
-      && existingPrs.every((pr) => pr.state === "merged" || pr.state === "closed");
+      currentLookupPrs.length > 0
+      && currentLookupPrs.every(
+        (pr) => pr.state === "merged" || pr.state === "closed",
+      );
     if (
       allExistingPrsTerminal
       && branch !== "HEAD"
-      && existingLookupMatches
     ) {
       return {
         backend,
         threadId: request.threadId,
-        prs: existingPrs,
+        prs: currentLookupPrs,
         ghAvailable: true,
         shortCircuited: true,
       };
@@ -1121,52 +1182,33 @@ class DesktopAppServerService {
       return {
         backend,
         threadId: request.threadId,
-        prs: existingPrs,
+        prs: currentLookupPrs,
         ghAvailable: true,
       };
     }
 
-    if (existingLookupMatches) {
-      if ((request.trigger ?? "scheduled") === "user") {
-        this.startCanonicalPullRequestRefresh({
-          backend,
-          request,
-          requestKey,
-          previousPrs: existingPrs,
-        });
-      }
-      return {
-        backend,
-        threadId: request.threadId,
-        prs: existingPrs,
-        ghAvailable: true,
-      };
-    }
-
-    if (!this.tryClaimLookupRefresh(request.trigger ?? "scheduled")) {
-      return {
-        backend,
-        threadId: request.threadId,
-        prs: existingPrs,
-        ghAvailable: true,
-      };
-    }
-
-    const refreshPromise = this.fetchAndPersistThreadPullRequests({
+    this.startPullRequestLookupRefresh({
       backend,
       request,
       requestKey,
-      previousPrs: existingPrs,
+      lookupKey,
+      lookupDirectoryPaths,
+      previousPrs: currentLookupPrs,
     });
-    return await refreshPromise;
+
+    return {
+      backend,
+      threadId: request.threadId,
+      prs: currentLookupPrs,
+      ghAvailable: true,
+    };
   }
 
-  private async fetchAndPersistThreadPullRequests(params: {
-    backend: AppServerBackendKind;
+  private async fetchPullRequestLookup(params: {
     request: RefreshThreadPullRequestsRequest;
-    requestKey: string;
-    previousPrs: PrSummary[];
-  }): Promise<RefreshThreadPullRequestsResponse> {
+    lookupKey: string;
+    lookupDirectoryPaths: string[];
+  }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
     const prs = await detectPullRequestsForThread({
       fetcher: this.getPrFetcher(),
       branch: params.request.branch.trim(),
@@ -1175,75 +1217,130 @@ class DesktopAppServerService {
     const fetchedAt = Date.now();
     this.rememberPrStatuses(prs, fetchedAt);
     await this.writePrStatusesToCache(prs, fetchedAt);
-
-    // Persist even an empty result so we don't refetch unchanged state on
-    // every renderer trigger. The fetchedAt timestamp lets a future TTL
-    // policy (if we add one) reason about staleness without any extra
-    // bookkeeping.
-    await this.getOverlayStore().setThreadPullRequests({
-      backend: params.backend,
-      threadId: params.request.threadId,
+    this.rememberPrLookup({
+      lookupKey: params.lookupKey,
+      branch: params.request.branch.trim(),
+      directoryPaths: params.lookupDirectoryPaths,
       prs,
       fetchedAt,
-      refreshKey: params.requestKey,
+    });
+    await this.writePrLookupToCache({
+      lookupKey: params.lookupKey,
+      branch: params.request.branch.trim(),
+      directoryPaths: params.lookupDirectoryPaths,
+      prs,
+      fetchedAt,
     });
 
-    if (!prSummariesEqual(params.previousPrs, prs)) {
-      await this.publishThreadPullRequestsUpdated({
-        backend: params.backend,
-        threadId: params.request.threadId,
-        prs,
-      });
-    }
-
-    return {
-      backend: params.backend,
-      threadId: params.request.threadId,
-      prs,
-      ghAvailable: true,
-    };
+    return { prs, fetchedAt };
   }
 
-  private startCanonicalPullRequestRefresh(params: {
+  private startPullRequestLookupRefresh(params: {
     backend: AppServerBackendKind;
     request: RefreshThreadPullRequestsRequest;
     requestKey: string;
+    lookupKey: string;
+    lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
   }): void {
-    const refreshKey = this.claimCanonicalRefreshKey(
-      params.previousPrs,
-      params.request.trigger ?? "scheduled",
-    );
-    if (!refreshKey || this.pendingPrStatusRefreshes.has(refreshKey)) {
+    const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
+    if (pending) {
+      this.addPullRequestLookupSubscriber(params.lookupKey, params);
       return;
     }
 
-    const promise = this.fetchAndPersistThreadPullRequests(params)
-      .then(() => undefined)
+    const refreshKey = this.claimPullRequestLookupRefreshKey(
+      params.lookupKey,
+      params.request.trigger ?? "scheduled",
+    );
+    if (!refreshKey) {
+      return;
+    }
+
+    this.addPullRequestLookupSubscriber(params.lookupKey, params);
+    const promise = this.fetchPullRequestLookup(params)
+      .then(async ({ prs, fetchedAt }) => {
+        await this.persistPullRequestLookupSubscribers({
+          lookupKey: params.lookupKey,
+          prs,
+          fetchedAt,
+        });
+      })
       .catch((error) => {
-        appServerLog.warn("background PR status refresh failed", {
+        appServerLog.warn("background PR lookup refresh failed", {
           threadId: params.request.threadId,
           refreshKey,
           error: error instanceof Error ? error.message : String(error),
         });
       })
       .finally(() => {
-        if (this.pendingPrStatusRefreshes.get(refreshKey) === promise) {
-          this.pendingPrStatusRefreshes.delete(refreshKey);
+        if (this.pendingPrLookupRefreshes.get(params.lookupKey) === promise) {
+          this.pendingPrLookupRefreshes.delete(params.lookupKey);
+          this.prLookupSubscribers.delete(params.lookupKey);
         }
       });
-    this.pendingPrStatusRefreshes.set(refreshKey, promise);
+    this.pendingPrLookupRefreshes.set(params.lookupKey, promise);
   }
 
-  private claimCanonicalRefreshKey(
-    prs: PrSummary[],
-    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
-  ): string | undefined {
-    const keys = [...new Set(prs.map(getPrStatusKey))].sort();
-    if (keys.length === 0) {
-      return undefined;
+  private addPullRequestLookupSubscriber(
+    lookupKey: string,
+    params: {
+      backend: AppServerBackendKind;
+      request: RefreshThreadPullRequestsRequest;
+      requestKey: string;
+      previousPrs: PrSummary[];
+    },
+  ): void {
+    const subscribers =
+      this.prLookupSubscribers.get(lookupKey) ?? new Map<string, PrLookupSubscriber>();
+    const threadKey = buildThreadIdentityKey(
+      params.backend,
+      params.request.threadId,
+    );
+    subscribers.set(threadKey, {
+      backend: params.backend,
+      threadId: params.request.threadId,
+      requestKey: params.requestKey,
+      previousPrs: params.previousPrs,
+    });
+    this.prLookupSubscribers.set(lookupKey, subscribers);
+  }
+
+  private async persistPullRequestLookupSubscribers(params: {
+    lookupKey: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): Promise<void> {
+    const subscribers = this.prLookupSubscribers.get(params.lookupKey);
+    if (!subscribers?.size) {
+      return;
     }
 
+    await Promise.all(
+      [...subscribers.values()].map(async (subscriber) => {
+        await this.getOverlayStore().setThreadPullRequests({
+          backend: subscriber.backend,
+          threadId: subscriber.threadId,
+          prs: params.prs,
+          fetchedAt: params.fetchedAt,
+          refreshKey: subscriber.requestKey,
+        });
+
+        if (!prSummariesEqual(subscriber.previousPrs, params.prs)) {
+          await this.publishThreadPullRequestsUpdated({
+            backend: subscriber.backend,
+            threadId: subscriber.threadId,
+            prs: params.prs,
+          });
+        }
+      }),
+    );
+  }
+
+  private claimPullRequestLookupRefreshKey(
+    lookupKey: string,
+    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+  ): string | undefined {
     const now = Date.now();
     const minInterval =
       trigger === "user"
@@ -1253,16 +1350,12 @@ class DesktopAppServerService {
       trigger === "user"
         ? "lastUserRefreshRequestedAt"
         : "lastScheduledRefreshRequestedAt";
-    const due = keys.some((key) => {
-      const entry = this.prStatusRegistry.get(key);
-      const lastRequestedAt = Math.max(
-        entry?.[timestampField] ?? 0,
-        entry?.fetchedAt ?? 0,
-      );
-      return (
-        now - lastRequestedAt >= minInterval
-      );
-    });
+    const entry = this.prLookupRegistry.get(lookupKey);
+    const lastRequestedAt = Math.max(
+      entry?.[timestampField] ?? 0,
+      entry?.fetchedAt ?? 0,
+    );
+    const due = now - lastRequestedAt >= minInterval;
     if (!due) {
       return undefined;
     }
@@ -1270,20 +1363,19 @@ class DesktopAppServerService {
       return undefined;
     }
 
-    for (const key of keys) {
-      const entry = this.prStatusRegistry.get(key);
-      if (entry) {
-        entry[timestampField] = now;
-      }
+    if (entry) {
+      entry[timestampField] = now;
+    } else {
+      this.prLookupRegistry.set(lookupKey, {
+        prs: [],
+        fetchedAt: 0,
+        branch: "",
+        directoryPaths: [],
+        [timestampField]: now,
+      });
     }
 
-    return keys.join("|");
-  }
-
-  private tryClaimLookupRefresh(
-    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
-  ): boolean {
-    return trigger === "user" || this.prStatusTokenBucket.tryTake();
+    return lookupKey;
   }
 
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
@@ -1301,6 +1393,26 @@ class DesktopAppServerService {
     }
   }
 
+  private rememberPrLookup(entry: {
+    lookupKey: string;
+    branch: string;
+    directoryPaths: string[];
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): void {
+    const current = this.prLookupRegistry.get(entry.lookupKey);
+    if (current && current.fetchedAt > entry.fetchedAt) {
+      return;
+    }
+    this.prLookupRegistry.set(entry.lookupKey, {
+      ...current,
+      branch: entry.branch,
+      directoryPaths: entry.directoryPaths,
+      prs: entry.prs,
+      fetchedAt: entry.fetchedAt,
+    });
+  }
+
   private async loadPrStatusRegistry(): Promise<void> {
     if (this.prStatusRegistryLoaded) {
       return;
@@ -1309,6 +1421,18 @@ class DesktopAppServerService {
     const entries = await this.getOverlayStore().readPrStatusCache();
     for (const entry of Object.values(entries)) {
       this.rememberPrStatuses([entry.pr], entry.fetchedAt);
+    }
+  }
+
+  private async loadPrLookupRegistry(): Promise<void> {
+    if (this.prLookupRegistryLoaded) {
+      return;
+    }
+    this.prLookupRegistryLoaded = true;
+    const entries = await this.getOverlayStore().readPrLookupCache();
+    for (const entry of Object.values(entries)) {
+      this.rememberPrLookup(entry);
+      this.rememberPrStatuses(entry.prs, entry.fetchedAt);
     }
   }
 
@@ -1322,6 +1446,10 @@ class DesktopAppServerService {
       pr,
     }));
     await this.getOverlayStore().writePrStatusCacheEntries(entries);
+  }
+
+  private async writePrLookupToCache(entry: PrLookupCacheEntry): Promise<void> {
+    await this.getOverlayStore().writePrLookupCacheEntry(entry);
   }
 
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
@@ -1843,8 +1971,11 @@ class DesktopAppServerService {
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.prStatusRegistry.clear();
-    this.pendingPrStatusRefreshes.clear();
+    this.prLookupRegistry.clear();
+    this.pendingPrLookupRefreshes.clear();
+    this.prLookupSubscribers.clear();
     this.prStatusRegistryLoaded = false;
+    this.prLookupRegistryLoaded = false;
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();

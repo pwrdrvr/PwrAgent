@@ -448,6 +448,18 @@ CREATE INDEX IF NOT EXISTS idx_pr_status_cache_fetched
   ON pr_status_cache(fetched_at DESC);
 `;
 
+const PR_LOOKUP_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_lookup_cache (
+  lookup_key      TEXT PRIMARY KEY,
+  branch          TEXT NOT NULL,
+  directory_paths TEXT NOT NULL,
+  fetched_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
+  ON pr_lookup_cache(fetched_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -577,6 +589,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 14) {
       db.transaction(() => {
         db.exec(PR_STATUS_CACHE_SCHEMA);
+        db.pragma("user_version = 13");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 14) {
+      db.transaction(() => {
+        db.exec(PR_LOOKUP_CACHE_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -727,6 +745,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
+    db.exec(PR_LOOKUP_CACHE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

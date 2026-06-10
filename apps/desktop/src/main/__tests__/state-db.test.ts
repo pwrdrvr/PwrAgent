@@ -21,12 +21,13 @@ describe("StateDb", () => {
   it("creates additive runtime cache tables", () => {
     const tables = stateDb.raw
       .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?) ORDER BY name`,
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?) ORDER BY name`,
       )
       .all(
         "acp_installed_agents",
         "acp_registry_cache",
         "acp_sessions",
+        "pr_lookup_cache",
         "pr_status_cache",
       ) as Array<{ name: string }>;
 
@@ -34,6 +35,7 @@ describe("StateDb", () => {
       "acp_installed_agents",
       "acp_registry_cache",
       "acp_sessions",
+      "pr_lookup_cache",
       "pr_status_cache",
     ]);
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(

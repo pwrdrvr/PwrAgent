@@ -49,6 +49,14 @@ export type PrStatusCacheEntry = {
   pr: PrSummary;
 };
 
+export type PrLookupCacheEntry = {
+  lookupKey: string;
+  branch: string;
+  directoryPaths: string[];
+  fetchedAt: number;
+  prs: PrSummary[];
+};
+
 function parseDirectoryGitStatusCachePayload(
   payload: string | null,
 ): NavigationDirectoryGitStatus | undefined {
@@ -741,6 +749,57 @@ export class SqliteOverlayStore {
     write();
   }
 
+  async readPrLookupCache(): Promise<Record<string, PrLookupCacheEntry>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT lookup_key, branch, directory_paths, fetched_at, payload
+         FROM pr_lookup_cache`,
+      )
+      .all() as Array<{
+        lookup_key: string;
+        branch: string;
+        directory_paths: string;
+        fetched_at: number;
+        payload: string;
+      }>;
+
+    const entries: Record<string, PrLookupCacheEntry> = {};
+    for (const row of rows) {
+      try {
+        entries[row.lookup_key] = {
+          lookupKey: row.lookup_key,
+          branch: row.branch,
+          directoryPaths: JSON.parse(row.directory_paths) as string[],
+          fetchedAt: row.fetched_at,
+          prs: JSON.parse(row.payload) as PrSummary[],
+        };
+      } catch {
+        // Ignore malformed cache rows. A future refresh rewrites the row.
+      }
+    }
+    return entries;
+  }
+
+  async writePrLookupCacheEntry(entry: PrLookupCacheEntry): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO pr_lookup_cache(
+           lookup_key,
+           branch,
+           directory_paths,
+           fetched_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.lookupKey,
+        entry.branch,
+        JSON.stringify(entry.directoryPaths),
+        entry.fetchedAt,
+        JSON.stringify(entry.prs),
+      );
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -1364,6 +1423,8 @@ export type OverlayStoreLike = Pick<
   | "setThreadPullRequests"
   | "readPrStatusCache"
   | "writePrStatusCacheEntries"
+  | "readPrLookupCache"
+  | "writePrLookupCacheEntry"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
