@@ -331,11 +331,11 @@ export function FederationSettings(props: FederationSettingsProps) {
 
       <SettingsSection
         eyebrow="Peers"
-        title="Enrolled Peers"
+        title="Federation Instances"
         chip={`${effectiveHealth.peers.length}`}
       >
         {effectiveHealth.peers.length === 0 ? (
-          <p className="settings-empty">No enrolled peers.</p>
+          <p className="settings-empty">No federation instances.</p>
         ) : (
           <dl className="settings-aboutkv">
             {effectiveHealth.peers.map((peer) => (

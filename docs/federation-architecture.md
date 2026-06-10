@@ -98,10 +98,18 @@ In the child profile, open Settings -> Federation:
 
 Back in the master profile:
 
-1. Confirm the child appears under Enrolled Peers.
+1. Confirm the child appears under Federation Instances.
 2. Click Open next to the child.
 3. The new window is scoped to the child instance for thread list, thread read,
    skill list, and prompt submission.
+
+In a child profile:
+
+1. Refresh Settings -> Federation after connecting.
+2. Confirm the gateway and any sibling children appear under Federation
+   Instances.
+3. Click Open next to the gateway to work against the master, or next to a
+   sibling child to route through the gateway.
 
 Remote backend events stream back into the matching remote window, so prompt
 submission should show live turn status, tool activity, and assistant deltas

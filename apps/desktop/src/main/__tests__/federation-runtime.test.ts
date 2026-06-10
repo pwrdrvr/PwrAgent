@@ -17,13 +17,20 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => Promise<void>;
+  applyPeerDirectory: (envelope: FederationProtocolEnvelope) => boolean;
   forwardLocalBackendEvent: (event: AgentEvent) => void;
+  gatewayInstanceId?: FederationInstanceId;
   localInstanceId?: FederationInstanceId;
   publishRemoteBackendEvent: (
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => boolean;
+  remotePeerDirectory: Map<FederationInstanceId, unknown>;
   registerGatewayConnection: (connection: FederationGatewayConnection) => void;
+  sendEnvelopeToTarget: (
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ) => void;
   setAgentEventPublisher: (publisher: (event: AgentEvent) => void) => void;
   unregisterGatewayConnection: (connection: FederationGatewayConnection) => void;
 };
@@ -43,6 +50,93 @@ function createConnection(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("records gateway-advertised peers for child instance health and opening", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "child_one";
+
+    const handled = runtime.applyPeerDirectory({
+      id: "peers-1",
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: [
+          {
+            id: "gateway_one",
+            label: "Studio",
+            role: "gateway",
+            status: "connected",
+            capabilities: ["remote_window", "gateway_relay"],
+          },
+          {
+            id: "child_two",
+            label: "Laptop",
+            role: "child",
+            status: "connected",
+            capabilities: ["remote_window", "thread_detail"],
+          },
+          {
+            id: "child_one",
+            label: "Self",
+            role: "child",
+            status: "connected",
+            capabilities: ["remote_window"],
+          },
+        ],
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "child_one",
+      createdAt: 2_000,
+    });
+
+    expect(handled).toBe(true);
+    expect([...runtime.remotePeerDirectory.values()]).toMatchObject([
+      {
+        id: "gateway_one",
+        label: "Studio",
+        role: "gateway",
+        status: "connected",
+      },
+      {
+        id: "child_two",
+        label: "Laptop",
+        role: "child",
+        status: "connected",
+      },
+    ]);
+  });
+
+  it("falls back to the gateway when a child targets a sibling peer", () => {
+    const sentToGateway: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "child_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "gateway_one",
+        capabilities: ["gateway_relay"],
+        sendEnvelope: (envelope) => sentToGateway.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.gatewayInstanceId = "gateway_one";
+    runtime.localInstanceId = "child_one";
+    runtime.router = router;
+
+    const request: FederationProtocolEnvelope = {
+      id: "request-1",
+      kind: "request",
+      method: "backend.listThreads",
+      params: {},
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "child_one",
+      targetInstanceId: "child_two",
+      createdAt: 2_000,
+    };
+
+    runtime.sendEnvelopeToTarget("child_two", request);
+
+    expect(sentToGateway).toEqual([request]);
+  });
+
   it("forwards local backend events to remote-capable peers", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
@@ -143,6 +237,63 @@ describe("DesktopFederationRuntime", () => {
             turnId: "turn-1",
           },
         },
+      },
+    ]);
+  });
+
+  it("relays child backend events to sibling peers through the gateway", () => {
+    const relayedToSibling: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "child_one",
+        capabilities: ["remote_window"],
+      }),
+    );
+    router.registerConnection(
+      createConnection({
+        peerId: "child_two",
+        capabilities: ["remote_window"],
+        sendEnvelope: (envelope) => relayedToSibling.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+
+    runtime.publishRemoteBackendEvent(
+      {
+        id: "event-1",
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              delta: "hello",
+              itemId: "item-1",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "child_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "child_one",
+    );
+
+    expect(relayedToSibling).toMatchObject([
+      {
+        id: "event-1",
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        sourceInstanceId: "child_one",
+        targetInstanceId: "child_two",
+        hopCount: 1,
       },
     ]);
   });

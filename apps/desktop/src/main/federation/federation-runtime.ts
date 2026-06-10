@@ -7,6 +7,7 @@ import type {
   FederationCapability,
   FederationHealthStatus,
   FederationInstanceId,
+  FederationInstanceRole,
   FederationPeerSummary,
   FederationProtocolEnvelope,
 } from "@pwragent/shared";
@@ -27,7 +28,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateDb } from "../state/app-state";
+import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import {
   createFederationEnrollmentInvite,
   type FederationEnrollmentInvite,
@@ -55,6 +56,7 @@ const log = getMainLogger("pwragent:federation-runtime");
 const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
+const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
@@ -73,6 +75,13 @@ type FederationInvitePayload = {
   expiresAt: number;
 };
 
+type FederationPeerDirectoryNotification = {
+  method: typeof FEDERATION_PEER_DIRECTORY_METHOD;
+  params: {
+    peers: FederationPeerSummary[];
+  };
+};
+
 export class DesktopFederationRuntime {
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
@@ -80,7 +89,12 @@ export class DesktopFederationRuntime {
   private localInstanceId?: FederationInstanceId;
   private listenUrl?: string;
   private gatewayUrl?: string;
+  private gatewayInstanceId?: FederationInstanceId;
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
+  private readonly remotePeerDirectory = new Map<
+    FederationInstanceId,
+    FederationPeerSummary
+  >();
   private publishAgentEvent?: (event: AgentEvent) => void;
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
@@ -106,22 +120,16 @@ export class DesktopFederationRuntime {
     this.router = undefined;
     this.listenUrl = undefined;
     this.gatewayUrl = undefined;
+    this.gatewayInstanceId = undefined;
     this.rpcByPeer.clear();
+    this.remotePeerDirectory.clear();
   }
 
   async health(): Promise<FederationHealthStatus> {
     const settings = await getDesktopSettingsService().readSettings();
-    const peers = this.store().listPeers({ includeRevoked: true });
     return buildFederationHealthStatus({
       settings,
-      peers: peers.map((peer) =>
-        this.router?.getConnection(peer.id)
-          ? { ...peer, status: "connected" }
-          : {
-              ...peer,
-              status: peer.status === "connected" ? "disconnected" : peer.status,
-            },
-      ),
+      peers: this.visiblePeers(),
       instanceId: this.ensureLocalInstanceId(),
     });
   }
@@ -192,9 +200,7 @@ export class DesktopFederationRuntime {
         localInstanceId: this.ensureLocalInstanceId(),
         remoteInstanceId: target.instanceId,
         sendEnvelope: (envelope) => {
-          if (!this.router?.sendToPeer(target.instanceId, envelope)) {
-            throw new Error(`Federation peer ${target.instanceId} is not connected.`);
-          }
+          this.sendEnvelopeToTarget(target.instanceId, envelope);
         },
       });
       this.rpcByPeer.set(target.instanceId, rpc);
@@ -291,6 +297,7 @@ export class DesktopFederationRuntime {
       log.warn("federation child mode missing gateway instance id");
       return;
     }
+    this.gatewayInstanceId = gatewayInstanceId;
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
@@ -326,6 +333,7 @@ export class DesktopFederationRuntime {
       capabilities: connection.capabilities,
       sendEnvelope: connection.sendEnvelope,
     });
+    this.broadcastPeerDirectory();
   }
 
   private unregisterGatewayConnection(connection: FederationGatewayConnection): void {
@@ -334,6 +342,7 @@ export class DesktopFederationRuntime {
       return;
     }
     this.unregisterPeer(connection.peerId);
+    this.broadcastPeerDirectory();
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
@@ -345,6 +354,9 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    if (this.applyPeerDirectory(envelope)) {
+      return;
+    }
     if (this.publishRemoteBackendEvent(envelope, sourcePeerId)) {
       return;
     }
@@ -371,6 +383,148 @@ export class DesktopFederationRuntime {
 
   private store(): FederationStore {
     return new FederationStore(getAppStateDb());
+  }
+
+  private sendEnvelopeToTarget(
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): void {
+    if (this.router?.sendToPeer(targetInstanceId, envelope)) {
+      return;
+    }
+
+    const gatewayInstanceId = this.gatewayInstanceId ??
+      getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (
+      gatewayInstanceId &&
+      gatewayInstanceId !== targetInstanceId &&
+      this.router?.sendToPeer(gatewayInstanceId, envelope)
+    ) {
+      return;
+    }
+
+    throw new Error(`Federation peer ${targetInstanceId} is not connected.`);
+  }
+
+  private visiblePeers(): FederationPeerSummary[] {
+    const localInstanceId = this.ensureLocalInstanceId();
+    const visible = new Map<FederationInstanceId, FederationPeerSummary>();
+
+    for (const peer of this.remotePeerDirectory.values()) {
+      if (peer.id !== localInstanceId) {
+        visible.set(peer.id, peer);
+      }
+    }
+
+    for (const peer of this.store().listPeers({ includeRevoked: true })) {
+      if (peer.id === localInstanceId) continue;
+      visible.set(peer.id, peer);
+    }
+
+    for (const connection of this.router?.listConnections() ?? []) {
+      if (connection.peerId === localInstanceId) continue;
+      const existing = visible.get(connection.peerId);
+      visible.set(connection.peerId, {
+        id: connection.peerId,
+        label: existing?.label ?? this.defaultPeerLabel(connection.peerId),
+        role: existing?.role ?? this.defaultPeerRole(connection.peerId),
+        status: "connected",
+        capabilities: [...connection.capabilities],
+        protocolVersion: existing?.protocolVersion,
+        endpoint: existing?.endpoint,
+        profileName: existing?.profileName,
+        lastConnectedAt: existing?.lastConnectedAt,
+        lastActivityAt: existing?.lastActivityAt,
+        revokedAt: existing?.revokedAt,
+        unavailableReason: existing?.unavailableReason,
+      });
+    }
+
+    return [...visible.values()].map((peer) =>
+      this.router?.getConnection(peer.id)
+        ? { ...peer, status: "connected" }
+        : {
+            ...peer,
+            status: peer.status === "connected" ? "disconnected" : peer.status,
+          },
+    );
+  }
+
+  private defaultPeerLabel(peerId: FederationInstanceId): string {
+    return peerId === getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY)
+      ? "Gateway"
+      : peerId;
+  }
+
+  private defaultPeerRole(peerId: FederationInstanceId): FederationInstanceRole {
+    return peerId === getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY)
+      ? "gateway"
+      : "child";
+  }
+
+  private buildPeerDirectory(
+    recipientPeerId: FederationInstanceId,
+  ): FederationPeerSummary[] {
+    const localInstanceId = this.ensureLocalInstanceId();
+    const localProfileName = getAppStateDb().getMeta("profile_name") || undefined;
+    const peers: FederationPeerSummary[] = [
+      {
+        id: localInstanceId,
+        label: localProfileName || "Gateway",
+        role: "gateway",
+        status: "connected",
+        capabilities: DEFAULT_CAPABILITIES,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        profileName: localProfileName,
+      },
+    ];
+
+    for (const peer of this.visiblePeers()) {
+      if (peer.id === recipientPeerId) continue;
+      peers.push(peer);
+    }
+
+    return peers;
+  }
+
+  private broadcastPeerDirectory(): void {
+    const router = this.router;
+    if (!router) return;
+    if (!isAppStateInitialized()) return;
+    const localInstanceId = this.ensureLocalInstanceId();
+
+    for (const connection of router.listConnections()) {
+      connection.sendEnvelope({
+        id: `federation-peers:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_PEER_DIRECTORY_METHOD,
+        params: {
+          peers: this.buildPeerDirectory(connection.peerId),
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: localInstanceId,
+        targetInstanceId: connection.peerId,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  private applyPeerDirectory(envelope: FederationProtocolEnvelope): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      envelope.method !== FEDERATION_PEER_DIRECTORY_METHOD
+    ) {
+      return false;
+    }
+
+    const notification = envelope as FederationPeerDirectoryNotification & typeof envelope;
+    this.remotePeerDirectory.clear();
+    for (const peer of notification.params.peers) {
+      if (peer.id !== this.ensureLocalInstanceId()) {
+        this.remotePeerDirectory.set(peer.id, peer);
+      }
+    }
+    return true;
   }
 
   private subscribeLocalBackendEvents(): void {
@@ -428,7 +582,37 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     });
+    this.relayRemoteBackendEvent(envelope, sourcePeerId);
     return true;
+  }
+
+  private relayRemoteBackendEvent(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): void {
+    const router = this.router;
+    if (!router || sourcePeerId === this.gatewayInstanceId) {
+      return;
+    }
+    const hopCount = envelope.hopCount ?? 0;
+    if (hopCount >= 1) {
+      return;
+    }
+
+    for (const connection of router.listConnections()) {
+      if (connection.peerId === sourcePeerId) continue;
+      if (
+        !connection.capabilities.includes("remote_window") &&
+        !connection.capabilities.includes("thread_detail")
+      ) {
+        continue;
+      }
+      connection.sendEnvelope({
+        ...envelope,
+        hopCount: hopCount + 1,
+        targetInstanceId: connection.peerId,
+      });
+    }
   }
 }
 
