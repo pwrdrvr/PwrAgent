@@ -36,7 +36,8 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
-import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
+import { CloseIcon, EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -81,6 +82,12 @@ type ComposerProps = {
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: DesktopApi;
+  /**
+   * Surface a transient app-level toast (image attachment limit reached,
+   * pasted image rejected on a non-vision model). Plumbed up to the shared
+   * AppNoticeToast stack in App.tsx.
+   */
+  onShowNotice?: (notice: AppNoticeToastNotice) => void;
   directory?: NavigationDirectorySummary;
   /**
    * Full set of currently-tracked directories from the navigation
@@ -184,6 +191,13 @@ type ComposerProps = {
 type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
+
+/**
+ * Maximum number of image attachments allowed on a single message. No
+ * provider currently advertises its own per-message image limit, so this is
+ * the default cap; if a backend ever reports one, prefer the smaller value.
+ */
+const MAX_COMPOSER_IMAGE_ATTACHMENTS = 5;
 
 type ComposerDropdownOption = {
   disabled?: boolean;
@@ -1546,6 +1560,24 @@ export function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  // Currently expanded attachment shown in the full-size lightbox, or
+  // undefined when the lightbox is closed.
+  const [lightboxAttachment, setLightboxAttachment] =
+    useState<ComposerImageAttachment>();
+  useEffect(() => {
+    if (!lightboxAttachment) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setLightboxAttachment(undefined);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [lightboxAttachment]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
@@ -3754,6 +3786,50 @@ export function Composer(props: ComposerProps) {
     });
   };
 
+  const showComposerNotice = (notice: Omit<AppNoticeToastNotice, "id">): void => {
+    props.onShowNotice?.({
+      id: `composer-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ...notice,
+    });
+  };
+
+  /**
+   * Apply image-support + attachment-limit policy to a freshly pasted/dropped
+   * batch. Returns the subset that should be attached, or `null` to reject the
+   * whole batch. Surfaces a toast for every rejection (non-vision model) and
+   * whenever the per-message limit clamps or blocks the batch.
+   */
+  const gateImageFilesForAttachment = (
+    files: ComposerImageFile[],
+  ): ComposerImageFile[] | null => {
+    if (!imagesSupported) {
+      showComposerNotice({
+        title: "Images not supported",
+        message: `${imagesUnsupportedLabel} doesn't support image attachments.`,
+      });
+      return null;
+    }
+
+    const remaining = MAX_COMPOSER_IMAGE_ATTACHMENTS - imageAttachments.length;
+    if (remaining <= 0) {
+      showComposerNotice({
+        title: "Attachment limit reached",
+        message: `You can attach up to ${MAX_COMPOSER_IMAGE_ATTACHMENTS} images per message.`,
+      });
+      return null;
+    }
+
+    if (files.length > remaining) {
+      showComposerNotice({
+        title: "Attachment limit reached",
+        message: `You can attach up to ${MAX_COMPOSER_IMAGE_ATTACHMENTS} images per message.`,
+      });
+      return files.slice(0, remaining);
+    }
+
+    return files;
+  };
+
   const handlePaste = (event: ClipboardEvent<HTMLElement>): void => {
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0) {
@@ -3762,7 +3838,11 @@ export function Composer(props: ComposerProps) {
 
     event.preventDefault();
     setSendError(undefined);
-    void attachImages(pastedFiles);
+    const accepted = gateImageFilesForAttachment(pastedFiles);
+    if (!accepted || accepted.length === 0) {
+      return;
+    }
+    void attachImages(accepted);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
@@ -3782,7 +3862,11 @@ export function Composer(props: ComposerProps) {
 
     event.preventDefault();
     setSendError(undefined);
-    void attachImages(droppedFiles);
+    const accepted = gateImageFilesForAttachment(droppedFiles);
+    if (!accepted || accepted.length === 0) {
+      return;
+    }
+    void attachImages(accepted);
   };
 
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
@@ -3796,6 +3880,8 @@ export function Composer(props: ComposerProps) {
         files.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
           if (isGifFile(file, type)) {
+            // GIFs skip normalization (to preserve animation), so they have no
+            // measured dimensions — the card shows only the size chip for them.
             return {
               id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
               name: file.name || fallbackName,
@@ -3851,7 +3937,10 @@ export function Composer(props: ComposerProps) {
         const nextSnapshot = {
           draft: saved.draft,
           editorDocument: saved.editorDocument,
-          imageAttachments: [...saved.imageAttachments, ...nextAttachments],
+          imageAttachments: [
+            ...saved.imageAttachments,
+            ...nextAttachments,
+          ].slice(0, MAX_COMPOSER_IMAGE_ATTACHMENTS),
           skillTokens: saved.skillTokens,
         };
         saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
@@ -3860,7 +3949,12 @@ export function Composer(props: ComposerProps) {
       }
 
       setImageAttachments((current) => {
-        const mergedAttachments = [...current, ...nextAttachments];
+        // Final safety cap so two near-simultaneous pastes can never persist
+        // more than the limit even if both passed the pre-attach gate.
+        const mergedAttachments = [...current, ...nextAttachments].slice(
+          0,
+          MAX_COMPOSER_IMAGE_ATTACHMENTS,
+        );
         const nextSnapshot = {
           draft,
           editorDocument,
@@ -4068,6 +4162,15 @@ export function Composer(props: ComposerProps) {
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);
+  // Image attachments are allowed unless the active model explicitly reports
+  // no image support (Codex Spark) or the ACP agent advertises
+  // `prompt.image: false`. `undefined` on either signal means "assume
+  // supported" so existing backends keep working.
+  const imagesSupported =
+    selectedModelOption?.supportsImage !== false &&
+    backend?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
+  const imagesUnsupportedLabel =
+    selectedModelOption?.label ?? currentSettings?.model ?? "This mode";
   const supportsReasoning =
     selectedModelOption?.supportsReasoning ??
     Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
@@ -4698,6 +4801,39 @@ export function Composer(props: ComposerProps) {
         document.body,
       )
     : null;
+  const imageLightbox = lightboxAttachment
+    ? createPortal(
+        <div
+          className="composer__lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded image"
+          onClick={() => setLightboxAttachment(undefined)}
+        >
+          <div
+            className="composer__lightbox-content"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <button
+              aria-label="Close image"
+              className="composer__lightbox-close"
+              type="button"
+              onClick={() => setLightboxAttachment(undefined)}
+            >
+              <CloseIcon size={18} aria-hidden="true" />
+            </button>
+            <img
+              className="composer__lightbox-image"
+              src={lightboxAttachment.url}
+              alt={formatPastedImageAlt(lightboxAttachment, 0)}
+            />
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
   const workspaceHandoffDialog =
     handoffDialog && threadWorkspace
       ? createPortal(
@@ -5033,6 +5169,55 @@ export function Composer(props: ComposerProps) {
         </div>
       ))}
 
+      {imageAttachments.length > 0 ? (
+        <div className="composer__attachments" aria-label="Pasted images">
+          {imageAttachments.map((attachment, index) => {
+            const dimensions = formatImageDimensions(
+              attachment.width,
+              attachment.height,
+            );
+            return (
+              <div className="composer__attachment" key={attachment.id}>
+                <div className="composer__attachment-thumb">
+                  <button
+                    aria-label={`Expand ${attachment.name}`}
+                    className="composer__attachment-open"
+                    type="button"
+                    onClick={() => {
+                      setLightboxAttachment(attachment);
+                    }}
+                  >
+                    <img
+                      className="composer__attachment-preview"
+                      src={attachment.url}
+                      alt={formatPastedImageAlt(attachment, index)}
+                    />
+                  </button>
+                  <button
+                    aria-label={`Remove ${attachment.name}`}
+                    className="composer__attachment-remove"
+                    type="button"
+                    onClick={() => {
+                      removeImageAttachment(attachment.id);
+                    }}
+                  >
+                    <CloseIcon size={12} aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="composer__attachment-chips">
+                  <span className="composer__attachment-chip">
+                    {formatBytes(attachment.size)}
+                  </span>
+                  {dimensions ? (
+                    <span className="composer__attachment-chip">{dimensions}</span>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       <div className="composer__input-wrap" ref={inputWrapRef}>
         {isReviewComposerOpen ? (
           <fieldset className="composer__review-config" aria-label="Review target">
@@ -5282,38 +5467,6 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : null}
       </div>
-
-      {imageAttachments.length > 0 ? (
-        <div className="composer__attachments" aria-label="Pasted images">
-          {imageAttachments.map((attachment, index) => (
-            <div className="composer__attachment" key={attachment.id}>
-              <img
-                className="composer__attachment-preview"
-                src={attachment.url}
-                alt={formatPastedImageAlt(attachment, index)}
-              />
-              <div className="composer__attachment-copy">
-                <span className="composer__attachment-name">
-                  {attachment.name}
-                </span>
-                <span className="composer__attachment-meta">
-                  {formatImageType(attachment.type)} · {formatBytes(attachment.size)}
-                </span>
-              </div>
-              <button
-                aria-label={`Remove ${attachment.name}`}
-                className="composer__attachment-remove"
-                type="button"
-                onClick={() => {
-                  removeImageAttachment(attachment.id);
-                }}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
 
       {props.launchpad || props.thread ? (
         <div
@@ -5910,6 +6063,7 @@ export function Composer(props: ComposerProps) {
       </div>
       </form>
       {fullAccessRiskDialog}
+      {imageLightbox}
     </>
   );
 }
@@ -6179,6 +6333,21 @@ function readFileAsImageDataUrl(file: File, mimeType: string): Promise<string> {
   });
 }
 
+function formatImageDimensions(
+  width: number | undefined,
+  height: number | undefined,
+): string | undefined {
+  if (
+    !width ||
+    !height ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height)
+  ) {
+    return undefined;
+  }
+  return `${Math.round(width)}×${Math.round(height)}`;
+}
+
 function formatPastedImageName(type: string, index: number): string {
   const extension = type.split("/")[1] || "png";
   return `pasted-image-${index + 1}.${extension}`;
@@ -6189,11 +6358,6 @@ function formatPastedImageAlt(
   index: number
 ): string {
   return attachment.name || `Pasted image ${index + 1}`;
-}
-
-function formatImageType(type: string): string {
-  const subtype = type.split("/")[1];
-  return subtype ? subtype.toUpperCase() : "Image";
 }
 
 function formatBytes(size: number): string {

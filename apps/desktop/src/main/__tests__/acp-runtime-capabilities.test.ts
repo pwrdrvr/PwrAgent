@@ -51,4 +51,44 @@ describe("ACP runtime capabilities", () => {
     expect(capabilities?.agentCapabilities?.loadSession).toBe(true);
     expect(acpRuntimeSupportsSessionHistoryReplay(capabilities)).toBe(false);
   });
+
+  it("normalizes prompt content capabilities (image/audio/embeddedContext)", () => {
+    const capabilities = normalizeAcpRuntimeCapabilities({
+      now: 1000,
+      source: "initialize",
+      value: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          promptCapabilities: {
+            image: false,
+            audio: true,
+            embeddedContext: true,
+          },
+        },
+      },
+    });
+
+    expect(capabilities?.agentCapabilities?.prompt).toEqual({
+      image: false,
+      audio: true,
+      embeddedContext: true,
+    });
+  });
+
+  it("reads prompt image support from a snake_case prompt_capabilities block", () => {
+    const capabilities = normalizeAcpRuntimeCapabilities({
+      now: 1000,
+      source: "initialize",
+      value: {
+        protocol_version: 1,
+        agent_capabilities: {
+          prompt_capabilities: {
+            image: true,
+          },
+        },
+      },
+    });
+
+    expect(capabilities?.agentCapabilities?.prompt?.image).toBe(true);
+  });
 });

@@ -1499,6 +1499,8 @@ describe("CodexAppServerClient", () => {
         label: "GPT-5.3-Codex-Spark",
         current: undefined,
         supportsReasoning: true,
+        // Spark does not accept image input — gates composer image pastes.
+        supportsImage: false,
       },
       {
         id: "gpt-5.2",
@@ -1507,6 +1509,30 @@ describe("CodexAppServerClient", () => {
         supportsReasoning: true,
       },
     ]);
+  });
+
+  it("marks Codex Spark as not supporting images and honors an explicit protocol flag", async () => {
+    MockTransport.modelListResult = {
+      data: [
+        { id: "gpt-5.5", supportsReasoning: true },
+        { id: "gpt-5.3-codex-spark", supportsReasoning: true },
+        // An explicit protocol flag wins over the name-based Spark fallback.
+        { id: "gpt-5.4", supportsReasoning: true, supports_image: false },
+      ],
+    };
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    const models = await client.listModels();
+    const byId = new Map(models.map((model) => [model.id, model]));
+
+    // Non-Spark default leaves the flag unset ("assume supported").
+    expect(byId.get("gpt-5.5")?.supportsImage).toBeUndefined();
+    // Spark name fallback blocks images.
+    expect(byId.get("gpt-5.3-codex-spark")?.supportsImage).toBe(false);
+    // Explicit protocol flag is honored.
+    expect(byId.get("gpt-5.4")?.supportsImage).toBe(false);
   });
 
   it("normalizes 10080 minute rate-limit windows as weekly limits", async () => {
