@@ -393,26 +393,74 @@ textarea,
   user-select: none;
 }
 
-/* Left sidebar hidden via the layout toggle (⌘B). The sidebar grid item is
-   removed (display:none), so the shell must collapse to a SINGLE column —
-   otherwise grid auto-placement drops the only remaining child (<main>)
-   into the leftover 0-width first track and the whole content area
-   collapses to nothing. The re-show control lives in the header chrome /
-   title bar, never inside the sidebar, so it stays reachable. */
+/* "Hidden" collapses the sidebar to a thin activity rail rather than
+   removing it: the thread-list panel disappears but the masthead's action
+   buttons (Automations / Settings / New Thread) keep a home, mirroring the
+   right context-rail spine. Without this the wordmark + buttons — which
+   live inside the sidebar — would vanish entirely. */
 .app-shell[data-sidebar-hidden="true"] {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
 }
 
 .app-shell[data-sidebar-hidden="true"] .sidebar {
+  padding: 0;
+}
+
+/* Hide everything below the masthead (resize handle, runtime identity,
+   lens switch, thread list) and the wordmark text — only the action
+   buttons remain. */
+.app-shell[data-sidebar-hidden="true"] .sidebar > :not(.sidebar__masthead),
+.app-shell[data-sidebar-hidden="true"] .sidebar__brand {
   display: none;
 }
 
-/* macOS floats the traffic lights over the top-left and the sidebar
-   masthead normally reserves that space. With the sidebar hidden, clear it
-   on the thread header so the breadcrumb doesn't sit under the stoplights.
-   Windows/Linux start content at the edge (no overlay), so darwin-only. */
+.app-shell[data-sidebar-hidden="true"] .sidebar__masthead {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 0;
+}
+
+.app-shell[data-sidebar-hidden="true"] .sidebar__masthead-actions {
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Borderless icons so the collapsed rail reads like the right spine, with
+   the same subtle hover/active feedback as the context-rail tabs. */
+.app-shell[data-sidebar-hidden="true"] .sidebar__icon-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.app-shell[data-sidebar-hidden="true"] .sidebar__icon-button:hover,
+.app-shell[data-sidebar-hidden="true"] .sidebar__icon-button:focus-visible,
+.app-shell[data-sidebar-hidden="true"] .sidebar__icon-button.is-active {
+  border-color: var(--border-subtle);
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+/* macOS floats the traffic lights over the rail's top; drop the action
+   buttons below them, and give the thread-header breadcrumb a little extra
+   left room so it clears the green light beside the 48px rail. */
+:root[data-platform="darwin"] .app-shell[data-sidebar-hidden="true"] .sidebar__masthead {
+  padding-top: 32px;
+}
+
 :root[data-platform="darwin"] .app-shell[data-sidebar-hidden="true"] .thread-header {
-  padding-left: 80px;
+  padding-left: 30px;
+}
+
+/* Windows already hosts the wordmark + action buttons in the title-bar
+   strip (the sidebar masthead is hidden on win32), so there's nothing to
+   keep on a rail — fully hide the sidebar there instead. */
+:root[data-platform="win32"] .app-shell[data-sidebar-hidden="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-platform="win32"] .app-shell[data-sidebar-hidden="true"] .sidebar {
+  display: none;
 }
 
 /* Windows custom title-bar strip (File / View / Profiles / Window / Help).
