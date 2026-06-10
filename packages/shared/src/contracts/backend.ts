@@ -157,6 +157,14 @@ export type BackendModelOption = {
   supportsReasoning?: boolean;
   supportsFast?: boolean;
   supportsSteering?: boolean;
+  /**
+   * Whether this model accepts image input. `undefined` means "assume
+   * supported" (backward compatible); only an explicit `false` blocks image
+   * attachments in the composer. Codex Spark reports `false`; ACP agents that
+   * advertise `agentCapabilities.prompt.image: false` are gated separately on
+   * the runtime capability.
+   */
+  supportsImage?: boolean;
 };
 
 export type BackendLaunchpadOptions = {

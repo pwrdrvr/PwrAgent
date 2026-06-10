@@ -49,6 +49,7 @@ import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads
 import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
@@ -816,6 +817,7 @@ export type ThreadViewProps = {
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
   launchpadError?: string;
+  onShowNotice?: (notice: AppNoticeToastNotice) => void;
   archiveThreadError?: string;
   loading: boolean;
   loadingMore: boolean;
@@ -2103,6 +2105,7 @@ export function ThreadView(props: ThreadViewProps) {
               backends={props.backends}
               applications={props.applications}
               desktopApi={props.desktopApi}
+              onShowNotice={props.onShowNotice}
               composerImplementation={props.composerImplementation}
               draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
@@ -2287,6 +2290,7 @@ export function ThreadView(props: ThreadViewProps) {
             backends={props.backends}
             applications={props.applications}
             desktopApi={props.desktopApi}
+            onShowNotice={props.onShowNotice}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}

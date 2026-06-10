@@ -36,6 +36,7 @@ import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
+import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
@@ -168,6 +169,11 @@ function DesktopAppShell(props: {
   // triggers the slim "set up `foo`?" confirmation step; everything
   // else uses the standard first-run / replay flow.
   const [bootInfo, setBootInfo] = useState<DesktopBootInfo | null>(null);
+  // Transient composer-originated notices (image attachment limit reached,
+  // pasted image rejected on a non-vision model). Rendered through the shared
+  // AppNoticeToast in the toast stack below, separate from the navigation
+  // archive notice so the two never clobber each other.
+  const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -380,6 +386,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     desktopApi,
     launchpadError: navigation.launchpadError,
+    onShowNotice: setComposerNotice,
     loading: session.loading,
     loadingMore: session.loadingMore,
     messageCount: session.messages.length,
@@ -750,6 +757,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={navigation.archiveThreadNotice}
             onDismiss={navigation.dismissArchiveThreadNotice}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={composerNotice}
+            onDismiss={() => setComposerNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>

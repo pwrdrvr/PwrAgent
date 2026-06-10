@@ -3659,6 +3659,17 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
           "supportsSteering",
           "supports_steering",
         ]),
+        // Prefer an explicit protocol flag when the model list carries one;
+        // otherwise fall back to the known Spark exclusion (Spark models do
+        // not accept image input). Leaving this `undefined` for all other
+        // models means "assume supported" in the composer.
+        supportsImage:
+          pickBoolean(modelRecord, [
+            "supportsImage",
+            "supports_image",
+            "supportsVision",
+            "supports_vision",
+          ]) ?? (isSparkModelId(id) ? false : undefined),
       },
     ];
   });
@@ -3693,6 +3704,10 @@ function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
       },
     ];
   });
+}
+
+function isSparkModelId(id: string): boolean {
+  return id.toLowerCase().includes("spark");
 }
 
 function shouldHideCodexModel(

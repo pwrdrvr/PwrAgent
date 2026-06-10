@@ -295,11 +295,35 @@ function readAgentCapabilities(
   const sessionHistoryReplay =
     readBoolean(kimiMeta, "sessionHistoryReplay") ??
     readBoolean(kimiMeta, "session_history_replay");
+  // ACP advertises prompt content support under `promptCapabilities`
+  // (image / audio / embeddedContext). Some agents nest it under `prompt`.
+  const promptRecord =
+    asRecord(record?.promptCapabilities) ??
+    asRecord(record?.prompt_capabilities) ??
+    asRecord(record?.prompt);
+  const promptImage = readBoolean(promptRecord, "image");
+  const promptAudio = readBoolean(promptRecord, "audio");
+  const promptEmbeddedContext =
+    readBoolean(promptRecord, "embeddedContext") ??
+    readBoolean(promptRecord, "embedded_context");
+  const prompt =
+    promptImage !== undefined ||
+    promptAudio !== undefined ||
+    promptEmbeddedContext !== undefined
+      ? {
+          ...(promptImage !== undefined ? { image: promptImage } : {}),
+          ...(promptAudio !== undefined ? { audio: promptAudio } : {}),
+          ...(promptEmbeddedContext !== undefined
+            ? { embeddedContext: promptEmbeddedContext }
+            : {}),
+        }
+      : undefined;
   const hasData =
     loadSession !== undefined ||
     close !== undefined ||
     cancel !== undefined ||
-    sessionHistoryReplay !== undefined;
+    sessionHistoryReplay !== undefined ||
+    prompt !== undefined;
   return hasData
     ? {
         ...(loadSession !== undefined ? { loadSession } : {}),
@@ -307,6 +331,7 @@ function readAgentCapabilities(
         ...(close !== undefined || cancel !== undefined
           ? { session: { ...(close !== undefined ? { close } : {}), ...(cancel !== undefined ? { cancel } : {}) } }
           : {}),
+        ...(prompt !== undefined ? { prompt } : {}),
         raw: record ?? sessionCapabilities,
       }
     : { raw: record ?? sessionCapabilities };

@@ -8214,10 +8214,331 @@ describe("Composer", () => {
       },
     });
 
-    expect(await screen.findByText("PNG · 24 KB")).toBeInTheDocument();
-    expect(screen.getByText("PNG · 1 MB")).toBeInTheDocument();
-    expect(screen.getByText("PNG · 1.2 MB")).toBeInTheDocument();
-    expect(screen.getByText("PNG · 10 MB")).toBeInTheDocument();
+    expect(await screen.findByText("24 KB")).toBeInTheDocument();
+    expect(screen.getByText("1 MB")).toBeInTheDocument();
+    expect(screen.getByText("1.2 MB")).toBeInTheDocument();
+    expect(screen.getByText("10 MB")).toBeInTheDocument();
+  });
+
+  it("renders size and dimension chips above the chat entry and removes an image via the circular control", async () => {
+    const file = new File([new Uint8Array([1])], "shot.png", {
+      type: "image/png",
+    });
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+
+    // Size + dimension chips (normalizeImageFile mock => 3 bytes, 32x24).
+    expect(await screen.findByText("3 B")).toBeInTheDocument();
+    expect(screen.getByText("32×24")).toBeInTheDocument();
+
+    // The strip sits before the chat entry in the DOM (req 1 & 6).
+    const strip = screen.getByLabelText("Pasted images");
+    const input = screen.getByLabelText("Reply");
+    expect(
+      strip.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    // The circular control removes the attachment.
+    fireEvent.click(screen.getByRole("button", { name: "Remove shot.png" }));
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll(".composer__attachment-preview")
+      ).toHaveLength(0)
+    );
+  });
+
+  it("stops accepting pasted images at the attachment limit and shows a toast", async () => {
+    const onShowNotice = vi.fn();
+    const files = Array.from(
+      { length: 6 },
+      (_, index) =>
+        new File([new Uint8Array([1])], `shot-${index}.png`, {
+          type: "image/png",
+        })
+    );
+    // Distinct content per file so the cap (not the duplicate guard) is what
+    // clamps the batch — identical pastes are de-duplicated separately. The
+    // gate clamps 6 → 5 before normalizing, so only 5 files are normalized;
+    // queueing exactly 5 `Once` overrides keeps them consumed within this test
+    // and never leaks into later tests (afterEach only clears call history).
+    for (const file of files.slice(0, 5)) {
+      vi.mocked(normalizeImageFile).mockImplementationOnce(async () => ({
+        conversionPath: "renderer" as const,
+        dataUrl: `data:image/png;base64,${btoa(file.name)}`,
+        height: 24,
+        mimeType: "image/png" as const,
+        original: {
+          height: 24,
+          mimeType: "image/png",
+          name: file.name,
+          size: file.size,
+          width: 32,
+        },
+        size: 3,
+        width: 32,
+      }));
+    }
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        onShowNotice={onShowNotice}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: files.map((file) => ({
+          kind: "file",
+          type: file.type,
+          getAsFile: () => file,
+        })),
+      },
+    });
+
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll(".composer__attachment-preview")
+      ).toHaveLength(5)
+    );
+    expect(onShowNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Attachment limit reached" })
+    );
+  });
+
+  it("rejects an exact-duplicate paste and keeps a single attachment", async () => {
+    const onShowNotice = vi.fn();
+    const makeFile = () =>
+      new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        onShowNotice={onShowNotice}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const pasteOnce = () =>
+      fireEvent.paste(screen.getByLabelText("Reply"), {
+        clipboardData: {
+          files: [],
+          items: [
+            { kind: "file", type: "image/png", getAsFile: () => makeFile() },
+          ],
+        },
+      });
+
+    // The default normalize mock yields identical bytes for both pastes, so
+    // the second paste is an exact duplicate of the first.
+    pasteOnce();
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll(".composer__attachment-preview")
+      ).toHaveLength(1)
+    );
+
+    pasteOnce();
+    await waitFor(() =>
+      expect(onShowNotice).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Image already attached" })
+      )
+    );
+    expect(
+      container.querySelectorAll(".composer__attachment-preview")
+    ).toHaveLength(1);
+  });
+
+  it("rejects pasted images and toasts when the model does not support images", async () => {
+    const onShowNotice = vi.fn();
+    const file = new File([new Uint8Array([1])], "shot.png", {
+      type: "image/png",
+    });
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                label: "GPT-5.3-Codex-Spark",
+                supportsImage: false,
+              },
+            ],
+          }),
+        ]}
+        onShowNotice={onShowNotice}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          model: "gpt-5.3-codex-spark",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+
+    expect(onShowNotice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Images not supported",
+        message: expect.stringContaining("GPT-5.3-Codex-Spark"),
+      })
+    );
+    expect(
+      container.querySelectorAll(".composer__attachment-preview")
+    ).toHaveLength(0);
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+  });
+
+  it("warns when attachments are already present on a model that doesn't support images", async () => {
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                label: "GPT-5.3-Codex-Spark",
+                supportsImage: false,
+              },
+            ],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+          imageAttachments: [
+            {
+              id: "seeded-1",
+              name: "shot.png",
+              size: 24 * 1024,
+              type: "image/png",
+              url: "data:image/png;base64,AAAA",
+            },
+          ],
+        }}
+      />
+    );
+
+    // The thumbnail still renders (non-blocking), but a warning naming the
+    // model appears so the operator knows the image won't be processed.
+    expect(await screen.findByText("24 KB")).toBeInTheDocument();
+    const warning = screen.getByText(/doesn't support image attachments/);
+    expect(warning).toHaveClass("composer__meta--warning");
+    expect(warning.textContent).toContain("GPT-5.3-Codex-Spark");
+  });
+
+  it("opens a full-size lightbox when a thumbnail is clicked and closes it via the X", async () => {
+    const file = new File([new Uint8Array([1])], "shot.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand shot.png" })
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close image" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Expanded image" })
+      ).not.toBeInTheDocument()
+    );
   });
 
   it("keeps dropped GIF images animated by preserving the original data URL", async () => {
