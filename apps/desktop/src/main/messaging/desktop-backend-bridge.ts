@@ -114,7 +114,17 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       limit: 20,
       threadId: request.threadId,
     });
+    const entryReply = findLastAssistantEntryReply(response.replay);
     const messageReply = findLastAssistantMessageReply(response.replay);
+    if (entryReply && messageReply) {
+      if (isReplyNewer(messageReply, entryReply)) {
+        return messageReply;
+      }
+      return entryReply;
+    }
+    if (entryReply) {
+      return entryReply;
+    }
     if (messageReply) {
       return messageReply;
     }
@@ -129,7 +139,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...(createdAt ? { createdAt } : {}),
       };
     }
-    return findLastAssistantEntryReply(response.replay);
+    return undefined;
   }
 
   async handoffThreadWorkspace(
@@ -299,4 +309,17 @@ function findLastAssistantEntryCreatedAt(
     }
   }
   return undefined;
+}
+
+function isReplyNewer(
+  candidate: MessagingLastAssistantReply,
+  current: MessagingLastAssistantReply,
+): boolean {
+  return (
+    typeof candidate.createdAt === "number" &&
+    Number.isFinite(candidate.createdAt) &&
+    typeof current.createdAt === "number" &&
+    Number.isFinite(current.createdAt) &&
+    candidate.createdAt > current.createdAt
+  );
 }
