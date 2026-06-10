@@ -7647,6 +7647,96 @@ describe("MessagingController", () => {
     expect(shouldConsumeDeliveryBudget(status)).toBe(true);
   });
 
+  it("treats initial pinned status cards as user-command budget traffic", () => {
+    const initialPinnedStatus = {
+      id: "status-1",
+      kind: "status",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      delivery: {
+        mode: "present",
+        pin: true,
+      },
+      status: "idle",
+      text: "Binding: Thread one",
+    } satisfies MessagingSurfaceIntent;
+    const routineStatusUpdate = {
+      ...initialPinnedStatus,
+      id: "status-2",
+      delivery: {
+        mode: "update",
+        fallback: "present_new",
+      },
+      targetSurface: {
+        channel: "telegram",
+        id: "surface-1",
+      },
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(initialPinnedStatus)).toBe("user_command");
+    expect(messagingDeliveryPriority(routineStatusUpdate)).toBe("routine_status");
+  });
+
+  it("defers initial pinned status budget traffic instead of dropping it in slow mode", () => {
+    let now = 1000;
+    const scope: MessagingDeliveryScope = {
+      budget: { intervalMs: 60_000, limit: 1, reserved: 0 },
+      id: "telegram:group:-1001",
+      kind: "group",
+      platform: "telegram",
+    };
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({ outcome: "admitted" });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "routine_status",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "dropped",
+      reason: "budget-exhausted",
+      slowMode: true,
+    });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "routine_status",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "dropped",
+      reason: "slow-mode",
+      slowMode: true,
+    });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "deferred",
+      reason: "budget-exhausted",
+      retryAt: 61_000,
+      slowMode: true,
+    });
+    now = 61_001;
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({ outcome: "admitted" });
+  });
+
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {
     let now = 1000;
     let releaseFirstDelivery: (() => void) | undefined;

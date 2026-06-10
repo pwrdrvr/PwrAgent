@@ -12140,7 +12140,13 @@ export function messagingDeliveryPriority(
       }
       return "user_command";
     case "status":
-      return context?.userInitiated ? "user_command" : "routine_status";
+      if (context?.userInitiated) {
+        return "user_command";
+      }
+      if (intent.delivery?.mode === "present" && intent.delivery.pin === true) {
+        return "user_command";
+      }
+      return "routine_status";
     case "activity":
     case "progress":
     case "dismiss":
