@@ -182,6 +182,20 @@ afterEach(async () => {
 });
 
 describe("SqliteMessagingStore", () => {
+  it("persists Agent-thread binding targets", async () => {
+    const store = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        targetKind: "agent_thread",
+      }),
+    );
+
+    await expect(store.getBinding("binding-1")).resolves.toMatchObject({
+      id: "binding-1",
+      targetKind: "agent_thread",
+    });
+  });
+
   it("persists pending skill selections on bindings", async () => {
     const store = await createStore();
     await store.upsertBinding(

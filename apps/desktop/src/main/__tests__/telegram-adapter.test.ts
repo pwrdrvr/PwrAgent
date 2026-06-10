@@ -259,6 +259,9 @@ describe("TelegramAdapter", () => {
                 text: "Projects",
               }),
               expect.objectContaining({
+                text: "Agents",
+              }),
+              expect.objectContaining({
                 text: "New",
               }),
               expect.objectContaining({
@@ -608,9 +611,10 @@ describe("TelegramAdapter", () => {
       (row: Array<{ text: string }>) => row.map((button) => button.text),
     );
     expect(buttonRows).toEqual([
-      ["Resume", "New"],
-      ["Status", "Detach"],
-      ["Monitor", "Help"],
+      ["Resume", "Agent"],
+      ["New", "Status"],
+      ["Detach", "Monitor"],
+      ["Help"],
     ]);
   });
 

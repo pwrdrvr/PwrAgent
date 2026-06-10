@@ -98,6 +98,657 @@ describe("MessagingController", () => {
       });
   });
 
+  it("presents an Agent-only picker for authorized /agent commands", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [
+      {
+        ...navigation.threads[0]!,
+        id: "ordinary-thread",
+        title: "Ordinary thread",
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "agent-thread",
+        title: "Agent thread",
+        updatedAt: 2000,
+        agent: {
+          name: "Inbox Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+    ];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing PwrAgent Agent threads."),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
+        ]),
+        items: [
+          expect.objectContaining({
+            id: "agent-thread",
+          }),
+        ],
+      },
+    });
+    expect(harness.delivered[0]?.fallbackText).not.toContain("Ordinary thread");
+  });
+
+  it("offers Agent creation when no Agent threads exist", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("No matching PwrAgent Agent threads found."),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
+        ]),
+      },
+    });
+  });
+
+  it("binds /agent selections as Agent-thread targets", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Inbox Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const agentEvent = buildCommandEvent("/agent");
+    await harness.controller.handleInboundEvent(agentEvent);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const binding = await harness.store.findActiveBindingForChannel(agentEvent.channel);
+    expect(binding).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      targetKind: "agent_thread",
+    });
+    const confirmation = harness.delivered.find(
+      (intent) => intent.kind === "confirmation" && intent.title === "Thread bound",
+    );
+    expect(confirmation).toMatchObject({
+      body: expect.stringContaining("selected Agent thread"),
+      fallbackText: "Send a message to continue with the Agent thread.",
+    });
+  });
+
+  it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Agent: Messaging Agent"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      {
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+        input: [
+          {
+            type: "text",
+            text: "Check the queue",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+        }),
+      },
+      expect.objectContaining({
+        onThreadMaterialized: expect.any(Function),
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      targetKind: "agent_thread",
+    });
+  });
+
+  it("reports the current messaging location for an active Agent-thread turn", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      outcome: "unsupported" as const,
+      updatedAt: 1000,
+    }));
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      operations: [
+        {
+          operation: "create_child" as const,
+          supported: true,
+        },
+      ],
+      outcome: "ok" as const,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      getManagedConversationRights,
+    });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      displayName: "Hunt",
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_location",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          binding: {
+            backend: "codex",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "-1001",
+            kind: "channel",
+            title: "Ops",
+          },
+          managedConversation: {
+            canCreateChild: true,
+            providerSupportsCreation: true,
+          },
+        },
+      },
+    });
+    expect(getManagedConversationRights).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: event.actor,
+        channel: event.channel,
+        routingState: event.routingState,
+      }),
+    );
+  });
+
+  it("preserves the messaging location for queued Agent-thread turns", async () => {
+    const harness = await createHarness();
+    harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
+      const turnId = harness.startTurn.mock.calls.length === 1 ? "turn-1" : "turn-2";
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId,
+      };
+    });
+    const event = buildTextEvent("first request");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    await harness.controller.handleInboundEvent(buildTextEvent("queued request"));
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Message queued",
+      }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_location",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-2",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          binding: {
+            backend: "codex",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+      },
+    });
+  });
+
+  it("creates a native Telegram topic, attaches a target thread, and posts resume status there", async () => {
+    const now = Date.UTC(2026, 5, 9, 23, 5);
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({
+      id: "thread-2",
+      title: "Telegram thread naming issue",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      ],
+      inbox: {
+        inInbox: false,
+      },
+      updatedAt: now - 60_000,
+    });
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      operations: [
+        {
+          operation: "create_child" as const,
+          supported: true,
+        },
+      ],
+      outcome: "ok" as const,
+      updatedAt: 1000,
+    }));
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "500",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Telegram thread naming issue",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 500 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      getManagedConversationRights,
+      navigation,
+      now: () => now,
+      readThreadLastAssistantReply: async () => ({
+        createdAt: now - 30 * 60_000,
+        text: "Last completed answer.",
+      }),
+    });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    harness.delivered.splice(0);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+          title: "Telegram thread naming issue",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        binding: {
+          backend: "codex",
+          targetKind: "thread",
+          threadId: "thread-2",
+        },
+        conversation: {
+          id: "500",
+          kind: "topic",
+          title: "Telegram thread naming issue",
+        },
+        outcome: "created_and_attached",
+        placement: "new_child",
+      },
+    });
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        bindingId:
+          "binding:telegram:topic:-1001:500:codex:thread-2",
+        delivery: expect.objectContaining({
+          mode: "present",
+          pin: true,
+        }),
+        targetSurface: undefined,
+        text: expect.stringContaining("Project: PwrAgent"),
+      }),
+      expect.objectContaining({
+        kind: "message",
+        bindingId:
+          "binding:telegram:topic:-1001:500:codex:thread-2",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: expect.stringMatching(
+              /^Last Bot Reply \(30 minutes ago, .+\)\n\nLast completed answer\.$/,
+            ),
+          }),
+        ],
+      }),
+    ]);
+    expect(createManagedConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: event.actor,
+        parent: event.channel,
+        routingState: event.routingState,
+        title: "Telegram thread naming issue",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "500",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+          title: "Telegram thread naming issue",
+        },
+      }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      pinnedStatusSurface: {
+        id: expect.stringMatching(/^surface:status:/),
+      },
+      statusSurface: {
+        id: expect.stringMatching(/^surface:status:/),
+      },
+      targetKind: "thread",
+      threadId: "thread-2",
+    });
+  });
+
+  it("does not create a child conversation for an inactive attach target", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "500",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Archived thread",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 500 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ createManagedConversation });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+          title: "Archived thread",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "not_found",
+        message: expect.stringContaining("not an active attachable thread"),
+      },
+    });
+    expect(createManagedConversation).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "500",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+          title: "Archived thread",
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("starts a new Agent thread from the /agent picker New Agent action", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+    });
+  });
+
+  it("keeps new-thread creation in Agent mode after switching from /agent to recents", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:recents",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing recent PwrAgent threads."),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
+        ]),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+      }),
+      expect.objectContaining({
+        onThreadMaterialized: expect.any(Function),
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      targetKind: "agent_thread",
+    });
+  });
+
   it("returns from the nested new-thread picker back to the resume browser", async () => {
     const harness = await createHarness();
 
@@ -422,6 +1073,7 @@ describe("MessagingController", () => {
       updatedAt: now,
     });
     harness.delivered.length = 0;
+    sleeps.length = 0;
     now = 6000;
     budgetEvents.length = 0;
 
@@ -512,6 +1164,7 @@ describe("MessagingController", () => {
       updatedAt: now,
     });
     harness.delivered.length = 0;
+    sleeps.length = 0;
     now = 6000;
     budgetEvents.length = 0;
 
@@ -1003,6 +1656,62 @@ describe("MessagingController", () => {
         label: "3. giphy-demo (1)",
       }),
     ]);
+  });
+
+  it("preserves the workspace kind when starting an Agent from a Workspaces fallback selection", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories = [
+      {
+        key: "workspace:/Users/test/.pwragent/profiles/dev/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/dev/projects",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_500,
+      },
+      ...navigation.directories,
+    ];
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+      ) => ({
+        backend: request.launchpad?.backend ?? "codex",
+        threadId: "new-thread-1",
+        ...(request.input && request.input.length > 0 ? { turnId: "turn-1" } : {}),
+        executionMode: request.launchpad?.executionMode ?? "default",
+        workMode: request.launchpad?.workMode ?? "local",
+      }),
+    );
+    const harness = await createHarness({ navigation, materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          label: "Workspaces Scratchpad",
+          path: "/Users/test/.pwragent/profiles/dev/projects",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Create a scratch task"));
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:/Users/test/.pwragent/profiles/dev/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/profiles/dev/projects",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
   });
 
   it("debounces split first prompts before creating a messaging-started thread", async () => {
@@ -3381,6 +4090,7 @@ describe("MessagingController", () => {
     const ids = (last?.actions ?? []).map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:agent",
       "command:new",
       "command:status",
       "command:detach",
@@ -5928,6 +6638,98 @@ describe("MessagingController", () => {
     });
   });
 
+  it("queues a second surface message on the same Agent thread without creating a shadow thread", async () => {
+    const harness = await createHarness();
+    const telegramChannel = buildTextEvent("ignored").channel;
+    const discordChannel: MessagingInboundTextEvent["channel"] = {
+      channel: "discord",
+      conversation: {
+        id: "discord-dm-1",
+        kind: "dm",
+      },
+    };
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: telegramChannel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:discord:dm::discord-dm-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: discordChannel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start from telegram", { channel: telegramChannel }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("follow up from discord", { channel: discordChannel }),
+    );
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "start from telegram",
+          },
+        ],
+      }),
+    );
+    expect(
+      harness.delivered
+        .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+        .at(-1),
+    ).toMatchObject({
+      body: expect.stringContaining("> follow up from discord"),
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "follow up from discord",
+          },
+        ],
+      }),
+    );
+  });
+
   it("retains queued follow-up input when promotion fails", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -6843,10 +7645,11 @@ describe("MessagingController", () => {
         budgetEvents.push(event);
       },
     );
+    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
     const harness = await createHarness({
       channel: "telegram",
       now: () => now,
-      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliveryBudget,
       resolveDeliveryScope: (intent) =>
         intent.kind === "stream_update" ? scope : undefined,
       onDeliveryBudgetEvent,
@@ -6866,6 +7669,15 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+
+    expect(
+      deliveryBudget.admit({
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "admitted",
+    });
 
     const finalDelivery = harness.controller.handleBackendEvent({
       backend: "codex",
@@ -6956,8 +7768,15 @@ describe("MessagingController", () => {
       ...resumeRepost,
       id: "assistant-message-1",
     } satisfies MessagingSurfaceIntent;
+    const importantResumeRepost = {
+      ...resumeRepost,
+      id: "assistant-resume-repost-important-1",
+    } satisfies MessagingSurfaceIntent;
 
     expect(messagingDeliveryPriority(resumeRepost)).toBe("routine_status");
+    expect(messagingDeliveryPriority(importantResumeRepost)).toBe(
+      "user_command",
+    );
     expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
   });
 
@@ -6976,13 +7795,37 @@ describe("MessagingController", () => {
     );
   });
 
-  it("does not charge typing activity against the message write budget", () => {
+  it("does not charge typing activity or stream partials against the message write budget", () => {
     const activity = {
       id: "activity-1",
       kind: "activity",
       activity: "typing",
       createdAt: 1_000,
       state: "active",
+    } satisfies MessagingSurfaceIntent;
+    const streamPartial = {
+      id: "stream-1",
+      kind: "stream_update",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      stream: {
+        isFinal: false,
+        itemId: "item-1",
+        key: "stream-key",
+        sequence: 1,
+        turnId: "turn-1",
+      },
+      text: "Partial",
+    } satisfies MessagingSurfaceIntent;
+    const finalStream = {
+      ...streamPartial,
+      id: "stream-2",
+      stream: {
+        ...streamPartial.stream,
+        isFinal: true,
+        sequence: 2,
+      },
+      text: "Final",
     } satisfies MessagingSurfaceIntent;
     const status = {
       id: "status-1",
@@ -6993,7 +7836,99 @@ describe("MessagingController", () => {
     } satisfies MessagingSurfaceIntent;
 
     expect(shouldConsumeDeliveryBudget(activity)).toBe(false);
+    expect(shouldConsumeDeliveryBudget(streamPartial)).toBe(false);
+    expect(shouldConsumeDeliveryBudget(finalStream)).toBe(true);
     expect(shouldConsumeDeliveryBudget(status)).toBe(true);
+  });
+
+  it("treats initial pinned status cards as user-command budget traffic", () => {
+    const initialPinnedStatus = {
+      id: "status-1",
+      kind: "status",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      delivery: {
+        mode: "present",
+        pin: true,
+      },
+      status: "idle",
+      text: "Binding: Thread one",
+    } satisfies MessagingSurfaceIntent;
+    const routineStatusUpdate = {
+      ...initialPinnedStatus,
+      id: "status-2",
+      delivery: {
+        mode: "update",
+        fallback: "present_new",
+      },
+      targetSurface: {
+        channel: "telegram",
+        id: "surface-1",
+      },
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(initialPinnedStatus)).toBe("user_command");
+    expect(messagingDeliveryPriority(routineStatusUpdate)).toBe("routine_status");
+  });
+
+  it("defers initial pinned status budget traffic instead of dropping it in slow mode", () => {
+    let now = 1000;
+    const scope: MessagingDeliveryScope = {
+      budget: { intervalMs: 60_000, limit: 1, reserved: 0 },
+      id: "telegram:group:-1001",
+      kind: "group",
+      platform: "telegram",
+    };
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({ outcome: "admitted" });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "routine_status",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "dropped",
+      reason: "budget-exhausted",
+      slowMode: true,
+    });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "routine_status",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "dropped",
+      reason: "slow-mode",
+      slowMode: true,
+    });
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "deferred",
+      reason: "budget-exhausted",
+      retryAt: 61_000,
+      slowMode: true,
+    });
+    now = 61_001;
+    expect(
+      budget.admit({
+        consumeCapacity: true,
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({ outcome: "admitted" });
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {

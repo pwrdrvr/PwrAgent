@@ -4,11 +4,13 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBrowseSessionRecord,
+  MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import {
   buildResumeIntent,
   parseResumeCommandArgs,
   RESUME_BROWSER_PAGE_SIZE,
+  resumeBrowserPageSize,
 } from "../messaging/core/messaging-resume-browser";
 
 describe("messaging resume browser", () => {
@@ -70,6 +72,48 @@ describe("messaging resume browser", () => {
     expect(intent.fallbackText).toContain("Reply with a number");
   });
 
+  it("fits middle-page resume controls within LINE action budgets", () => {
+    const lineProfile = buildLineLikeCapabilityProfile();
+    const pageSize = resumeBrowserPageSize(lineProfile);
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: Array.from({ length: 20 }, (_, index) =>
+          buildThread({
+            id: `thread-${index + 1}`,
+            title: `Thread ${index + 1}`,
+            updatedAt: 2000 - index,
+          }),
+        ),
+      }),
+      session: buildBrowseSession({
+        mode: "recents",
+        pageIndex: 1,
+        pageSize,
+      }),
+    });
+
+    expect(pageSize).toBe(7);
+    expect(intent.kind).toBe("thread_picker");
+    expect(intent.page.actions).toHaveLength(lineProfile.actions!.maxActions);
+    expect(intent.page.actions.map((action) => action.id)).toEqual([
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:page:prev",
+      "browse:page:next",
+      "browse:mode:projects",
+      "browse:mode:agents",
+      "browse:mode:new",
+      "browse:cancel",
+    ]);
+  });
+
   it("renders project-specific thread context after selecting a project", () => {
     const intent = buildResumeIntent({
       id: "intent-1",
@@ -96,6 +140,52 @@ describe("messaging resume browser", () => {
         ],
       },
     });
+  });
+
+  it("renders only Agent threads in agent browse mode", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: [
+          buildThread({ id: "ordinary-thread", title: "Ordinary thread" }),
+          buildThread({
+            id: "agent-thread",
+            title: "Agent thread",
+            updatedAt: 2000,
+            agent: {
+              name: "Inbox Agent",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1500,
+            },
+          }),
+        ],
+      }),
+      session: buildBrowseSession({
+        mode: "agents",
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing PwrAgent Agent threads."),
+      prompt: expect.stringContaining("Choose an Agent thread to attach"),
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "agent-thread",
+          }),
+        ],
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:recents" }),
+          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+    expect(intent.fallbackText).toContain("Agent thread");
+    expect(intent.fallbackText).not.toContain("Ordinary thread");
   });
 
   it("renders Grok worktree threads with the primary project label", () => {
@@ -292,6 +382,31 @@ function buildBrowseSession(
   };
 }
 
+function buildLineLikeCapabilityProfile(): MessagingCapabilityProfile {
+  return {
+    actions: {
+      maxActions: 13,
+      maxActionsPerRow: 4,
+      maxCallbackPayloadBytes: 300,
+      maxLabelLength: 20,
+      supportsDisabled: false,
+      supportsLayoutHints: true,
+      supportsStyles: false,
+    },
+    text: {
+      encoding: "utf8-bytes",
+      markdownDialect: "plain",
+      maxLength: 5000,
+      supportsBold: false,
+      supportsCodeBlocks: false,
+      supportsItalic: false,
+      supportsInlineCode: false,
+      supportsLinks: false,
+      supportsMessageEdit: false,
+    },
+  };
+}
+
 function buildNavigationSnapshot(
   overrides: Partial<NavigationSnapshot> = {},
 ): NavigationSnapshot {
@@ -335,6 +450,30 @@ function buildNavigationSnapshot(
       backend: "codex",
       executionMode: "default",
     },
+    ...overrides,
+  };
+}
+
+function buildThread(
+  overrides: Partial<NavigationSnapshot["threads"][number]> = {},
+): NavigationSnapshot["threads"][number] {
+  return {
+    id: "thread-1",
+    title: "Thread one",
+    titleSource: "explicit",
+    source: "codex",
+    linkedDirectories: [
+      {
+        id: "directory:pwragent",
+        kind: "local",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+      },
+    ],
+    inbox: {
+      inInbox: false,
+    },
+    updatedAt: 1000,
     ...overrides,
   };
 }

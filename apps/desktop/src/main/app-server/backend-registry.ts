@@ -28,6 +28,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadReplay,
+  type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
   type AppServerTurnInputItem,
@@ -97,10 +98,14 @@ import {
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
   type ThreadAgentMetadata,
+  type PwrAgentThreadInspectionRequest,
+  type PwrAgentThreadInspectionResponse,
+  type ThreadInspectionSummary,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
   type StartReviewResponse,
+  type StartThreadRequest,
   type StartThreadResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
@@ -121,6 +126,12 @@ import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
   isAcpBackendId,
+  isAppServerBackendKind,
+  DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
+  DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
+  MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+  PWRAGENT_THREAD_TOOL_NAMESPACE,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
@@ -160,7 +171,6 @@ import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
-  buildAutomationInspectionDynamicToolSpecs,
   handleAutomationInspectionDynamicToolCall,
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
@@ -177,7 +187,21 @@ import {
   normalizePreferredMonitorReasoningEffort,
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
+import {
+  buildPwrAgentThreadDynamicToolErrorResponse,
+  handlePwrAgentThreadDynamicToolCall,
+  readPwrAgentThreadDynamicToolCall,
+} from "../agent-tools/pwragent-thread-codex-tools";
+import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
+import {
+  buildPwrAgentMessagingDynamicToolErrorResponse,
+  handlePwrAgentMessagingDynamicToolCall,
+  readPwrAgentMessagingDynamicToolCall,
+} from "../agent-tools/pwragent-messaging-codex-tools";
+import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
+import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
+import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -2887,6 +2911,24 @@ export class DesktopBackendRegistry {
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
+  private messagingAgentToolService?: MessagingAgentToolService;
+  private readonly messagingHandler: PwrAgentMessagingHandler =
+    async (request) => {
+      if (!this.messagingAgentToolService) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "PwrAgent messaging context tools are not available.",
+          },
+        };
+      }
+      return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
+        request,
+      );
+    };
+  private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
+    async (request) => await this.handleThreadInspectionRequest(request);
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -3315,6 +3357,12 @@ export class DesktopBackendRegistry {
     cleaner: MessagingArchiveCleaner | null | undefined,
   ): void {
     this.messagingArchiveCleaner = cleaner;
+  }
+
+  setMessagingAgentToolService(
+    service: MessagingAgentToolService | null | undefined,
+  ): void {
+    this.messagingAgentToolService = service ?? undefined;
   }
 
   setAutomationInspectionHandler(
@@ -5107,6 +5155,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
@@ -5189,16 +5238,29 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
-    const dynamicTools =
+    const agentToolCatalogs = resolveAgentToolCatalogs({
+      agent: request.agent,
+      automationInspectionHandler: this.automationInspectionHandler,
+      messagingHandler: this.messagingHandler,
+      threadInspectionHandler: this.threadInspectionHandler,
+    });
+    const resolvedDynamicTools =
       backend === "codex"
         ? [
-            ...buildAutomationInspectionDynamicToolSpecs(),
+            ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
             ...buildTaskMonitorDynamicToolSpecs("parent"),
           ]
         : undefined;
+    const dynamicTools = resolvedDynamicTools?.length
+      ? resolvedDynamicTools
+      : undefined;
     if (dynamicTools?.length) {
-      backendRegistryLog.info("attaching codex dynamic tools", {
+      backendRegistryLog.info("attaching agent tool catalogs", {
         backend,
+        catalogFingerprints: agentToolCatalogs.map(
+          (catalog) => catalog.summary.fingerprint,
+        ),
+        catalogs: agentToolCatalogs.map((catalog) => catalog.id),
         toolCount: dynamicTools.length,
         tools: dynamicTools.map((tool) => tool.name),
       });
@@ -5272,6 +5334,14 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
+    }
+    if (request.agent) {
+      await this.overlayStore.setThreadAgent({
+        backend,
+        threadId: result.threadId,
+        agent: request.agent,
+      });
+      this.invalidateThreadListCache(backend);
     }
     if (request.codexEnvironmentRuntime) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
@@ -7992,6 +8062,7 @@ export class DesktopBackendRegistry {
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
+      agent: request.agent,
       cwd: workspace.cwd,
       linkedDirectories,
       model: launchpad.model,
@@ -10500,6 +10571,74 @@ export class DesktopBackendRegistry {
         handler: this.automationInspectionHandler,
       });
     }
+    const threadToolCall = readPwrAgentThreadDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (threadToolCall?.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE) {
+      if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
+        backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
+          backend,
+          callId: threadToolCall.callId,
+          namespace: threadToolCall.namespace,
+          threadId: threadToolCall.threadId,
+          tool: threadToolCall.tool,
+          turnId: threadToolCall.turnId,
+        });
+        return buildPwrAgentThreadDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Thread inspection tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling thread inspection dynamic tool call", {
+        backend,
+        callId: threadToolCall.callId,
+        namespace: threadToolCall.namespace,
+        threadId: threadToolCall.threadId,
+        tool: threadToolCall.tool,
+        turnId: threadToolCall.turnId,
+      });
+      return await handlePwrAgentThreadDynamicToolCall({
+        backend,
+        call: threadToolCall,
+        handler: this.threadInspectionHandler,
+      });
+    }
+    const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (messagingToolCall?.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE) {
+      if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
+        backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
+          backend,
+          callId: messagingToolCall.callId,
+          namespace: messagingToolCall.namespace,
+          threadId: messagingToolCall.threadId,
+          tool: messagingToolCall.tool,
+          turnId: messagingToolCall.turnId,
+        });
+        return buildPwrAgentMessagingDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Messaging context tool calls must originate from an active turn on the same Agent thread.",
+        });
+      }
+      backendRegistryLog.info("handling messaging context dynamic tool call", {
+        backend,
+        callId: messagingToolCall.callId,
+        namespace: messagingToolCall.namespace,
+        threadId: messagingToolCall.threadId,
+        tool: messagingToolCall.tool,
+        turnId: messagingToolCall.turnId,
+      });
+      return await handlePwrAgentMessagingDynamicToolCall({
+        backend,
+        call: messagingToolCall,
+        handler: this.messagingHandler,
+      });
+    }
 
     const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
       method: request.method,
@@ -11434,6 +11573,151 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async handleThreadInspectionRequest(
+    request: PwrAgentThreadInspectionRequest,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (request.operation === "search_threads") {
+      const backend = readThreadInspectionBackend(request.args.backend);
+      if (request.args.backend !== undefined && !backend) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "backend must be all or a known PwrAgent backend.",
+          },
+        };
+      }
+      const hasQuery = Boolean(request.args.query?.trim());
+      const limit = clampInteger(
+        request.args.limit,
+        hasQuery
+          ? DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT
+          : DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
+        MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+      );
+      const listBackend = backend === "all" ? undefined : backend;
+      const activeThreads = await this.listThreads({
+        backend: listBackend,
+        archived: false,
+        callerReason: "agent-thread-inspection",
+      });
+      const threads =
+        request.args.includeArchived === true
+          ? dedupeThreadInspectionThreadSummaries([
+              ...activeThreads,
+              ...(await this.listThreads({
+                backend: listBackend,
+                archived: true,
+                callerReason: "agent-thread-inspection:archived",
+              })),
+            ])
+          : activeThreads;
+      const enriched = await this.enrichThreadInspectionSummaries(threads);
+      const filtered = filterThreadInspectionSummaries(enriched, {
+        agentOnly: request.args.agentOnly === true,
+        query: request.args.query,
+      });
+      return {
+        ok: true,
+        data: {
+          threads: filtered.slice(0, limit).map(toThreadInspectionSearchSummary),
+          totalCount: filtered.length,
+          limit,
+          truncated: filtered.length > limit,
+        },
+      };
+    }
+
+    if (request.operation === "get_thread_status") {
+      if (!isAppServerBackendKind(request.args.backend)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "backend must be a known PwrAgent backend.",
+          },
+        };
+      }
+      const threadId = request.args.threadId?.trim();
+      if (!threadId) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "threadId is required.",
+          },
+        };
+      }
+      const activeThreads = await this.listThreads({
+        backend: request.args.backend,
+        archived: false,
+        callerReason: "agent-thread-inspection",
+      });
+      let candidateThreads = activeThreads.filter((thread) => thread.id === threadId);
+      if (candidateThreads.length === 0) {
+        candidateThreads = (
+          await this.listThreads({
+            backend: request.args.backend,
+            archived: true,
+            callerReason: "agent-thread-inspection:archived",
+          })
+        ).filter((thread) => thread.id === threadId);
+      }
+      const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
+      if (!summary) {
+        return {
+          ok: false,
+          error: {
+            code: "not_found",
+            message: `Thread ${request.args.backend}:${threadId} was not found.`,
+          },
+        };
+      }
+      const status = await this.readThread({
+        backend: request.args.backend,
+        limit: 0,
+        threadId,
+      })
+        .then((response) => response.threadStatus ?? response.replay.threadStatus)
+        .catch((): AppServerThreadStatus | undefined => undefined);
+      const queueKey = buildThreadIdentityKey(request.args.backend, threadId);
+      const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
+      return {
+        ok: true,
+        data: {
+          thread: {
+            ...summary,
+            status,
+            queuedExecutionMode: queued?.mode,
+            queuedExecutionModeAt: queued?.queuedAt,
+          },
+        },
+      };
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_operation",
+        message: "Unsupported PwrAgent thread inspection operation.",
+      },
+    };
+  }
+
+  private async enrichThreadInspectionSummaries(
+    threads: AppServerThreadSummary[],
+  ): Promise<ThreadInspectionSummary[]> {
+    return await Promise.all(
+      threads.map(async (thread) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        return toThreadInspectionSummary(thread, overlay?.agent);
+      }),
+    );
+  }
+
   private notificationsEnabled(): boolean {
     try {
       return getDesktopSettingsService().resolveNotificationsEnabled();
@@ -12032,6 +12316,200 @@ export class DesktopBackendRegistry {
       }
     }
   }
+}
+
+function readThreadInspectionBackend(
+  value: unknown,
+): AppServerBackendKind | "all" | undefined {
+  if (value === undefined || value === "all") {
+    return "all";
+  }
+  return typeof value === "string" && isAppServerBackendKind(value)
+    ? value
+    : undefined;
+}
+
+function clampInteger(
+  value: unknown,
+  defaultValue: number,
+  maxValue: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return Math.max(1, Math.min(maxValue, Math.floor(value)));
+}
+
+function filterThreadInspectionSummaries(
+  threads: ThreadInspectionSummary[],
+  options: { agentOnly: boolean; query?: string },
+): ThreadInspectionSummary[] {
+  const clauses = parseThreadInspectionQuery(options.query);
+  return threads
+    .filter((thread) => !options.agentOnly || Boolean(thread.agent))
+    .map((thread) => ({
+      score: scoreThreadInspectionSummary(thread, clauses),
+      thread,
+    }))
+    .filter((entry) => clauses.length === 0 || entry.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        (right.thread.updatedAt ?? right.thread.createdAt ?? 0) -
+          (left.thread.updatedAt ?? left.thread.createdAt ?? 0),
+    )
+    .map((entry) => entry.thread);
+}
+
+function toThreadInspectionSummary(
+  thread: AppServerThreadSummary,
+  agent: ThreadAgentMetadata | undefined,
+): ThreadInspectionSummary {
+  return {
+    backend: thread.source,
+    threadId: thread.id,
+    title: thread.title,
+    summary: thread.summary,
+    projectKey: thread.projectKey,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    archivedAt: thread.archivedAt,
+    agent,
+    executionMode: thread.executionMode,
+    model: thread.model,
+    reasoningEffort: thread.reasoningEffort,
+    serviceTier: thread.serviceTier,
+    fastMode: thread.fastMode,
+    linkedDirectories: thread.linkedDirectories,
+  };
+}
+
+function dedupeThreadInspectionThreadSummaries(
+  threads: AppServerThreadSummary[],
+): AppServerThreadSummary[] {
+  const seen = new Set<string>();
+  const deduped: AppServerThreadSummary[] = [];
+  for (const thread of threads) {
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(thread);
+  }
+  return deduped;
+}
+
+function parseThreadInspectionQuery(query: string | undefined): string[][] {
+  const trimmed = query?.trim().toLowerCase();
+  if (!trimmed) {
+    return [];
+  }
+  return trimmed
+    .split(/\s+(?:or)\s+|[|,]/i)
+    .map((clause) =>
+      clause
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter(Boolean),
+    )
+    .filter((tokens) => tokens.length > 0);
+}
+
+function scoreThreadInspectionSummary(
+  thread: ThreadInspectionSummary,
+  clauses: string[][],
+): number {
+  if (clauses.length === 0) {
+    return 0;
+  }
+  const title = thread.title.toLowerCase();
+  const project = `${thread.projectKey ?? ""} ${thread.linkedDirectories
+    .flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ])
+    .filter(Boolean)
+    .join(" ")}`.toLowerCase();
+  const haystack = [
+    thread.backend,
+    thread.threadId,
+    thread.title,
+    thread.summary,
+    thread.projectKey,
+    thread.agent?.name,
+    thread.agent?.instructions,
+    ...thread.linkedDirectories.flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ]),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+
+  let bestScore = 0;
+  for (const tokens of clauses) {
+    if (!tokens.every((token) => haystack.includes(token))) {
+      continue;
+    }
+    const phrase = tokens.join(" ");
+    const exactTitle = title.includes(phrase) ? 100 : 0;
+    const allTitleTokens = tokens.every((token) => title.includes(token))
+      ? 75
+      : 0;
+    const exactProject = project.includes(phrase) ? 60 : 0;
+    const allProjectTokens = tokens.every((token) => project.includes(token))
+      ? 45
+      : 0;
+    const exactHaystack = haystack.includes(phrase) ? 35 : 0;
+    const tokenScore = Math.min(tokens.length, 5) * 5;
+    bestScore = Math.max(
+      bestScore,
+      exactTitle ||
+        allTitleTokens ||
+        exactProject ||
+        allProjectTokens ||
+        exactHaystack ||
+        tokenScore,
+    );
+  }
+  return bestScore;
+}
+
+function toThreadInspectionSearchSummary(
+  thread: ThreadInspectionSummary,
+): ThreadInspectionSummary {
+  return {
+    backend: thread.backend,
+    threadId: thread.threadId,
+    title: thread.title,
+    ...(thread.summary
+      ? { summary: truncateThreadInspectionText(thread.summary, 240) }
+      : {}),
+    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
+    ...(thread.agent ? { agent: thread.agent } : {}),
+    linkedDirectories: thread.linkedDirectories.slice(0, 3).map((directory) => ({
+      id: directory.id,
+      kind: directory.kind,
+      label: directory.label,
+      path: directory.path,
+      ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
+    })),
+  };
+}
+
+function truncateThreadInspectionText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 let registry: DesktopBackendRegistry | null = null;

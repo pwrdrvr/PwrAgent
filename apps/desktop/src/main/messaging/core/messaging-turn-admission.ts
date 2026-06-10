@@ -3,6 +3,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
+  MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
   MessagingSurfaceRef,
@@ -23,6 +24,7 @@ export type MessagingTurnAdmissionBundle = {
 export type MessagingQueuedTurnEntry = {
   binding: MessagingBindingRecord;
   createdAt: number;
+  event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
   preview: string;

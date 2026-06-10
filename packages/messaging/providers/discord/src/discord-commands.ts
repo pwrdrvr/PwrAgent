@@ -74,6 +74,21 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
   },
   {
     contexts: COMMAND_CONTEXTS,
+    description: "Choose a PwrAgent Agent thread to control from this conversation.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "agent",
+    options: [
+      {
+        description: "Optional Agent filter text or resume flags.",
+        name: "args",
+        required: false,
+        type: ApplicationCommandOptionType.String,
+      },
+    ],
+    type: ApplicationCommandType.ChatInput,
+  },
+  {
+    contexts: COMMAND_CONTEXTS,
     description: "Start a new PwrAgent thread from a project.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "new",

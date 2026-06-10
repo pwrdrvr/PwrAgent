@@ -11,6 +11,7 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 import type {
   MessagingDeliveryRecord,
@@ -885,6 +886,7 @@ function sanitizeBinding(
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
+    targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
 }
 

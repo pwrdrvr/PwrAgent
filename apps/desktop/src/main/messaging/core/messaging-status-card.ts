@@ -109,6 +109,9 @@ export function buildBindingStatusIntent(params: {
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
   const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
+  const bindingKind = params.binding.targetKind === "agent_thread"
+    ? "Agent binding"
+    : "Binding";
   const toolUpdateMode = resolveMessagingToolUpdateMode(
     params.binding,
     params.toolUpdateMode,
@@ -150,7 +153,7 @@ export function buildBindingStatusIntent(params: {
     targetSurface: params.binding.statusSurface,
     status: statusForThreadState(params.threadState),
     text: [
-      `Binding: ${bindingTitle} (${params.binding.backend})`,
+      `${bindingKind}: ${bindingTitle} (${params.binding.backend})`,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,

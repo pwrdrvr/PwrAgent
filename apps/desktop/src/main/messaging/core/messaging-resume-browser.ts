@@ -22,7 +22,7 @@ import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
-const RESUME_BROWSER_NAV_ACTION_COUNT = 5;
+const RESUME_BROWSER_NAV_ACTION_COUNT = 6;
 const WORKSPACES_SCRATCHPAD_LABEL = "Workspaces Scratchpad";
 
 export function resumeBrowserPageSize(
@@ -53,6 +53,27 @@ export type ResumeBrowserThreadSelection = {
 };
 
 export type ResumeBrowserProjectSelection = MessagingBrowseSelectedProject;
+
+export function isNewThreadLaunchAction(
+  launchAction: MessagingBrowseLaunchAction,
+): boolean {
+  return (
+    launchAction === "start_new_thread" ||
+    launchAction === "start_new_agent_thread"
+  );
+}
+
+export function isNewAgentThreadLaunchAction(
+  launchAction: MessagingBrowseLaunchAction,
+): boolean {
+  return launchAction === "start_new_agent_thread";
+}
+
+export function shouldStartNewAgentThreadFromSession(
+  session: MessagingBrowseSessionRecord,
+): boolean {
+  return session.mode === "agents" || session.returnTo?.mode === "agents";
+}
 
 export function parseResumeCommandArgs(args: string[]): ParsedResumeCommand {
   const tokens = normalizeOptionDashes(args.join(" "))
@@ -177,10 +198,24 @@ export function directoryForProjectSelection(
   navigation: NavigationSnapshot,
   selectedProject: MessagingBrowseSelectedProject,
 ): NavigationDirectorySummary | undefined {
+  if (selectedProject.directoryKey) {
+    const keyed = navigation.directories.find((directory) =>
+      directory.key === selectedProject.directoryKey
+    );
+    if (keyed) {
+      return keyed;
+    }
+  }
+  if (selectedProject.path) {
+    const pathed = navigation.directories.find((directory) =>
+      directory.path === selectedProject.path
+    );
+    if (pathed) {
+      return pathed;
+    }
+  }
   return navigation.directories.find((directory) =>
-    selectedProject.directoryKey
-      ? directory.key === selectedProject.directoryKey
-      : directory.label === selectedProject.label,
+    directory.label === selectedProject.label
   );
 }
 
@@ -299,6 +334,9 @@ function threadsForSession(
   session: MessagingBrowseSessionRecord,
 ): NavigationThreadSummary[] {
   let threads = navigation.threads;
+  if (session.mode === "agents") {
+    threads = threads.filter((thread) => Boolean(thread.agent));
+  }
   const selectedDirectory = session.selectedProject
     ? directoryForProjectSelection(navigation, session.selectedProject)
     : undefined;
@@ -316,6 +354,8 @@ function threadsForSession(
         thread.id,
         thread.title,
         thread.summary,
+        thread.agent?.name,
+        thread.agent?.instructions,
         thread.projectKey,
         ...thread.linkedDirectories.flatMap((directory) => [
           directory.label,
@@ -339,7 +379,7 @@ function projectsForSession(
 ): NavigationDirectorySummary[] {
   const query = session.query?.trim().toLowerCase();
   const directories =
-    session.launchAction === "start_new_thread"
+    isNewThreadLaunchAction(session.launchAction)
       ? collapseWorkspaceScratchpadDirectories(navigation.directories)
       : navigation.directories;
 
@@ -358,7 +398,7 @@ function projectsForSession(
         .some((value) => value!.toLowerCase().includes(query));
     })
     .sort((left, right) => {
-      if (session.launchAction === "start_new_thread") {
+      if (isNewThreadLaunchAction(session.launchAction)) {
         const leftRank = isWorkspaceScratchpadDirectory(left) ? 0 : 1;
         const rightRank = isWorkspaceScratchpadDirectory(right) ? 0 : 1;
         if (leftRank !== rightRank) {
@@ -417,7 +457,7 @@ function formatProjectPickerLabel(
   project: NavigationDirectorySummary,
   session: MessagingBrowseSessionRecord,
 ): string {
-  return session.launchAction === "start_new_thread" &&
+  return isNewThreadLaunchAction(session.launchAction) &&
     isWorkspaceScratchpadDirectory(project)
     ? WORKSPACES_SCRATCHPAD_LABEL
     : project.label;
@@ -456,7 +496,22 @@ function navigationActions(
       layout: { row: NAV_ROW },
     });
   }
-  if (session.mode !== "projects" && session.mode !== "new_project") {
+  if (session.mode === "agents") {
+    actions.push({
+      id: "browse:mode:recents",
+      label: "Recent Threads",
+      style: "navigation",
+      fallbackText: "recent",
+      layout: { row: FOOTER_ROW },
+    });
+    actions.push({
+      id: "browse:mode:new",
+      label: "New Agent",
+      style: "secondary",
+      fallbackText: "new",
+      layout: { row: FOOTER_ROW },
+    });
+  } else if (session.mode !== "projects" && session.mode !== "new_project") {
     actions.push({
       id: "browse:mode:projects",
       label: "Projects",
@@ -473,10 +528,19 @@ function navigationActions(
       layout: { row: FOOTER_ROW },
     });
   }
-  if (session.launchAction !== "start_new_thread") {
+  if (session.mode !== "agents" && session.launchAction === "resume_thread") {
+    actions.push({
+      id: "browse:mode:agents",
+      label: "Agents",
+      style: "navigation",
+      fallbackText: "agents",
+      layout: { row: FOOTER_ROW },
+    });
+  }
+  if (session.mode !== "agents" && !isNewThreadLaunchAction(session.launchAction)) {
     actions.push({
       id: "browse:mode:new",
-      label: "New",
+      label: shouldStartNewAgentThreadFromSession(session) ? "New Agent" : "New",
       style: "secondary",
       fallbackText: "new",
       layout: { row: FOOTER_ROW },
@@ -506,13 +570,22 @@ function threadPickerPromptText(
   totalItems: number,
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
-  const scope = session.selectedProject
-    ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
-    : "Showing recent PwrAgent threads.";
+  const scope =
+    session.mode === "agents"
+      ? "Showing PwrAgent Agent threads."
+      : session.selectedProject
+        ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
+        : "Showing recent PwrAgent threads.";
   return [
     `${scope} ${pageLabel}.`,
-    "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
-    totalItems === 0 ? "No matching PwrAgent threads found." : "",
+    session.mode === "agents"
+      ? "Choose an Agent thread to attach. Use Recent Threads to show every thread, or Cancel to close this picker."
+      : "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
+    totalItems === 0
+      ? session.mode === "agents"
+        ? "No matching PwrAgent Agent threads found."
+        : "No matching PwrAgent threads found."
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -531,7 +604,8 @@ function threadPickerFallbackText(
   const controls = [
     page.pageIndex > 0 ? "previous" : undefined,
     page.pageIndex < page.totalPages - 1 ? "next" : undefined,
-    "projects",
+    session.mode === "agents" ? "recent" : "projects",
+    session.mode === "agents" ? undefined : "agents",
     "new",
     "cancel",
   ].filter(Boolean);
@@ -555,13 +629,17 @@ function projectPickerPromptText(
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
   const opening =
-    session.launchAction === "start_new_thread"
+    isNewAgentThreadLaunchAction(session.launchAction)
+      ? "Choose a project for the new PwrAgent Agent thread."
+      : session.launchAction === "start_new_thread"
       ? "Choose a project for the new PwrAgent thread."
       : "Choose a project to filter recent PwrAgent threads.";
   return [
     `${opening} ${pageLabel}.`,
-    session.launchAction === "start_new_thread"
-      ? "Tap a project to start a fresh thread there."
+    isNewThreadLaunchAction(session.launchAction)
+      ? isNewAgentThreadLaunchAction(session.launchAction)
+        ? "Tap a project to start a fresh Agent thread there."
+        : "Tap a project to start a fresh thread there."
       : "Tap a project to show only that project's threads.",
     totalItems === 0 ? "No PwrAgent projects found." : "",
   ]

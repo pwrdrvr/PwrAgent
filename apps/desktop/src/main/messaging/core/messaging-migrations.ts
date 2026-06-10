@@ -9,6 +9,7 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 
 // SCHEMA-DRIFT-CHECKPOINT: when bumping CURRENT_MESSAGING_STORE_VERSION,
 // also audit `apps/desktop/e2e/fixtures/readme-state-seeding.ts`. Its
@@ -93,7 +94,10 @@ function stripCachedThreadState(
   binding: MessagingBindingRecord,
 ): MessagingBindingRecord {
   const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } = binding;
-  return rest;
+  return {
+    ...rest,
+    targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
+  };
 }
 
 function migrateRecord<T>(

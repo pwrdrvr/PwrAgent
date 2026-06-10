@@ -4,6 +4,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  isMessagingBindingTargetKind,
   parseCodexTurnErrorMessage,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
@@ -27,6 +28,10 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingToolUpdateMode,
+  PwrAgentMessagingLocationSummary,
+  PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -112,11 +117,14 @@ import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
   directoryForProjectSelection,
+  isNewAgentThreadLaunchAction,
+  isNewThreadLaunchAction,
   parseResumeCommandArgs,
   resumeBrowserPageSize,
   resumeReturnTargetForSession,
   selectProjectFromValue,
   selectThreadFromValue,
+  shouldStartNewAgentThreadFromSession,
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
@@ -194,6 +202,9 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
+const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
+  "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
@@ -249,6 +260,15 @@ type AutomationTurnMessagingContext = {
   automationName?: string;
   automationRunId?: string;
 };
+
+type ActiveAgentMessagingOrigin = {
+  binding: MessagingBindingRecord;
+  event: MessagingInboundEvent;
+};
+
+type AgentMessagingOriginResolution =
+  | { ok: true; origin: ActiveAgentMessagingOrigin }
+  | Extract<PwrAgentMessagingResponse, { ok: false }>;
 
 type ExecutionModeResolution = {
   mode: ThreadExecutionMode | undefined;
@@ -528,6 +548,10 @@ export class MessagingController {
     string,
     AutomationTurnMessagingContext
   >();
+  private readonly activeAgentMessagingOriginsByTurnKey = new Map<
+    string,
+    ActiveAgentMessagingOrigin
+  >();
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
@@ -596,6 +620,27 @@ export class MessagingController {
         await this.deliverToolUpdateDelivery(delivery);
       },
     });
+  }
+
+  async handlePwrAgentMessagingRequest(
+    request: PwrAgentMessagingRequest,
+  ): Promise<PwrAgentMessagingResponse> {
+    switch (request.operation) {
+      case "get_current_location": {
+        const origin = await this.resolveAgentMessagingOrigin(request.context);
+        if (!origin.ok) {
+          return origin;
+        }
+        return {
+          ok: true,
+          data: {
+            location: await this.summarizeAgentMessagingLocation(origin.origin),
+          },
+        };
+      }
+      case "attach_thread_here":
+        return await this.attachThreadHereFromAgentMessagingOrigin(request);
+    }
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
@@ -943,6 +988,7 @@ export class MessagingController {
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
+      this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
     }
   }
 
@@ -1123,6 +1169,10 @@ export class MessagingController {
     }
     if (verb === "resume") {
       await this.presentResumeBrowser(event);
+      return;
+    }
+    if (verb === "agent") {
+      await this.presentAgentBrowser(event);
       return;
     }
     if (verb === "new") {
@@ -1376,6 +1426,7 @@ export class MessagingController {
     if (await this.isTurnOccupied(currentBinding, bundle.threadKey)) {
       await this.queuePreparedInput({
         binding: consumedSkillBinding,
+        event: bundle.events[0],
         input: preparedWithSkill.input,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
@@ -1427,7 +1478,8 @@ export class MessagingController {
       now: this.now(),
     });
     if (
-      session?.launchAction === "start_new_thread" &&
+      session &&
+      isNewThreadLaunchAction(session.launchAction) &&
       session.mode === "new_thread_options" &&
       session.selectedProject &&
       (session.textInputExpiresAt ?? session.expiresAt) > this.now()
@@ -1718,6 +1770,11 @@ export class MessagingController {
         updatedAt: this.now(),
       };
       this.setActiveTurn(params.binding, activeTurn);
+      this.rememberAgentMessagingOrigin({
+        binding: params.binding,
+        event: params.event,
+        turnId: started.turnId,
+      });
       await this.signalTurnActivity(params.binding, activeTurn, {
         force: true,
       });
@@ -1735,6 +1792,7 @@ export class MessagingController {
         if (params.queueOnConcurrentStart !== false) {
           await this.queuePreparedInput({
             binding: params.binding,
+            event: params.event,
             input: params.input,
             preview: params.preview,
             threadKey: params.threadKey,
@@ -1786,6 +1844,7 @@ export class MessagingController {
 
   private async adoptStartedTurn(params: {
     binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
     turnId: string;
   }): Promise<void> {
@@ -1804,6 +1863,11 @@ export class MessagingController {
       updatedAt: this.now(),
     };
     this.setActiveTurn(params.binding, activeTurn);
+    this.rememberAgentMessagingOrigin({
+      binding: params.binding,
+      event: params.event,
+      turnId: params.turnId,
+    });
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
@@ -1812,6 +1876,7 @@ export class MessagingController {
 
   private async queuePreparedInput(params: {
     binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     preview: string;
     threadKey: string;
@@ -1993,6 +2058,7 @@ export class MessagingController {
 
     const startResult = await this.startPreparedInput({
       binding: entry.binding,
+      event: entry.event,
       input: entry.input,
       preview: entry.preview,
       queueOnConcurrentStart: false,
@@ -2833,6 +2899,7 @@ export class MessagingController {
 
   private async repostLastAssistantMessageForResume(
     binding: MessagingBindingRecord,
+    options?: { important?: boolean },
   ): Promise<void> {
     const readLastAssistantReply = this.options.backend.readThreadLastAssistantReply;
     const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
@@ -2870,7 +2937,11 @@ export class MessagingController {
 
     await this.deliver(
       {
-        id: this.newIntentId("assistant-resume-repost"),
+        id: this.newIntentId(
+          options?.important
+            ? "assistant-resume-repost-important"
+            : "assistant-resume-repost",
+        ),
         kind: "message",
         bindingId: binding.id,
         createdAt: this.now(),
@@ -3001,6 +3072,74 @@ export class MessagingController {
       filter: parsed.query,
     });
     const selectedBackend =
+      isNewThreadLaunchAction(parsed.launchAction)
+        ? await this.resolveNewThreadBackendForSession(
+            {
+              launchpadBackend: navigation.launchpadDefaults.backend,
+            },
+            event,
+          )
+        : undefined;
+    if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
+      return;
+    }
+    const selectedDirectory = parsed.cwd
+      ? navigation.directories.find(
+          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
+        )
+      : undefined;
+    const session: MessagingBrowseSessionRecord = {
+      id: this.newIntentId("browse"),
+      allowedActorIds: [event.actor.platformUserId],
+      backend: selectedBackend?.kind,
+      channel: event.channel,
+      createdAt: this.now(),
+      updatedAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      launchAction: parsed.launchAction,
+      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+      pageIndex: 0,
+      pageSize: resumeBrowserPageSize(this.capabilityProfile),
+      preferences: parsed.preferences
+        ? {
+            ...parsed.preferences,
+            updatedAt: this.now(),
+          }
+        : undefined,
+      query: parsed.query,
+      selectedProject: selectedDirectory
+        ? {
+            directoryKey: selectedDirectory.key,
+            label: selectedDirectory.label,
+            path: selectedDirectory.path,
+          }
+        : undefined,
+    };
+    await this.renderResumeBrowser(session, navigation, event);
+  }
+
+  private async presentAgentBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+    const parsed = parseResumeCommandArgs(event.args);
+    if (parsed.error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("agent-error"),
+          createdAt: this.now(),
+          title: "Agent command error",
+          body: parsed.error,
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      filter: parsed.query,
+    });
+    const selectedBackend =
       parsed.launchAction === "start_new_thread"
         ? await this.resolveNewThreadBackendForSession(
             {
@@ -3025,8 +3164,10 @@ export class MessagingController {
       createdAt: this.now(),
       updatedAt: this.now(),
       expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction,
-      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+      launchAction: parsed.launchAction === "start_new_thread"
+        ? "start_new_agent_thread"
+        : "resume_thread",
+      mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
       pageIndex: 0,
       pageSize: resumeBrowserPageSize(this.capabilityProfile),
       preferences: parsed.preferences
@@ -3099,6 +3240,9 @@ export class MessagingController {
           launchAction: "resume_thread",
           mode: "projects",
           pageIndex: 0,
+          returnTo: shouldStartNewAgentThreadFromSession(session)
+            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            : undefined,
           selectedProject: undefined,
         },
         navigation,
@@ -3112,6 +3256,23 @@ export class MessagingController {
           ...nextSession,
           launchAction: "resume_thread",
           mode: "recents",
+          pageIndex: 0,
+          returnTo: shouldStartNewAgentThreadFromSession(session)
+            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            : undefined,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:agents") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "resume_thread",
+          mode: "agents",
           pageIndex: 0,
           selectedProject: undefined,
         },
@@ -3135,10 +3296,12 @@ export class MessagingController {
         {
           ...nextSession,
           backend: selectedBackend.kind,
-          launchAction: "start_new_thread",
+          launchAction: shouldStartNewAgentThreadFromSession(session)
+            ? "start_new_agent_thread"
+            : "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
-          returnTo: resumeReturnTargetForSession(nextSession),
+          returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
         },
         navigation,
@@ -3194,7 +3357,7 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      if (session.launchAction === "start_new_thread") {
+      if (isNewThreadLaunchAction(session.launchAction)) {
         await this.startNewThreadFromProject(event, session, navigation, project);
         return;
       }
@@ -3540,6 +3703,10 @@ export class MessagingController {
       const targetThread = navigation.threads.find(
         (thread) => thread.source === target.backend && thread.id === target.threadId,
       );
+      if (session.mode === "agents" && !targetThread?.agent) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
       if (
         targetThread?.executionMode === "full-access" &&
         !(await this.canResumeFullAccessThreads())
@@ -3569,7 +3736,10 @@ export class MessagingController {
           return;
         }
       }
-      const binding = await this.bindChannelToThread(event, target);
+      const binding = await this.bindChannelToThread(event, {
+        ...target,
+        targetKind: session.mode === "agents" ? "agent_thread" : "thread",
+      });
       const updatedBinding = session.preferences
         ? await this.updateBindingPreferences(binding, session.preferences)
         : binding;
@@ -4919,6 +5089,9 @@ export class MessagingController {
       const binding = await this.bindChannelToThread(event, {
         backend: started.backend,
         threadId: started.threadId,
+        targetKind: isNewAgentThreadLaunchAction(session.launchAction)
+          ? "agent_thread"
+          : undefined,
       });
       await retireBrowseSession();
       let updatedBinding = preferences
@@ -4944,6 +5117,7 @@ export class MessagingController {
         fastMode: options.supportsFast ? options.fastMode : undefined,
         acpRuntime: options.acpRuntime,
         codexEnvironmentRuntime: started.codexEnvironmentRuntime,
+        agent: agentForNewThreadSession(session),
         preferences,
         project,
         threadId: started.threadId,
@@ -4972,6 +5146,7 @@ export class MessagingController {
       ? await this.options.backend.materializeDirectoryLaunchpad(
           {
             directoryKey: messagingLaunchpadMaterializationKey(session),
+            agent: agentForNewThreadSession(session),
             launchpad,
             input: prepared.input,
           },
@@ -4991,6 +5166,7 @@ export class MessagingController {
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
       serviceTier: preferences?.serviceTier,
       acpRuntime: options.acpRuntime,
+      agent: agentForNewThreadSession(session),
       ...(options.workMode === "worktree"
         ? {
             workMode: "worktree" as const,
@@ -5046,6 +5222,7 @@ export class MessagingController {
       });
       await this.adoptStartedTurn({
         binding: updatedBinding,
+        event,
         navigation: optimisticNavigation,
         turnId: materialized.turnId,
       });
@@ -9305,6 +9482,37 @@ export class MessagingController {
     );
   }
 
+  private rememberAgentMessagingOrigin(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    turnId: string;
+  }): void {
+    if (!params.event || params.binding.targetKind !== "agent_thread") {
+      return;
+    }
+    this.activeAgentMessagingOriginsByTurnKey.set(
+      agentMessagingTurnKey(
+        params.binding.backend,
+        params.binding.threadId,
+        params.turnId,
+      ),
+      {
+        binding: params.binding,
+        event: params.event,
+      },
+    );
+  }
+
+  private forgetAgentMessagingOrigin(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string,
+  ): void {
+    this.activeAgentMessagingOriginsByTurnKey.delete(
+      agentMessagingTurnKey(backend, threadId, turnId),
+    );
+  }
+
   private isAutomationTurnEvent(
     event: AgentEvent,
     binding: MessagingBindingRecord,
@@ -9528,7 +9736,11 @@ export class MessagingController {
 
   private async bindChannelToThread(
     event: MessagingInboundEvent,
-    target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
+    target: {
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      targetKind?: MessagingBindingRecord["targetKind"];
+    },
   ): Promise<MessagingBindingRecord> {
     const now = this.now();
     const previousBinding = await this.options.store.findActiveBindingForChannel(
@@ -9537,6 +9749,7 @@ export class MessagingController {
     const binding: MessagingBindingRecord = {
       id: `binding:${buildMessagingConversationKey(event.channel)}:${target.backend}:${target.threadId}`,
       channel: event.channel,
+      targetKind: target.targetKind ?? "thread",
       backend: target.backend,
       threadId: target.threadId,
       authorizedActorIds: [event.actor.platformUserId],
@@ -9981,6 +10194,338 @@ export class MessagingController {
             id: this.newIntentId("tool-update-batch"),
           });
     await this.deliver(intent, binding);
+  }
+
+  private async attachThreadHereFromAgentMessagingOrigin(
+    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_here" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const { args } = request;
+    if (
+      !args ||
+      !isAppServerBackendKind(args.backend) ||
+      typeof args.threadId !== "string" ||
+      args.threadId.trim().length === 0
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "attach_thread_here requires backend and threadId.",
+        },
+      };
+    }
+    const placement = args.placement ?? "auto";
+    if (
+      placement !== "auto" &&
+      placement !== "new_child" &&
+      placement !== "current_conversation"
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "placement must be auto, new_child, or current_conversation.",
+        },
+      };
+    }
+    const targetKind = args.targetKind ?? "thread";
+    if (!isMessagingBindingTargetKind(targetKind)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "targetKind must be thread or agent_thread.",
+        },
+      };
+    }
+
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+    const target = await this.resolveAttachTarget(args.backend, args.threadId);
+    if (!target.ok) {
+      return target;
+    }
+
+    const location = await this.summarizeAgentMessagingLocation(origin.origin);
+    const resolvedPlacement = this.resolveAttachPlacement({
+      location,
+      origin: origin.origin,
+      placement,
+    });
+    if (!resolvedPlacement.ok) {
+      return resolvedPlacement;
+    }
+
+    let attachEvent = origin.origin.event;
+    let createdConversation: MessagingChannelRef["conversation"] | undefined;
+    if (resolvedPlacement.placement === "new_child") {
+      if (!this.options.adapter.createManagedConversation) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "This messaging provider does not support creating a native child conversation from PwrAgent.",
+          },
+        };
+      }
+      const createResult = await this.options.adapter.createManagedConversation({
+        actor: origin.origin.event.actor,
+        parent: origin.origin.event.channel,
+        routingState: origin.origin.event.routingState,
+        title: sanitizeMessagingChildTitle(args.title),
+      });
+      if (createResult.outcome !== "created" || !createResult.conversation) {
+        return {
+          ok: false,
+          error: {
+            code: createResult.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              createResult.errorMessage ??
+              "The messaging provider could not create a native child conversation.",
+          },
+        };
+      }
+      createdConversation = createResult.conversation;
+      attachEvent = {
+        ...origin.origin.event,
+        id: `${origin.origin.event.id}:attach:${this.now()}`,
+        kind: "lifecycle",
+        lifecycle: "bound",
+        channel: {
+          channel: createResult.channel,
+          conversation: createResult.conversation,
+        },
+        routingState: createResult.routingState,
+        receivedAt: this.now(),
+      };
+    }
+
+    const binding = await this.bindChannelToThread(attachEvent, {
+      backend: args.backend,
+      threadId: args.threadId,
+      targetKind,
+    });
+    const visibleBinding = await this.renderBindingStatus(binding);
+    await this.repostLastAssistantMessageForResume(visibleBinding, {
+      important: true,
+    });
+    return {
+      ok: true,
+      data: {
+        binding: summarizeMessagingBinding(visibleBinding),
+        channel: visibleBinding.channel.channel,
+        conversation: summarizeMessagingConversation(visibleBinding.channel.conversation),
+        createdConversation: createdConversation
+          ? summarizeMessagingConversation(createdConversation)
+          : undefined,
+        location,
+        outcome: resolvedPlacement.placement === "new_child"
+          ? "created_and_attached"
+          : "attached",
+        placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private async resolveAttachTarget(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<{ ok: true } | Extract<PwrAgentMessagingResponse, { ok: false }>> {
+    let navigation: NavigationSnapshot;
+    try {
+      navigation = await this.options.backend.getNavigationSnapshot({ backend });
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            error instanceof Error
+              ? `Could not verify target thread before attaching: ${error.message}`
+              : "Could not verify target thread before attaching.",
+        },
+      };
+    }
+
+    const target = navigation.threads.find(
+      (thread) => thread.source === backend && thread.id === threadId,
+    );
+    if (!target) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            `Thread ${backend}:${threadId} is not an active attachable thread. ` +
+            "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
+        },
+      };
+    }
+
+    return { ok: true };
+  }
+
+  private resolveAttachPlacement(params: {
+    location: PwrAgentMessagingLocationSummary;
+    origin: ActiveAgentMessagingOrigin;
+    placement: "auto" | "current_conversation" | "new_child";
+  }):
+    | { ok: true; placement: "current_conversation" | "new_child" }
+    | Extract<PwrAgentMessagingResponse, { ok: false }> {
+    if (params.placement !== "auto") {
+      if (
+        params.placement === "new_child" &&
+        !params.location.managedConversation.canCreateChild
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: managedConversationUnavailableMessage(
+              params.location.managedConversation,
+            ),
+          },
+        };
+      }
+      return { ok: true, placement: params.placement };
+    }
+
+    if (params.location.managedConversation.canCreateChild) {
+      return { ok: true, placement: "new_child" };
+    }
+
+    if (
+      params.origin.binding.targetKind !== "agent_thread" &&
+      (params.origin.event.channel.conversation.kind === "thread" ||
+        params.origin.event.channel.conversation.kind === "topic")
+    ) {
+      return { ok: true, placement: "current_conversation" };
+    }
+
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_operation",
+        message:
+          `${managedConversationUnavailableMessage(
+            params.location.managedConversation,
+          )} Pass placement=current_conversation only if replacing the current conversation binding is intended.`,
+      },
+    };
+  }
+
+  private async resolveAgentMessagingOrigin(
+    context: PwrAgentMessagingRequest["context"],
+  ): Promise<AgentMessagingOriginResolution> {
+    if (context.turnId) {
+      const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+        agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
+      );
+      if (!origin || !this.isChannelInScope(origin.binding.channel)) {
+        return {
+          ok: false,
+          error: {
+            code: "not_found",
+            message:
+              "No active messaging origin is recorded for this Agent turn.",
+          },
+        };
+      }
+      return { ok: true, origin };
+    }
+
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend: context.backend,
+        threadId: context.threadId,
+      }),
+    ).filter((binding) => binding.targetKind === "agent_thread");
+    if (bindings.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "No active messaging binding is attached to this Agent thread.",
+        },
+      };
+    }
+    if (bindings.length > 1) {
+      return {
+        ok: false,
+        error: {
+          code: "ambiguous_location",
+          message:
+            "This Agent thread is attached to more than one messaging surface; call from an active messaging turn so PwrAgent can resolve here.",
+        },
+      };
+    }
+    const binding = bindings[0]!;
+    return {
+      ok: true,
+      origin: {
+        binding,
+        event: eventFromBinding(binding, this.now()),
+      },
+    };
+  }
+
+  private async summarizeAgentMessagingLocation(
+    origin: ActiveAgentMessagingOrigin,
+  ): Promise<PwrAgentMessagingLocationSummary> {
+    return {
+      actor: summarizeMessagingActor(origin.event.actor),
+      binding: summarizeMessagingBinding(origin.binding),
+      channel: origin.event.channel.channel,
+      conversation: summarizeMessagingConversation(origin.event.channel.conversation),
+      managedConversation: await this.resolveManagedConversationSummary(origin),
+    };
+  }
+
+  private async resolveManagedConversationSummary(
+    origin: ActiveAgentMessagingOrigin,
+  ): Promise<PwrAgentMessagingManagedConversationSummary> {
+    const providerSupportsCreation = Boolean(
+      this.options.adapter.createManagedConversation,
+    );
+    if (!this.options.adapter.getManagedConversationRights) {
+      const operation = {
+        operation: "create_child" as const,
+        supported: providerSupportsCreation,
+        reason: providerSupportsCreation
+          ? "provider does not expose permission preflight"
+          : "provider does not support managed conversations",
+      };
+      return {
+        canCreateChild: providerSupportsCreation,
+        operation,
+        operations: [operation],
+        outcome: providerSupportsCreation ? "ok" : "unsupported",
+        providerSupportsCreation,
+      };
+    }
+
+    const rights = await this.options.adapter.getManagedConversationRights({
+      actor: origin.event.actor,
+      channel: origin.event.channel,
+      routingState: origin.event.routingState,
+    });
+    const operation = rights.operations.find(
+      (candidate) => candidate.operation === "create_child",
+    );
+    return {
+      canCreateChild: providerSupportsCreation && operation?.supported === true,
+      operation,
+      operations: rights.operations.map((candidate) => ({ ...candidate })),
+      outcome: rights.outcome,
+      errorMessage: rights.errorMessage,
+      providerSupportsCreation,
+      updatedAt: rights.updatedAt,
+    };
   }
 
   private filterBindingsForChannel(
@@ -11116,6 +11661,9 @@ function newThreadPromptGateBody(
   return [
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
+    isNewAgentThreadLaunchAction(session.launchAction)
+      ? `Agent: ${DEFAULT_MESSAGING_AGENT_NAME}`
+      : undefined,
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
@@ -11228,8 +11776,9 @@ function boundThreadConfirmationBody(
   binding: MessagingBindingRecord,
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
+  const noun = binding.targetKind === "agent_thread" ? "Agent thread" : "thread";
   return [
-    "Messages in this conversation will route to the selected thread.",
+    `Messages in this conversation will route to the selected ${noun}.`,
     sharedConversationMentionInstruction(binding, capabilityProfile),
   ].filter((line): line is string => Boolean(line)).join("\n\n");
 }
@@ -11239,7 +11788,9 @@ function boundThreadFallbackText(
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
   return sharedConversationMentionInstruction(binding, capabilityProfile)
-    ?? "Send a message to continue the thread.";
+    ?? (binding.targetKind === "agent_thread"
+      ? "Send a message to continue with the Agent thread."
+      : "Send a message to continue the thread.");
 }
 
 function sharedConversationMentionInstruction(
@@ -11391,6 +11942,92 @@ function automationTurnKey(params: {
   return `${params.backend}:${params.threadId}:${params.turnId}`;
 }
 
+function agentMessagingTurnKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
+function summarizeMessagingConversation(
+  conversation: MessagingChannelRef["conversation"],
+): PwrAgentMessagingLocationSummary["conversation"] {
+  return {
+    id: conversation.id,
+    kind: conversation.kind,
+    parentId: conversation.parentId,
+    title: conversation.title,
+    parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
+  };
+}
+
+function summarizeMessagingActor(
+  actor: MessagingInboundEvent["actor"],
+): PwrAgentMessagingLocationSummary["actor"] {
+  return {
+    platformUserId: actor.platformUserId,
+    displayName: actor.displayName,
+    username: actor.username,
+    isBot: actor.isBot,
+  };
+}
+
+function summarizeMessagingBinding(
+  binding: MessagingBindingRecord,
+): PwrAgentMessagingLocationSummary["binding"] {
+  return {
+    id: binding.id,
+    backend: binding.backend,
+    threadId: binding.threadId,
+    targetKind: binding.targetKind ?? "thread",
+    displayName: binding.displayName,
+  };
+}
+
+function eventFromBinding(
+  binding: MessagingBindingRecord,
+  now: number,
+): MessagingInboundEvent {
+  return {
+    id: `agent-origin:${binding.id}`,
+    kind: "lifecycle",
+    lifecycle: "bound",
+    actor: {
+      platformUserId: binding.authorizedActorIds[0] ?? "unknown",
+      displayName: binding.displayName,
+    },
+    channel: binding.channel,
+    receivedAt: now,
+    routingState: binding.routingState,
+  };
+}
+
+function sanitizeMessagingChildTitle(title: string | undefined): string {
+  const normalized = (title ?? "PwrAgent thread").replace(/\s+/g, " ").trim();
+  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
+}
+
+function managedConversationUnavailableMessage(
+  summary: PwrAgentMessagingManagedConversationSummary,
+): string {
+  if (!summary.providerSupportsCreation) {
+    return "This messaging provider does not support creating native child conversations.";
+  }
+  const operation = summary.operation;
+  if (operation?.missingPermission) {
+    return `PwrAgent cannot create a native child conversation because the provider permission ${operation.missingPermission} is missing.`;
+  }
+  if (operation?.reason) {
+    return `PwrAgent cannot create a native child conversation: ${operation.reason}.`;
+  }
+  if (summary.errorMessage) {
+    return `PwrAgent cannot create a native child conversation: ${summary.errorMessage}.`;
+  }
+  return "PwrAgent cannot create a native child conversation in the current messaging location.";
+}
+
 function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   automationName?: string;
   automationRunId?: string;
@@ -11527,6 +12164,9 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
 }
 
 export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+  if (intent.kind === "stream_update" && !intent.stream.isFinal) {
+    return false;
+  }
   return intent.kind !== "activity";
 }
 
@@ -11545,6 +12185,9 @@ export function messagingDeliveryPriority(
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
     case "message":
+      if (intent.id.startsWith("assistant-resume-repost-important")) {
+        return "user_command";
+      }
       if (intent.id.startsWith("assistant-resume-repost")) {
         return "routine_status";
       }
@@ -11556,7 +12199,13 @@ export function messagingDeliveryPriority(
       }
       return "user_command";
     case "status":
-      return context?.userInitiated ? "user_command" : "routine_status";
+      if (context?.userInitiated) {
+        return "user_command";
+      }
+      if (intent.delivery?.mode === "present" && intent.delivery.pin === true) {
+        return "user_command";
+      }
+      return "routine_status";
     case "activity":
     case "progress":
     case "dismiss":
@@ -12012,6 +12661,7 @@ type TurnLifecycleParams = {
 
 function navigationWithStartedThread(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
+  agent?: ReturnType<typeof agentForNewThreadSession>;
   backend: AppServerBackendKind;
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   directory?: NavigationDirectorySummary;
@@ -12064,6 +12714,16 @@ function navigationWithStartedThread(params: {
         executionMode: params.executionMode,
         acpRuntime: params.acpRuntime,
         codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+        agent: params.agent
+          ? {
+              ...params.agent,
+              instructionLineCount: params.agent.instructions
+                ? params.agent.instructions.split(/\r?\n/).length
+                : 0,
+              instructionsTooLong: false,
+              updatedAt: params.now,
+            }
+          : undefined,
         model: params.model,
         reasoningEffort: params.reasoningEffort,
         serviceTier: params.serviceTier,
@@ -12166,6 +12826,18 @@ function messagingLaunchpadMaterializationKey(
   session: MessagingBrowseSessionRecord,
 ): string {
   return `messaging:${session.id}`;
+}
+
+function agentForNewThreadSession(
+  session: MessagingBrowseSessionRecord,
+): { name: string; instructions?: string } | undefined {
+  if (!isNewAgentThreadLaunchAction(session.launchAction)) {
+    return undefined;
+  }
+  return {
+    name: DEFAULT_MESSAGING_AGENT_NAME,
+    instructions: DEFAULT_MESSAGING_AGENT_INSTRUCTIONS,
+  };
 }
 
 function formatResumeRepostText(params: {

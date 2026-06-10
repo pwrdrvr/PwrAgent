@@ -24,6 +24,8 @@ import type {
   MessagingPlatformHealth,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
@@ -72,6 +74,7 @@ import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 import { MessagingDeliveryBudget } from "./core/messaging-delivery-budget";
+import type { MessagingAgentToolService } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
@@ -240,7 +243,7 @@ export type CredentialValidationRequest =
     }
   | { channel: "line"; credential: { channelAccessToken: string } };
 
-export class DesktopMessagingRuntime {
+export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private adapters: DesktopMessagingAdapter[] = [];
   private controllers: MessagingController[] = [];
   private readonly runningAdapters = new Map<
@@ -308,6 +311,30 @@ export class DesktopMessagingRuntime {
     await this.enqueueLifecycle(async () => {
       await this.stopNow();
     });
+  }
+
+  async handlePwrAgentMessagingRequest(
+    request: PwrAgentMessagingRequest,
+  ): Promise<PwrAgentMessagingResponse> {
+    let firstNotFound: PwrAgentMessagingResponse | undefined;
+    for (const controller of this.controllers) {
+      const response = await controller.handlePwrAgentMessagingRequest(request);
+      if (response.ok) {
+        return response;
+      }
+      if (!firstNotFound && response.error.code === "not_found") {
+        firstNotFound = response;
+        continue;
+      }
+      return response;
+    }
+    return firstNotFound ?? {
+      ok: false,
+      error: {
+        code: "not_found",
+        message: "No running messaging adapter has this Agent turn location.",
+      },
+    };
   }
 
   private async stopNow(): Promise<void> {

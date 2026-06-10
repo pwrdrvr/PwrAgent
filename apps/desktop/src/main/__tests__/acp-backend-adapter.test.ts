@@ -7,6 +7,7 @@ import type {
 import {
   AcpBackendAdapter,
   describeInstalledAcpBackend,
+  isAcpSessionMissingForProjectError,
   type AcpSessionMetadata,
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -161,6 +162,18 @@ describe("describeInstalledAcpBackend", () => {
       "default",
       "full-access",
     ]);
+  });
+});
+
+describe("isAcpSessionMissingForProjectError", () => {
+  it("treats provider Unknown sessionId errors as rebindable missing sessions", () => {
+    expect(
+      isAcpSessionMissingForProjectError(
+        new Error(
+          'json-rpc error (-32602): Invalid params: Unknown sessionId: stable-thread-id: {"sessionId":"stable-thread-id"}',
+        ),
+      ),
+    ).toBe(true);
   });
 });
 

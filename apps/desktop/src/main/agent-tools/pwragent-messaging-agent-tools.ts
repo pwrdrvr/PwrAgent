@@ -1,0 +1,120 @@
+import type {
+  PwrAgentMessagingOperationName,
+  PwrAgentMessagingRequest,
+  PwrAgentMessagingResponse,
+} from "@pwragent/shared";
+import {
+  PWRAGENT_MESSAGING_OPERATION_NAMES,
+  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+} from "@pwragent/shared";
+import type {
+  AgentToolDefinition,
+  AgentToolDispatchResult,
+} from "./agent-tool-definition.js";
+import {
+  agentToolFailure,
+  agentToolSuccess,
+} from "./agent-tool-definition.js";
+import { AgentToolRouter } from "./agent-tool-router.js";
+
+export const PWRAGENT_MESSAGING_UNAVAILABLE_MESSAGE =
+  "PwrAgent messaging context tools are not available.";
+
+export type PwrAgentMessagingHandler = (
+  request: PwrAgentMessagingRequest,
+) => PwrAgentMessagingResponse | Promise<PwrAgentMessagingResponse>;
+
+export function buildPwrAgentMessagingToolRouter(
+  handler: PwrAgentMessagingHandler | undefined,
+  options: { unsupportedMessage?: string } = {},
+): AgentToolRouter {
+  return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler), {
+    unsupportedMessage:
+      options.unsupportedMessage ?? "Unsupported PwrAgent messaging tool.",
+  });
+}
+
+export function buildPwrAgentMessagingToolDefinitions(
+  handler: PwrAgentMessagingHandler | undefined,
+): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
+  return PWRAGENT_MESSAGING_OPERATION_NAMES.map((operation) => ({
+    namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+    name: operation,
+    description: descriptionForOperation(operation),
+    inputSchema: inputSchemaForOperation(operation),
+    deferLoading: false,
+    dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
+      if (!handler) {
+        return agentToolFailure({
+          code: "internal_error",
+          message: PWRAGENT_MESSAGING_UNAVAILABLE_MESSAGE,
+        });
+      }
+      const response = await handler({
+        operation,
+        context: {
+          backend: context.backend,
+          threadId: context.threadId,
+          turnId: context.turnId,
+        },
+        args,
+      } as PwrAgentMessagingRequest);
+      return messagingResponseToAgentToolResult(response);
+    },
+  }));
+}
+
+function descriptionForOperation(operation: PwrAgentMessagingOperationName): string {
+  switch (operation) {
+    case "get_current_location":
+      return "Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
+    case "attach_thread_here":
+      return "Attach a known PwrAgent thread to the current messaging location, creating a native child thread/topic when the provider supports it.";
+  }
+}
+
+function inputSchemaForOperation(
+  operation: PwrAgentMessagingOperationName,
+): Record<string, unknown> {
+  switch (operation) {
+    case "get_current_location":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      };
+    case "attach_thread_here":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: {
+            type: "string",
+          },
+          threadId: { type: "string" },
+          title: { type: "string" },
+          placement: {
+            type: "string",
+            enum: ["auto", "new_child", "current_conversation"],
+          },
+          targetKind: {
+            type: "string",
+            enum: ["thread", "agent_thread"],
+          },
+        },
+      };
+  }
+}
+
+function messagingResponseToAgentToolResult(
+  response: PwrAgentMessagingResponse,
+): AgentToolDispatchResult {
+  if (response.ok) {
+    return agentToolSuccess(response.data);
+  }
+  return agentToolFailure({
+    code: response.error.code,
+    message: response.error.message,
+  });
+}

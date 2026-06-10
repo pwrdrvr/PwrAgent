@@ -14,6 +14,7 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 import {
   CURRENT_MESSAGING_STORE_VERSION,
   migrateMessagingStoreData,
@@ -670,6 +671,7 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
+    targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
 }
 

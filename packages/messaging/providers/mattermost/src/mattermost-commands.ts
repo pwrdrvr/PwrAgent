@@ -2,7 +2,7 @@
  * Mattermost slash-command registration & reconciler.
  *
  * Mirrors `discord-commands.ts` for the same surface (`/resume`,
- * `/new`, `/status`, `/detach`, `/monitor`). Mattermost commands are scoped per team —
+ * `/agent`, `/new`, `/status`, `/detach`, `/monitor`). Mattermost commands are scoped per team —
  * the bot must be a team member, and registration creates a row in
  * the team's `commands` table. Each registered command gets a
  * server-issued `token` (returned in `addCommand`'s response and
@@ -77,7 +77,7 @@ type CanonicalCommandBase = {
 
 /**
  * Canonical command set as base verbs. Match Discord's surface
- * (`resume`, `new`, `status`, `detach`, `monitor`, `help`) so users on different platforms see
+ * (`resume`, `agent`, `new`, `status`, `detach`, `monitor`, `help`) so users on different platforms see
  * the same primitives. Add new entries here; the reconciler picks
  * them up automatically once the per-prefix trigger is computed.
  */
@@ -88,6 +88,13 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     description: "Bind this conversation to a PwrAgent thread.",
     autoCompleteDesc: "Choose a PwrAgent thread to control from this conversation.",
     autoCompleteHint: "[--projects | --new | <args>]",
+  },
+  {
+    base: "agent",
+    displayNameSuffix: "Agent",
+    description: "Bind this conversation to a PwrAgent Agent thread.",
+    autoCompleteDesc: "Choose a PwrAgent Agent thread to control from this conversation.",
+    autoCompleteHint: "[<filter>]",
   },
   {
     base: "new",

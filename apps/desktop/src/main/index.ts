@@ -622,6 +622,7 @@ export function bootstrapApp(): void {
       requestBindingRevokeAllForThread: (request) =>
         messagingRuntime.requestBindingRevokeAllForThread(request),
     });
+    getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
     const messagingOverride = resolveRuntimeMessagingOverride();
     if (messagingOverride.disabled) {
       mainLog.info("messaging runtime disabled for this app instance", {

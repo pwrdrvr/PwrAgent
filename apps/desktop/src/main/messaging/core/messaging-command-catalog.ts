@@ -47,6 +47,7 @@ import {
  */
 export type MessagingCommandVerb =
   | "resume"
+  | "agent"
   | "new"
   | "status"
   | "detach"
@@ -74,6 +75,10 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
   {
     verb: "resume",
     description: "choose a thread to control from this conversation",
+  },
+  {
+    verb: "agent",
+    description: "choose an Agent thread to control from this conversation",
   },
   {
     verb: "new",

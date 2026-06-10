@@ -4994,7 +4994,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("passes automation inspection dynamic tools when starting Codex threads", async () => {
+  it("passes task monitor tools but not Agent tools when starting ordinary Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -5012,6 +5012,44 @@ script = "echo setup"
 
     await registry.startThread({ backend: "codex" });
 
+    const dynamicTools = codexClient.lastStartThreadParams?.dynamicTools as
+      | Array<{ namespace: string; name: string }>
+      | undefined;
+    expect(dynamicTools).toEqual([
+      expect.objectContaining({
+        namespace: "pwragent_task_monitors",
+        name: "create_monitor_delegation",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("passes Agent dynamic tools when starting Agent Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      agent: {
+        name: "Inbox Agent",
+        instructions: "Track inbox automations.",
+      },
+    });
+
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -5026,6 +5064,36 @@ script = "echo setup"
           namespace: "pwragent_task_monitors",
           name: "create_monitor_delegation",
         }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "get_thread_status",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "get_current_location",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+      ]),
+    );
+    expect(
+      new Set(
+        (codexClient.lastStartThreadParams?.dynamicTools as Array<{
+          namespace: string;
+        }>).map((tool) => tool.namespace),
+      ),
+    ).toEqual(
+      new Set([
+        "pwragent_automations",
+        "pwragent_threads",
+        "pwragent_messaging",
+        "pwragent_task_monitors",
       ]),
     );
     expect(
@@ -5036,6 +5104,16 @@ script = "echo setup"
         ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: expect.objectContaining({
+        name: "Inbox Agent",
+      }),
+    });
 
     await registry.close();
   });
@@ -6739,6 +6817,69 @@ script = "pnpm install"
     await registry.close();
   });
 
+  it("passes Agent dynamic tools when materializing Agent Codex launchpads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:/tmp/pwragent-scratch",
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Shared messaging context.",
+      },
+      input: [{ type: "text", text: "Start the Agent thread." }],
+      launchpad: {
+        directoryKey: "workspace:/tmp/pwragent-scratch",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/tmp/pwragent-scratch",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "get_current_location",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
   it("creates a scratch workspace for Codex thread creation when cwd is omitted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
@@ -6769,12 +6910,12 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      dynamicTools: expect.arrayContaining([
+      dynamicTools: [
         expect.objectContaining({
-          namespace: "pwragent_automations",
-          name: "list_automations",
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
         }),
-      ]),
+      ],
     });
 
     await registry.close();
@@ -8295,6 +8436,61 @@ script = "printf setup-output"
       label: "app",
       path: expectedDir("/repo/app"),
       worktreePath: expectedDir("/repo/app/.worktrees/thread-1/app"),
+    });
+
+    await registry.close();
+  });
+
+  it("passes Agent metadata through materialized launchpad starts", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Keep shared messaging context.",
+      },
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: response.backend,
+        threadId: response.threadId,
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Messaging Agent",
+        instructions: "Keep shared messaging context.",
+      },
     });
 
     await registry.close();
@@ -11091,6 +11287,372 @@ command = "pnpm dev"
     expect(events).toEqual([]);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("handles thread inspection dynamic tool calls from active Agent turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Inbox triage",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory:/repo/app",
+              kind: "local",
+              label: "App",
+              path: "/repo/app",
+            },
+          ],
+          updatedAt: 2000,
+        },
+        {
+          id: "thread-2",
+          title: "Ordinary work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            agent: {
+              name: "Inbox Agent",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1500,
+            },
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {
+          agentOnly: true,
+          query: "inbox",
+          limit: 5,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.any(String),
+        },
+      ],
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      threads: [
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          title: "Inbox triage",
+          agent: {
+            name: "Inbox Agent",
+          },
+        },
+      ],
+      totalCount: 1,
+      limit: 5,
+      truncated: false,
+    });
+    expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
+      callerReason: "agent-thread-inspection",
+    });
+
+    await registry.close();
+  });
+
+  it("lists recent lightweight thread candidates for Agent thread search", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Investigate desktop E2E failures",
+          titleSource: "explicit",
+          source: "codex",
+          summary: `${"Failure details ".repeat(40)}end`,
+          linkedDirectories: [
+            {
+              id: "directory:/repo/pwragent",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          updatedAt: 2000,
+        },
+        {
+          id: "thread-2",
+          title: "Ordinary work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      threads: [
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          title: "Investigate desktop E2E failures",
+          linkedDirectories: [
+            {
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+        },
+        {
+          backend: "codex",
+          threadId: "thread-2",
+          title: "Ordinary work",
+        },
+      ],
+      totalCount: 2,
+      limit: 100,
+      truncated: false,
+    });
+    expect(payload.threads[0].summary.length).toBeLessThanOrEqual(240);
+    expect(payload.threads[0]).not.toHaveProperty("model");
+    expect(payload.threads[0]).not.toHaveProperty("reasoningEffort");
+
+    await registry.close();
+  });
+
+  it("matches thread search alternatives without an exact phrase", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Investigate desktop E2E failures",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+        {
+          id: "thread-2",
+          title: "Telegram thread naming issue",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {
+          query: "telegram naming OR playwright e2e OR desktop failures",
+          limit: 5,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.threads.map((thread: { threadId: string }) => thread.threadId)).toEqual([
+      "thread-2",
+      "thread-1",
+    ]);
+
+    await registry.close();
+  });
+
+  it("reads active Agent thread status instead of only archived threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      threads: [
+        {
+          id: "active-thread",
+          title: "Jeeves",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+      archivedThreads: [
+        {
+          id: "archived-thread",
+          title: "Archived Jeeves",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          archivedAt: 1000,
+        },
+      ],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "active-thread",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      thread: {
+        backend: "codex",
+        threadId: "active-thread",
+        title: "Jeeves",
+        status: "idle",
+      },
+    });
+    expect(
+      codexClient.listThreadsCalls
+        .map((call) => call.params?.archived)
+    ).toEqual([false]);
+
     await registry.close();
   });
 
@@ -14136,6 +14698,122 @@ command = "pnpm dev"
       cwd: "/repo/app/.worktrees/app-feature-handoff",
     });
     expect(ensureSession).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("rebinds ACP protocol sessions when the provider no longer recognizes the stored session id", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "stable-thread-id",
+        title: "Kimi Test Thread",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "session-new",
+        agentSessionId: "session-new",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const ensureSession = vi.fn(async () => {
+      throw new Error(
+        'json-rpc error (-32602): Invalid params: Unknown sessionId: stable-thread-id: {"sessionId":"stable-thread-id"}',
+      );
+    });
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:stable-thread-id:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "kimi",
+          name: "Kimi CLI",
+          distributionKind: "local",
+          distributionSource: "kimi --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-kimi-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "kimi",
+            distributionKind: "local",
+            command: "kimi",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "stable-thread-id",
+      input: [{ type: "text", text: "That worked!" }],
+    });
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "stable-thread-id",
+        cwd: "/repo/app",
+        title: "Kimi Test Thread",
+      }),
+    );
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "stable-thread-id",
+        prompt: "That worked!",
+      }),
+    );
+    expect(sessionStore.getSession(acpBackendId, "stable-thread-id")).toMatchObject({
+      agentSessionId: "session-new",
+    });
 
     await registry.close();
   });
