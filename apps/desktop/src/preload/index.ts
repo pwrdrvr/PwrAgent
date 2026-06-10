@@ -224,6 +224,8 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenFederationWindowRequest,
+  OpenFederationWindowResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
@@ -272,6 +274,7 @@ import type {
 } from "@pwragent/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
+import { readFederationWindowTargetFromArgv } from "../shared/federation-window";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
@@ -392,6 +395,7 @@ import {
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  FEDERATION_OPEN_WINDOW_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
   COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,
@@ -759,6 +763,10 @@ const desktopApi = Object.freeze({
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
     await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
+  openFederationWindow: async (
+    request: OpenFederationWindowRequest,
+  ): Promise<OpenFederationWindowResponse> =>
+    await ipcRenderer.invoke(FEDERATION_OPEN_WINDOW_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1760,6 +1768,9 @@ function readBootstrapNavigationPreferences(): {
   return { browseMode: "inbox" };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
+const bootstrapFederationTarget = readFederationWindowTargetFromArgv(
+  process.argv,
+);
 
 // Decode the OS home directory passed from main via
 // `webPreferences.additionalArguments`. The sandboxed preload can't call
@@ -1816,6 +1827,10 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld(
     "__pwragentLogFilePath",
     bootstrapLogFilePath,
+  );
+  contextBridge.exposeInMainWorld(
+    "__pwragentFederationTarget",
+    bootstrapFederationTarget,
   );
   recordPreloadLog("info", "exposed context bridge", {
     keyCount: Object.keys(desktopApi).length

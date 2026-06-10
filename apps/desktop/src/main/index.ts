@@ -38,6 +38,10 @@ import {
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
 import {
+  disposeFederationIpcHandlers,
+  registerFederationIpcHandlers,
+} from "./ipc/federation";
+import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
@@ -398,6 +402,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
+  disposeFederationIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposeIntegratedTerminalIpcHandlers();
   // Detached env-action trees (`pnpm dev` and friends) were previously just
@@ -841,6 +846,7 @@ export function bootstrapApp(): void {
     });
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();
+    registerFederationIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     installTranscriptImageProtocol();
