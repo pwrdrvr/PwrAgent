@@ -472,6 +472,7 @@ describe("MessagingController", () => {
           mode: "present",
           pin: true,
         }),
+        targetSurface: undefined,
         text: expect.stringContaining("Project: PwrAgent"),
       }),
       expect.objectContaining({

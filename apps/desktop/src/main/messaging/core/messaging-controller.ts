@@ -10297,7 +10297,7 @@ export class MessagingController {
       threadId: args.threadId,
       targetKind,
     });
-    const visibleBinding = await this.renderBindingStatus(binding, attachEvent);
+    const visibleBinding = await this.renderBindingStatus(binding);
     await this.repostLastAssistantMessageForResume(visibleBinding);
     return {
       ok: true,
