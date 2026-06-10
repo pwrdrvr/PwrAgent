@@ -46,6 +46,34 @@ export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
 }
 
 /**
+ * Classify a keydown as one of the two window-layout chords, or `null`:
+ *   ⌘B / ⌃B   → "sidebar" (toggle the left sidebar)
+ *   ⌘⌥B / ⌃⌥B → "rail"    (toggle the right context rail)
+ * Returns `null` while typing in a field, without the primary modifier, or
+ * for any other key.
+ *
+ * Pure + side-effect-free so a SINGLE owner can wire one window listener to it
+ * (see `useLayoutChordHotkeys`). Previously each `PanelToggleButtons` instance
+ * bound its own listener; on Windows the title bar and the thread header both
+ * render the chips, so two listeners fired and the chord toggled twice — a
+ * visible no-op.
+ */
+export function matchLayoutChord(
+  event: KeyboardEvent,
+): "sidebar" | "rail" | null {
+  if (isEditableTarget(event)) {
+    return null;
+  }
+  if (!isPrimaryAccel(event)) {
+    return null;
+  }
+  if (!isAccelLetter(event, "b")) {
+    return null;
+  }
+  return event.altKey ? "rail" : "sidebar";
+}
+
+/**
  * Render the display label for a primary-accelerator chord, adjusted for
  * the current platform: ⌘/⌥ glyphs on macOS, "Ctrl"/"Alt" words joined
  * with "+" on Windows/Linux. This is presentation only — {@link

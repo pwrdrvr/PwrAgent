@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
+import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import {
   useDesktopSettings,
@@ -250,6 +251,14 @@ function DesktopAppShell(props: {
     },
     [writeConfig],
   );
+
+  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
+  // ⌘⌥B/⌃⌥B rail). Bound once here — never per PanelToggleButtons chip — so
+  // it fires exactly once regardless of how many chips are mounted.
+  useLayoutChordHotkeys({
+    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+  });
   const setActiveContextTabPersisted = useCallback(
     (tab: ContextTabId) => {
       setActiveContextTab(tab);
