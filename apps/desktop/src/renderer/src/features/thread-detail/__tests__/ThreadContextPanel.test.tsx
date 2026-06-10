@@ -250,6 +250,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(
       "Watch CI until it completes.",
     );
+    expect(screen.getAllByRole("button", { name: "History" })[0]).toBeDisabled();
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {

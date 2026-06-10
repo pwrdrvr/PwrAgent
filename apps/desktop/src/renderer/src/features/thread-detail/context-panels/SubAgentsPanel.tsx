@@ -54,8 +54,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
               <button
                 className="context-list__action"
                 type="button"
-                disabled={!props.onViewSubAgent || !subAgent.monitorThreadId}
-                onClick={() => props.onViewSubAgent?.(subAgent)}
+                disabled
+                title="Sub-agent history is not available yet."
               >
                 History
               </button>
