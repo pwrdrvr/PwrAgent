@@ -1464,7 +1464,6 @@ function mergeLaunchpadUpdateResponse(
   preserveSetting("parentThreadTitle");
   preserveEnvironment("codexEnvironmentId");
   preserveEnvironment("codexEnvironmentExecutionTarget");
-  preserveEnvironment("codexEnvironmentSetupEnabled");
   preserveEnvironment("codexEnvironmentActionId");
   preserveEnvironment("codexEnvironmentOptions");
 

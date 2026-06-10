@@ -137,7 +137,6 @@ type ComposerProps = {
         | "branchName"
         | "codexEnvironmentId"
         | "codexEnvironmentExecutionTarget"
-        | "codexEnvironmentSetupEnabled"
         | "codexEnvironmentActionId"
         | "directoryLabel"
         | "directoryPath"
@@ -4041,7 +4040,6 @@ export function Composer(props: ComposerProps) {
         | "branchName"
         | "codexEnvironmentId"
         | "codexEnvironmentExecutionTarget"
-        | "codexEnvironmentSetupEnabled"
         | "codexEnvironmentActionId"
       >
     >
@@ -5566,7 +5564,6 @@ export function Composer(props: ComposerProps) {
                   fastMode: undefined,
                   codexEnvironmentId: undefined,
                   codexEnvironmentExecutionTarget: undefined,
-                  codexEnvironmentSetupEnabled: false,
                   codexEnvironmentActionId: undefined,
                 });
               }}
@@ -5971,9 +5968,6 @@ export function Composer(props: ComposerProps) {
                     codexEnvironmentExecutionTarget: environment
                       ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
                       : undefined,
-                    codexEnvironmentSetupEnabled: Boolean(
-                      environment?.setupScript,
-                    ),
                     codexEnvironmentActionId: undefined,
                   });
                 }}

@@ -440,7 +440,6 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "parentThreadTitle"
       | "codexEnvironmentId"
       | "codexEnvironmentExecutionTarget"
-      | "codexEnvironmentSetupEnabled"
       | "codexEnvironmentActionId"
       | "directoryLabel"
       | "directoryPath"

@@ -88,9 +88,12 @@ export function withCodexEnvironmentOptions(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
 ): NavigationLaunchpadDraft {
+  const launchpadWithoutDeprecatedSetupFlag = { ...launchpad };
+  delete launchpadWithoutDeprecatedSetupFlag.codexEnvironmentSetupEnabled;
+
   if (options.length === 0) {
     return {
-      ...launchpad,
+      ...launchpadWithoutDeprecatedSetupFlag,
       codexEnvironmentId: undefined,
       codexEnvironmentActionId: undefined,
       codexEnvironmentOptions: [],
@@ -101,13 +104,10 @@ export function withCodexEnvironmentOptions(
     (environment) => environment.id === launchpad.codexEnvironmentId,
   );
   return {
-    ...launchpad,
+    ...launchpadWithoutDeprecatedSetupFlag,
     codexEnvironmentId: selectedEnvironment?.id,
     codexEnvironmentExecutionTarget:
       launchpad.codexEnvironmentExecutionTarget ?? "local",
-    codexEnvironmentSetupEnabled:
-      launchpad.codexEnvironmentSetupEnabled ??
-      Boolean(selectedEnvironment?.setupScript),
     codexEnvironmentActionId: undefined,
     codexEnvironmentOptions: options,
   };

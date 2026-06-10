@@ -380,6 +380,99 @@ describe("ThreadView", () => {
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
+  it("shows environment setup details from config even when the deprecated setup flag is false", async () => {
+    const selectedDirectory = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "PwrSnap",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "full-access",
+      prompt: "Investigate clipboard filenames",
+      updatedAt: 1000,
+      workMode: "worktree",
+      codexEnvironmentId: "environment",
+      codexEnvironmentExecutionTarget: "local",
+      // Deprecated persisted value from older launchpad rows.
+      codexEnvironmentSetupEnabled: false,
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrSnap",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          setupScript: "nvm install\ncorepack enable\npnpm install",
+          actions: [],
+        },
+      ],
+    } satisfies NavigationLaunchpadDraft;
+    const onMaterializeLaunchpad = vi.fn(() => new Promise<void>(() => {}));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Running environment setup" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
+  });
+
   it("keeps launch failures closable from the pending setup screen", async () => {
     const selectedDirectory = {
       key: "directory:/repo",

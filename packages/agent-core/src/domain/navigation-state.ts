@@ -490,8 +490,6 @@ export function buildNavigationSnapshotHash(params: {
               directory.launchpad.codexEnvironmentId ?? null,
             codexEnvironmentExecutionTarget:
               directory.launchpad.codexEnvironmentExecutionTarget ?? null,
-            codexEnvironmentSetupEnabled:
-              directory.launchpad.codexEnvironmentSetupEnabled ?? null,
             codexEnvironmentActionId:
               directory.launchpad.codexEnvironmentActionId ?? null,
             codexEnvironmentOptions: (

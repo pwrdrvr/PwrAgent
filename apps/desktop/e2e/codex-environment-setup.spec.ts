@@ -588,7 +588,6 @@ test("directory launchpad keeps selected environment controls after snapshot rel
           patch: {
             codexEnvironmentId: "environment",
             codexEnvironmentExecutionTarget: "local",
-            codexEnvironmentSetupEnabled: true,
             workMode: "worktree",
           },
           stickySettingsChanged: true,
