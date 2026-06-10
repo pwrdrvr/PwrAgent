@@ -1,5 +1,15 @@
-import type { ReplayFixture, ReplayRequestStep, ReplayResponseMethod, ReplayResponseStep, ReplayStep, ReplayStepOverride } from "./replay-fixture";
+import type {
+  ReplayFixture,
+  ReplayNotificationStep,
+  ReplayRequestStep,
+  ReplayResponseMethod,
+  ReplayResponseStep,
+  ReplayStep,
+  ReplayStepOverride,
+} from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
+
+type ReplayLiveStep = Exclude<ReplayStep, ReplayResponseStep>;
 
 const REUSABLE_RESPONSE_METHODS = new Set<ReplayResponseMethod>([
   "initialize",
@@ -69,7 +79,7 @@ export class ReplayController {
   advance(params: {
     stepId?: string;
     override?: ReplayStepOverride;
-  } = {}): Exclude<ReplayStep, ReplayResponseStep> {
+  } = {}): ReplayLiveStep {
     if (this.pendingRequest) {
       throw new Error(
         `Replay is waiting for request ${this.pendingRequest.request.params.requestId}`
@@ -128,44 +138,56 @@ export class ReplayController {
   }
 }
 
-function applyOverride<T extends Exclude<ReplayStep, ReplayResponseStep>>(
-  step: T,
+function applyOverride(
+  step: ReplayLiveStep,
   override?: ReplayStepOverride
-): T {
+): ReplayLiveStep {
   if (!override) {
     return step;
   }
 
   if ("request" in override && step.kind === "request") {
+    const requestOverride = override.request;
+    const requestParamsOverride = requestOverride?.params as
+      | Record<string, unknown>
+      | undefined;
+    const request: ReplayRequestStep["request"] = {
+      ...step.request,
+      ...requestOverride,
+      params: {
+        ...(step.request.params as Record<string, unknown>),
+        ...(requestParamsOverride ?? {})
+      } as ReplayRequestStep["request"]["params"]
+    };
+
     return {
       ...step,
-      request: {
-        ...step.request,
-        ...override.request,
-        params: {
-          ...step.request.params,
-          ...(override.request?.params ?? {})
-        }
-      }
-    } as T;
+      request
+    };
   }
 
   if ("notification" in override && step.kind === "notification") {
+    const notificationOverride = override.notification;
+    const notificationParamsOverride = notificationOverride?.params as
+      | Record<string, unknown>
+      | undefined;
+    const notification: ReplayNotificationStep["notification"] = {
+      ...step.notification,
+      ...notificationOverride,
+      params: {
+        ...(step.notification.params as Record<string, unknown>),
+        ...(notificationParamsOverride ?? {})
+      }
+    } as ReplayNotificationStep["notification"];
+
     return {
       ...step,
-      notification: {
-        ...step.notification,
-        ...override.notification,
-        params: {
-          ...step.notification.params,
-          ...(override.notification?.params ?? {})
-        }
-      }
-    } as T;
+      notification
+    };
   }
 
   return {
     ...step,
     ...override
-  } as T;
+  } as ReplayLiveStep;
 }
