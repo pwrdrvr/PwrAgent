@@ -1297,7 +1297,7 @@ function normalizeAgentMessagePhase(
   if (value === "commentary") {
     return "commentary";
   }
-  if (value === "final_answer") {
+  if (value === "final" || value === "final_answer") {
     return "final";
   }
   return undefined;
@@ -3290,6 +3290,12 @@ function sortEntriesByCreatedAt(entries: AppServerThreadEntry[]): AppServerThrea
     .map((item) => item.entry);
 }
 
+function timestampFromRecord(record: Record<string, unknown>): number | undefined {
+  return normalizeEpochTimestamp(
+    pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+  );
+}
+
 function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
   const record = asRecord(value);
   const thread = asRecord(record?.thread);
@@ -3343,6 +3349,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
     };
 
     for (const item of rawItems) {
+      const itemCreatedAt = timestampFromRecord(item);
       const itemType = pickString(item, ["type"]);
       const role = normalizeConversationRole(itemType);
       if (role) {
@@ -3355,6 +3362,12 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           continue;
         }
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
+        const messageCreatedAt =
+          itemCreatedAt ??
+          (role === "assistant" && phase === "final"
+            ? turnMetadata?.completedAt
+            : undefined) ??
+          createdAt;
         entries.push({
           type: "message",
           id:
@@ -3363,7 +3376,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           role,
           text: content.text,
           ...(content.parts ? { parts: content.parts } : {}),
-          createdAt,
+          createdAt: messageCreatedAt,
           ...(turnMetadata ? { turn: turnMetadata } : {}),
           ...(phase ? { phase } : {})
         });
@@ -3400,7 +3413,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         continue;
       }
 
-      const tokenUsageActivity = summarizeTokenUsageActivity(item, createdAt, turnMetadata);
+      const tokenUsageActivity = summarizeTokenUsageActivity(
+        item,
+        itemCreatedAt ?? turnMetadata?.completedAt ?? createdAt,
+        turnMetadata
+      );
       if (tokenUsageActivity) {
         flushActivityItems();
         entries.push(tokenUsageActivity);

@@ -2290,6 +2290,58 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("uses turn completion time for final assistant entries without item timestamps", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-final-completed-at", {
+      thread: {
+        turns: [
+          {
+            id: "turn-final",
+            status: "completed",
+            startedAt: 1_763_500_100,
+            completedAt: 1_763_500_520,
+            items: [
+              {
+                type: "agentMessage",
+                id: "final-response",
+                phase: "final",
+                text: "Done at completion.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-final-completed-at",
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "final-response",
+        role: "assistant",
+        text: "Done at completion.",
+        createdAt: 1_763_500_520_000,
+        phase: "final",
+        turn: {
+          id: "turn-final",
+          status: "completed",
+          startedAt: 1_763_500_100_000,
+          completedAt: 1_763_500_520_000,
+        },
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("counts added, removed, and updated FileChange variants from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-file-change-counts", {
