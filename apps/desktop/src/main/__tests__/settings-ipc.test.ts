@@ -900,7 +900,10 @@ describe("settings ipc", () => {
     } finally {
       disposeAppState();
     }
-  });
+    // Dynamic `import()` of the main app-state graph + IPC discovery round-trip
+    // runs right at the 5s default under CI load; give it headroom so the slow
+    // setup doesn't flake the suite.
+  }, 20_000);
 
   it("reuses cached ACP capabilities across refreshes and re-probes only when forced", async () => {
     const tempRoot = fs.mkdtempSync(
@@ -980,7 +983,9 @@ describe("settings ipc", () => {
     } finally {
       disposeAppState();
     }
-  });
+    // See the override-discovery test above: the app-state import + repeated
+    // discovery round-trips need headroom over the 5s default under CI load.
+  }, 20_000);
 
   it("coalesces concurrent forced ACP refreshes onto one probe pass", async () => {
     const tempRoot = fs.mkdtempSync(
