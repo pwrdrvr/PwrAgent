@@ -11927,51 +11927,15 @@ textarea,
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  /* At narrow widths the rail stops floating and stacks below the chat:
-     the tab strip becomes a horizontal row and the open panel sits under
-     it, full width. */
-  .context-rail,
-  .context-rail.is-open,
-  .context-rail.is-pinned {
-    position: static;
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-    flex-basis: auto;
-    flex-direction: column;
-    margin-left: 0;
-    box-shadow: none;
-  }
-
-  .context-rail__spine {
-    order: 0;
-    width: 100%;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    padding: 8px;
-    border-left: 0;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .context-rail__tablist {
-    flex: 0 0 auto;
-    flex-direction: row;
-    width: auto;
-  }
-
-  .context-rail__tablist-spacer {
-    display: none;
-  }
-
-  .context-panel {
-    order: 1;
-    width: 100%;
-    flex-basis: auto;
-    border-left: 0;
-    max-height: 60vh;
-    animation: none;
-  }
+  /* No rail overrides at narrow widths. The rail is anchored to
+     `.thread-view__layout` (position: absolute) and its width is the
+     sidebar-aware `--context-rail-effective`, which already shrinks the
+     panel as the window narrows. The old narrow-width design flipped the
+     rail to `position: static; width: 100%` to stack it below the chat as a
+     horizontal strip — but that only worked while `.thread-view__layout`
+     was `flex-direction: column`. Anchored absolute, a static full-width
+     rail would instead sit in-flow beside the chat and collapse it to zero
+     width, so the rail stays vertical + floating at every width. */
 }
 
 @media (max-width: 820px) {

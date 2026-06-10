@@ -316,6 +316,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".context-rail")).toContain(
       "position: absolute;"
     );
+    // A media query must NOT flip the rail back to `position: static` (the
+    // old "stack the rail below the chat" narrow-width design) — anchored
+    // absolute, an in-flow full-width rail collapses the chat to zero width.
+    expect(css).not.toMatch(
+      /@media[^{]*\{[\s\S]*?\.context-rail[^{]*\{[^}]*position:\s*static/
+    );
     expect(css).not.toMatch(
       /\.thread-header[^{]*\{[^}]*padding-right:\s*calc\(var\(--context-rail-effective/
     );
