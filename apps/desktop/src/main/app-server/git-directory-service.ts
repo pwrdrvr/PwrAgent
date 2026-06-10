@@ -253,6 +253,16 @@ function parseGitWorktreeEntries(output: string): WorktreeEntry[] {
   return entries;
 }
 
+async function readPrimaryWorktreePath(
+  cwd: string,
+  runGit: GitCommandRunner,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const worktreeList = await runGit(cwd, ["worktree", "list", "--porcelain"], env)
+    .catch(() => "");
+  return parseGitWorktreeEntries(worktreeList)[0]?.path;
+}
+
 function parseGitLines(output: string): string[] {
   return output
     .split("\n")
@@ -324,13 +334,14 @@ function isProtectedBranch(branch?: string): boolean {
 
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
+  sourceRoot?: string;
   requestedBranch?: string;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
 }): Promise<string | undefined> {
   const runGit = params.runGit ?? defaultRunGit;
   const requestedBranch = sanitizeBranchName(params.requestedBranch ?? "");
-  if (requestedBranch) {
+  if (requestedBranch && requestedBranch !== "HEAD") {
     const commit = await runGit(
       params.repoRoot,
       ["rev-parse", "--verify", `${requestedBranch}^{commit}`],
@@ -339,8 +350,9 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
     return commit ? requestedBranch : undefined;
   }
 
-  const [currentBranch, branchesOutput, remoteHead] = await Promise.all([
-    runGit(params.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
+  const sourceRoot = params.sourceRoot ?? params.repoRoot;
+  const [rawCurrentBranch, branchesOutput, remoteHead] = await Promise.all([
+    runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
       () => "",
     ),
     runGit(
@@ -359,6 +371,7 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
       params.gitEnv,
     ).catch(() => ""),
   ]);
+  const currentBranch = rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch;
   const branches = parseGitLines(branchesOutput);
   const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
   const candidates = uniqueBranches([
@@ -569,7 +582,7 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    const [currentBranch, branchesOutput, remoteHead, worktreeList] =
+    const [rawCurrentBranch, branchesOutput, remoteHead, worktreeList] =
       await Promise.all([
         runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
           () => "",
@@ -593,6 +606,8 @@ export class GitDirectoryService {
           () => "",
         ),
       ]);
+    const currentBranch =
+      rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
     const upstreamBranch = await runGit(
       repoRoot,
       [
@@ -715,23 +730,27 @@ export class GitDirectoryService {
       };
     }
 
-    const repoRoot = await readGitRoot(
+    const sourceRoot = await readGitRoot(
       directoryPath,
       this.runGitCommand,
       this.gitEnv,
     );
-    if (!repoRoot) {
+    if (!sourceRoot) {
       return {
         cwd: directoryPath,
         workMode: "local",
       };
     }
+    const repoRoot =
+      (await readPrimaryWorktreePath(sourceRoot, this.runGitCommand, this.gitEnv))
+      ?? sourceRoot;
 
     const baseBranch = await resolveVerifiedWorktreeBaseBranch({
       gitEnv: this.gitEnv,
       repoRoot,
       requestedBranch: launchpad.branchName,
       runGit: this.runGitCommand,
+      sourceRoot,
     });
     if (!baseBranch) {
       return {

@@ -12,11 +12,6 @@ const FALLBACK_DEFAULT_BRANCHES = [
   "trunk",
 ] as const;
 
-type LocalBranchAtHead = {
-  name: string;
-  upstream?: string;
-};
-
 type DefaultBranchInfo = {
   names: Set<string>;
   upstreams: Set<string>;
@@ -83,68 +78,7 @@ async function resolvePrLookupBranches(params: {
     return defaultBranchInfo.names.has(params.branch) ? [] : [params.branch];
   }
 
-  const branchesAtHead = await readLocalBranchesPointingAtHead(params.cwd);
-  if (branchesAtHead.some((branch) => isDefaultBranch(branch, defaultBranchInfo))) {
-    return [];
-  }
-
-  return uniqueNonEmpty(
-    branchesAtHead
-      .filter((branch) => branch.name !== "HEAD")
-      .map((branch) => branch.name),
-  );
-}
-
-function isDefaultBranch(
-  branch: LocalBranchAtHead,
-  defaultBranchInfo: DefaultBranchInfo,
-): boolean {
-  return (
-    defaultBranchInfo.names.has(branch.name) ||
-    Boolean(branch.upstream && defaultBranchInfo.upstreams.has(branch.upstream))
-  );
-}
-
-async function readLocalBranchesPointingAtHead(
-  cwd: string,
-): Promise<LocalBranchAtHead[]> {
-  try {
-    return await readBranchesPointingAtHead(cwd);
-  } catch {
-    return [];
-  }
-}
-
-async function readBranchesPointingAtHead(
-  cwd: string,
-): Promise<LocalBranchAtHead[]> {
-  const { stdout } = await execFileAsync(
-    "git",
-    [
-      "for-each-ref",
-      "--points-at",
-      "HEAD",
-      "--format=%(refname:short)%09%(upstream:short)",
-      "refs/heads",
-    ],
-    {
-      cwd,
-      maxBuffer: 64 * 1024,
-      timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
-    },
-  );
-  return stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [name = "", upstream = ""] = line.split("\t");
-      return {
-        name: name.trim(),
-        upstream: upstream.trim() || undefined,
-      };
-    })
-    .filter((branch) => branch.name);
+  return [];
 }
 
 async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
