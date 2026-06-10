@@ -2984,6 +2984,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Messaging",
+      "Federation",
       "Worktrees",
       "Thread Management",
       "Archived Threads",
