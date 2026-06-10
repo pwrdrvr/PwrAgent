@@ -7339,10 +7339,6 @@ command = "pnpm test"
   it("refreshes stale thread environment actions before running a command", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
     const outputPath = path.join(root, "action.txt");
-    // The action command embeds this path unquoted into a shell redirection.
-    // On Windows the action runs through Git bash, which mangles unquoted
-    // backslash paths — forward-slash the path so the redirection target is
-    // valid in bash (no-op on POSIX, and Git bash accepts `C:/...`).
     const shellOutputPath = outputPath.replace(/\\/g, "/");
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
@@ -7353,7 +7349,7 @@ name = "PwrAgnt"
 
 [[actions]]
 name = "Dev - Messaging"
-command = '''printf action-ran > ${shellOutputPath}'''
+command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-ran')" ${JSON.stringify(shellOutputPath)}'''
 `,
       "utf8",
     );
