@@ -70,6 +70,8 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
+  OpenFederationWindowRequest,
+  OpenFederationWindowResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -350,6 +352,9 @@ export type DesktopApi = {
   waitForProfileAlive?: (
     request: WaitForDesktopProfileAliveRequest,
   ) => Promise<WaitForDesktopProfileAliveResponse>;
+  openFederationWindow?: (
+    request: OpenFederationWindowRequest,
+  ) => Promise<OpenFederationWindowResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

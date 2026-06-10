@@ -37,6 +37,10 @@ import {
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
 import {
+  disposeFederationIpcHandlers,
+  registerFederationIpcHandlers,
+} from "./ipc/federation";
+import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
@@ -241,6 +245,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeAppMetadataIpcHandlers();
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
+  disposeFederationIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposeIntegratedTerminalIpcHandlers();
   disposePreloadLogIpcHandlers();
@@ -611,6 +616,7 @@ export function bootstrapApp(): void {
         await requestQuit({ performQuit, source: "update-install" }),
     });
     registerComposerDraftIpcHandlers();
+    registerFederationIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     installTranscriptImageProtocol();

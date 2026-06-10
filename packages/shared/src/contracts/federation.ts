@@ -92,6 +92,18 @@ export type FederationHealthStatus = {
   peers: FederationPeerSummary[];
 };
 
+export type OpenFederationWindowRequest = {
+  target: FederationRemoteTarget;
+  label?: string;
+  initialThread?: FederatedThreadRef;
+};
+
+export type OpenFederationWindowResponse = {
+  opened: boolean;
+  windowId?: number;
+  target: FederationRemoteTarget;
+};
+
 export type FederationEnvelopeBase = {
   id: FederationRequestId;
   protocolVersion: number;

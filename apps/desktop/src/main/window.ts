@@ -9,6 +9,7 @@ import {
 } from "electron";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { FederationRemoteTarget } from "@pwragent/shared";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
@@ -50,6 +51,7 @@ import {
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
 import { placementForCursorDisplay } from "./window-placement";
+import { federationWindowTargetAdditionalArguments } from "../shared/federation-window";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
@@ -300,6 +302,7 @@ export function syncHotCpuProfilersFromSettings(
 }
 
 export function createMainWindow(options?: {
+  federationTarget?: FederationRemoteTarget;
   startupCpuProfiler?: {
     attachWindow: (window: BrowserWindow) => void;
   };
@@ -366,6 +369,7 @@ export function createMainWindow(options?: {
         // Surface the OS home directory so the renderer can collapse long
         // absolute paths to `~` (the sandboxed preload can't read it itself).
         `--pwragent-home-dir=${JSON.stringify(homedir())}`,
+        ...federationWindowTargetAdditionalArguments(options?.federationTarget),
       ],
     }
   });
