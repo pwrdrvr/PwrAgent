@@ -1,6 +1,7 @@
 import { useEffect, type ReactElement } from "react";
 import {
   formatPrimaryAccel,
+  isAccelLetter,
   isEditableTarget,
   isPrimaryAccel,
 } from "../../lib/keyboard-accel";
@@ -50,7 +51,10 @@ export function PanelToggleButtons({
       if (!isPrimaryAccel(event)) {
         return;
       }
-      if (event.key !== "b" && event.key !== "B") {
+      // Match the physical "B" via event.code, NOT event.key: on macOS the
+      // Option modifier composes event.key into "∫", so ⌘⌥B (toggle rail)
+      // would never match a literal "b"/"B" check. See isAccelLetter.
+      if (!isAccelLetter(event, "b")) {
         return;
       }
       event.preventDefault();

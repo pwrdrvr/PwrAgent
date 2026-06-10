@@ -27,6 +27,25 @@ export function isEditableTarget(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Whether `event` targets the given single letter, robust to the macOS
+ * Option-compose quirk. Holding Option (Alt) on macOS rewrites `event.key`
+ * into the composed character it would type (⌥B → "∫", ⌥V → "√", …), so any
+ * chord that includes Alt can NEVER be matched against `event.key` — which is
+ * why ⌘⌥B silently did nothing while ⌘B worked. Match the physical key via
+ * `event.code` ("Key" + the uppercased letter) instead, which is independent
+ * of modifiers and layout-composition; fall back to `event.key` for the rare
+ * environment that doesn't populate `code`.
+ */
+export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
+  const upper = letter.toUpperCase();
+  return (
+    event.code === `Key${upper}` ||
+    event.key === upper ||
+    event.key === upper.toLowerCase()
+  );
+}
+
+/**
  * Render the display label for a primary-accelerator chord, adjusted for
  * the current platform: ⌘/⌥ glyphs on macOS, "Ctrl"/"Alt" words joined
  * with "+" on Windows/Linux. This is presentation only — {@link
