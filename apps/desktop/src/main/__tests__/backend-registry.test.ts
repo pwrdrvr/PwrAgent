@@ -723,6 +723,11 @@ class MockBackendClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
+  interruptTurnCallCount = 0;
+  lastInterruptTurnParams?: {
+    threadId: string;
+    turnId: string;
+  };
   startTurnCalls: Array<NonNullable<MockBackendClient["lastStartTurnParams"]>> = [];
   startTurnCallCount = 0;
   lastSteerTurnParams?: {
@@ -1054,8 +1059,13 @@ class MockBackendClient {
     };
   }
 
-  async interruptTurn(): Promise<{ threadId: string; turnId: string }> {
-    return { threadId: "thread-1", turnId: "turn-1" };
+  async interruptTurn(params: {
+    threadId: string;
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    this.interruptTurnCallCount += 1;
+    this.lastInterruptTurnParams = params;
+    return params;
   }
 
   async steerTurn(params: {
@@ -11864,6 +11874,179 @@ command = "pnpm dev"
                 reason: "monitor_recovery_turn_ended_without_completion",
                 recoveryAttempted: true,
                 terminalStatus: "completed",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    unsubscribeEvents();
+    await registry.close();
+  });
+
+  it("interrupts stale active monitors before fallback completion", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribeEvents = registry.onEvent((event) => {
+      events.push(event);
+    });
+    const checkStaleTaskMonitors = (registry as unknown as {
+      checkStaleTaskMonitors: (now?: number) => Promise<void>;
+    }).checkStaleTaskMonitors.bind(registry);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+          heartbeatIntervalSeconds: 30,
+          pollIntervalSeconds: 20,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          item: { id: "cmd-1", type: "commandExecution" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          item: { id: "cmd-1", type: "commandExecution" },
+        },
+      },
+    });
+
+    await checkStaleTaskMonitors(Date.now() + 90_000);
+
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(codexClient.lastInterruptTurnParams).toEqual({
+      threadId: "monitor-thread",
+      turnId: "turn-1",
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "cancelled", output: [] },
+        },
+      },
+    });
+
+    expect(codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.startTurnCalls[1]).toMatchObject({
+      threadId: "monitor-thread",
+      model: "gpt-5.4-mini",
+    });
+    expect(
+      codexClient.startTurnCalls[1]?.input[0]?.type === "text"
+        ? codexClient.startTurnCalls[1].input[0].text
+        : "",
+    ).toContain("pwragent_task_monitors.complete_monitoring");
+
+    await checkStaleTaskMonitors(Date.now() + 180_000);
+
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems[0]).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: expect.stringContaining("Completion source: PwrAgent fallback"),
+            },
+          ],
+        },
+      ],
+    });
+    const completionStateEvent = events.find((event) => {
+      if (event.notification.method !== "item/completed") {
+        return false;
+      }
+      const item = event.notification.params.item as {
+        data?: Record<string, unknown>;
+        type?: string;
+      };
+      return item.type === "taskMonitorCompletion";
+    });
+    expect(completionStateEvent).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            type: "taskMonitorCompletion",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              outcome: "failure",
+              fallbackGenerated: true,
+              completionSource: {
+                type: "pwragent_fallback",
+                reason: "monitor_recovery_turn_stale_without_completion",
+                recoveryAttempted: true,
               },
             },
           },

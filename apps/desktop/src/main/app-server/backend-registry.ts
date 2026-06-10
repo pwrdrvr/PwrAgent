@@ -1399,12 +1399,30 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+function readNotificationItemType(notification: AppServerNotification): string | undefined {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const params = readRecord(notification.params);
+  const item = readRecord(params?.item);
+  const type = item?.type;
+  return typeof type === "string" ? type : undefined;
+}
+
+const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
+const TASK_MONITOR_STALE_GRACE_MS = 15_000;
+
 type TaskMonitorDelegationRecord = {
+  activeCommandCount: number;
   backend: "codex";
   createdAt: number;
   cwd?: string;
   executionMode?: ThreadExecutionMode;
   finalHandoffPrompt?: string;
+  lastActivityAt: number;
   latestUsage?: TaskMonitorUsageSnapshot;
   monitorId: string;
   monitorThreadId?: string;
@@ -1415,6 +1433,7 @@ type TaskMonitorDelegationRecord = {
   preferredModel: string;
   preferredReasoningEffort: string;
   recoveryAttempted?: boolean;
+  staleInterruptAttempted?: boolean;
   startupTimeoutSeconds: number;
   task: string;
 };
@@ -2846,6 +2865,7 @@ export class DesktopBackendRegistry {
     string,
     TaskMonitorDelegationRecord
   >();
+  private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   /**
    * Best-effort cache of thread labels keyed by `${backend}:${threadId}`, used
    * only to label native attention/terminal notifications so multiple
@@ -3118,6 +3138,14 @@ export class DesktopBackendRegistry {
         backend === "codex" ? this.threadHasActiveTurn(threadId) : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
+    this.taskMonitorWatchdogTimer = setInterval(() => {
+      void this.checkStaleTaskMonitors().catch((error) => {
+        backendRegistryLog.warn("task monitor stale watchdog failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, TASK_MONITOR_STALE_CHECK_INTERVAL_MS);
+    this.taskMonitorWatchdogTimer.unref?.();
 
     this.isCodexBootstrapDeferredFn =
       options?.isCodexBootstrapDeferred ??
@@ -8085,6 +8113,9 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    if (this.taskMonitorWatchdogTimer) {
+      clearInterval(this.taskMonitorWatchdogTimer);
+    }
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
@@ -9279,12 +9310,43 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    monitorRecord.lastActivityAt = Date.now();
     const usageSnapshot = buildTaskMonitorUsageSnapshot({
       model: monitorRecord.preferredModel,
       tokenUsage: notification.params.tokenUsage,
     });
     if (usageSnapshot) {
       monitorRecord.latestUsage = usageSnapshot;
+    }
+  }
+
+  private recordTaskMonitorActivity(notification: AppServerNotification): void {
+    const params = readRecord(notification.params);
+    const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+    if (!threadId) {
+      return;
+    }
+
+    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
+      (record) => record.monitorThreadId === threadId,
+    );
+    if (!monitorRecord) {
+      return;
+    }
+
+    monitorRecord.lastActivityAt = Date.now();
+    const itemType = readNotificationItemType(notification);
+    if (itemType !== "commandExecution") {
+      return;
+    }
+
+    if (notification.method === "item/started") {
+      monitorRecord.activeCommandCount += 1;
+    } else if (notification.method === "item/completed") {
+      monitorRecord.activeCommandCount = Math.max(
+        0,
+        monitorRecord.activeCommandCount - 1,
+      );
     }
   }
 
@@ -10534,10 +10596,12 @@ export class DesktopBackendRegistry {
       });
     }
     const record: TaskMonitorDelegationRecord = {
+      activeCommandCount: 0,
       backend: "codex",
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
+      lastActivityAt: Date.now(),
       monitorId,
       parentThreadId,
       pollIntervalSeconds,
@@ -10547,6 +10611,13 @@ export class DesktopBackendRegistry {
       task,
     };
     this.taskMonitorDelegations.set(monitorId, record);
+    backendRegistryLog.info("created task monitor delegation", {
+      heartbeatIntervalSeconds,
+      monitorId,
+      parentThreadId,
+      pollIntervalSeconds,
+      startupTimeoutSeconds,
+    });
 
     let startedMonitor: {
       cwd?: string;
@@ -10578,6 +10649,7 @@ export class DesktopBackendRegistry {
     }
     record.cwd = startedMonitor.cwd;
     record.executionMode = startedMonitor.executionMode;
+    record.lastActivityAt = Date.now();
     record.monitorThreadId = startedMonitor.threadId;
     record.monitorTurnId = startedMonitor.turnId;
 
@@ -10738,6 +10810,7 @@ export class DesktopBackendRegistry {
       return taskMonitorFailure("inject_progress", "invalid_arguments", "message is required.");
     }
 
+    bound.record.lastActivityAt = Date.now();
     await this.emitTaskMonitorProgressMessage({
       monitorId: bound.record.monitorId,
       parentThreadId: bound.record.parentThreadId,
@@ -10776,6 +10849,7 @@ export class DesktopBackendRegistry {
       return taskMonitorFailure("complete_monitoring", "invalid_arguments", "summary is required.");
     }
 
+    bound.record.lastActivityAt = Date.now();
     const parentTurn = await this.finishTaskMonitorDelegation({
       completionSource: { type: "monitor_tool" },
       details: args.details,
@@ -10927,6 +11001,91 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async checkStaleTaskMonitors(now = Date.now()): Promise<void> {
+    for (const record of Array.from(this.taskMonitorDelegations.values())) {
+      if (!record.monitorThreadId || !record.monitorTurnId) {
+        continue;
+      }
+      if (record.activeCommandCount > 0) {
+        continue;
+      }
+
+      const staleAfterMs =
+        Math.max(
+          record.heartbeatIntervalSeconds * 2,
+          record.pollIntervalSeconds * 2,
+          record.startupTimeoutSeconds,
+        ) *
+          1000 +
+        TASK_MONITOR_STALE_GRACE_MS;
+      const idleMs = now - record.lastActivityAt;
+      if (idleMs < staleAfterMs) {
+        continue;
+      }
+
+      if (record.recoveryAttempted) {
+        await this.synthesizeTaskMonitorFallbackCompletion({
+          record,
+          reason: "monitor_recovery_turn_stale_without_completion",
+        });
+        continue;
+      }
+
+      if (record.staleInterruptAttempted) {
+        await this.synthesizeTaskMonitorFallbackCompletion({
+          record,
+          reason: "monitor_stale_interrupt_no_terminal",
+        });
+        continue;
+      }
+
+      await this.interruptStaleTaskMonitor(record, idleMs);
+    }
+  }
+
+  private async interruptStaleTaskMonitor(
+    record: TaskMonitorDelegationRecord,
+    idleMs: number,
+  ): Promise<void> {
+    if (!record.monitorThreadId || !record.monitorTurnId) {
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_thread_missing_for_stale_recovery",
+      });
+      return;
+    }
+
+    record.lastActivityAt = Date.now();
+    record.staleInterruptAttempted = true;
+    backendRegistryLog.warn("task monitor stale; interrupting for recovery", {
+      idleMs,
+      monitorId: record.monitorId,
+      monitorThreadId: record.monitorThreadId,
+      monitorTurnId: record.monitorTurnId,
+      parentThreadId: record.parentThreadId,
+    });
+
+    try {
+      const executionMode = record.executionMode ?? "default";
+      await this.getClient("codex", executionMode).interruptTurn({
+        threadId: record.monitorThreadId,
+        turnId: record.monitorTurnId,
+      });
+    } catch (error) {
+      backendRegistryLog.error("failed to interrupt stale task monitor", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+      });
+      await this.synthesizeTaskMonitorFallbackCompletion({
+        record,
+        reason: "monitor_stale_interrupt_failed",
+      });
+    }
+  }
+
   private async startTaskMonitorRecoveryTurn(params: {
     record: TaskMonitorDelegationRecord;
     terminalStatus: "completed" | "failed" | "cancelled";
@@ -10942,6 +11101,9 @@ export class DesktopBackendRegistry {
     }
 
     record.recoveryAttempted = true;
+    record.activeCommandCount = 0;
+    record.lastActivityAt = Date.now();
+    record.staleInterruptAttempted = false;
     const executionMode = record.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
@@ -10973,6 +11135,7 @@ export class DesktopBackendRegistry {
           : {}),
       });
       record.monitorTurnId = turn.turnId;
+      record.lastActivityAt = Date.now();
       backendRegistryLog.warn("started task monitor recovery turn", {
         monitorId: record.monitorId,
         monitorThreadId: record.monitorThreadId,
@@ -10998,13 +11161,13 @@ export class DesktopBackendRegistry {
   private async synthesizeTaskMonitorFallbackCompletion(params: {
     record: TaskMonitorDelegationRecord;
     reason: string;
-    terminalStatus: "completed" | "failed" | "cancelled";
+    terminalStatus?: "completed" | "failed" | "cancelled";
   }): Promise<void> {
     const completionSource: TaskMonitorCompletionSource = {
       type: "pwragent_fallback",
       reason: params.reason,
       recoveryAttempted: Boolean(params.record.recoveryAttempted),
-      terminalStatus: params.terminalStatus,
+      ...(params.terminalStatus ? { terminalStatus: params.terminalStatus } : {}),
     };
     const outcome =
       params.terminalStatus === "cancelled" ? "cancelled" : "failure";
@@ -11013,7 +11176,9 @@ export class DesktopBackendRegistry {
       details: [
         "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent_task_monitors.complete_monitoring.",
         `Fallback reason: ${params.reason}.`,
-        `Last monitor turn status: ${params.terminalStatus}.`,
+        params.terminalStatus
+          ? `Last monitor turn status: ${params.terminalStatus}.`
+          : "No terminal monitor turn status was observed.",
       ].join("\n"),
       outcome,
       record: params.record,
@@ -11482,6 +11647,7 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent): Promise<void> {
     if (event.backend === "codex") {
+      this.recordTaskMonitorActivity(event.notification);
       this.recordTaskMonitorUsage(event.notification);
     }
 
