@@ -219,6 +219,12 @@ describe("settings ipc", () => {
     childProcessMocks.spawn.mockImplementation(() => {
       throw new Error("unexpected spawn");
     });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("unexpected network fetch in settings IPC test");
+      }),
+    );
   });
 
   it("registers redacted read and write handlers", async () => {
