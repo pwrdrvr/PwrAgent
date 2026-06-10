@@ -469,6 +469,20 @@ export class DesktopSettingsService {
       updates: {
         channel: this.resolveUpdateChannelValue(config.updates?.channel),
       },
+      ui: {
+        sidebarHidden: this.resolveConfigBoolean(
+          config.ui?.sidebarHidden,
+          false,
+        ),
+        contextRailPinned: this.resolveConfigBoolean(
+          config.ui?.contextRailPinned,
+          false,
+        ),
+        activeContextTab: {
+          value: config.ui?.activeContextTab ?? "info",
+          source: config.ui?.activeContextTab === undefined ? "default" : "config",
+        },
+      },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
         allowFullAccessEscalation: this.resolveConfigBoolean(

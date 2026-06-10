@@ -449,6 +449,18 @@ export type DesktopSettingsSnapshot = {
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
+  /**
+   * Window-layout preferences remembered across launches: whether the
+   * left sidebar is hidden, whether the right context rail is pinned
+   * open, and which context-rail tab was last active. `activeContextTab`
+   * is a plain string here; the renderer validates it against its known
+   * tab ids and falls back to the default when unrecognized.
+   */
+  ui: {
+    sidebarHidden: DesktopSettingsValue<boolean>;
+    contextRailPinned: DesktopSettingsValue<boolean>;
+    activeContextTab: DesktopSettingsValue<string>;
+  };
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
     allowFullAccessEscalation: DesktopSettingsValue<boolean>;
@@ -637,6 +649,11 @@ export type DesktopSettingsConfigPatch = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+  };
+  ui?: {
+    sidebarHidden?: boolean;
+    contextRailPinned?: boolean;
+    activeContextTab?: string;
   };
   messaging?: {
     enabled?: boolean;

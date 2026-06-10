@@ -251,7 +251,9 @@ describe("ThreadView", () => {
     expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+    // The context rail is a tabbed activity bar now; clicking the Thread
+    // info tab reveals its panel (linked directories + execution context).
+    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
 
     expect(screen.getByText("No linked directory")).toBeInTheDocument();
     expect(
@@ -262,13 +264,10 @@ describe("ThreadView", () => {
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
-    expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
-    expect(screen.getByText("user@example.com")).toBeInTheDocument();
-    expect(screen.getByText("pro")).toBeInTheDocument();
-    expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Weekly limit: 91% left/)).toBeInTheDocument();
-    expect(screen.getByText("Grok app server")).toBeInTheDocument();
+    // Backend availability + account + rate limits now live under their own
+    // Provider status tab (covered in ProviderStatusPanel.test.tsx). Here we
+    // just confirm the tab is present in the rail.
+    expect(screen.getByRole("tab", { name: "Provider status" })).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
@@ -774,7 +773,7 @@ describe("ThreadView", () => {
       "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product"
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
 
     expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
     expect(screen.getByText("search-product")).toBeInTheDocument();

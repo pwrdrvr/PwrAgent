@@ -812,29 +812,6 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   grok: "AgentCore - Grok",
 };
 
-const DISABLED_AGENT_CORE_GROK_REASON =
-  "AgentCore - Grok is experimental and disabled. Enable it in Settings → Experimental.";
-
-function disabledAgentCoreGrokSummary(): BackendSummary {
-  return {
-    kind: "grok",
-    label: BACKEND_LABELS.grok,
-    available: false,
-    methods: [],
-    capabilities: buildCapabilities([], "grok"),
-    executionModes: [
-      {
-        mode: "default",
-        label: EXECUTION_MODE_SUMMARIES.default.label,
-        available: false,
-        isDefault: true,
-        unavailableReason: DISABLED_AGENT_CORE_GROK_REASON,
-      },
-    ],
-    unavailableReason: DISABLED_AGENT_CORE_GROK_REASON,
-  };
-}
-
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.5",
@@ -3163,12 +3140,19 @@ export class DesktopBackendRegistry {
     request: ListBackendsRequest = {}
   ): Promise<ListBackendsResponse> {
     const agentCoreGrokEnabled = resolveAgentCoreGrokEnabled();
-    const summaries = await Promise.all([
-      this.describeCodexBackend(),
-      agentCoreGrokEnabled
-        ? this.describeSingleBackend("grok", this.grokClient)
-        : Promise.resolve(disabledAgentCoreGrokSummary()),
-    ]);
+    // When the experimental agent-core Grok feature is off, omit the backend
+    // entirely rather than emitting a disabled placeholder — a turned-off
+    // experimental feature isn't an app server, so it shouldn't clutter the
+    // provider list (or any backend picker). Settings → Experimental is where
+    // it gets enabled.
+    const summaries = (
+      await Promise.all([
+        this.describeCodexBackend(),
+        agentCoreGrokEnabled
+          ? this.describeSingleBackend("grok", this.grokClient)
+          : Promise.resolve(undefined),
+      ])
+    ).filter((summary): summary is BackendSummary => summary !== undefined);
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {

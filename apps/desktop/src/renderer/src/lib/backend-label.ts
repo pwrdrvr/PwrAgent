@@ -36,8 +36,8 @@ export function formatBackendLabel(
   // legacy direct-xAI agent-core backend is rendered as
   // "AgentCore - Grok" in its own branch below — see
   // `feat(desktop): add Grok CLI ACP backend` (PR #579) and
-  // backend-registry.ts:disabledAgentCoreGrokSummary for the
-  // experimental-flag policy.
+  // backend-registry.ts:listBackends for the experimental-flag gating
+  // (the agent-core backend is omitted entirely when the flag is off).
   if (backend === "acp:grok") {
     return "Grok";
   }

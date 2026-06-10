@@ -2,6 +2,14 @@ import type { ReactElement } from "react";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
+import { PanelToggleButtons } from "./PanelToggleButtons";
+
+export type AppTitleBarLayoutControls = {
+  sidebarOpen: boolean;
+  railOpen: boolean;
+  onToggleSidebar: () => void;
+  onToggleRail: () => void;
+};
 
 /**
  * Windows-only custom title bar (GitHub-Desktop style). Consolidates the chrome
@@ -21,6 +29,7 @@ import { AppMenuBar } from "./AppMenuBar";
 export function AppTitleBar(props: {
   desktopApi?: DesktopApi;
   onOpenMessagingActivity?: () => void;
+  layout?: AppTitleBarLayoutControls;
   actions?: {
     automationsActive: boolean;
     settingsActive: boolean;
@@ -76,12 +85,22 @@ export function AppTitleBar(props: {
         ) : null}
       </div>
       <div className="app-titlebar__spacer" />
-      {props.desktopApi ? (
+      {props.layout || props.desktopApi ? (
         <div className="app-titlebar__right">
-          <MessagingStatusBar
-            desktopApi={props.desktopApi}
-            onOpenActivity={props.onOpenMessagingActivity}
-          />
+          {props.layout ? (
+            <PanelToggleButtons
+              sidebarOpen={props.layout.sidebarOpen}
+              railOpen={props.layout.railOpen}
+              onToggleSidebar={props.layout.onToggleSidebar}
+              onToggleRail={props.layout.onToggleRail}
+            />
+          ) : null}
+          {props.desktopApi ? (
+            <MessagingStatusBar
+              desktopApi={props.desktopApi}
+              onOpenActivity={props.onOpenMessagingActivity}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

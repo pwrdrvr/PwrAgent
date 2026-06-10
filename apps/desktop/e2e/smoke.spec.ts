@@ -29,8 +29,8 @@ test("loads the desktop shell without eager skill or manual refresh requests", a
       app.window.getByRole("button", { name: /^Refresh$/i })
     ).toHaveCount(0);
     await expect(
-      app.window.getByRole("button", {
-        name: "Open context rail"
+      app.window.getByRole("tab", {
+        name: "Thread info"
       })
     ).toBeVisible();
   } finally {

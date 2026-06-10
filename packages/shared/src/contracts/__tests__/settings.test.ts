@@ -82,6 +82,11 @@ describe("desktop settings contracts", () => {
       updates: {
         channel: { value: "latest", source: "default" },
       },
+      ui: {
+        sidebarHidden: { value: false, source: "default" },
+        contextRailPinned: { value: false, source: "default" },
+        activeContextTab: { value: "info", source: "default" },
+      },
       messaging: {
         enabled: {
           value: true,

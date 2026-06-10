@@ -46,12 +46,16 @@ import {
   formatExecutionModeLabel,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
-import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
+import {
+  DEFAULT_CONTEXT_TAB,
+  type ContextTabId,
+} from "./context-panels/context-tab";
+import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -85,6 +89,8 @@ type LaunchpadEnvironmentSetupProgress = {
   output: string;
   status: "starting" | "running" | "completed" | "failed";
 };
+
+const noop = (): void => {};
 
 function applyLaunchpadEnvironmentSetupProgress(
   current: LaunchpadEnvironmentSetupProgress | undefined,
@@ -865,6 +871,25 @@ export type ThreadViewProps = {
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   onRevealSelectedThreadInList?: () => void;
+  /**
+   * Window-level layout state (owned by App). The context rail pin +
+   * active tab and the left-sidebar hide toggle are window preferences,
+   * not per-thread, so they live above ThreadView and flow back through
+   * these callbacks (persisted to config there). Optional with safe
+   * defaults so the many existing render-only tests don't have to thread
+   * window chrome; App always supplies them.
+   */
+  contextRailPinned?: boolean;
+  onContextRailPinnedChange?: (pinned: boolean) => void;
+  activeContextTab?: ContextTabId;
+  onActiveContextTabChange?: (tab: ContextTabId) => void;
+  sidebarHidden?: boolean;
+  onToggleSidebar?: () => void;
+  /**
+   * The sidebar masthead's wordmark + action buttons, relocated into the
+   * thread header when the sidebar is hidden (macOS/Linux).
+   */
+  mastheadActions?: MastheadActionsProps;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -990,7 +1015,6 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
-  const [contextRailPinned, setContextRailPinned] = useState(false);
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
@@ -1005,19 +1029,15 @@ export function ThreadView(props: ThreadViewProps) {
     useState<string>();
   const [launchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
-  // Auto-pin the context rail on wide displays (issue #240). Same
-  // breakpoint as the CSS in `app.css` (`@media (min-width: 1700px)`)
-  // so the React state and the visual styles agree about when the
-  // rail is "always visible". Without this, the rail's React panel
-  // content is conditionally rendered (`open = pinned || revealed`)
-  // and the user sees an empty rail wrapper on wide displays because
-  // CSS forced the wrapper visible without the panel content. The
-  // userPinned-vs-effective split also means the user's manual
-  // pin/unpin choice is preserved across resizes — when they shrink
-  // the window back below 1700px the rail returns to whatever they
-  // had it set to before.
-  const contextRailWideMatch = useMediaQuery("(min-width: 1700px)");
-  const contextRailEffectivePinned = contextRailPinned || contextRailWideMatch;
+  // The context-rail pin is a window-level preference owned by App and
+  // toggled from the header chips (no more wide-display force-pin — the
+  // user controls it explicitly).
+  const contextRailPinned = props.contextRailPinned ?? false;
+  const activeContextTab = props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
+  const sidebarHidden = props.sidebarHidden ?? false;
+  const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
+  const onActiveContextTabChange = props.onActiveContextTabChange ?? noop;
+  const onToggleSidebar = props.onToggleSidebar ?? noop;
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
@@ -1029,7 +1049,6 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
     setSetupFailureArchiving(false);
-    setContextRailPinned(false);
     setContextRailResizing(false);
     setExpandedImage(undefined);
     setLaunchpadMaterializing(false);
@@ -1881,6 +1900,13 @@ export function ThreadView(props: ThreadViewProps) {
           desktopApi={props.desktopApi}
           title="Pick a Thread"
           onOpenMessagingActivity={props.onOpenMessagingActivity}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar,
+            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+          }}
+          masthead={props.mastheadActions}
         />
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -2156,11 +2182,18 @@ export function ThreadView(props: ThreadViewProps) {
         backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
         onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
+        layout={{
+          sidebarOpen: !sidebarHidden,
+          railOpen: contextRailPinned,
+          onToggleSidebar,
+          onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+        }}
+        masthead={props.mastheadActions}
       />
 
       <div
         className={`thread-view__layout${
-          contextRailEffectivePinned ? " has-pinned-context-rail" : ""
+          contextRailPinned ? " has-pinned-context-rail" : ""
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
       >
         <div className="thread-view__primary">
@@ -2358,21 +2391,15 @@ export function ThreadView(props: ThreadViewProps) {
         ) : null}
 
         <ThreadContextPanel
+          activeTab={activeContextTab}
           backendError={props.backendError}
           backends={props.backends}
           desktopApi={props.desktopApi}
-          onPinnedChange={setContextRailPinned}
+          onActiveTabChange={onActiveContextTabChange}
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
-          // Auto-pinned when wide (issue #240) — the panel renders
-          // `open = pinned || revealed` so passing the effective
-          // value here makes sure the panel content is in the DOM
-          // at wide widths, not just the empty rail wrapper. The
-          // raw user state (`contextRailPinned`) still flows through
-          // `onPinnedChange` so the user's narrow-width preference
-          // is preserved across resizes.
-          pinned={contextRailEffectivePinned}
+          pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}
           worktreeArchiveError={props.worktreeArchiveError}
