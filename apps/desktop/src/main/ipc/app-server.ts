@@ -48,6 +48,7 @@ import {
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationSnapshot,
   type AutomationThreadSummary,
+  type PrSummary,
   type ReorderDirectoryPinsRequest,
   type ReorderDirectoryPinsResponse,
   type ReorderThreadPinsRequest,
@@ -148,6 +149,9 @@ import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
+const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
+const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
+const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
 const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 
@@ -340,6 +344,56 @@ function getThreadPullRequestsRequestKey(
   });
 }
 
+function getPrStatusKey(pr: Pick<PrSummary, "org" | "repo" | "number">): string {
+  return `${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+}
+
+function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((pr, index) => {
+    const candidate = right[index];
+    return (
+      candidate?.number === pr.number &&
+      candidate.org === pr.org &&
+      candidate.repo === pr.repo &&
+      candidate.state === pr.state &&
+      candidate.url === pr.url
+    );
+  });
+}
+
+type PrStatusRegistryEntry = {
+  pr: PrSummary;
+  fetchedAt: number;
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+class PrStatusTokenBucket {
+  private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
+  private updatedAt = Date.now();
+
+  tryTake(now = Date.now()): boolean {
+    const elapsedMs = Math.max(0, now - this.updatedAt);
+    this.tokens = Math.min(
+      PR_STATUS_TOKEN_BUCKET_CAPACITY,
+      this.tokens +
+        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
+    );
+    this.updatedAt = now;
+
+    if (this.tokens < 1) {
+      return false;
+    }
+
+    this.tokens -= 1;
+    return true;
+  }
+}
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
@@ -353,6 +407,9 @@ class DesktopAppServerService {
     string,
     Promise<RefreshThreadPullRequestsResponse>
   >();
+  private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
+  private readonly pendingPrStatusRefreshes = new Map<string, Promise<void>>();
+  private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -690,6 +747,8 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    this.seedPrStatusRegistryFromThreads(snapshot.threads);
+    const snapshotThreads = this.applyCanonicalPrStatuses(snapshot.threads);
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
@@ -716,6 +775,7 @@ class DesktopAppServerService {
 
     return {
       ...snapshot,
+      threads: snapshotThreads,
       directories,
       unchanged: snapshot.unchanged && directoriesUnchanged,
     };
@@ -1018,7 +1078,9 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
     });
-    const existingPrs = existing?.prs ?? [];
+    const persistedPrs = existing?.prs ?? [];
+    this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
+    const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
     // Terminal-state short-circuit: once every cached PR for a lookup is
     // merged or closed, we do not need to re-query gh for the same
@@ -1059,12 +1121,13 @@ class DesktopAppServerService {
       };
     }
 
-    const lastFetchedAt = existing?.prsFetchedAt;
-    if (
-      typeof lastFetchedAt === "number" &&
-      Date.now() - lastFetchedAt < THREAD_PR_REFRESH_MIN_INTERVAL_MS &&
-      existing?.prsRefreshKey === requestKey
-    ) {
+    if (existingPrs.length > 0) {
+      this.startCanonicalPullRequestRefresh({
+        backend,
+        request,
+        requestKey,
+        previousPrs: existingPrs,
+      });
       return {
         backend,
         threadId: request.threadId,
@@ -1073,24 +1136,203 @@ class DesktopAppServerService {
       };
     }
 
-    const prs = await detectPullRequestsForThread({
-      fetcher,
-      branch,
-      directoryPaths: request.directoryPaths,
+    if (!this.tryClaimLookupRefresh(request.trigger ?? "scheduled")) {
+      return {
+        backend,
+        threadId: request.threadId,
+        prs: existingPrs,
+        ghAvailable: true,
+      };
+    }
+
+    const refreshPromise = this.fetchAndPersistThreadPullRequests({
+      backend,
+      request,
+      requestKey,
+      previousPrs: existingPrs,
     });
+    return await refreshPromise;
+  }
+
+  private async fetchAndPersistThreadPullRequests(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    previousPrs: PrSummary[];
+  }): Promise<RefreshThreadPullRequestsResponse> {
+    const prs = await detectPullRequestsForThread({
+      fetcher: this.getPrFetcher(),
+      branch: params.request.branch.trim(),
+      directoryPaths: params.request.directoryPaths,
+    });
+    const fetchedAt = Date.now();
+    this.rememberPrStatuses(prs, fetchedAt);
 
     // Persist even an empty result so we don't refetch unchanged state on
     // every renderer trigger. The fetchedAt timestamp lets a future TTL
     // policy (if we add one) reason about staleness without any extra
     // bookkeeping.
-    await overlay.setThreadPullRequests({
-      backend,
-      threadId: request.threadId,
+    await this.getOverlayStore().setThreadPullRequests({
+      backend: params.backend,
+      threadId: params.request.threadId,
       prs,
-      refreshKey: requestKey,
+      fetchedAt,
+      refreshKey: params.requestKey,
     });
 
-    return { backend, threadId: request.threadId, prs, ghAvailable: true };
+    if (!prSummariesEqual(params.previousPrs, prs)) {
+      await this.publishThreadPullRequestsUpdated({
+        backend: params.backend,
+        threadId: params.request.threadId,
+        prs,
+      });
+    }
+
+    return {
+      backend: params.backend,
+      threadId: params.request.threadId,
+      prs,
+      ghAvailable: true,
+    };
+  }
+
+  private startCanonicalPullRequestRefresh(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    previousPrs: PrSummary[];
+  }): void {
+    const refreshKey = this.claimCanonicalRefreshKey(
+      params.previousPrs,
+      params.request.trigger ?? "scheduled",
+    );
+    if (!refreshKey || this.pendingPrStatusRefreshes.has(refreshKey)) {
+      return;
+    }
+
+    const promise = this.fetchAndPersistThreadPullRequests(params)
+      .then(() => undefined)
+      .catch((error) => {
+        appServerLog.warn("background PR status refresh failed", {
+          threadId: params.request.threadId,
+          refreshKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.pendingPrStatusRefreshes.get(refreshKey) === promise) {
+          this.pendingPrStatusRefreshes.delete(refreshKey);
+        }
+      });
+    this.pendingPrStatusRefreshes.set(refreshKey, promise);
+  }
+
+  private claimCanonicalRefreshKey(
+    prs: PrSummary[],
+    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+  ): string | undefined {
+    const keys = [...new Set(prs.map(getPrStatusKey))].sort();
+    if (keys.length === 0) {
+      return undefined;
+    }
+
+    const now = Date.now();
+    const minInterval =
+      trigger === "user"
+        ? USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+        : THREAD_PR_REFRESH_MIN_INTERVAL_MS;
+    const timestampField =
+      trigger === "user"
+        ? "lastUserRefreshRequestedAt"
+        : "lastScheduledRefreshRequestedAt";
+    const due = keys.some((key) => {
+      const entry = this.prStatusRegistry.get(key);
+      const lastRequestedAt = entry?.[timestampField];
+      return (
+        typeof lastRequestedAt !== "number" ||
+        now - lastRequestedAt >= minInterval
+      );
+    });
+    if (!due) {
+      return undefined;
+    }
+    if (trigger === "scheduled" && !this.prStatusTokenBucket.tryTake(now)) {
+      return undefined;
+    }
+
+    for (const key of keys) {
+      const entry = this.prStatusRegistry.get(key);
+      if (entry) {
+        entry[timestampField] = now;
+      }
+    }
+
+    return keys.join("|");
+  }
+
+  private tryClaimLookupRefresh(
+    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+  ): boolean {
+    return trigger === "user" || this.prStatusTokenBucket.tryTake();
+  }
+
+  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
+    for (const pr of prs) {
+      const key = getPrStatusKey(pr);
+      const current = this.prStatusRegistry.get(key);
+      if (current && current.fetchedAt > fetchedAt) {
+        continue;
+      }
+      this.prStatusRegistry.set(key, {
+        ...current,
+        pr,
+        fetchedAt,
+      });
+    }
+  }
+
+  private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
+    return prs.map((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr);
+  }
+
+  private seedPrStatusRegistryFromThreads(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      if (!thread.prs?.length) {
+        continue;
+      }
+      this.rememberPrStatuses(thread.prs, 0);
+    }
+  }
+
+  private applyCanonicalPrStatuses(
+    threads: NavigationSnapshot["threads"],
+  ): NavigationSnapshot["threads"] {
+    return threads.map((thread) => {
+      if (!thread.prs?.length) {
+        return thread;
+      }
+      const prs = this.canonicalizePrs(thread.prs);
+      return prSummariesEqual(thread.prs, prs) ? thread : { ...thread, prs };
+    });
+  }
+
+  private async publishThreadPullRequestsUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): Promise<void> {
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: params.backend,
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: params.threadId,
+          prs: params.prs,
+        },
+      },
+    });
   }
 
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
@@ -1566,6 +1808,9 @@ class DesktopAppServerService {
     this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
     this.pendingNavigationSnapshots.clear();
+    this.pendingThreadPullRequestRefreshes.clear();
+    this.prStatusRegistry.clear();
+    this.pendingPrStatusRefreshes.clear();
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();

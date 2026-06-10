@@ -741,7 +741,7 @@ describe("app server ipc", () => {
     });
   });
 
-  it("refreshes mixed terminal and non-terminal PR chips instead of short-circuiting", async () => {
+  it("returns known PR chips immediately and refreshes mixed terminal/non-terminal state in the background", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
@@ -793,23 +793,166 @@ describe("app server ipc", () => {
       request,
     );
 
-    expect(detectPullRequestsForThread).toHaveBeenCalledWith({
-      fetcher: expect.any(Object),
-      branch: "fix/desktop-source-link-goto",
-      directoryPaths: ["/repo"],
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      ghAvailable: true,
+      prs: [stalePassingPr, mergedPr],
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/desktop-source-link-goto",
+        directoryPaths: ["/repo"],
+      });
     });
     expect(setThreadPullRequests).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
       prs: refreshedPrs,
+      fetchedAt: expect.any(Number),
       refreshKey: requestKey,
     });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: refreshedPrs,
+        },
+      },
+    });
+  });
+
+  it("serves the same canonical PR state across different thread overlays", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const stalePr: PrSummary = {
+      number: 727,
+      org: "OpenAI",
+      repo: "codex",
+      state: "pending",
+      url: "https://github.com/OpenAI/codex/pull/727",
+    };
+    const passingPr: PrSummary = {
+      ...stalePr,
+      state: "passing",
+    };
+    const baseRequest = {
+      backend: "codex",
+      branch: "hot-cpu-capture-presets",
+      directoryPaths: ["/repo"],
+    } satisfies Omit<RefreshThreadPullRequestsRequest, "threadId">;
+    const threadOneRequest = {
+      ...baseRequest,
+      threadId: "019eb2a0-734b-7503-b0b8-9d3fa56203ba",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const threadTwoRequest = {
+      ...baseRequest,
+      threadId: "019eb2e4-840b-7fb1-979c-af66091712c0",
+    } satisfies RefreshThreadPullRequestsRequest;
+    getThreadOverlayState
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: threadOneRequest.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: [stalePr],
+        prsFetchedAt: Date.now() - 120_000,
+        prsRefreshKey: "thread-one-key",
+      })
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: threadTwoRequest.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: [stalePr],
+        prsFetchedAt: Date.now() - 120_000,
+        prsRefreshKey: "thread-two-key",
+      });
+    detectPullRequestsForThread.mockResolvedValueOnce([passingPr]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      threadOneRequest,
+    );
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: threadOneRequest.threadId,
+          prs: [passingPr],
+        }),
+      );
+    });
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      threadTwoRequest,
+    );
+
     expect(response).toEqual({
       backend: "codex",
-      threadId: "thread-1",
+      threadId: threadTwoRequest.threadId,
       ghAvailable: true,
-      prs: refreshedPrs,
+      prs: [passingPr],
     });
+    expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces concurrent first-time PR lookups for the same thread request", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const fetchedPrs: PrSummary[] = [
+      {
+        number: 249,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "passing",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/249",
+      },
+    ];
+    let resolveFetch: ((prs: PrSummary[]) => void) | undefined;
+    detectPullRequestsForThread.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+
+    registerAppServerIpcHandlers();
+
+    const handler = handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)!;
+    const first = handler({}, request);
+    const second = handler({}, request);
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+    });
+    resolveFetch?.(fetchedPrs);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        ghAvailable: true,
+        prs: fetchedPrs,
+      },
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        ghAvailable: true,
+        prs: fetchedPrs,
+      },
+    ]);
+    expect(setThreadPullRequests).toHaveBeenCalledOnce();
   });
 
   it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {

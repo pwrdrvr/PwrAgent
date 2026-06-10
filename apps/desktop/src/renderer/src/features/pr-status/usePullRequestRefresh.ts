@@ -35,7 +35,10 @@ export function usePullRequestRefresh(params: {
   }, [onRefreshNavigation]);
 
   const refresh = useCallback(
-    (thread: NavigationThreadSummary): void => {
+    (
+      thread: NavigationThreadSummary,
+      trigger: "scheduled" | "user" = "scheduled",
+    ): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
       const branch = resolvePullRequestLookupBranch(thread);
       if (!branch) return;
@@ -45,6 +48,7 @@ export function usePullRequestRefresh(params: {
         .refreshThreadPullRequests({
           backend: thread.source,
           threadId: thread.id,
+          trigger,
           branch,
           directoryPaths,
         })
@@ -83,7 +87,7 @@ export function usePullRequestRefresh(params: {
       const currentSelected = selectedRef.current;
       if (!currentSelected) return;
       if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey) return;
-      refresh(currentSelected);
+      refresh(currentSelected, "scheduled");
     };
 
     refreshSelected();
@@ -96,7 +100,8 @@ export function usePullRequestRefresh(params: {
   }, [selectedRefreshKey, refresh]);
 
   // Hover prefetch: dedupe so a flood of mouseenter events for the same
-  // thread doesn't trigger a flood of gh subprocesses.
+  // thread doesn't trigger a flood of gh subprocesses. User-triggered
+  // prefetches intentionally use a shorter cooldown in main.
   const inflightKeysRef = useRef<Set<string>>(new Set());
   const prefetch = useCallback(
     (thread: NavigationThreadSummary): void => {
@@ -104,14 +109,15 @@ export function usePullRequestRefresh(params: {
       if (inflightKeysRef.current.has(key)) return;
       inflightKeysRef.current.add(key);
       try {
-        refresh(thread);
+        refresh(thread, "user");
       } finally {
-        // Allow another prefetch attempt after the typical 60s tick window.
+        // Allow deliberate leave/re-enter chip hovers to refresh more often
+        // than the scheduled 60s tick. Main still coalesces these per PR.
         // We don't wait for the IPC to resolve — main absorbs the duplicate
-        // call cost via the cached gh-version probe + terminal short-circuit.
+        // call cost via the registry and in-flight coalescing.
         window.setTimeout(() => {
           inflightKeysRef.current.delete(key);
-        }, SELECTED_REFRESH_INTERVAL_MS);
+        }, 10_000);
       }
     },
     [refresh],

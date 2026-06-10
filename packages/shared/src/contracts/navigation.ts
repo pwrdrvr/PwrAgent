@@ -711,6 +711,12 @@ export type ReorderDirectoryPinsResponse = {
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Refresh intent controls main-process coalescing. Scheduled polling is
+   * rate-limited globally and per PR; direct user interaction gets a much
+   * shorter per-PR cooldown and bypasses the global GitHub token bucket.
+   */
+  trigger?: "scheduled" | "user";
   /** Branch the renderer believes the thread is on. */
   branch: string;
   /**

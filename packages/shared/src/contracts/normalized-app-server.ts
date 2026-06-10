@@ -1159,6 +1159,26 @@ export type AppServerNotification =
         collapsed: boolean;
       };
     }
+  | {
+      method: "thread/pullRequests/updated";
+      params: {
+        threadId: string;
+        prs: Array<{
+          number: number;
+          org: string;
+          repo: string;
+          state:
+            | "merged"
+            | "failing"
+            | "passing"
+            | "draft"
+            | "pending"
+            | "closed"
+            | "unknown";
+          url: string;
+        }>;
+      };
+    }
   /**
    * Directory pin lifecycle — mirror of `thread/pin/*` minus the
    * implicit per-backend dimension (directories are

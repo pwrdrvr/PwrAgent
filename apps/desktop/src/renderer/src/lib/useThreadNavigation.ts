@@ -2298,6 +2298,11 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "thread/pullRequests/updated") {
+        scheduleRefresh();
+        return;
+      }
+
       if (method === "thread/name/updated") {
         const { threadId, threadName } = event.notification.params as {
           threadId: string;
