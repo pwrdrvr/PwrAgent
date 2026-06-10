@@ -3,6 +3,7 @@ import { appendAppLogEntry } from "./app-logs";
 import type { ProfileBootDecision } from "./profile";
 
 let initialized = false;
+let stdioErrorHandlersInstalled = false;
 let debugCollectionEnabled = false;
 const MAX_COMPACT_STRING_LENGTH = 320;
 const MAX_COMPACT_FIELDS = 24;
@@ -10,11 +11,74 @@ const MAX_COMPACT_DEPTH = 2;
 
 type ElectronLogHook = (typeof electronLog.hooks)[number];
 type ElectronLogMessage = Parameters<ElectronLogHook>[0];
+type StdioError = Error & {
+  code?: unknown;
+};
 
 const electronLogConsoleTransport = electronLog.transports?.console;
 
 if (process.env.VITEST === "true" && electronLogConsoleTransport) {
   electronLogConsoleTransport.level = false;
+}
+
+function isClosedStdioError(error: unknown): error is StdioError {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const code = (error as StdioError).code;
+  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
+}
+
+function disableConsoleTransport(): void {
+  electronLog.transports.console.level = false;
+}
+
+function rethrowUnexpectedStdioError(error: unknown): void {
+  queueMicrotask(() => {
+    throw error;
+  });
+}
+
+function handleStdioError(error: unknown): void {
+  if (isClosedStdioError(error)) {
+    disableConsoleTransport();
+    return;
+  }
+
+  rethrowUnexpectedStdioError(error);
+}
+
+function installStdioErrorHandlers(): void {
+  if (stdioErrorHandlersInstalled) {
+    return;
+  }
+
+  stdioErrorHandlersInstalled = true;
+  process.stdout.on("error", handleStdioError);
+  process.stderr.on("error", handleStdioError);
+}
+
+function guardConsoleTransport(): void {
+  const transport = electronLog.transports.console;
+  const writeFn = transport.writeFn;
+
+  transport.writeFn = (options) => {
+    if (transport.level === false) {
+      return;
+    }
+
+    try {
+      writeFn(options);
+    } catch (error) {
+      if (isClosedStdioError(error)) {
+        disableConsoleTransport();
+        return;
+      }
+
+      throw error;
+    }
+  };
 }
 
 export function initializeMainLogger(options?: { profileName?: string }): void {
@@ -23,6 +87,8 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
   }
 
   initialized = true;
+  installStdioErrorHandlers();
+  guardConsoleTransport();
   if (options?.profileName) {
     electronLog.transports.file.fileName = resolveMainLogFileNameForProfile(
       options.profileName,
