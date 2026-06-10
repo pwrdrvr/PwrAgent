@@ -2782,6 +2782,11 @@ export function useThreadSessionState(params: {
             !hasPendingInteraction(current);
 
           if (shouldClearStaleThinking) {
+            if (targetThread.optimisticActiveTurn) {
+              consumedOptimisticActiveTurnKeysRef.current.add(
+                `${targetThreadKey}:${targetThread.optimisticActiveTurn.id}`
+              );
+            }
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,

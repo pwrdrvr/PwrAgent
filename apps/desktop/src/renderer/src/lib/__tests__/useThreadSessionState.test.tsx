@@ -6394,6 +6394,78 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not reseed a launchpad active turn after idle hydration clears it", async () => {
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [
+          {
+            type: "review" as const,
+            id: "review-1",
+            review: "Code review",
+            displayText: "Code review",
+            createdAt: 2_000,
+            turn: {
+              id: "turn-review",
+              status: "completed" as const,
+              startedAt: 1_500,
+              completedAt: 2_500,
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const optimisticThread = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      optimisticActiveTurn: {
+        id: "turn-review",
+        statusText: "Reviewing",
+        startedAt: 1_500,
+        reviewDisplayText: "Review changes against main",
+      },
+    };
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: optimisticThread,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+
+    rerender({ currentThread: { ...optimisticThread } });
+    await flushReactUpdates();
+
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+  });
+
   it("seeds launchpad active turns alongside optimistic user messages", async () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
