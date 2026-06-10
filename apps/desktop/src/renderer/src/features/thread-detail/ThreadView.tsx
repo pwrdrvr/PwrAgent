@@ -1898,6 +1898,13 @@ export function ThreadView(props: ThreadViewProps) {
           desktopApi={props.desktopApi}
           title="Pick a Thread"
           onOpenMessagingActivity={props.onOpenMessagingActivity}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar,
+            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+          }}
+          masthead={props.mastheadActions}
         />
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">

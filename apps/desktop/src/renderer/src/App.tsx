@@ -697,6 +697,13 @@ function DesktopAppShell(props: {
                 desktopApi={desktopApi}
                 title="Loading..."
                 onOpenMessagingActivity={openMessagingActivityWindow}
+                layout={{
+                  sidebarOpen: !sidebarHidden,
+                  railOpen: contextRailPinned,
+                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                }}
+                masthead={mastheadActions}
               />
             </section>
           ) : ThreadViewComponent ? (
