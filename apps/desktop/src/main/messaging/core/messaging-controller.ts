@@ -12118,6 +12118,9 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
 }
 
 export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+  if (intent.kind === "stream_update" && !intent.stream.isFinal) {
+    return false;
+  }
   return intent.kind !== "activity";
 }
 

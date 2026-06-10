@@ -7494,10 +7494,11 @@ describe("MessagingController", () => {
         budgetEvents.push(event);
       },
     );
+    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
     const harness = await createHarness({
       channel: "telegram",
       now: () => now,
-      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliveryBudget,
       resolveDeliveryScope: (intent) =>
         intent.kind === "stream_update" ? scope : undefined,
       onDeliveryBudgetEvent,
@@ -7517,6 +7518,15 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+
+    expect(
+      deliveryBudget.admit({
+        priority: "user_command",
+        scope,
+      }),
+    ).toMatchObject({
+      outcome: "admitted",
+    });
 
     const finalDelivery = harness.controller.handleBackendEvent({
       backend: "codex",
@@ -7634,13 +7644,37 @@ describe("MessagingController", () => {
     );
   });
 
-  it("does not charge typing activity against the message write budget", () => {
+  it("does not charge typing activity or stream partials against the message write budget", () => {
     const activity = {
       id: "activity-1",
       kind: "activity",
       activity: "typing",
       createdAt: 1_000,
       state: "active",
+    } satisfies MessagingSurfaceIntent;
+    const streamPartial = {
+      id: "stream-1",
+      kind: "stream_update",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      stream: {
+        isFinal: false,
+        itemId: "item-1",
+        key: "stream-key",
+        sequence: 1,
+        turnId: "turn-1",
+      },
+      text: "Partial",
+    } satisfies MessagingSurfaceIntent;
+    const finalStream = {
+      ...streamPartial,
+      id: "stream-2",
+      stream: {
+        ...streamPartial.stream,
+        isFinal: true,
+        sequence: 2,
+      },
+      text: "Final",
     } satisfies MessagingSurfaceIntent;
     const status = {
       id: "status-1",
@@ -7651,6 +7685,8 @@ describe("MessagingController", () => {
     } satisfies MessagingSurfaceIntent;
 
     expect(shouldConsumeDeliveryBudget(activity)).toBe(false);
+    expect(shouldConsumeDeliveryBudget(streamPartial)).toBe(false);
+    expect(shouldConsumeDeliveryBudget(finalStream)).toBe(true);
     expect(shouldConsumeDeliveryBudget(status)).toBe(true);
   });
 
