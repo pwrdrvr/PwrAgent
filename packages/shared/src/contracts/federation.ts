@@ -93,6 +93,12 @@ export type FederationHealthStatus = {
   peers: FederationPeerSummary[];
 };
 
+export type ReadFederationHealthRequest = Record<string, never>;
+
+export type ReadFederationHealthResponse = {
+  health: FederationHealthStatus;
+};
+
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
   label?: string;

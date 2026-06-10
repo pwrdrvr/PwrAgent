@@ -1,6 +1,7 @@
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
 export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";
+export const FEDERATION_GET_HEALTH_CHANNEL = "federation:get-health";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";
