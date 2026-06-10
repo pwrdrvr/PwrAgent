@@ -383,6 +383,11 @@ textarea,
   display: grid;
   position: relative;
   grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
+  /* The sidebar's actual horizontal footprint. Mirrors `--sidebar-width`
+     while the sidebar is shown; the hidden override below drops it to 0 so
+     downstream reserves (e.g. `--context-rail-effective`) stop subtracting a
+     sidebar that isn't on screen. */
+  --sidebar-reserve: var(--sidebar-width, 408px);
   align-items: stretch;
   height: 100vh;
   height: 100dvh;
@@ -403,6 +408,9 @@ textarea,
    0-width first track and the whole content area collapses to nothing. */
 .app-shell[data-sidebar-hidden="true"] {
   grid-template-columns: minmax(0, 1fr);
+  /* No sidebar on screen — free its footprint so reserves computed from it
+     (the context rail's effective width) reclaim the space. */
+  --sidebar-reserve: 0px;
 }
 
 .app-shell[data-sidebar-hidden="true"] .sidebar {
@@ -748,27 +756,12 @@ textarea,
      22px matches the v2 design's `.pa-thread__header { padding:
      14px 22px }`. */
   padding-left: 22px;
-  /* Reserve space for the position:fixed context-rail spine (48px wide,
-     pinned top-right). Without this padding, anything we render in the
-     header's right-aligned region (messaging status icons, on/off
-     toggle) gets covered by the spine's hamburger button. */
-  padding-right: 56px;
-}
-
-.thread-view:has(.context-rail.is-open) .thread-header {
-  /* The header sits above `.thread-view__layout`, so the layout's
-     pinned-rail padding does not protect the right-aligned messaging
-     indicators. Reserve the opened rail width here as well; the
-     title/chips shrink first and the status indicators keep their
-     visible slot. */
-  /* + 48px reserves the always-visible tab rail (spine) that now sits at
-     the window edge to the right of the panel. */
-  padding-right: calc(min(var(--context-rail-width, 380px), calc(100% - 32px)) + 60px);
-}
-
-.thread-view:has(.context-rail.is-pinned) .thread-header,
-.thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
-  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 60px);
+  /* The context rail now lives BELOW the header (anchored to
+     `.thread-view__layout`, not the window), so the header owns its full
+     width — no rail gutter to reserve and nothing to squash the toggles /
+     MSG against. Just a small right inset so they don't sit flush to the
+     window edge. */
+  padding-right: 16px;
 }
 
 .thread-header button,
@@ -3879,6 +3872,25 @@ textarea,
   gap: 0;
   min-height: 0;
   overflow: hidden;
+  /* The single source of truth for the pinned rail's rendered width.
+     `.context-panel` renders at exactly this, and `.thread-view__layout`
+     reserves exactly this (+ spine) — computed ONCE so the panel and its
+     gutter can never disagree (which is what slid the panel over the chat
+     + MSG cluster). The header no longer reserves a gutter at all: the rail
+     is anchored below it (see `.context-rail`).
+
+     The width is the user's chosen `--context-rail-width`, but never wider
+     than what leaves the chat column ~400px after the sidebar + spine. A
+     plain `42vw` cap ignored the sidebar, so on a narrow window a wide rail
+     still starved the chat and the fixed-width MSG cluster overflowed under
+     the rail. `--sidebar-reserve` is the sidebar's real footprint (0px when
+     the sidebar is hidden), so a hidden sidebar hands the freed space to the
+     rail instead of reserving for a sidebar that isn't there. `max(240px, …)`
+     keeps the panel usable on tiny windows. */
+  --context-rail-effective: min(
+    var(--context-rail-width, 380px),
+    max(240px, calc(100vw - var(--sidebar-reserve, 408px) - 448px))
+  );
 }
 
 .settings-screen {
@@ -6494,8 +6506,10 @@ textarea,
      `.composer > *`), so the visual breathing room between the message
      column and the rail comes from the centered chat column's right
      margin. + 48px reserves the always-visible tab rail (spine) that
-     sits at the window edge to the right of the panel. */
-  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 48px);
+     sits at the window edge to the right of the panel. Reserve exactly the
+     panel's shared effective width (see `.thread-view`) so the gutter and
+     the panel can never disagree. */
+  padding-right: calc(var(--context-rail-effective, 380px) + 48px);
 }
 
 .thread-view__layout.is-resizing-context-rail {
@@ -7501,8 +7515,13 @@ textarea,
 .live-work-rail--dock-above {
   /* Cap at the same width as the composer + transcript reading
      column (--chat-column-max) so the rail lines up visually with
-     the composer's input. Issue #495 follow-up. */
-  width: min(100%, var(--chat-column-max));
+     the composer's input. Issue #495 follow-up.
+     Subtract the 16px side margins from the 100% term: when the chat
+     column is narrower than --chat-column-max (the usual case once the
+     sidebar + context rail are both open), a bare `100%` plus the margins
+     overflows the column and rams the bar flush against the sidebar +
+     context rail while the composer/transcript stay inset 16px. */
+  width: min(100% - 32px, var(--chat-column-max));
   align-self: center;
   margin: 0 16px 8px;
   /* Bounded height: composer + transcript should still own the
@@ -8951,14 +8970,21 @@ textarea,
 
 .context-rail {
   display: flex;
-  position: fixed;
+  /* Anchored to `.thread-view__layout` (position: relative), NOT the window,
+     so the rail starts BELOW the thread header and spans only the chat area.
+     The header then keeps its full width and never has to reserve a gutter
+     or squash its toggles/MSG to clear a rail that overlaps the title line.
+     `right: 0` lands on the layout's padding edge = the window's right edge;
+     the layout's padding-right reserves the gutter so the transcript /
+     composer sit flush against the rail's left border when pinned. */
+  position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
   z-index: 10;
   flex: 0 0 auto;
   width: max-content;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100% - 32px);
   min-width: 0;
   min-height: 0;
   overflow: visible;
@@ -8983,13 +9009,6 @@ textarea,
 .context-rail.is-pinned {
   z-index: 10;
   box-shadow: none;
-}
-
-/* On Windows the context-rail is position:fixed top:0 — it would slide under
-   the custom title strip (and its tabs under the OS caption buttons). Pin it
-   below the strip instead. */
-:root[data-platform="win32"] .context-rail {
-  top: var(--win-titlebar-h);
 }
 
 /* Vertical tab rail pinned to the window's right edge — always visible. Tool
@@ -9120,8 +9139,12 @@ textarea,
   order: 1;
   display: flex;
   flex-direction: column;
-  flex: 0 0 min(var(--context-rail-width, 380px), calc(100vw - 96px));
-  width: min(var(--context-rail-width, 380px), calc(100vw - 96px));
+  /* Render at the shared effective width (see `.thread-view`). The gutter
+     reserved by `.thread-view__layout` is this same var (+ spine), so this
+     absolutely-positioned surface can never be wider than its reserved
+     gutter — which is what slid it over the chat + MSG cluster. */
+  flex: 0 0 var(--context-rail-effective, 380px);
+  width: var(--context-rail-effective, 380px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -11894,15 +11917,13 @@ textarea,
     grid-template-columns: minmax(280px, min(var(--sidebar-width, 360px), 360px)) minmax(0, 1fr);
   }
 
-  .thread-view__layout {
-    flex-direction: column;
-    padding-right: 0;
-  }
-
-  .thread-view:has(.context-rail.is-open) .thread-header,
-  .thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
-    padding-right: 56px;
-  }
+  /* No rail-gutter override here. The context rail is anchored to
+     `.thread-view__layout`, which reserves its gutter from the shared
+     `--context-rail-effective` width — already sidebar-aware and scaling
+     down with the viewport (it leaves the chat ~400px). Zeroing the reserve
+     at narrow widths (as this block used to) only removed the gutter while
+     the panel kept rendering, covering the chat. Let the capped reserve
+     ride the window down instead. */
 
   .transcript-list__scroll-bottom {
     left: 50%;
@@ -11923,51 +11944,15 @@ textarea,
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  /* At narrow widths the rail stops floating and stacks below the chat:
-     the tab strip becomes a horizontal row and the open panel sits under
-     it, full width. */
-  .context-rail,
-  .context-rail.is-open,
-  .context-rail.is-pinned {
-    position: static;
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-    flex-basis: auto;
-    flex-direction: column;
-    margin-left: 0;
-    box-shadow: none;
-  }
-
-  .context-rail__spine {
-    order: 0;
-    width: 100%;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    padding: 8px;
-    border-left: 0;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .context-rail__tablist {
-    flex: 0 0 auto;
-    flex-direction: row;
-    width: auto;
-  }
-
-  .context-rail__tablist-spacer {
-    display: none;
-  }
-
-  .context-panel {
-    order: 1;
-    width: 100%;
-    flex-basis: auto;
-    border-left: 0;
-    max-height: 60vh;
-    animation: none;
-  }
+  /* No rail overrides at narrow widths. The rail is anchored to
+     `.thread-view__layout` (position: absolute) and its width is the
+     sidebar-aware `--context-rail-effective`, which already shrinks the
+     panel as the window narrows. The old narrow-width design flipped the
+     rail to `position: static; width: 100%` to stack it below the chat as a
+     horizontal strip — but that only worked while `.thread-view__layout`
+     was `flex-direction: column`. Anchored absolute, a static full-width
+     rail would instead sit in-flow beside the chat and collapse it to zero
+     width, so the rail stays vertical + floating at every width. */
 }
 
 @media (max-width: 820px) {

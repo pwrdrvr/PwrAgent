@@ -2399,6 +2399,7 @@ export function ThreadView(props: ThreadViewProps) {
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
+          width={contextRailWidth}
           pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}
