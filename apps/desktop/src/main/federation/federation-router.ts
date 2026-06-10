@@ -40,6 +40,20 @@ export class FederationRouter {
     this.connections.set(connection.peerId, connection);
   }
 
+  getConnection(peerId: FederationInstanceId): FederationRouterConnection | undefined {
+    return this.connections.get(peerId);
+  }
+
+  sendToPeer(
+    peerId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): boolean {
+    const connection = this.connections.get(peerId);
+    if (!connection) return false;
+    connection.sendEnvelope(envelope);
+    return true;
+  }
+
   unregisterConnection(peerId: FederationInstanceId): void {
     this.connections.delete(peerId);
   }

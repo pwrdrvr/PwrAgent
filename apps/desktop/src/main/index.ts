@@ -42,6 +42,10 @@ import {
   registerFederationIpcHandlers,
 } from "./ipc/federation";
 import {
+  disposeDesktopFederationRuntime,
+  getDesktopFederationRuntime,
+} from "./federation/federation-runtime";
+import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
@@ -158,6 +162,7 @@ const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
+const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 
 // Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
@@ -440,6 +445,11 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
         await disposeMessagingStatusIpcHandlers();
         await disposeDesktopMessagingRuntime();
       },
+    },
+    {
+      name: "federation",
+      timeoutMs: FEDERATION_SHUTDOWN_TIMEOUT_MS,
+      run: disposeDesktopFederationRuntime,
     },
     {
       name: "app-server",
@@ -860,6 +870,9 @@ export function bootstrapApp(): void {
     });
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
+        if (patch.federation !== undefined) {
+          await getDesktopFederationRuntime().restart();
+        }
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
@@ -878,6 +891,11 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
+    void getDesktopFederationRuntime().restart().catch((error) => {
+      mainLog.error("federation runtime failed during startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const messagingRuntime = getDesktopMessagingRuntime((options) =>
       loadDesktopMessagingConfigFromSettings(
         getDesktopSettingsService(),

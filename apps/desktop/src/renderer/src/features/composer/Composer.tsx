@@ -71,6 +71,7 @@ import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -5709,6 +5710,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.startTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         input: payload.input,
         executionMode: props.thread.executionMode,

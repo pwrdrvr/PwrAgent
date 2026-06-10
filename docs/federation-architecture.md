@@ -69,3 +69,40 @@ future support tooling:
 
 UI surfaces should treat this as operator-visible status, not as an authority
 for making authorization decisions.
+
+## MVP Dogfood Flow
+
+Build once, then run two isolated profiles from the same checkout:
+
+```sh
+pnpm --filter @pwragent/desktop build
+PWRAGENT_PROFILE=master pnpm --filter @pwragent/desktop preview
+PWRAGENT_PROFILE=child pnpm --filter @pwragent/desktop preview
+```
+
+In the master profile, open Settings -> Federation:
+
+1. Set mode to `gateway`.
+2. Keep `listen_host` as `127.0.0.1`.
+3. Set a local test port, for example `8765`.
+4. Set Public URL to `ws://127.0.0.1:8765` for local testing, or to the
+   Cloudflare Tunnel `wss://...` endpoint for remote testing.
+5. Save federation settings.
+6. Generate an invite.
+
+In the child profile, open Settings -> Federation:
+
+1. Paste the invite into Import invite.
+2. Import it. The child switches to `child` mode and stores the gateway URL.
+3. Refresh health on both profiles.
+
+Back in the master profile:
+
+1. Confirm the child appears under Enrolled Peers.
+2. Click Open next to the child.
+3. The new window is scoped to the child instance for thread list, thread read,
+   skill list, and prompt submission.
+
+The MVP does not yet stream remote live events into the master window. After
+submitting a prompt to a remote thread, refresh/reopen the thread to inspect the
+updated transcript.

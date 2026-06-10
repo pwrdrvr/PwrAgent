@@ -99,6 +99,26 @@ export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
 };
 
+export type GenerateFederationInviteRequest = {
+  label?: string;
+  ttlMs?: number;
+};
+
+export type GenerateFederationInviteResponse = {
+  invite: string;
+  expiresAt: number;
+};
+
+export type ImportFederationInviteRequest = {
+  invite: string;
+};
+
+export type ImportFederationInviteResponse = {
+  accepted: boolean;
+  gatewayInstanceId: FederationInstanceId;
+  gatewayUrl: string;
+};
+
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
   label?: string;

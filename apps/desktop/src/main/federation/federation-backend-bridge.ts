@@ -6,6 +6,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   FederationCapability,
+  StartTurnRequest,
+  StartTurnResponse,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
@@ -14,6 +16,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listThreads: "backend.listThreads",
   readThread: "backend.readThread",
   listSkills: "backend.listSkills",
+  startTurn: "backend.startTurn",
 } as const;
 
 export type FederationBackendMethod =
@@ -26,6 +29,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
 };
 
 export type FederationBackendOperations = {
@@ -38,6 +42,7 @@ export type FederationBackendOperations = {
   listSkills(
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
+  startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
 };
 
 export function registerFederationBackendHandlers(params: {
@@ -63,6 +68,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listSkills(
         (envelope.params ?? {}) as AppServerListSkillsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.startTurn,
+    async (envelope) =>
+      await params.backend.startTurn(
+        envelope.params as StartTurnRequest,
       ),
   );
 }
@@ -93,6 +105,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<AppServerListSkillsResponse> {
     return await this.rpc.request<AppServerListSkillsResponse>({
       method: FEDERATION_BACKEND_METHODS.listSkills,
+      params: request,
+    });
+  }
+
+  async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
+    return await this.rpc.request<StartTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.startTurn,
       params: request,
     });
   }

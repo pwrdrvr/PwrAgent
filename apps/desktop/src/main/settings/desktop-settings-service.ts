@@ -62,6 +62,12 @@ import {
 } from "@pwragent/messaging-interface";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import {
+  generateFederationIdentityKeyPair,
+  publicKeyPemFromPrivateKey,
+  type FederationIdentityKeyPair,
+} from "../federation/federation-identity";
+
+import {
   applyDesktopSettingsPatch,
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
@@ -1371,6 +1377,24 @@ export class DesktopSettingsService {
 
   async resolveGrokApiKey(): Promise<string | undefined> {
     return await this.options.secretStore.getSecret("grokApiKey");
+  }
+
+  async getOrCreateFederationIdentityKeyPair(): Promise<FederationIdentityKeyPair> {
+    const existing = await this.options.secretStore.getSecret(
+      "federationInstancePrivateKey",
+    );
+    if (existing) {
+      return {
+        privateKeyPem: existing,
+        publicKeyPem: publicKeyPemFromPrivateKey(existing),
+      };
+    }
+    const keyPair = generateFederationIdentityKeyPair();
+    await this.options.secretStore.setSecret(
+      "federationInstancePrivateKey",
+      keyPair.privateKeyPem,
+    );
+    return keyPair;
   }
 
   resolveTelegramBotTokenSync(): string | undefined {

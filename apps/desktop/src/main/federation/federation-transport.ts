@@ -79,6 +79,8 @@ export type FederationGatewayWebSocketServerOptions = {
   port: number;
   store: FederationStore;
   sessions?: FederationSessionRegistry;
+  onConnection?: (connection: FederationGatewayConnection) => void;
+  onDisconnect?: (connection: FederationGatewayConnection) => void;
   onEnvelope?: (
     envelope: FederationProtocolEnvelope,
     connection: FederationGatewayConnection,
@@ -180,6 +182,7 @@ export class FederationGatewayWebSocketServer {
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         capabilities: decision.capabilities,
       });
+      this.options.onConnection?.(connection);
 
       socket.on("message", (nextRaw) => {
         const next = parseSocketMessage(nextRaw);
@@ -193,6 +196,9 @@ export class FederationGatewayWebSocketServer {
           closedAt: Date.now(),
           reason: "transport_closed",
         });
+        if (connection) {
+          this.options.onDisconnect?.(connection);
+        }
       });
     });
   }

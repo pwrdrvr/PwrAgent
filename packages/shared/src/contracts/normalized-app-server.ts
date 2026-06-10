@@ -3,6 +3,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
+import type { FederationTarget } from "./federation";
 import type {
   PrSummary,
   ThreadPrAutoDispatchEventKind,
@@ -654,6 +655,7 @@ export type AppServerThreadReplay = {
 export type AppServerListThreadsRequest = {
   backend?: AppServerBackendKind;
   archived?: boolean;
+  federationTarget?: FederationTarget;
   filter?: string;
 };
 
@@ -810,6 +812,7 @@ export type RenameThreadResponse = {
 
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   includeTurns?: boolean;
   before?: string;
@@ -941,6 +944,7 @@ export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
   cwd?: string;
   cwds?: string[];
+  federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
 };
 
