@@ -11592,6 +11592,7 @@ function isUserInitiatedDeliveryEvent(
     event &&
       (event.kind === "callback" ||
         event.kind === "command" ||
+        event.kind === "media" ||
         event.kind === "text"),
   );
 }

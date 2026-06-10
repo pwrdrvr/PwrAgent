@@ -461,6 +461,111 @@ describe("MessagingController", () => {
     });
   });
 
+  it("queues media-initiated pending skill status renders during slow mode", async () => {
+    let now = 0;
+    const sleeps: number[] = [];
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 1, intervalMs: 1000, reserved: 0 },
+    };
+    const budgetEvents: Array<
+      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+    > = [];
+    const harness = await createHarness({
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      downloadAttachment: vi.fn(async ({ attachment }) => {
+        const data = new TextEncoder().encode("error log");
+        return {
+          data,
+          fileName: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: data.byteLength,
+        };
+      }),
+      now: () => now,
+      onDeliveryBudgetEvent: (event) => budgetEvents.push(event),
+      resolveDeliveryScope: () => scope,
+      sleepUntil: async (retryAt) => {
+        sleeps.push(retryAt);
+        now = retryAt;
+      },
+    });
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCallbackEvent({ actionId: "status:refresh" }).channel,
+    );
+    expect(binding).toBeTruthy();
+    await harness.store.upsertBinding({
+      ...binding!,
+      pendingSkillSelection: {
+        name: "ce:work",
+        path: "/skills/ce-work/SKILL.md",
+        selectedActorId: "user-1",
+        selectedAt: now,
+      },
+      statusSurface: {
+        channel: "telegram",
+        id: "surface:existing-status",
+      },
+      updatedAt: now,
+    });
+    harness.delivered.length = 0;
+    now = 6000;
+    budgetEvents.length = 0;
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Please inspect this"),
+      id: "event-media",
+      kind: "media",
+      text: "Please inspect this",
+      attachments: [
+        {
+          id: "file-1",
+          kind: "file",
+          name: "debug.log",
+          disposition: "available",
+          mimeType: "text/plain",
+          sizeBytes: 9,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          {
+            type: "text",
+            text: "Use [$ce:work](/skills/ce-work/SKILL.md)",
+          },
+        ]),
+      }),
+    );
+    expect(sleeps).toHaveLength(1);
+    expect(budgetEvents).toContainEqual(
+      expect.objectContaining({
+        outcome: "deferred",
+        priority: "user_command",
+        intentKind: "status",
+        reason: "budget-exhausted",
+        retryAt: sleeps[0],
+      }),
+    );
+    expect(budgetEvents).not.toContainEqual(
+      expect.objectContaining({
+        outcome: "dropped",
+        intentKind: "status",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({ mode: "update" }),
+      text: expect.not.stringContaining("Pending skill: $ce:work"),
+    });
+  });
+
   it("starts a new messaging thread in a new worktree from the selected base branch", async () => {
     const harness = await createHarness({
       navigation: {
