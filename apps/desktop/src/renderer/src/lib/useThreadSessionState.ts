@@ -19,9 +19,12 @@ import type {
   AppServerThreadImagePart,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
+import {
+  agentEventThreadIdentityKey,
+  threadSummaryIdentityKey,
+} from "./federated-thread-events";
 import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
@@ -2912,7 +2915,7 @@ export function useThreadSessionState(params: {
 } {
   const { desktopApi, liveTranscriptEventFiltering = false, thread } = params;
   const threadKey = thread
-    ? buildThreadIdentityKey(thread.source, thread.id)
+    ? threadSummaryIdentityKey(thread)
     : undefined;
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
@@ -3019,7 +3022,7 @@ export function useThreadSessionState(params: {
   const loadLatest = useCallback(
     async (targetThread: NavigationThreadSummary): Promise<void> => {
       const readThread = desktopApi?.readThread;
-      const targetThreadKey = buildThreadIdentityKey(targetThread.source, targetThread.id);
+      const targetThreadKey = threadSummaryIdentityKey(targetThread);
       const hydrationVersion = getThreadHydrationVersion(targetThread);
 
       if (!readThread) {
@@ -3405,7 +3408,7 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      const targetThreadKey = buildThreadIdentityKey(event.backend, notificationThreadId);
+      const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
       if (
         liveTranscriptEventFiltering &&

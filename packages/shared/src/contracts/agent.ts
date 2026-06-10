@@ -634,6 +634,7 @@ export type RegisterDirectoryFromDiskResponse =
 
 export type AgentEvent = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   notification: AppServerNotification;
   /**
    * Optional main-process display model for live protocol notifications whose

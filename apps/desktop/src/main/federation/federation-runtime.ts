@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type {
+  AgentEvent,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
@@ -10,8 +11,9 @@ import type {
   FederationProtocolEnvelope,
 } from "@pwragent/shared";
 import {
+  FEDERATION_PROTOCOL_VERSION,
   buildFederatedThreadRef,
-  buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   isRemoteFederationTarget,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
@@ -31,9 +33,11 @@ import {
   type FederationEnrollmentInvite,
 } from "./federation-enrollment";
 import {
+  FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
+  type FederationBackendEventNotification,
   type FederationBackendOperations,
 } from "./federation-backend-bridge";
 import { buildFederationHealthStatus } from "./federation-health";
@@ -77,7 +81,13 @@ export class DesktopFederationRuntime {
   private listenUrl?: string;
   private gatewayUrl?: string;
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
+  private publishAgentEvent?: (event: AgentEvent) => void;
+  private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
+
+  setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
+    this.publishAgentEvent = publisher;
+  }
 
   async restart(): Promise<void> {
     this.restartPromise ??= this.restartNow().finally(() => {
@@ -87,6 +97,8 @@ export class DesktopFederationRuntime {
   }
 
   async stop(): Promise<void> {
+    this.unsubscribeLocalBackendEvents?.();
+    this.unsubscribeLocalBackendEvents = undefined;
     this.child?.close();
     this.child = undefined;
     await this.server?.stop();
@@ -221,7 +233,7 @@ export class DesktopFederationRuntime {
       unchanged: false,
       threads,
       inboxThreadKeys: threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
+        federatedThreadIdentityKey(thread.federation.ref),
       ),
       directories: [],
       launchpadDefaults: {
@@ -249,6 +261,7 @@ export class DesktopFederationRuntime {
       backend: localBackendOperations(),
     });
     this.router = router;
+    this.subscribeLocalBackendEvents();
 
     if (mode === "gateway" || mode === "dual") {
       this.server = new FederationGatewayWebSocketServer({
@@ -257,7 +270,7 @@ export class DesktopFederationRuntime {
         port: settings.federation.listenPort.value,
         store: this.store(),
         onConnection: (connection) => this.registerGatewayConnection(connection),
-        onDisconnect: (connection) => this.unregisterPeer(connection.peerId),
+        onDisconnect: (connection) => this.unregisterGatewayConnection(connection),
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
       });
@@ -315,6 +328,14 @@ export class DesktopFederationRuntime {
     });
   }
 
+  private unregisterGatewayConnection(connection: FederationGatewayConnection): void {
+    const activeConnection = this.router?.getConnection(connection.peerId);
+    if (activeConnection?.sendEnvelope !== connection.sendEnvelope) {
+      return;
+    }
+    this.unregisterPeer(connection.peerId);
+  }
+
   private unregisterPeer(peerId: FederationInstanceId): void {
     this.router?.unregisterConnection(peerId);
     this.rpcByPeer.delete(peerId);
@@ -324,9 +345,12 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
-    if (envelope.kind === "response" || envelope.kind === "error") {
-      this.rpcByPeer.get(sourcePeerId)?.receiveEnvelope(envelope);
+    if (this.publishRemoteBackendEvent(envelope, sourcePeerId)) {
       return;
+    }
+    if (envelope.kind === "response" || envelope.kind === "error") {
+      const handled = this.rpcByPeer.get(sourcePeerId)?.receiveEnvelope(envelope) ?? false;
+      if (handled) return;
     }
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
   }
@@ -347,6 +371,64 @@ export class DesktopFederationRuntime {
 
   private store(): FederationStore {
     return new FederationStore(getAppStateDb());
+  }
+
+  private subscribeLocalBackendEvents(): void {
+    this.unsubscribeLocalBackendEvents?.();
+    this.unsubscribeLocalBackendEvents = getDesktopBackendRegistry().onEvent((event) => {
+      this.forwardLocalBackendEvent(event);
+    });
+  }
+
+  private forwardLocalBackendEvent(event: AgentEvent): void {
+    const router = this.router;
+    if (!router) return;
+
+    for (const connection of router.listConnections()) {
+      if (
+        !connection.capabilities.includes("remote_window") &&
+        !connection.capabilities.includes("thread_detail")
+      ) {
+        continue;
+      }
+
+      connection.sendEnvelope({
+        id: `federation-event:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: event.backend,
+          notification: event.notification,
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: connection.peerId,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  private publishRemoteBackendEvent(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      envelope.method !== FEDERATION_BACKEND_EVENT_METHOD
+    ) {
+      return false;
+    }
+
+    const notification = envelope as FederationBackendEventNotification & typeof envelope;
+    this.publishAgentEvent?.({
+      backend: notification.params.backend,
+      federationTarget: {
+        scope: "remote",
+        instanceId: envelope.sourceInstanceId || sourcePeerId,
+      },
+      notification: notification.params.notification,
+    });
+    return true;
   }
 }
 

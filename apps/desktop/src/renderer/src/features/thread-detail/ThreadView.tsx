@@ -45,6 +45,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -1713,8 +1714,9 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.method === "mcpServer/oauthLogin/completed");
 
       if (
-        event.backend !== selectedThread.source ||
-        (notificationThreadId !== selectedThread.id && !isGlobalMcpStatus)
+        isGlobalMcpStatus
+          ? event.backend !== selectedThread.source
+          : !agentEventMatchesThread(event, selectedThread, notificationThreadId)
       ) {
         return;
       }

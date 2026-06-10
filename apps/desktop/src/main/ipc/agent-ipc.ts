@@ -270,7 +270,7 @@ function withRendererActivityEntry(event: AgentEvent): AgentEvent {
   return rendererActivityEntry ? { ...event, rendererActivityEntry } : event;
 }
 
-function broadcastAgentEvent(event: AgentEvent): void {
+export function broadcastAgentEvent(event: AgentEvent): void {
   const eventSummary = summarizeAgentEvent(event);
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
@@ -290,6 +290,7 @@ export function registerAgentIpcHandlers(): void {
   const registry = getDesktopBackendRegistry();
 
   unsubscribeRegistryEvents?.();
+  getDesktopFederationRuntime().setAgentEventPublisher(broadcastAgentEvent);
   unsubscribeRegistryEvents = registry.onEvent((event) => {
     broadcastAgentEvent(event);
   });

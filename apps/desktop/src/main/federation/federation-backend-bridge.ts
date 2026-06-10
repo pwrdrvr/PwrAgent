@@ -5,6 +5,7 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AgentEvent,
   FederationCapability,
   StartTurnRequest,
   StartTurnResponse,
@@ -18,6 +19,13 @@ export const FEDERATION_BACKEND_METHODS = {
   listSkills: "backend.listSkills",
   startTurn: "backend.startTurn",
 } as const;
+
+export const FEDERATION_BACKEND_EVENT_METHOD = "backend.event";
+
+export type FederationBackendEventNotification = {
+  method: typeof FEDERATION_BACKEND_EVENT_METHOD;
+  params: AgentEvent;
+};
 
 export type FederationBackendMethod =
   (typeof FEDERATION_BACKEND_METHODS)[keyof typeof FEDERATION_BACKEND_METHODS];

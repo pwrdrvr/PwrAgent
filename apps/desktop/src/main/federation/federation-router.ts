@@ -44,6 +44,10 @@ export class FederationRouter {
     return this.connections.get(peerId);
   }
 
+  listConnections(): FederationRouterConnection[] {
+    return [...this.connections.values()];
+  }
+
   sendToPeer(
     peerId: FederationInstanceId,
     envelope: FederationProtocolEnvelope,

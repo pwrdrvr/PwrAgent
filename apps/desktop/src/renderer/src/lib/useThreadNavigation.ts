@@ -34,6 +34,10 @@ import {
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import {
+  agentEventThreadIdentityKey,
+  federationTargetsEqual,
+} from "./federated-thread-events";
+import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
   type ThreadWorkspaceMode,
@@ -2630,6 +2634,10 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onAgentEvent((event) => {
+      if (!federationTargetsEqual(event.federationTarget, readRendererFederationTarget())) {
+        return;
+      }
+
       const method = event.notification.method as string;
       if (method === "navigation/directoryGitStatus/updated") {
         const params = event.notification
@@ -2742,7 +2750,7 @@ export function useThreadNavigation(
         const { threadId } = event.notification.params as {
           threadId: string;
         };
-        const threadKey = buildThreadIdentityKey(event.backend, threadId);
+        const threadKey = agentEventThreadIdentityKey(event, threadId);
         suppressedArchivedThreadKeysRef.current.add(threadKey);
 
         setState((current) => ({
@@ -3120,7 +3128,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         suppressedArchivedThreadKeysRef.current.delete(
-          buildThreadIdentityKey(event.backend, threadId)
+          agentEventThreadIdentityKey(event, threadId)
         );
         scheduleRefresh();
         return;

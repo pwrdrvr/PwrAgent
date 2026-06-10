@@ -6,8 +6,12 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import {
+  agentEventMatchesThread,
+  federationTargetsEqual,
+  threadSummaryIdentityKey,
+} from "./federated-thread-events";
 
 type SkillState = {
   error?: string;
@@ -48,7 +52,8 @@ export function useThreadSkills(params: {
       return {
         backend: thread.source,
         cwds,
-        key: buildThreadIdentityKey(thread.source, thread.id),
+        federationTarget: thread.federation?.ref.target,
+        key: threadSummaryIdentityKey(thread),
         threadId: thread.id,
       };
     }
@@ -58,6 +63,7 @@ export function useThreadSkills(params: {
       return {
         backend: launchpad.backend,
         cwds,
+        federationTarget: undefined,
         key: `launchpad:${launchpad.backend}:${launchpad.directoryKey}`,
         threadId: undefined,
       };
@@ -112,6 +118,9 @@ export function useThreadSkills(params: {
           backend: skillTarget.backend,
           ...(cwds.length === 1 ? { cwd: cwds[0] } : {}),
           ...(cwds.length > 0 ? { cwds } : {}),
+          ...(skillTarget.federationTarget
+            ? { federationTarget: skillTarget.federationTarget }
+            : {}),
           ...(skillTarget.threadId ? { threadId: skillTarget.threadId } : {}),
         });
 
@@ -150,9 +159,12 @@ export function useThreadSkills(params: {
       return;
     }
 
-    const { backend, key, threadId } = skillTarget;
+    const { backend, federationTarget, key, threadId } = skillTarget;
     return desktopApi.onAgentEvent((event) => {
       if (event.backend !== backend) {
+        return;
+      }
+      if (!federationTargetsEqual(event.federationTarget, federationTarget)) {
         return;
       }
 
@@ -183,9 +195,10 @@ export function useThreadSkills(params: {
       }
 
       if (
+        !thread ||
         !threadId ||
         event.notification.method !== "thread/availableCommands/updated" ||
-        event.notification.params.threadId !== threadId
+        !agentEventMatchesThread(event, thread, event.notification.params.threadId)
       ) {
         return;
       }
@@ -217,7 +230,7 @@ export function useThreadSkills(params: {
         },
       }));
     });
-  }, [desktopApi, loadTarget, skillTarget]);
+  }, [desktopApi, loadTarget, skillTarget, thread]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
     await loadTarget();
