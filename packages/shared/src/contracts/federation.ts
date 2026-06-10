@@ -1,6 +1,7 @@
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
+  AppServerThreadSummary,
   ThreadIdentifier,
 } from "./normalized-app-server";
 
@@ -102,6 +103,32 @@ export type OpenFederationWindowResponse = {
   opened: boolean;
   windowId?: number;
   target: FederationRemoteTarget;
+};
+
+export type FederatedSearchRequest = {
+  query: string;
+  limit?: number;
+};
+
+export type FederatedSearchResult = {
+  ref: FederatedThreadRef;
+  thread: AppServerThreadSummary;
+  instanceLabel: string;
+  peerStatus?: FederationPeerSummary["status"];
+  score: number;
+};
+
+export type FederatedSearchPeerFailure = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+  error: string;
+};
+
+export type FederatedSearchResponse = {
+  query: string;
+  searchedAt: number;
+  results: FederatedSearchResult[];
+  failures: FederatedSearchPeerFailure[];
 };
 
 export type FederationEnvelopeBase = {
