@@ -1754,7 +1754,14 @@ function appendConversationMessage(
 function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
   const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
-  const timestampKeys = ["createdAt", "created_at", "timestamp", "time"];
+  const timestampKeys = [
+    "createdAt",
+    "created_at",
+    "startedAt",
+    "started_at",
+    "timestamp",
+    "time",
+  ];
 
   const visit = (node: unknown, inheritedCreatedAt?: number): void => {
     if (Array.isArray(node)) {
