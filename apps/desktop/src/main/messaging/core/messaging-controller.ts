@@ -10297,12 +10297,14 @@ export class MessagingController {
       threadId: args.threadId,
       targetKind,
     });
+    const visibleBinding = await this.renderBindingStatus(binding, attachEvent);
+    await this.repostLastAssistantMessageForResume(visibleBinding);
     return {
       ok: true,
       data: {
-        binding: summarizeMessagingBinding(binding),
-        channel: binding.channel.channel,
-        conversation: summarizeMessagingConversation(binding.channel.conversation),
+        binding: summarizeMessagingBinding(visibleBinding),
+        channel: visibleBinding.channel.channel,
+        conversation: summarizeMessagingConversation(visibleBinding.channel.conversation),
         createdConversation: createdConversation
           ? summarizeMessagingConversation(createdConversation)
           : undefined,

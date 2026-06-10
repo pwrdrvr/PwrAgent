@@ -356,7 +356,27 @@ describe("MessagingController", () => {
     );
   });
 
-  it("creates a native Telegram topic and attaches a target thread there", async () => {
+  it("creates a native Telegram topic, attaches a target thread, and posts resume status there", async () => {
+    const now = Date.UTC(2026, 5, 9, 23, 5);
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({
+      id: "thread-2",
+      title: "Telegram thread naming issue",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      ],
+      inbox: {
+        inInbox: false,
+      },
+      updatedAt: now - 60_000,
+    });
     const getManagedConversationRights = vi.fn(async () => ({
       channel: "telegram" as const,
       conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
@@ -385,6 +405,12 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       getManagedConversationRights,
+      navigation,
+      now: () => now,
+      readThreadLastAssistantReply: async () => ({
+        createdAt: now - 30 * 60_000,
+        text: "Last completed answer.",
+      }),
     });
     const channelEvent = buildTelegramChannelCommandEvent("/agent");
     const event = buildTextEvent("attach it here", {
@@ -404,6 +430,7 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(event);
+    harness.delivered.splice(0);
 
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
@@ -436,6 +463,31 @@ describe("MessagingController", () => {
         placement: "new_child",
       },
     });
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        bindingId:
+          "binding:telegram:topic:-1001:500:codex:thread-2",
+        delivery: expect.objectContaining({
+          mode: "present",
+          pin: true,
+        }),
+        text: expect.stringContaining("Project: PwrAgent"),
+      }),
+      expect.objectContaining({
+        kind: "message",
+        bindingId:
+          "binding:telegram:topic:-1001:500:codex:thread-2",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: expect.stringMatching(
+              /^Last Bot Reply \(30 minutes ago, .+\)\n\nLast completed answer\.$/,
+            ),
+          }),
+        ],
+      }),
+    ]);
     expect(createManagedConversation).toHaveBeenCalledWith(
       expect.objectContaining({
         actor: event.actor,
@@ -457,6 +509,12 @@ describe("MessagingController", () => {
       }),
     ).resolves.toMatchObject({
       backend: "codex",
+      pinnedStatusSurface: {
+        id: expect.stringMatching(/^surface:status:/),
+      },
+      statusSurface: {
+        id: expect.stringMatching(/^surface:status:/),
+      },
       targetKind: "thread",
       threadId: "thread-2",
     });
