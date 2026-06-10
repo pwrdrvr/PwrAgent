@@ -521,6 +521,73 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not create a child conversation for an inactive attach target", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "500",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Archived thread",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 500 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ createManagedConversation });
+    const channelEvent = buildTelegramChannelCommandEvent("/agent");
+    const event = buildTextEvent("attach it here", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+          title: "Archived thread",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "not_found",
+        message: expect.stringContaining("not an active attachable thread"),
+      },
+    });
+    expect(createManagedConversation).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "500",
+          kind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops",
+          title: "Archived thread",
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("starts a new Agent thread from the /agent picker New Agent action", async () => {
     const harness = await createHarness();
 

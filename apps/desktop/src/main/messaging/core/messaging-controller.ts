@@ -10239,6 +10239,10 @@ export class MessagingController {
     if (!origin.ok) {
       return origin;
     }
+    const target = await this.resolveAttachTarget(args.backend, args.threadId);
+    if (!target.ok) {
+      return target;
+    }
 
     const location = await this.summarizeAgentMessagingLocation(origin.origin);
     const resolvedPlacement = this.resolveAttachPlacement({
@@ -10322,6 +10326,44 @@ export class MessagingController {
         placement: resolvedPlacement.placement,
       },
     };
+  }
+
+  private async resolveAttachTarget(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<{ ok: true } | Extract<PwrAgentMessagingResponse, { ok: false }>> {
+    let navigation: NavigationSnapshot;
+    try {
+      navigation = await this.options.backend.getNavigationSnapshot({ backend });
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            error instanceof Error
+              ? `Could not verify target thread before attaching: ${error.message}`
+              : "Could not verify target thread before attaching.",
+        },
+      };
+    }
+
+    const target = navigation.threads.find(
+      (thread) => thread.source === backend && thread.id === threadId,
+    );
+    if (!target) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            `Thread ${backend}:${threadId} is not an active attachable thread. ` +
+            "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
+        },
+      };
+    }
+
+    return { ok: true };
   }
 
   private resolveAttachPlacement(params: {
