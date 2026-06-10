@@ -494,6 +494,7 @@ export type MessagingControllerOptions = {
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   fullAccessControls?: MessagingFullAccessControlsResolver;
   deliveryBudget?: MessagingDeliveryBudget;
+  sleepUntil?: (retryAt: number, now: () => number) => Promise<void>;
   activityLog?: () => MessagingActivityLog;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
   onFullAccessPolicyViolation?: (event: {
@@ -9737,7 +9738,9 @@ export class MessagingController {
     const routedIntent = this.withRoutingAudit(intent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
-    const priority = messagingDeliveryPriority(routedIntent);
+    const priority = messagingDeliveryPriority(routedIntent, {
+      userInitiated: isUserInitiatedDeliveryEvent(event),
+    });
     const channel = binding?.channel.channel ??
       routedIntent.audit?.channel.channel ??
       this.options.channel;
@@ -9777,7 +9780,7 @@ export class MessagingController {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
-          await sleepUntil(admission.retryAt, this.now);
+          await (this.options.sleepUntil ?? sleepUntil)(admission.retryAt, this.now);
           admission = this.deliveryBudget.admit({
             consumeCapacity: consumeDeliveryBudget,
             priority,
@@ -11543,6 +11546,7 @@ export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boo
 
 export function messagingDeliveryPriority(
   intent: MessagingSurfaceIntent,
+  context?: { userInitiated?: boolean },
 ): MessagingDeliveryPriority {
   switch (intent.kind) {
     case "approval":
@@ -11566,6 +11570,7 @@ export function messagingDeliveryPriority(
       }
       return "user_command";
     case "status":
+      return context?.userInitiated ? "user_command" : "routine_status";
     case "activity":
     case "progress":
     case "dismiss":
@@ -11578,6 +11583,18 @@ export function messagingDeliveryPriority(
     case "error":
       return "user_command";
   }
+}
+
+function isUserInitiatedDeliveryEvent(
+  event: MessagingInboundEvent | undefined,
+): boolean {
+  return Boolean(
+    event &&
+      (event.kind === "callback" ||
+        event.kind === "command" ||
+        event.kind === "media" ||
+        event.kind === "text"),
+  );
 }
 
 function approvalResponseLabel(
