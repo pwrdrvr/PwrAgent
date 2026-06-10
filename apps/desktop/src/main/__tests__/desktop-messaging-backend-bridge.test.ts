@@ -7,6 +7,43 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("prefers newer transcript assistant entries over stale replay messages", async () => {
+    const bridge = createBridge({
+      entries: [
+        {
+          type: "message",
+          id: "newer-entry",
+          role: "assistant",
+          text: "Actually latest bot reply.",
+          createdAt: 3_000,
+        },
+      ],
+      messages: [
+        {
+          id: "stale-message",
+          role: "assistant",
+          text: "Stale nested response item.",
+          createdAt: 1_000,
+        },
+      ],
+      lastAssistantMessage: "Stale nested response item.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    });
+
+    await expect(
+      bridge.readThreadLastAssistantReply({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toEqual({
+      text: "Actually latest bot reply.",
+      createdAt: 3_000,
+    });
+  });
+
   it("prefers the latest replay message over older transcript entries", async () => {
     const bridge = createBridge({
       entries: [
