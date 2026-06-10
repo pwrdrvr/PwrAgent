@@ -192,6 +192,10 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
+  GenerateFederationInviteRequest,
+  GenerateFederationInviteResponse,
+  ImportFederationInviteRequest,
+  ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
   OpenPathRequest,
@@ -360,6 +364,12 @@ export type DesktopApi = {
   readFederationHealth?: (
     request?: ReadFederationHealthRequest,
   ) => Promise<ReadFederationHealthResponse>;
+  generateFederationInvite?: (
+    request?: GenerateFederationInviteRequest,
+  ) => Promise<GenerateFederationInviteResponse>;
+  importFederationInvite?: (
+    request: ImportFederationInviteRequest,
+  ) => Promise<ImportFederationInviteResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

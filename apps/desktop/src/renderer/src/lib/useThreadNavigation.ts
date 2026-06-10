@@ -32,6 +32,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { readRendererFederationTarget } from "./federation-window";
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
@@ -2295,11 +2296,13 @@ export function useThreadNavigation(
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
         });
+        const federationTarget = readRendererFederationTarget();
         const snapshotRequest =
-          options?.forceRefresh || options?.refreshMode
+          options?.forceRefresh || options?.refreshMode || federationTarget
             ? {
                 ...(options?.forceRefresh ? { forceRefresh: true } : {}),
                 ...(options?.refreshMode ? { refreshMode: options.refreshMode } : {}),
+                ...(federationTarget ? { federationTarget } : {}),
               }
             : undefined;
         const snapshot = snapshotRequest

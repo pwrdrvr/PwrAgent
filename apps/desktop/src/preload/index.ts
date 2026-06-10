@@ -173,6 +173,10 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
+  GenerateFederationInviteRequest,
+  GenerateFederationInviteResponse,
+  ImportFederationInviteRequest,
+  ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
   OpenFederationWindowRequest,
@@ -309,6 +313,8 @@ import {
   PATH_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
   FEDERATION_GET_HEALTH_CHANNEL,
+  FEDERATION_GENERATE_INVITE_CHANNEL,
+  FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
@@ -659,6 +665,14 @@ const desktopApi = Object.freeze({
     request?: ReadFederationHealthRequest,
   ): Promise<ReadFederationHealthResponse> =>
     await ipcRenderer.invoke(FEDERATION_GET_HEALTH_CHANNEL, request),
+  generateFederationInvite: async (
+    request?: GenerateFederationInviteRequest,
+  ): Promise<GenerateFederationInviteResponse> =>
+    await ipcRenderer.invoke(FEDERATION_GENERATE_INVITE_CHANNEL, request),
+  importFederationInvite: async (
+    request: ImportFederationInviteRequest,
+  ): Promise<ImportFederationInviteResponse> =>
+    await ipcRenderer.invoke(FEDERATION_IMPORT_INVITE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

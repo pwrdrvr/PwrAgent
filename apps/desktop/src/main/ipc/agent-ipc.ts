@@ -49,6 +49,8 @@ import {
   type UpdateThreadExpectedBranchRequest,
   type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -349,6 +351,17 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .startTurn({
+              ...request,
+              federationTarget: undefined,
+            });
+        }
         const submitted = await registry.submitTurn({
           ...request,
           origin: "manual",

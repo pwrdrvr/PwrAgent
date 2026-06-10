@@ -105,6 +105,7 @@ import {
   buildThreadIdentityKey,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
 } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
   disposeDesktopBackendRegistry,
@@ -156,6 +157,7 @@ import {
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
@@ -372,6 +374,7 @@ function getNavigationSnapshotRequestKey(
 ): string {
   return JSON.stringify({
     backend: request.backend ?? "all",
+    federationTarget: request.federationTarget ?? { scope: "local" },
     filter: request.filter ?? "",
     forceRefresh: request.forceRefresh === true,
     refreshMode: request.refreshMode ?? "full",
@@ -767,6 +770,15 @@ class DesktopAppServerService {
   async listThreads(
     request: AppServerListThreadsRequest = {}
   ): Promise<AppServerListThreadsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listThreads({
+          backend: request.backend,
+          archived: request.archived,
+          filter: request.filter,
+        });
+    }
     const backend = request.backend;
     const threads = await getDesktopBackendRegistry().listThreads({
       backend,
@@ -802,6 +814,16 @@ class DesktopAppServerService {
   async listSkills(
     request: AppServerListSkillsRequest = {},
   ): Promise<AppServerListSkillsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listSkills({
+          backend: request.backend,
+          cwd: request.cwd,
+          cwds: request.cwds,
+          threadId: request.threadId,
+        });
+    }
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().listSkills({
       backend,
@@ -832,6 +854,16 @@ class DesktopAppServerService {
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .readThread({
+          backend: request.backend,
+          threadId: request.threadId,
+          before: request.before,
+          limit: request.limit,
+        });
+    }
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().readThread({
       backend,
@@ -1027,6 +1059,15 @@ class DesktopAppServerService {
   private async readNavigationSnapshot(
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationSnapshot(
+        request.federationTarget,
+        {
+          backend: request.backend === "all" ? undefined : request.backend,
+          filter: request.filter,
+        },
+      );
+    }
     const backend: AppServerBackendScope = request.backend ?? "all";
     const refreshMode = request.refreshMode ?? "full";
     const activeRecentRefresh = refreshMode === "active-recent";

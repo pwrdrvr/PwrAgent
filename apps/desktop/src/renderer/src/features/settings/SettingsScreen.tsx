@@ -580,7 +580,10 @@ function SettingsSectionBody(props: {
     return (
       <FederationSettings
         desktopApi={props.desktopApi}
+        saving={props.settings.saving}
         snapshot={props.snapshot}
+        onSettingsChanged={props.settings.refresh}
+        onWriteConfig={props.settings.writeConfig}
       />
     );
   }

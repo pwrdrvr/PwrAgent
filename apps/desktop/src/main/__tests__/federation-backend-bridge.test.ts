@@ -20,6 +20,7 @@ describe("federation backend bridge", () => {
       })),
       readThread: vi.fn(),
       listSkills: vi.fn(),
+      startTurn: vi.fn(),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -120,6 +121,7 @@ describe("federation backend bridge", () => {
         listThreads: vi.fn(),
         readThread: vi.fn(),
         listSkills: vi.fn(),
+        startTurn: vi.fn(),
       } as unknown as FederationBackendOperations,
     });
 
@@ -141,5 +143,65 @@ describe("federation backend bridge", () => {
       status: "rejected",
       code: "capability_denied",
     });
+  });
+
+  it("maps remote turn submission to a turn-control guarded handler", async () => {
+    const backend: FederationBackendOperations = {
+      listThreads: vi.fn(),
+      readThread: vi.fn(),
+      listSkills: vi.fn(),
+      startTurn: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        queueStatus: "started",
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "child_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "request-1",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.startTurn,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "ship it" }],
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "child_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "ship it" }],
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "request-1",
+        result: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    ]);
   });
 });

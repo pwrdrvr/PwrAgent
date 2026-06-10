@@ -41,6 +41,10 @@ import {
   registerFederationIpcHandlers,
 } from "./ipc/federation";
 import {
+  disposeDesktopFederationRuntime,
+  getDesktopFederationRuntime,
+} from "./federation/federation-runtime";
+import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
@@ -257,6 +261,7 @@ function disposeMainProcessResourcesSync(): void {
     disposeRuntimeIdentityIpcHandlers();
   }
   void disposeMessagingStatusIpcHandlers();
+  void disposeDesktopFederationRuntime();
   const runtimeMessagingLeaseCoordinator =
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
@@ -630,6 +635,9 @@ export function bootstrapApp(): void {
     });
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
+        if (patch.federation !== undefined) {
+          await getDesktopFederationRuntime().restart();
+        }
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
@@ -648,6 +656,11 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
+    void getDesktopFederationRuntime().restart().catch((error) => {
+      mainLog.error("federation runtime failed during startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const messagingRuntime = getDesktopMessagingRuntime((options) =>
       loadDesktopMessagingConfigFromSettings(
         getDesktopSettingsService(),

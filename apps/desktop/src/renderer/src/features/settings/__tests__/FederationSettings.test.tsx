@@ -37,7 +37,10 @@ describe("FederationSettings", () => {
     render(
       <FederationSettings
         desktopApi={desktopApi}
+        saving={false}
         snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
       />,
     );
 
@@ -54,11 +57,18 @@ describe("FederationSettings", () => {
   });
 
   it("falls back to the settings snapshot when diagnostics are unavailable", () => {
-    render(<FederationSettings snapshot={settingsSnapshot()} />);
+    render(
+      <FederationSettings
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
 
     expect(screen.getByText("Federation diagnostics are unavailable."))
       .toBeInTheDocument();
-    expect(screen.getByText("gateway")).toBeInTheDocument();
+    expect(screen.getAllByText("gateway").length).toBeGreaterThan(0);
     expect(screen.getByText("wss://child.example.com/federation"))
       .toBeInTheDocument();
   });

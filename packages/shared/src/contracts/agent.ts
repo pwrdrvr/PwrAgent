@@ -21,6 +21,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationLaunchpadDefaults,
 } from "./navigation";
+import type { FederationTarget } from "./federation";
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
@@ -204,6 +205,7 @@ export type StartThreadMigrationResponse = {
 
 export type StartTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;

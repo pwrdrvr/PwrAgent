@@ -21,6 +21,7 @@ import type {
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { readRendererFederationTarget } from "./federation-window";
 import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
@@ -3054,6 +3055,8 @@ export function useThreadSessionState(params: {
           ...(initialHistoryLimit !== undefined
             ? { limit: initialHistoryLimit }
             : {}),
+          federationTarget: targetThread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: targetThread.id,
         }));
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
@@ -4444,6 +4447,8 @@ export function useThreadSessionState(params: {
     try {
       const olderResponse = await desktopApi.readThread({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         before: selectedSession.response.replay.pagination.previousCursor,
       });
