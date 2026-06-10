@@ -8278,6 +8278,28 @@ describe("Composer", () => {
           type: "image/png",
         })
     );
+    // Distinct content per file so the cap (not the duplicate guard) is what
+    // clamps the batch — identical pastes are de-duplicated separately. The
+    // gate clamps 6 → 5 before normalizing, so only 5 files are normalized;
+    // queueing exactly 5 `Once` overrides keeps them consumed within this test
+    // and never leaks into later tests (afterEach only clears call history).
+    for (const file of files.slice(0, 5)) {
+      vi.mocked(normalizeImageFile).mockImplementationOnce(async () => ({
+        conversionPath: "renderer" as const,
+        dataUrl: `data:image/png;base64,${btoa(file.name)}`,
+        height: 24,
+        mimeType: "image/png" as const,
+        original: {
+          height: 24,
+          mimeType: "image/png",
+          name: file.name,
+          size: file.size,
+          width: 32,
+        },
+        size: 3,
+        width: 32,
+      }));
+    }
 
     const { container } = render(
       <Composer
@@ -8316,6 +8338,59 @@ describe("Composer", () => {
     expect(onShowNotice).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Attachment limit reached" })
     );
+  });
+
+  it("rejects an exact-duplicate paste and keeps a single attachment", async () => {
+    const onShowNotice = vi.fn();
+    const makeFile = () =>
+      new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        backends={[backendSummary("codex")]}
+        onShowNotice={onShowNotice}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const pasteOnce = () =>
+      fireEvent.paste(screen.getByLabelText("Reply"), {
+        clipboardData: {
+          files: [],
+          items: [
+            { kind: "file", type: "image/png", getAsFile: () => makeFile() },
+          ],
+        },
+      });
+
+    // The default normalize mock yields identical bytes for both pastes, so
+    // the second paste is an exact duplicate of the first.
+    pasteOnce();
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll(".composer__attachment-preview")
+      ).toHaveLength(1)
+    );
+
+    pasteOnce();
+    await waitFor(() =>
+      expect(onShowNotice).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Image already attached" })
+      )
+    );
+    expect(
+      container.querySelectorAll(".composer__attachment-preview")
+    ).toHaveLength(1);
   });
 
   it("rejects pasted images and toasts when the model does not support images", async () => {

@@ -1560,6 +1560,20 @@ export function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  // Per-attachment content signature (`<size>:<hash>`) cache used to reject
+  // exact-duplicate pastes. Computed lazily on first use and kept only in
+  // memory — signatures are never part of the persisted draft snapshot.
+  const imageSignatureCacheRef = useRef(new Map<string, string>());
+  const getImageSignature = (attachment: ComposerImageAttachment): string => {
+    const cache = imageSignatureCacheRef.current;
+    const cached = cache.get(attachment.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const signature = `${attachment.size}:${hashImageDataUrl(attachment.url)}`;
+    cache.set(attachment.id, signature);
+    return signature;
+  };
   // Currently expanded attachment shown in the full-size lightbox, or
   // undefined when the lightbox is closed.
   const [lightboxAttachment, setLightboxAttachment] =
@@ -3934,13 +3948,20 @@ export function Composer(props: ComposerProps) {
           imageAttachments: pasteImageAttachments,
           skillTokens,
         };
+        // Drop exact duplicates against the background scope's own attachments
+        // (no toast — this composer isn't the one on screen).
+        const { unique } = partitionNewImageAttachments(
+          saved.imageAttachments,
+          nextAttachments,
+          getImageSignature,
+        );
         const nextSnapshot = {
           draft: saved.draft,
           editorDocument: saved.editorDocument,
-          imageAttachments: [
-            ...saved.imageAttachments,
-            ...nextAttachments,
-          ].slice(0, MAX_COMPOSER_IMAGE_ATTACHMENTS),
+          imageAttachments: [...saved.imageAttachments, ...unique].slice(
+            0,
+            MAX_COMPOSER_IMAGE_ATTACHMENTS,
+          ),
           skillTokens: saved.skillTokens,
         };
         saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
@@ -3948,10 +3969,39 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
+      // Reject exact-duplicate pastes so the same image can't stack up. Toast
+      // off the snapshot captured when this paste started — accurate for the
+      // sequential paste-the-same-image case — then re-check inside the state
+      // updater below against the freshest list for the rare paste race.
+      const { unique, duplicateCount } = partitionNewImageAttachments(
+        pasteImageAttachments,
+        nextAttachments,
+        getImageSignature,
+      );
+      if (duplicateCount > 0) {
+        showComposerNotice({
+          title: "Image already attached",
+          message:
+            duplicateCount === 1
+              ? "That image is already attached to this message."
+              : `${duplicateCount} of those images are already attached to this message.`,
+        });
+      }
+      if (unique.length === 0) {
+        return;
+      }
+
       setImageAttachments((current) => {
-        // Final safety cap so two near-simultaneous pastes can never persist
-        // more than the limit even if both passed the pre-attach gate.
-        const mergedAttachments = [...current, ...nextAttachments].slice(
+        // Re-run de-dup and the cap against the latest state (not the snapshot
+        // captured when this paste began) so a second identical paste arriving
+        // while an earlier one is still normalizing can never slip a duplicate
+        // through or exceed the limit.
+        const { unique: freshlyUnique } = partitionNewImageAttachments(
+          current,
+          unique,
+          getImageSignature,
+        );
+        const mergedAttachments = [...current, ...freshlyUnique].slice(
           0,
           MAX_COMPOSER_IMAGE_ATTACHMENTS,
         );
@@ -6338,6 +6388,66 @@ function readFileAsImageDataUrl(file: File, mimeType: string): Promise<string> {
     });
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * Small, fast, non-cryptographic 53-bit hash (cyrb53) over an image data URL.
+ * Used only to bucket like-sized attachments for in-memory de-duplication; it
+ * is never persisted or sent, and hash collisions are resolved by an exact
+ * data-URL comparison, so a weak hash is safe here.
+ */
+function hashImageDataUrl(value: string): number {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+/**
+ * Split a freshly-normalized batch into genuinely new attachments versus exact
+ * duplicates of something already attached (or of an earlier item in the same
+ * batch). A mismatched `size` rules out most pairs up front via the signature
+ * prefix; only same-size candidates land in the same bucket, where an exact
+ * data-URL compare confirms the match so two distinct same-size images are
+ * never wrongly merged on a hash collision.
+ */
+function partitionNewImageAttachments(
+  existing: ComposerImageAttachment[],
+  incoming: ComposerImageAttachment[],
+  signatureFor: (attachment: ComposerImageAttachment) => string,
+): { unique: ComposerImageAttachment[]; duplicateCount: number } {
+  const seen = new Map<string, string[]>();
+  const remember = (attachment: ComposerImageAttachment): void => {
+    const signature = signatureFor(attachment);
+    const urls = seen.get(signature);
+    if (urls) {
+      urls.push(attachment.url);
+    } else {
+      seen.set(signature, [attachment.url]);
+    }
+  };
+  for (const attachment of existing) {
+    remember(attachment);
+  }
+  const unique: ComposerImageAttachment[] = [];
+  let duplicateCount = 0;
+  for (const attachment of incoming) {
+    if (seen.get(signatureFor(attachment))?.includes(attachment.url)) {
+      duplicateCount += 1;
+      continue;
+    }
+    unique.push(attachment);
+    remember(attachment);
+  }
+  return { unique, duplicateCount };
 }
 
 function formatImageDimensions(
