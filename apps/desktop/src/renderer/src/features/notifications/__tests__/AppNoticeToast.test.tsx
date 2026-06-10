@@ -60,4 +60,26 @@ describe("AppNoticeToast", () => {
     });
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it("stays visible without a countdown when auto-dismiss is disabled", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+
+    const { container } = render(
+      <AppNoticeToast
+        notice={{ ...notice, autoDismiss: false }}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });

@@ -43,7 +43,10 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
-import { buildHotCpuProfileHandoffMessage } from "../../shared/hot-cpu-profile";
+import {
+  buildHotCpuProfileHandoffMessage,
+  formatHotCpuProfileTriggerSummary,
+} from "../../shared/hot-cpu-profile";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
@@ -205,9 +208,13 @@ function DesktopAppShell(props: {
   useEffect(() => {
     return desktopApi?.onHotCpuProfileCaptured?.((event) => {
       setHotCpuProfileNotice({
+        autoDismiss: false,
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: "CPU profile captured",
-        message: `Saved ${event.profileFilename}. Copy this notice to hand off the profile path.`,
+        message: [
+          `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
+          "Copy this notice to hand off the profile path.",
+        ].join(" "),
         detail: buildHotCpuProfileHandoffMessage(event),
       });
     });

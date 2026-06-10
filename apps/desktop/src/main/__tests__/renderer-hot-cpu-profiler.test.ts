@@ -184,6 +184,10 @@ describe("RendererHotCpuProfiler", () => {
         profilePath: sessionResult.session.createProfilePath(1),
         sessionDirectory: sessionResult.session.directoryPath,
         sessionDirectoryName: sessionResult.session.directoryName,
+        triggerConsecutiveSamples: 2,
+        triggerCpuPercent: 75,
+        triggerMode: "sustained",
+        triggerThresholdPercent: 50,
       }),
     );
 

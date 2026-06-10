@@ -33,6 +33,14 @@ type CpuUsageReading = {
   wallDeltaSeconds?: number;
 };
 
+type ActiveProfileTrigger = Pick<
+  HotCpuProfileCapturedEvent,
+  | "triggerConsecutiveSamples"
+  | "triggerCpuPercent"
+  | "triggerMode"
+  | "triggerThresholdPercent"
+>;
+
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -78,6 +86,7 @@ export class RendererHotCpuProfiler {
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private profiling = false;
+  private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private stopped = false;
 
   constructor(options: {
@@ -338,6 +347,12 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.enable");
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
+      this.activeProfileTrigger = {
+        triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
+        triggerCpuPercent: options.cpuPercent,
+        triggerMode: this.config.triggerMode,
+        triggerThresholdPercent: this.triggerThresholdPercent(),
+      };
       this.profileCount += 1;
       const index = this.profileCount;
       this.lastProfileAtMs = Date.parse(options.capturedAt);
@@ -376,6 +391,8 @@ export class RendererHotCpuProfiler {
         this.config.profileDurationMs,
       );
     } catch (error) {
+      this.activeProfileTrigger = null;
+      this.profiling = false;
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "profile-start-failed",
@@ -397,6 +414,13 @@ export class RendererHotCpuProfiler {
     const index = this.profileCount;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
+    const activeProfileTrigger =
+      this.activeProfileTrigger ?? {
+        triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
+        triggerCpuPercent: 0,
+        triggerMode: this.config.triggerMode,
+        triggerThresholdPercent: this.triggerThresholdPercent(),
+      };
 
     try {
       const result = (await this.target.debugger.sendCommand("Profiler.stop")) as {
@@ -430,6 +454,7 @@ export class RendererHotCpuProfiler {
         profilePath,
         sessionDirectory: this.session.directoryPath,
         sessionDirectoryName: this.session.directoryName,
+        ...activeProfileTrigger,
       });
     } catch (error) {
       await this.session.appendEvent({
@@ -443,6 +468,7 @@ export class RendererHotCpuProfiler {
       });
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
+      this.activeProfileTrigger = null;
       this.detachDebugger();
     }
   }

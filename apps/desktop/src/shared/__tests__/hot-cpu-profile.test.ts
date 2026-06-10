@@ -12,10 +12,15 @@ describe("hot CPU profile handoff message", () => {
         sessionDirectory:
           "/Users/test/.pwragent/profiles/dev/diagnostics/hot-cpu/20260610T120000Z",
         sessionDirectoryName: "20260610T120000Z",
+        triggerConsecutiveSamples: 2,
+        triggerCpuPercent: 24.25,
+        triggerMode: "slowburn",
+        triggerThresholdPercent: 15,
       }),
     ).toBe(
       [
         "PwrAgent captured a renderer CPU profile.",
+        "Trigger: Slowburn (2 consecutive samples >= 15%; trigger sample 24.3%)",
         "Session basename: 20260610T120000Z",
         "Session directory path: /Users/test/.pwragent/profiles/dev/diagnostics/hot-cpu/20260610T120000Z",
         "CPU profile basename: renderer-hot-0001.cpuprofile",
