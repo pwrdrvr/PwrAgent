@@ -1239,6 +1239,130 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  it("retimestamps streamed final assistant messages when the turn completes", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+              startedAt: 1_763_500_100_000,
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "final-message",
+            delta: "Final answer.",
+            phase: "final",
+          },
+        },
+      });
+    });
+
+    const pendingCreatedAt = result.current.pendingAssistantMessage?.createdAt;
+    expect(pendingCreatedAt).toEqual(expect.any(Number));
+    expect(pendingCreatedAt).not.toBe(1_763_500_520_000);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              startedAt: 1_763_500_100_000,
+              completedAt: 1_763_500_520_000,
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        id: "final-message",
+        role: "assistant",
+        phase: "final",
+        text: "Final answer.",
+        createdAt: 1_763_500_520_000,
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+          startedAt: 1_763_500_100_000,
+          completedAt: 1_763_500_520_000,
+        }),
+      }),
+    ]);
+    expect(result.current.pendingAssistantMessage).toBeUndefined();
+  });
+
   it("renders completed assistant message items without waiting for a transcript reread", async () => {
     let agentEventHandler:
       | ((event: {

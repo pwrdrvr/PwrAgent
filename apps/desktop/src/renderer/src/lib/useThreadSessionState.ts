@@ -1706,6 +1706,26 @@ function withTurnMetadataAndPhase(
   };
 }
 
+function withCompletedAssistantTimestamp(
+  entry: AppServerThreadMessageEntry,
+  params: {
+    completedAt: number;
+    phase: AppServerThreadMessageEntry["phase"] | undefined;
+  }
+): AppServerThreadMessageEntry {
+  if (
+    entry.role !== "assistant" ||
+    (params.phase && params.phase !== "final")
+  ) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    createdAt: params.completedAt,
+  };
+}
+
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
   turn: AppServerThreadTurnMetadata | undefined,
@@ -3604,23 +3624,40 @@ export function useThreadSessionState(params: {
           const nextEntries = [
             ...current.optimisticEntries
               .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
-              .map((entry) =>
-                entry.turn?.id === completedTurn?.id
-                  ? withTurnMetadataAndPhase(
+              .map((entry) => {
+                if (entry.turn?.id !== completedTurn?.id) {
+                  return entry;
+                }
+
+                const phase = unphasedAssistantCompletionPhase ?? entry.phase;
+                return withCompletedAssistantTimestamp(
+                  withTurnMetadataAndPhase(
                     entry,
                     completedTurn,
                     unphasedAssistantCompletionPhase
-                  )
-                  : entry
-              ),
+                  ),
+                  {
+                    completedAt: completedTurn?.completedAt ?? nextLastTouchedAt,
+                    phase,
+                  }
+                );
+              }),
             ...(current.pendingAssistantMessage && completedTurnMatchesActive
               ? completedTurnHasReview
                 ? []
                 : [
-                  withTurnMetadataAndPhase(
-                    current.pendingAssistantMessage,
-                    completedTurn,
-                    unphasedAssistantCompletionPhase
+                  withCompletedAssistantTimestamp(
+                    withTurnMetadataAndPhase(
+                      current.pendingAssistantMessage,
+                      completedTurn,
+                      unphasedAssistantCompletionPhase
+                    ),
+                    {
+                      completedAt: completedTurn?.completedAt ?? nextLastTouchedAt,
+                      phase:
+                        unphasedAssistantCompletionPhase ??
+                        current.pendingAssistantMessage.phase,
+                    }
                   ),
                 ]
               : []),
@@ -3637,7 +3674,7 @@ export function useThreadSessionState(params: {
                   phase: "final",
                   ...(completedTurn ? { turn: completedTurn } : {}),
                   text: completedText,
-                  createdAt: Date.now(),
+                  createdAt: completedTurn?.completedAt ?? nextLastTouchedAt,
                 },
                 syntheticFinalSequence
               )
