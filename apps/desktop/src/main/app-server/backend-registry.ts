@@ -127,6 +127,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
@@ -11586,16 +11587,31 @@ export class DesktopBackendRegistry {
           },
         };
       }
+      const hasQuery = Boolean(request.args.query?.trim());
       const limit = clampInteger(
         request.args.limit,
-        DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
+        hasQuery
+          ? DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT
+          : DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
         MAX_THREAD_INSPECTION_SEARCH_LIMIT,
       );
-      const threads = await this.listThreads({
-        backend: backend === "all" ? undefined : backend,
-        archived: request.args.includeArchived === true,
+      const listBackend = backend === "all" ? undefined : backend;
+      const activeThreads = await this.listThreads({
+        backend: listBackend,
+        archived: false,
         callerReason: "agent-thread-inspection",
       });
+      const threads =
+        request.args.includeArchived === true
+          ? dedupeThreadInspectionThreadSummaries([
+              ...activeThreads,
+              ...(await this.listThreads({
+                backend: listBackend,
+                archived: true,
+                callerReason: "agent-thread-inspection:archived",
+              })),
+            ])
+          : activeThreads;
       const enriched = await this.enrichThreadInspectionSummaries(threads);
       const filtered = filterThreadInspectionSummaries(enriched, {
         agentOnly: request.args.agentOnly === true,
@@ -11604,7 +11620,7 @@ export class DesktopBackendRegistry {
       return {
         ok: true,
         data: {
-          threads: filtered.slice(0, limit),
+          threads: filtered.slice(0, limit).map(toThreadInspectionSearchSummary),
           totalCount: filtered.length,
           limit,
           truncated: filtered.length > limit,
@@ -11632,14 +11648,22 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      const threads = await this.listThreads({
+      const activeThreads = await this.listThreads({
         backend: request.args.backend,
-        archived: true,
+        archived: false,
         callerReason: "agent-thread-inspection",
       });
-      const [summary] = await this.enrichThreadInspectionSummaries(
-        threads.filter((thread) => thread.id === threadId),
-      );
+      let candidateThreads = activeThreads.filter((thread) => thread.id === threadId);
+      if (candidateThreads.length === 0) {
+        candidateThreads = (
+          await this.listThreads({
+            backend: request.args.backend,
+            archived: true,
+            callerReason: "agent-thread-inspection:archived",
+          })
+        ).filter((thread) => thread.id === threadId);
+      }
+      const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
       if (!summary) {
         return {
           ok: false,
@@ -12320,35 +12344,21 @@ function filterThreadInspectionSummaries(
   threads: ThreadInspectionSummary[],
   options: { agentOnly: boolean; query?: string },
 ): ThreadInspectionSummary[] {
-  const query = options.query?.trim().toLowerCase();
+  const clauses = parseThreadInspectionQuery(options.query);
   return threads
     .filter((thread) => !options.agentOnly || Boolean(thread.agent))
-    .filter((thread) => {
-      if (!query) {
-        return true;
-      }
-      return [
-        thread.backend,
-        thread.threadId,
-        thread.title,
-        thread.summary,
-        thread.projectKey,
-        thread.agent?.name,
-        thread.agent?.instructions,
-        ...thread.linkedDirectories.flatMap((directory) => [
-          directory.label,
-          directory.path,
-          directory.worktreePath,
-        ]),
-      ]
-        .filter((value): value is string => Boolean(value))
-        .some((value) => value.toLowerCase().includes(query));
-    })
+    .map((thread) => ({
+      score: scoreThreadInspectionSummary(thread, clauses),
+      thread,
+    }))
+    .filter((entry) => clauses.length === 0 || entry.score > 0)
     .sort(
       (left, right) =>
-        (right.updatedAt ?? right.createdAt ?? 0) -
-        (left.updatedAt ?? left.createdAt ?? 0),
-    );
+        right.score - left.score ||
+        (right.thread.updatedAt ?? right.thread.createdAt ?? 0) -
+          (left.thread.updatedAt ?? left.thread.createdAt ?? 0),
+    )
+    .map((entry) => entry.thread);
 }
 
 function toThreadInspectionSummary(
@@ -12372,6 +12382,134 @@ function toThreadInspectionSummary(
     fastMode: thread.fastMode,
     linkedDirectories: thread.linkedDirectories,
   };
+}
+
+function dedupeThreadInspectionThreadSummaries(
+  threads: AppServerThreadSummary[],
+): AppServerThreadSummary[] {
+  const seen = new Set<string>();
+  const deduped: AppServerThreadSummary[] = [];
+  for (const thread of threads) {
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(thread);
+  }
+  return deduped;
+}
+
+function parseThreadInspectionQuery(query: string | undefined): string[][] {
+  const trimmed = query?.trim().toLowerCase();
+  if (!trimmed) {
+    return [];
+  }
+  return trimmed
+    .split(/\s+(?:or)\s+|[|,]/i)
+    .map((clause) =>
+      clause
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter(Boolean),
+    )
+    .filter((tokens) => tokens.length > 0);
+}
+
+function scoreThreadInspectionSummary(
+  thread: ThreadInspectionSummary,
+  clauses: string[][],
+): number {
+  if (clauses.length === 0) {
+    return 0;
+  }
+  const title = thread.title.toLowerCase();
+  const project = `${thread.projectKey ?? ""} ${thread.linkedDirectories
+    .flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ])
+    .filter(Boolean)
+    .join(" ")}`.toLowerCase();
+  const haystack = [
+    thread.backend,
+    thread.threadId,
+    thread.title,
+    thread.summary,
+    thread.projectKey,
+    thread.agent?.name,
+    thread.agent?.instructions,
+    ...thread.linkedDirectories.flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ]),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+
+  let bestScore = 0;
+  for (const tokens of clauses) {
+    if (!tokens.every((token) => haystack.includes(token))) {
+      continue;
+    }
+    const phrase = tokens.join(" ");
+    const exactTitle = title.includes(phrase) ? 100 : 0;
+    const allTitleTokens = tokens.every((token) => title.includes(token))
+      ? 75
+      : 0;
+    const exactProject = project.includes(phrase) ? 60 : 0;
+    const allProjectTokens = tokens.every((token) => project.includes(token))
+      ? 45
+      : 0;
+    const exactHaystack = haystack.includes(phrase) ? 35 : 0;
+    const tokenScore = Math.min(tokens.length, 5) * 5;
+    bestScore = Math.max(
+      bestScore,
+      exactTitle ||
+        allTitleTokens ||
+        exactProject ||
+        allProjectTokens ||
+        exactHaystack ||
+        tokenScore,
+    );
+  }
+  return bestScore;
+}
+
+function toThreadInspectionSearchSummary(
+  thread: ThreadInspectionSummary,
+): ThreadInspectionSummary {
+  return {
+    backend: thread.backend,
+    threadId: thread.threadId,
+    title: thread.title,
+    ...(thread.summary
+      ? { summary: truncateThreadInspectionText(thread.summary, 240) }
+      : {}),
+    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
+    ...(thread.agent ? { agent: thread.agent } : {}),
+    linkedDirectories: thread.linkedDirectories.slice(0, 3).map((directory) => ({
+      id: directory.id,
+      kind: directory.kind,
+      label: directory.label,
+      path: directory.path,
+      ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
+    })),
+  };
+}
+
+function truncateThreadInspectionText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 let registry: DesktopBackendRegistry | null = null;

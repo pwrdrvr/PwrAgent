@@ -18,7 +18,8 @@ export type PwrAgentThreadInspectionOperationName =
   (typeof PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES)[number];
 
 export const DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT = 10;
-export const MAX_THREAD_INSPECTION_SEARCH_LIMIT = 50;
+export const DEFAULT_THREAD_INSPECTION_RECENT_LIMIT = 100;
+export const MAX_THREAD_INSPECTION_SEARCH_LIMIT = 100;
 
 export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "invalid_arguments",

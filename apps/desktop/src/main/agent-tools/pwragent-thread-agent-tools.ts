@@ -68,7 +68,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "search_threads":
-      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory.";
+      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread.";
     case "get_thread_status":
       return "Read status and compact metadata for a known PwrAgent thread.";
   }
@@ -83,16 +83,32 @@ function inputSchemaForOperation(
         type: "object",
         additionalProperties: false,
         properties: {
-          query: { type: "string" },
+          query: {
+            type: "string",
+            description:
+              "Thread/project words to search. Use OR or | between alternatives, for example `telegram naming OR topic issue`. Omit this to list recent candidates.",
+          },
           backend: {
             type: "string",
+            description:
+              "Backend to search. Defaults to all known PwrAgent backends.",
           },
-          includeArchived: { type: "boolean" },
-          agentOnly: { type: "boolean" },
+          includeArchived: {
+            type: "boolean",
+            description:
+              "When true, search active threads plus archived threads. Defaults to active threads only.",
+          },
+          agentOnly: {
+            type: "boolean",
+            description:
+              "Restrict results to PwrAgent Agent threads only. Leave false when the user asks to find an ordinary coding thread.",
+          },
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 50,
+            maximum: 100,
+            description:
+              "Maximum candidate rows to return. Defaults to 10 for a query and 100 when query is omitted.",
           },
         },
       };
