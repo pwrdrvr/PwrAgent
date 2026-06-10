@@ -148,6 +148,10 @@ function updateResultText(result: AppUpdateCheckResult): string {
   return `Update available: v${result.version}. Downloading in the background.`;
 }
 
+function formatHotCpuStartDelay(delayMs: DesktopHotCpuProfileStartDelayMs): string {
+  return delayMs === 0 ? "Immediate" : `Delay ${Math.round(delayMs / 1_000)}s`;
+}
+
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
@@ -183,6 +187,11 @@ export function GeneralSettings(props: {
   const [updateRestartError, setUpdateRestartError] = useState<
     string | undefined
   >();
+  const [hotCpuCountdownEndsAt, setHotCpuCountdownEndsAt] = useState<
+    number | null
+  >(null);
+  const [hotCpuCountdownRemainingMs, setHotCpuCountdownRemainingMs] =
+    useState(0);
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
@@ -207,6 +216,49 @@ export function GeneralSettings(props: {
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
     (option) => option.value === pastedImageMaxPatches.value,
   );
+  const hotCpuCountdownActive = hotCpuCountdownRemainingMs > 0;
+  const hotCpuCountdownSeconds = Math.ceil(hotCpuCountdownRemainingMs / 1_000);
+  const hotCpuStartDelayText = formatHotCpuStartDelay(
+    hotCpuProfilingStartDelayMs.value,
+  );
+
+  useEffect(() => {
+    if (hotCpuCountdownEndsAt === null) {
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remainingMs = Math.max(0, hotCpuCountdownEndsAt - Date.now());
+      setHotCpuCountdownRemainingMs(remainingMs);
+      if (remainingMs === 0) {
+        setHotCpuCountdownEndsAt(null);
+      }
+    };
+
+    updateCountdown();
+    const interval = window.setInterval(updateCountdown, 250);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [hotCpuCountdownEndsAt]);
+
+  const startHotCpuCapture = async () => {
+    await props.onHotCpuProfilingEnabledChange(true);
+    if (hotCpuProfilingStartDelayMs.value > 0) {
+      const endsAt = Date.now() + hotCpuProfilingStartDelayMs.value;
+      setHotCpuCountdownEndsAt(endsAt);
+      setHotCpuCountdownRemainingMs(hotCpuProfilingStartDelayMs.value);
+    } else {
+      setHotCpuCountdownEndsAt(null);
+      setHotCpuCountdownRemainingMs(0);
+    }
+  };
+
+  const stopHotCpuCapture = async () => {
+    setHotCpuCountdownEndsAt(null);
+    setHotCpuCountdownRemainingMs(0);
+    await props.onHotCpuProfilingEnabledChange(false);
+  };
 
   useEffect(() => {
     let canceled = false;
@@ -642,17 +694,41 @@ export function GeneralSettings(props: {
           />
           <SettingsField
             label="Hot renderer CPU profiling"
-            sub="Capture a short Chrome CPU profile when the renderer stays hot."
+            sub="Start an armed capture only after the presets below are ready."
             source={sourceBadge(hotCpuProfilingEnabled)}
             control={
-              <SettingsSwitch
-                checked={hotCpuProfilingEnabled.value}
-                disabled={props.saving}
-                label="Hot renderer CPU profiling"
-                onChange={(next) => {
-                  void props.onHotCpuProfilingEnabledChange(next);
-                }}
-              />
+              <div className="settings-hot-cpu-capture">
+                {hotCpuProfilingEnabled.value || hotCpuCountdownActive ? (
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    disabled={props.saving}
+                    onClick={() => {
+                      void stopHotCpuCapture();
+                    }}
+                  >
+                    Stop Capture
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    disabled={props.saving}
+                    onClick={() => {
+                      void startHotCpuCapture();
+                    }}
+                  >
+                    Start Capture ({hotCpuStartDelayText})
+                  </button>
+                )}
+                <span className="settings-hot-cpu-capture__status" aria-live="polite">
+                  {hotCpuCountdownActive
+                    ? `Starting in ${hotCpuCountdownSeconds}s`
+                    : hotCpuProfilingEnabled.value
+                      ? "Monitoring"
+                      : "Not armed"}
+                </span>
+              </div>
             }
           />
           <SettingsField
@@ -676,7 +752,7 @@ export function GeneralSettings(props: {
                         ? " is-active"
                         : ""
                     }`}
-                    disabled={props.saving || !hotCpuProfilingEnabled.value}
+                    disabled={props.saving}
                     role="radio"
                     type="button"
                     onClick={() => {
@@ -716,7 +792,7 @@ export function GeneralSettings(props: {
                         ? " is-active"
                         : ""
                     }`}
-                    disabled={props.saving || !hotCpuProfilingEnabled.value}
+                    disabled={props.saving}
                     role="radio"
                     type="button"
                     onClick={() => {
@@ -737,7 +813,7 @@ export function GeneralSettings(props: {
           <SettingsField
             label="Smart heap snapshots"
             sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
-            help="This also enables hot renderer CPU profiling so it can arm immediately while the current instance keeps running."
+            help="Arms heap snapshots for the next explicit CPU capture start."
             source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
             control={
               <SettingsSwitch

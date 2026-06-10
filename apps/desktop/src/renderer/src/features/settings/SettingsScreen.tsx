@@ -346,9 +346,6 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             general: {
               hotCpuProfilingCaptureHeapSnapshot,
-              ...(hotCpuProfilingCaptureHeapSnapshot
-                ? { hotCpuProfilingEnabled: true }
-                : {}),
             },
           });
         }}

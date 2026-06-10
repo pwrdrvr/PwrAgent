@@ -459,8 +459,8 @@ describe("SettingsScreen", () => {
       "false",
     );
     expect(
-      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
-    ).toHaveAttribute("aria-checked", "false");
+      screen.getByRole("button", { name: "Start Capture (Immediate)" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads are in progress",
@@ -488,9 +488,7 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Hot renderer CPU profiling" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Start Capture (Immediate)" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -499,6 +497,8 @@ describe("SettingsScreen", () => {
       });
     });
 
+    expect(screen.getByRole("radio", { name: /5 seconds/ })).not.toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Smart heap snapshots" }),
     ).toHaveAttribute("aria-checked", "false");
@@ -512,7 +512,6 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           hotCpuProfilingCaptureHeapSnapshot: true,
-          hotCpuProfilingEnabled: true,
         },
       });
     });

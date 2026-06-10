@@ -5016,6 +5016,19 @@ textarea,
   white-space: nowrap;
 }
 
+.settings-hot-cpu-capture {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settings-hot-cpu-capture__status {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .settings-segmented__button:hover,
 .settings-segmented__button:focus-visible {
   color: var(--text-primary);
