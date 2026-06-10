@@ -16,7 +16,6 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
-  ThreadSubAgentSummary,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
@@ -68,7 +67,6 @@ export class OverlayStore {
             gitBranch: current?.gitBranch,
             observedGitBranch: current?.observedGitBranch,
             retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
-            subAgents: current?.subAgents,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -351,34 +349,6 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         permissionTransitionLog: trimmed,
-      };
-      data.threads[threadKey] = nextState;
-      return nextState;
-    });
-  }
-
-  async upsertThreadSubAgent(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-    subAgent: ThreadSubAgentSummary;
-  }): Promise<ThreadOverlayState> {
-    return await this.withData(async (data) => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const current = data.threads[threadKey] ?? {
-        backend: params.backend,
-        threadId: params.threadId,
-        executionMode: "default",
-        extraLinkedDirectories: [],
-      };
-      const nextSubAgents = [
-        params.subAgent,
-        ...(current.subAgents ?? []).filter(
-          (subAgent) => subAgent.monitorId !== params.subAgent.monitorId,
-        ),
-      ].sort((left, right) => right.createdAt - left.createdAt);
-      const nextState: ThreadOverlayState = {
-        ...current,
-        subAgents: nextSubAgents,
       };
       data.threads[threadKey] = nextState;
       return nextState;
