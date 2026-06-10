@@ -5093,6 +5093,7 @@ script = "echo setup"
         "pwragent_automations",
         "pwragent_threads",
         "pwragent_messaging",
+        "pwragent_task_monitors",
       ]),
     );
     expect(
@@ -6909,7 +6910,12 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      dynamicTools: undefined,
+      dynamicTools: [
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+      ],
     });
 
     await registry.close();

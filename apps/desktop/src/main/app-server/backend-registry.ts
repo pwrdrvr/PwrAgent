@@ -10576,7 +10576,7 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (threadToolCall?.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE) {
-      if (!this.isLiveAutomationInspectionToolCall(backend, threadToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
         backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
           backend,
           callId: threadToolCall.callId,
@@ -10610,7 +10610,7 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (messagingToolCall?.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE) {
-      if (!this.isLiveAutomationInspectionToolCall(backend, messagingToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
         backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
           backend,
           callId: messagingToolCall.callId,
