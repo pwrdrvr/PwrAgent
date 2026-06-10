@@ -1,7 +1,14 @@
 export type HotCpuProfileTriggerMode = "spike" | "sustained" | "slowburn";
 
+export type HotCpuProfileHeapSnapshotArtifact = {
+  filename: string;
+  path: string;
+  phase: string;
+};
+
 export type HotCpuProfileCapturedEvent = {
   capturedAt: string;
+  heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
   profileFilename: string;
   profilePath: string;
   sessionDirectory: string;
@@ -52,6 +59,18 @@ export function formatHotCpuProfileTriggerSummary(
 export function buildHotCpuProfileHandoffMessage(
   event: HotCpuProfileCapturedEvent,
 ): string {
+  const heapSnapshotArtifacts = event.heapSnapshotArtifacts ?? [];
+  const heapSnapshotLines =
+    heapSnapshotArtifacts.length > 0
+      ? [
+          `Heap snapshots captured: ${heapSnapshotArtifacts.length}`,
+          ...heapSnapshotArtifacts.flatMap((artifact) => [
+            `Heap snapshot ${artifact.phase} basename: ${artifact.filename}`,
+            `Heap snapshot ${artifact.phase} path: ${artifact.path}`,
+          ]),
+        ]
+      : [];
+
   return [
     "PwrAgent captured a renderer CPU profile.",
     `Trigger: ${formatHotCpuProfileTriggerSummary(event)}`,
@@ -59,6 +78,7 @@ export function buildHotCpuProfileHandoffMessage(
     `Session directory path: ${event.sessionDirectory}`,
     `CPU profile basename: ${event.profileFilename}`,
     `CPU profile path: ${event.profilePath}`,
+    ...heapSnapshotLines,
     "Open the .cpuprofile in Chrome DevTools Performance, or inspect the full session directory for samples, events, and optional heap snapshots.",
   ].join("\n");
 }
