@@ -9,7 +9,6 @@ import type {
   TaskMonitorResponse,
 } from "@pwragent/shared";
 import {
-  DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
@@ -34,7 +33,7 @@ export function buildTaskMonitorDynamicToolSpecs(
     namespace: TASK_MONITOR_TOOL_NAMESPACE,
     name: "create_monitor_delegation",
     description:
-      "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd or target location, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
+      "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd or target location, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
     inputSchema: {
       type: "object",
       properties: {
@@ -42,7 +41,6 @@ export function buildTaskMonitorDynamicToolSpecs(
         monitorContext: { type: "string" },
         cwd: { type: "string" },
         pollIntervalSeconds: { type: "number", minimum: 5 },
-        heartbeatIntervalSeconds: { type: "number", minimum: 30 },
         preferredModel: { type: "string" },
         preferredReasoningEffort: { type: "string" },
         finalHandoffPrompt: { type: "string" },
@@ -191,7 +189,6 @@ export function buildTaskMonitorDynamicToolErrorResponse(params: {
 
 export function buildMonitorDelegationPrompt(params: {
   finalHandoffPrompt?: string;
-  heartbeatIntervalSeconds?: number;
   monitorContext?: string;
   monitorId: string;
   parentThreadId: string;
@@ -203,9 +200,7 @@ export function buildMonitorDelegationPrompt(params: {
   const pollInterval =
     normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
     DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
-  const heartbeatInterval =
-    normalizeHeartbeatIntervalSeconds(params.heartbeatIntervalSeconds) ??
-    DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
+  const heartbeatInterval = pollInterval;
   const preferredModel = normalizePreferredMonitorModel(params.preferredModel);
   const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
     params.preferredReasoningEffort,
@@ -220,8 +215,7 @@ export function buildMonitorDelegationPrompt(params: {
     "<monitor_config>",
     `Monitor id: ${params.monitorId}`,
     `Parent thread id: ${params.parentThreadId}`,
-    `Poll interval: ${pollInterval} seconds`,
-    `Heartbeat interval: ${heartbeatInterval} seconds`,
+    `Poll/heartbeat interval: ${pollInterval} seconds`,
     `Preferred monitor model: ${preferredModel}`,
     `Preferred reasoning effort: ${preferredReasoningEffort}`,
     "</monitor_config>",
@@ -250,8 +244,8 @@ export function buildMonitorDelegationPrompt(params: {
     "<progress_protocol>",
     "- Immediately after startup, before the first external poll or sleep, call pwragent_task_monitors.inject_progress with monitorId, status \"running\", and a concise message such as \"Monitor started: checking task status.\"",
     `- After the startup injection, poll about every ${pollInterval} seconds while the task is incomplete.`,
-    "- When the externally visible state changes, call pwragent_task_monitors.inject_progress with monitorId and a concise user-facing message.",
-    `- If the task is still running and no externally visible state changed for about ${heartbeatInterval} seconds, call pwragent_task_monitors.inject_progress with a brief heartbeat such as \"Still running: waiting for the task to finish.\" Do not send heartbeat updates more often than this interval.`,
+    "- Every poll should produce one non-waking progress injection: report the externally visible state change, or if nothing changed and the task is still running, send a brief heartbeat such as \"Still running: waiting for the task to finish.\"",
+    `- Do not send routine heartbeat updates more often than about every ${heartbeatInterval} seconds unless the external state changed.`,
     "- Progress injections are non-waking: they must not ask the parent agent to act.",
     "- Do not include the parent transcript or broad repository context in progress updates.",
     "- When the task reaches success, failure, or cancellation, call pwragent_task_monitors.complete_monitoring exactly once.",
@@ -266,7 +260,7 @@ export function buildMonitorDelegationPrompt(params: {
 }
 
 export function buildMonitorParentAgentGuidance(params: {
-  heartbeatIntervalSeconds?: number;
+  pollIntervalSeconds?: number;
   preferredModel: string;
   preferredReasoningEffort: string;
   startupTimeoutSeconds?: number;
@@ -274,9 +268,10 @@ export function buildMonitorParentAgentGuidance(params: {
   const startupTimeoutSeconds =
     normalizeStartupTimeoutSeconds(params.startupTimeoutSeconds) ??
     DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
-  const heartbeatIntervalSeconds =
-    normalizeHeartbeatIntervalSeconds(params.heartbeatIntervalSeconds) ??
-    DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
+  const pollIntervalSeconds =
+    normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
+    DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+  const heartbeatIntervalSeconds = pollIntervalSeconds;
   return [
     "PwrAgent starts one lightweight monitor thread for this delegation; do not call generic spawnAgent for this flow.",
     `The managed monitor uses model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort} for Codex; ACP or other runtimes should use a mini/non-thinking model or the lowest reliable reasoning setting.`,
@@ -286,7 +281,7 @@ export function buildMonitorParentAgentGuidance(params: {
     "Use this for local verification commands too when the alternative is repeatedly checking whether a long-running command has finished.",
     `After the tool reports startedByPwrAgent=true, make at most one startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
     "If the tool fails or no startup progress injection appears within the startup window, tell the user the monitor did not start and fall back to parent-side monitoring.",
-    `After startup is confirmed, do not poll the task from the parent. The monitor may inject non-waking progress updates and heartbeat messages about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
+    `After startup is confirmed, do not poll the task from the parent. The monitor should poll and inject a non-waking progress update or heartbeat about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
     "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
     "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
   ].join("\n");

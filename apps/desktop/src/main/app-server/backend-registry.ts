@@ -122,8 +122,8 @@ import {
   isAcpBackendId,
   type PendingRequestDecision,
   readCodexEnvironmentActionRuns,
-  DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_MODEL,
+  DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   TASK_MONITOR_TOOL_NAMESPACE,
@@ -10551,10 +10551,9 @@ export class DesktopBackendRegistry {
 
     const monitorId = `monitor-${randomUUID()}`;
     const pollIntervalSeconds =
-      normalizePollIntervalSeconds(args.pollIntervalSeconds) ?? 20;
-    const heartbeatIntervalSeconds =
-      normalizeHeartbeatIntervalSeconds(args.heartbeatIntervalSeconds) ??
-      DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS;
+      normalizePollIntervalSeconds(args.pollIntervalSeconds) ??
+      DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+    const heartbeatIntervalSeconds = pollIntervalSeconds;
     const requestedModel = normalizePreferredMonitorModel(args.preferredModel);
     const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
       args.preferredReasoningEffort,
@@ -10566,14 +10565,13 @@ export class DesktopBackendRegistry {
       });
     const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
     const parentAgentGuidance = buildMonitorParentAgentGuidance({
-      heartbeatIntervalSeconds,
+      pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
       startupTimeoutSeconds,
     });
     const prompt = buildMonitorDelegationPrompt({
       finalHandoffPrompt: args.finalHandoffPrompt,
-      heartbeatIntervalSeconds,
       monitorContext: args.monitorContext,
       monitorId,
       parentThreadId,
