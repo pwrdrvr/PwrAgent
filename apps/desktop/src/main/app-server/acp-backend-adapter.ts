@@ -584,7 +584,10 @@ export function acpSessionThreadStatus(
 
 export function isAcpSessionMissingForProjectError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("No previous sessions found for this project");
+  return (
+    message.includes("No previous sessions found for this project") ||
+    message.includes("Unknown sessionId")
+  );
 }
 
 export function acpSessionHasConversationHistory(

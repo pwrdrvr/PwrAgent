@@ -14696,6 +14696,122 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rebinds ACP protocol sessions when the provider no longer recognizes the stored session id", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "stable-thread-id",
+        title: "Kimi Test Thread",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "session-new",
+        agentSessionId: "session-new",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const ensureSession = vi.fn(async () => {
+      throw new Error(
+        'json-rpc error (-32602): Invalid params: Unknown sessionId: stable-thread-id: {"sessionId":"stable-thread-id"}',
+      );
+    });
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:stable-thread-id:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "kimi",
+          name: "Kimi CLI",
+          distributionKind: "local",
+          distributionSource: "kimi --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-kimi-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "kimi",
+            distributionKind: "local",
+            command: "kimi",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "stable-thread-id",
+      input: [{ type: "text", text: "That worked!" }],
+    });
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "stable-thread-id",
+        cwd: "/repo/app",
+        title: "Kimi Test Thread",
+      }),
+    );
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "stable-thread-id",
+        prompt: "That worked!",
+      }),
+    );
+    expect(sessionStore.getSession(acpBackendId, "stable-thread-id")).toMatchObject({
+      agentSessionId: "session-new",
+    });
+
+    await registry.close();
+  });
+
   it("updates stored ACP session cwd on workspace handoff before the next turn", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessionStore = createAcpSessionStoreMock([
