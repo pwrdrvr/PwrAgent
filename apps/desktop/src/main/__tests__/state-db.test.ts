@@ -30,12 +30,18 @@ describe("StateDb", () => {
   it("creates additive runtime cache tables", () => {
     const tables = stateDb.raw
       .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?) ORDER BY name`,
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN (?, ?, ?, ?, ?, ?, ?, ?)
+         ORDER BY name`,
       )
       .all(
         "acp_installed_agents",
         "acp_registry_cache",
         "acp_sessions",
+        "federation_enrollment_tokens",
+        "federation_peers",
+        "federation_session_audit",
         "pr_lookup_cache",
         "pr_status_cache",
       ) as Array<{ name: string }>;
@@ -44,6 +50,9 @@ describe("StateDb", () => {
       "acp_installed_agents",
       "acp_registry_cache",
       "acp_sessions",
+      "federation_enrollment_tokens",
+      "federation_peers",
+      "federation_session_audit",
       "pr_lookup_cache",
       "pr_status_cache",
     ]);
@@ -1365,6 +1374,9 @@ describe("StateDb", () => {
     stateDb = StateDb.open(dbPath);
 
     expect(existingTables()).toEqual([
+      "federation_enrollment_tokens",
+      "federation_peers",
+      "federation_session_audit",
       "pr_lookup_cache",
       "pr_status_cache",
       "thread_search_documents",
@@ -1427,6 +1439,9 @@ describe("StateDb", () => {
     stateDb = StateDb.open(dbPath);
 
     expect(existingTables()).toEqual([
+      "federation_enrollment_tokens",
+      "federation_peers",
+      "federation_session_audit",
       "pr_lookup_cache",
       "pr_status_cache",
       "thread_search_documents",
@@ -1580,9 +1595,15 @@ function openRawDb(dbPath: string): BetterSqlite3.Database {
 function existingTables(): string[] {
   const rows = stateDb.raw
     .prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?) ORDER BY name`,
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name IN (?, ?, ?, ?, ?, ?, ?)
+       ORDER BY name`,
     )
     .all(
+      "federation_enrollment_tokens",
+      "federation_peers",
+      "federation_session_audit",
       "pr_lookup_cache",
       "pr_status_cache",
       "thread_search_documents",

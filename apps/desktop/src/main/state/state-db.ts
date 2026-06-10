@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 37;
+export const CURRENT_STATE_DB_USER_VERSION = 38;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -842,6 +842,50 @@ CREATE INDEX IF NOT EXISTS idx_thread_message_origins_thread
   ON thread_message_origins(backend, thread_id, created_at, message_id);
 `;
 
+export const FEDERATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS federation_peers (
+  peer_id       TEXT PRIMARY KEY,
+  label         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER,
+  revoked_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_peers_status_updated
+  ON federation_peers(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS federation_enrollment_tokens (
+  enrollment_id  TEXT PRIMARY KEY,
+  token_hmac     TEXT NOT NULL UNIQUE,
+  status         TEXT NOT NULL,
+  generated_at   INTEGER NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  used_at        INTEGER,
+  peer_id        TEXT,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_status_expires
+  ON federation_enrollment_tokens(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_peer
+  ON federation_enrollment_tokens(peer_id);
+
+CREATE TABLE IF NOT EXISTS federation_session_audit (
+  event_id    INTEGER PRIMARY KEY,
+  peer_id     TEXT,
+  session_id  TEXT,
+  kind        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_peer_created
+  ON federation_session_audit(peer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_session_created
+  ON federation_session_audit(session_id, created_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -1141,6 +1185,12 @@ export class StateDb {
         db.pragma("user_version = 37");
       })();
     }
+    if ((db.pragma("user_version", { simple: true }) as number) < 38) {
+      db.transaction(() => {
+        db.exec(FEDERATION_SCHEMA);
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+      })();
+    }
     // Keep current-version databases converged without asking pre-v36 profiles
     // to install the unique index before the migration above removes duplicates.
     db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -1308,8 +1358,10 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
+    ensureThreadUsagePricingIndexes(db);
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadMessageOriginSchema(db);
+    db.exec(FEDERATION_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
