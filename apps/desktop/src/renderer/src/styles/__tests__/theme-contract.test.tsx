@@ -331,7 +331,7 @@ describe("Tangerine Terminal theme contract", () => {
     // it and the chat column reserves it (+ the 48px spine) — same value, so
     // the panel can never render wider than its reserved gutter.
     expect(css).toMatch(
-      /--context-rail-effective:\s*min\(\s*var\(--context-rail-width, 380px\),\s*max\(240px, calc\(100vw - var\(--sidebar-width, 408px\) - 448px\)\)\s*\);/
+      /--context-rail-effective:\s*min\(\s*var\(--context-rail-width, 380px\),\s*max\(240px, calc\(100vw - var\(--sidebar-reserve, 408px\) - 448px\)\)\s*\);/
     );
     expect(css).toContain(
       "padding-right: calc(var(--context-rail-effective, 380px) + 48px);"
@@ -343,6 +343,11 @@ describe("Tangerine Terminal theme contract", () => {
       /@media \(max-width: 1100px\)[\s\S]*?\.thread-header,[\s\S]*?padding-right:\s*56px;/
     );
     expect(css).not.toContain("the header reclaims the space");
+    // The sidebar-hidden override must zero the reserve so the rail reclaims
+    // the freed space instead of subtracting a sidebar that isn't on screen.
+    expect(css).toMatch(
+      /\.app-shell\[data-sidebar-hidden="true"\][^{]*\{[^}]*--sidebar-reserve:\s*0px;/
+    );
   });
 
   it("keeps hidden thread row actions from stealing row clicks", () => {

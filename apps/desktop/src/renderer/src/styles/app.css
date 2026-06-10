@@ -383,6 +383,11 @@ textarea,
   display: grid;
   position: relative;
   grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
+  /* The sidebar's actual horizontal footprint. Mirrors `--sidebar-width`
+     while the sidebar is shown; the hidden override below drops it to 0 so
+     downstream reserves (e.g. `--context-rail-effective`) stop subtracting a
+     sidebar that isn't on screen. */
+  --sidebar-reserve: var(--sidebar-width, 408px);
   align-items: stretch;
   height: 100vh;
   height: 100dvh;
@@ -403,6 +408,9 @@ textarea,
    0-width first track and the whole content area collapses to nothing. */
 .app-shell[data-sidebar-hidden="true"] {
   grid-template-columns: minmax(0, 1fr);
+  /* No sidebar on screen — free its footprint so reserves computed from it
+     (the context rail's effective width) reclaim the space. */
+  --sidebar-reserve: 0px;
 }
 
 .app-shell[data-sidebar-hidden="true"] .sidebar {
@@ -3866,18 +3874,22 @@ textarea,
   overflow: hidden;
   /* The single source of truth for the pinned rail's rendered width.
      `.context-panel` renders at exactly this, and `.thread-view__layout`
-     + `.thread-header` reserve exactly this (+ spine) — computed ONCE so
-     the panel and its gutter can never disagree (which is what slid the
-     panel over the chat + MSG cluster).
+     reserves exactly this (+ spine) — computed ONCE so the panel and its
+     gutter can never disagree (which is what slid the panel over the chat
+     + MSG cluster). The header no longer reserves a gutter at all: the rail
+     is anchored below it (see `.context-rail`).
 
      The width is the user's chosen `--context-rail-width`, but never wider
      than what leaves the chat column ~400px after the sidebar + spine. A
      plain `42vw` cap ignored the sidebar, so on a narrow window a wide rail
      still starved the chat and the fixed-width MSG cluster overflowed under
-     the rail. `max(240px, …)` keeps the panel usable on tiny windows. */
+     the rail. `--sidebar-reserve` is the sidebar's real footprint (0px when
+     the sidebar is hidden), so a hidden sidebar hands the freed space to the
+     rail instead of reserving for a sidebar that isn't there. `max(240px, …)`
+     keeps the panel usable on tiny windows. */
   --context-rail-effective: min(
     var(--context-rail-width, 380px),
-    max(240px, calc(100vw - var(--sidebar-width, 408px) - 448px))
+    max(240px, calc(100vw - var(--sidebar-reserve, 408px) - 448px))
   );
 }
 
@@ -9123,9 +9135,9 @@ textarea,
   display: flex;
   flex-direction: column;
   /* Render at the shared effective width (see `.thread-view`). The gutter
-     reserved by `.thread-view__layout` + `.thread-header` is this same var
-     (+ spine), so this position:fixed surface can never be wider than its
-     reserved gutter — which is what slid it over the chat + MSG cluster. */
+     reserved by `.thread-view__layout` is this same var (+ spine), so this
+     absolutely-positioned surface can never be wider than its reserved
+     gutter — which is what slid it over the chat + MSG cluster. */
   flex: 0 0 var(--context-rail-effective, 380px);
   width: var(--context-rail-effective, 380px);
   min-width: 0;
