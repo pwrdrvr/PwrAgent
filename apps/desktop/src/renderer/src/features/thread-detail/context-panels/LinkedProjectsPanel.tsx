@@ -5,6 +5,7 @@ import {
   CopyValueButton,
   TooltipValue,
   handleCopyPath,
+  openExternalUrl,
   type HideRailTooltip,
   type ShowRailTooltip,
 } from "./context-rail-shared";
@@ -90,7 +91,7 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
           <ul className="context-list pr-panel-list">
             {prs.map((pr) => (
               <li key={`${pr.org}/${pr.repo}#${pr.number}`} className="pr-panel-row">
-                <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openPr} />
+                <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openExternalUrl} />
               </li>
             ))}
           </ul>
@@ -98,11 +99,4 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       ) : null}
     </section>
   );
-}
-
-function openPr(url: string): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
 }

@@ -1,5 +1,6 @@
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { PrChip } from "../../pr-status/PrChip";
+import { openExternalUrl } from "./context-rail-shared";
 
 type PullRequestsPanelProps = {
   thread: NavigationThreadSummary;
@@ -24,7 +25,7 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
         <ul className="context-list pr-panel-list">
           {prs.map((pr) => (
             <li key={prKey(pr)} className="pr-panel-row">
-              <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openPr} />
+              <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openExternalUrl} />
               <span className="pr-panel-row__state">{stateLabel(pr.state)}</span>
             </li>
           ))}
@@ -40,13 +41,6 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
 
 function prKey(pr: PrSummary): string {
   return `${pr.org}/${pr.repo}#${pr.number}`;
-}
-
-function openPr(url: string): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function stateLabel(state: PrSummary["state"]): string {

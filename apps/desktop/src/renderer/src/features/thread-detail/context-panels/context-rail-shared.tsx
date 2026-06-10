@@ -146,3 +146,15 @@ export function pathBaseName(pathname: string): string {
   const segments = normalized.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? pathname;
 }
+
+/**
+ * Open an external URL (e.g. a pull request) in the user's browser from a
+ * rail panel. Shared by the Pull Requests + Linked Projects panels so the
+ * `PrChip` open behavior is identical.
+ */
+export function openExternalUrl(url: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}

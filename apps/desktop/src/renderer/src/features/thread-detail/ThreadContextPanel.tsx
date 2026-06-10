@@ -7,6 +7,7 @@ import {
   type ComponentType,
   type CSSProperties,
   type FocusEvent,
+  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
 } from "react";
@@ -40,7 +41,7 @@ type ContextTab = {
   id: ContextTabId;
   label: string;
   Icon: ComponentType<IconProps>;
-  /** Anchored to the bottom of the rail, above the pin toggle. */
+  /** Anchored to the bottom of the tab rail (below the spacer). */
   bottom?: boolean;
 };
 
@@ -442,7 +443,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             <div className="context-panel__header">
               <span className="context-panel__title">{activeTabMeta.label}</span>
             </div>
-            <div className="context-panel__scroll">{renderActivePanel()}</div>
+            <div
+              className="context-panel__scroll"
+              id="context-rail-panel"
+              role="tabpanel"
+              aria-labelledby={`context-rail-tab-${activeTab}`}
+            >
+              {renderActivePanel()}
+            </div>
           </div>
         </div>
       ) : null}
@@ -453,6 +461,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           role="tablist"
           aria-orientation="vertical"
           aria-label="Context panels"
+          onKeyDown={handleTablistKeyDown}
         >
           {topTabs.map((tab) => renderTab(tab))}
           {bottomTabs.length > 0 ? (
@@ -488,8 +497,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     return (
       <button
         key={tab.id}
+        id={`context-rail-tab-${tab.id}`}
         aria-label={tab.label}
         aria-selected={isActive && open}
+        aria-controls={open ? "context-rail-panel" : undefined}
         className={`context-rail__tab${isActive ? " is-active" : ""}`}
         role="tab"
         tabIndex={isActive ? 0 : -1}
@@ -500,6 +511,45 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         <TabIcon size={18} aria-hidden="true" />
       </button>
     );
+  }
+
+  // Vertical tablist roving focus (WAI-ARIA tabs pattern). Arrow keys move
+  // focus between the tab buttons; activation stays manual (Enter/Space or
+  // click) so arrowing through the rail doesn't fire a config write +
+  // reveal on every keypress. Home/End jump to the first/last tab.
+  function handleTablistKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    const tabs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'),
+    );
+    if (tabs.length === 0) {
+      return;
+    }
+    const current = tabs.indexOf(document.activeElement as HTMLElement);
+    let next: number;
+    switch (event.key) {
+      case "ArrowDown":
+        next = current < 0 ? 0 : (current + 1) % tabs.length;
+        break;
+      case "ArrowUp":
+        next = current < 0 ? tabs.length - 1 : (current - 1 + tabs.length) % tabs.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      default:
+        next = tabs.length - 1;
+        break;
+    }
+    event.preventDefault();
+    tabs[next]?.focus();
   }
 
   function renderActivePanel() {

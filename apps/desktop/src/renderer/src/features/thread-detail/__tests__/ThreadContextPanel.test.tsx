@@ -183,6 +183,37 @@ describe("ThreadContextPanel", () => {
     expect(onActiveTabChange).toHaveBeenCalledWith("info");
   });
 
+  it("wires the tabs to a labelled tabpanel when the rail is open", () => {
+    renderPanel({ pinned: true });
+
+    const activeTab = screen.getByRole("tab", { name: "Thread info" });
+    expect(activeTab).toHaveAttribute("aria-controls", "context-rail-panel");
+
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("id", "context-rail-panel");
+    expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
+  });
+
+  it("moves focus between tabs with Arrow keys (roving tablist)", () => {
+    renderPanel({ pinned: true });
+
+    const info = screen.getByRole("tab", { name: "Thread info" });
+    const subAgents = screen.getByRole("tab", { name: "Sub-agents" });
+    info.focus();
+    expect(document.activeElement).toBe(info);
+
+    fireEvent.keyDown(info, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(subAgents);
+
+    fireEvent.keyDown(subAgents, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(info);
+
+    fireEvent.keyDown(info, { key: "End" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { name: "Provider status" }),
+    );
+  });
+
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
     vi.useFakeTimers();
     renderPanel();

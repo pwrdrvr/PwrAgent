@@ -1,5 +1,9 @@
 import { useEffect, type ReactElement } from "react";
-import { isEditableTarget, isPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  formatPrimaryAccel,
+  isEditableTarget,
+  isPrimaryAccel,
+} from "../../lib/keyboard-accel";
 
 /**
  * Window layout chips — show/hide the left sidebar (primary) and the
@@ -91,7 +95,10 @@ function LayoutChip({
       : open
         ? "Hide context rail"
         : "Show context rail";
-  const chord = kind === "primary" ? "⌘B" : "⌘⌥B";
+  // Display the chord for the current platform (⌘B / ⌘⌥B on macOS,
+  // Ctrl+B / Ctrl+Alt+B on Windows/Linux). The binding itself accepts
+  // either modifier — see isPrimaryAccel.
+  const chord = formatPrimaryAccel("B", { alt: kind !== "primary" });
   return (
     <button
       type="button"
