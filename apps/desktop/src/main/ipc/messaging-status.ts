@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type {
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
@@ -484,9 +484,14 @@ export function registerMessagingStatusIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
-  ipcMain.handle(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL, async (): Promise<void> => {
-    showMessagingActivityWindow();
-  });
+  ipcMain.handle(
+    MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
+    async (event): Promise<void> => {
+      showMessagingActivityWindow({
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
+    },
+  );
 
   ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
   ipcMain.handle(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL, async (): Promise<void> => {

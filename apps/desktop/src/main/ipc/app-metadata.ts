@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { app, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import {
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
@@ -133,13 +133,17 @@ export function registerAppMetadataIpcHandlers(): void {
     APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
     async (): Promise<AppChangelogDocument> => readAppChangelogDocument(),
   );
-  ipcMain.handle(APP_CHANGELOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
-    showChangelogWindow();
+  ipcMain.handle(APP_CHANGELOG_WINDOW_OPEN_CHANNEL, async (event): Promise<void> => {
+    showChangelogWindow({
+      sourceWindow: BrowserWindow.fromWebContents(event.sender),
+    });
   });
   ipcMain.handle(
     APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
-    async (): Promise<void> => {
-      showThirdPartyNoticesWindow();
+    async (event): Promise<void> => {
+      showThirdPartyNoticesWindow({
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
     },
   );
   ipcMain.handle(
@@ -153,8 +157,10 @@ export function registerAppMetadataIpcHandlers(): void {
       return readDecoratedAppLogSnapshot();
     },
   );
-  ipcMain.handle(APP_LOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
-    showAppLogWindow();
+  ipcMain.handle(APP_LOG_WINDOW_OPEN_CHANNEL, async (event): Promise<void> => {
+    showAppLogWindow({
+      sourceWindow: BrowserWindow.fromWebContents(event.sender),
+    });
   });
 }
 

@@ -44,10 +44,13 @@ import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
+import { placementForCursorDisplay } from "./window-placement";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
 const isWindows = process.platform === "win32";
+const MAIN_WINDOW_WIDTH = 1440;
+const MAIN_WINDOW_HEIGHT = 960;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
@@ -320,8 +323,9 @@ export function createMainWindow(options?: {
         }
       : {};
   const window = new BrowserWindow({
-    width: 1440,
-    height: 960,
+    ...placementForCursorDisplay(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT),
+    width: MAIN_WINDOW_WIDTH,
+    height: MAIN_WINDOW_HEIGHT,
     minWidth: 1200,
     minHeight: 760,
     show: false,
