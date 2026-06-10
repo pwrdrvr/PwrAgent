@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type ComponentType,
-  type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -61,6 +60,18 @@ type ThreadContextPanelProps = {
   onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
+  /**
+   * Current rail width in px, owned by `ThreadView`. The panel is a
+   * controlled component: `ThreadView` publishes this as `--context-rail-width`
+   * on `.thread-view`, the panel renders at the derived
+   * `--context-rail-effective` (sidebar-capped) that the chat column + header
+   * also reserve, and resizes report back through `onWidthChange`. Keeping a
+   * single width source — instead of a second local copy here — is what
+   * guarantees the panel and its reserved gutter can never disagree (the bug
+   * where a widened rail slid under the MSG cluster on a freshly-created
+   * subthread).
+   */
+  width?: number;
   pinned: boolean;
   platform?: string;
   thread: NavigationThreadSummary;
@@ -78,7 +89,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const railRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
-  const [railWidth, setRailWidth] = useState(380);
+  // Width is owned by ThreadView (single source of truth). Used only for the
+  // resize delta math here; the rendered width comes from the inherited
+  // `--context-rail-effective` custom property. No local copy → no desync.
+  const railWidth = props.width ?? 380;
   const [resizing, setResizing] = useState(false);
   const [tooltip, setTooltip] = useState<{
     left?: number;
@@ -348,7 +362,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   const resizeRail = (nextWidth: number): void => {
     const clampedWidth = Math.min(560, Math.max(300, nextWidth));
-    setRailWidth(clampedWidth);
     props.onWidthChange?.(clampedWidth);
   };
   const startRailResize = (event: PointerEvent<HTMLElement>): void => {
@@ -386,7 +399,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
       }${resizing ? " is-resizing" : ""}`}
-      style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
       onMouseEnter={(event) => {
         rememberMousePosition(event);
         if (!pinned) {

@@ -2168,7 +2168,9 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section
-      className="thread-view"
+      className={`thread-view${
+        contextRailPinned ? " has-pinned-context-rail" : ""
+      }`}
       style={
         {
           "--context-rail-width": `${contextRailWidth}px`,
@@ -2399,6 +2401,7 @@ export function ThreadView(props: ThreadViewProps) {
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
+          width={contextRailWidth}
           pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}

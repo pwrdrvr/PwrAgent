@@ -307,18 +307,35 @@ describe("Tangerine Terminal theme contract", () => {
     expect(copyButtonRule).toContain("opacity: 1;");
   });
 
-  it("reserves opened context rail width for the thread header status area", () => {
-    // + 60px = panel width + the always-visible 48px tab rail (spine) +
-    // a small gap, so the header status area clears both the panel and
-    // the spine when the rail is open/pinned.
+  it("derives the pinned rail width, gutter, and header reserve from one shared var", () => {
+    // Single source of truth: `--context-rail-effective` is computed once on
+    // `.thread-view`, and the panel renders at it while the chat column +
+    // header reserve that same width (+ spine). Computing it once is what
+    // stops the position:fixed panel from ever rendering wider than its
+    // reserved gutter — the bug where a widened rail slid over the chat +
+    // MSG cluster on a freshly-created subthread. The cap is sidebar-aware
+    // (not a bare `vw`), so a wide rail can't starve the chat on a narrow
+    // window and push the MSG indicators under the rail.
     expect(css).toMatch(
-      /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 60px\);[\s\S]*?\}/
+      /--context-rail-effective:\s*min\(\s*var\(--context-rail-width, 380px\),\s*max\(240px, calc\(100vw - var\(--sidebar-width, 408px\) - 448px\)\)\s*\);/
     );
+    // Header status area: explicit `.has-pinned-context-rail` class (robust
+    // across every render branch, even before the fixed panel mounts) plus a
+    // `:has(.context-rail.is-open)` fallback for the hover-reveal overlay.
+    // +60 = effective width + the 48px spine + a small gap.
     expect(css).toMatch(
-      /\.thread-view:has\(\.context-rail\.is-pinned\) \.thread-header,\s*\.thread-view:has\(\.thread-view__layout\.has-pinned-context-rail\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), 42vw\) \+ 60px\);[\s\S]*?\}/
+      /\.thread-view\.has-pinned-context-rail \.thread-header,\s*\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(var\(--context-rail-effective, 380px\) \+ 60px\);[\s\S]*?\}/
     );
-    expect(css).toMatch(
-      /@media \(max-width: 1100px\)\s*\{[\s\S]*?\.thread-view:has\(\.context-rail\.is-open\) \.thread-header,[\s\S]*?padding-right:\s*56px;[\s\S]*?\}/
+    // Chat column + panel read the exact same effective width.
+    expect(css).toContain(
+      "padding-right: calc(var(--context-rail-effective, 380px) + 48px);"
+    );
+    expect(css).toContain("width: var(--context-rail-effective, 380px);");
+    // The narrow-width media query must NOT zero the rail gutter or drop the
+    // header reserve to a fixed 56px anymore — doing so left the fixed panel
+    // covering the chat + MSG cluster on narrow windows.
+    expect(css).not.toMatch(
+      /@media \(max-width: 1100px\)[\s\S]*?\.thread-header,[\s\S]*?padding-right:\s*56px;/
     );
     expect(css).not.toContain("the header reclaims the space");
   });
