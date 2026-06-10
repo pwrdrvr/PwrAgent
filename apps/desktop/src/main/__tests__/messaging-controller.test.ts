@@ -386,6 +386,81 @@ describe("MessagingController", () => {
     expect(budgetEvents).toEqual([]);
   });
 
+  it("queues callback status navigation instead of dropping it during slow mode", async () => {
+    let now = 0;
+    const sleeps: number[] = [];
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 1, intervalMs: 1000, reserved: 0 },
+    };
+    const budgetEvents: Array<
+      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+    > = [];
+    const harness = await createHarness({
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      now: () => now,
+      onDeliveryBudgetEvent: (event) => budgetEvents.push(event),
+      resolveDeliveryScope: () => scope,
+      sleepUntil: async (retryAt) => {
+        sleeps.push(retryAt);
+        now = retryAt;
+      },
+    });
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCallbackEvent({ actionId: "status:refresh" }).channel,
+    );
+    expect(binding).toBeTruthy();
+    await harness.store.upsertBinding({
+      ...binding!,
+      statusSurface: {
+        channel: "telegram",
+        id: "surface:existing-status",
+      },
+      updatedAt: now,
+    });
+    harness.delivered.length = 0;
+    now = 6000;
+    budgetEvents.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:model" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Model",
+    });
+
+    now = 6100;
+    const backNavigation = harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:refresh" }),
+    );
+    await backNavigation;
+
+    expect(sleeps).toHaveLength(1);
+    expect(budgetEvents).toContainEqual(
+      expect.objectContaining({
+        outcome: "deferred",
+        priority: "user_command",
+        intentKind: "status",
+        reason: "budget-exhausted",
+        retryAt: sleeps[0],
+      }),
+    );
+    expect(budgetEvents).not.toContainEqual(
+      expect.objectContaining({
+        outcome: "dropped",
+        intentKind: "status",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({ mode: "update" }),
+    });
+  });
+
   it("starts a new messaging thread in a new worktree from the selected base branch", async () => {
     const harness = await createHarness({
       navigation: {
@@ -6788,6 +6863,21 @@ describe("MessagingController", () => {
     expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
   });
 
+  it("treats user-initiated status renders as user command budget traffic", () => {
+    const status = {
+      id: "status-1",
+      kind: "status",
+      createdAt: 1_000,
+      status: "working",
+      text: "Working",
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(status)).toBe("routine_status");
+    expect(messagingDeliveryPriority(status, { userInitiated: true })).toBe(
+      "user_command",
+    );
+  });
+
   it("does not charge typing activity against the message write budget", () => {
     const activity = {
       id: "activity-1",
@@ -10994,6 +11084,7 @@ async function createHarness(options?: {
   pendingIntentTtlMs?: number;
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
+  sleepUntil?: MessagingControllerOptions["sleepUntil"];
   fullAccessControls?: MessagingControllerOptions["fullAccessControls"];
   activityLog?: MessagingControllerOptions["activityLog"];
   onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
@@ -11376,6 +11467,7 @@ async function createHarness(options?: {
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
+    sleepUntil: options?.sleepUntil,
     fullAccessControls: options?.fullAccessControls ?? {
       allowEscalation: true,
       allowThreadResume: true,
