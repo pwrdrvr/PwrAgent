@@ -4114,6 +4114,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Messaging",
+      "Federation",
       "Git",
       "Worktrees",
       "Thread Management",
