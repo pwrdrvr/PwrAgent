@@ -2191,7 +2191,7 @@ describe("CodexAppServerClient", () => {
           id: "item-1",
           role: "user",
           text: "Show me the current desktop thread shell",
-          createdAt: undefined,
+          createdAt: 1_763_500_100_000,
           parts: [
             {
               type: "text",
@@ -2203,13 +2203,13 @@ describe("CodexAppServerClient", () => {
           id: "item-2",
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
-          createdAt: undefined
+          createdAt: 1_763_500_100_000
         },
         {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: undefined
+          createdAt: 1_763_500_100_000
         }
       ],
       lastUserMessage: "Show me the current desktop thread shell",
@@ -2338,6 +2338,74 @@ describe("CodexAppServerClient", () => {
         },
       },
     ]);
+
+    await client.close();
+  });
+
+  it("does not let an older same-text assistant message hide a newer turn reply", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-repeated-assistant-text", {
+      events: [
+        {
+          type: "response_item",
+          timestamp: "2026-06-09T15:01:00.000Z",
+          payload: {
+            id: "old-response-item",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Same final answer.",
+              },
+            ],
+          },
+        },
+      ],
+      thread: {
+        turns: [
+          {
+            id: "newer-turn",
+            status: "completed",
+            startedAt: 1_781_112_452,
+            items: [
+              {
+                type: "agentMessage",
+                id: "new-final-answer",
+                phase: "final_answer",
+                text: "Same final answer.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-repeated-assistant-text",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        id: "new-final-answer",
+        role: "assistant",
+        text: "Same final answer.",
+        createdAt: 1_781_112_452_000,
+      }),
+    ]);
+    expect(replay.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        id: "new-final-answer",
+        role: "assistant",
+        text: "Same final answer.",
+        createdAt: 1_781_112_452_000,
+      }),
+    );
+    expect(replay.lastAssistantMessage).toBe("Same final answer.");
 
     await client.close();
   });
@@ -2769,7 +2837,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-1",
         role: "user",
         text: "Describe this image",
-        createdAt: undefined,
+        createdAt: 1_763_500_150_000,
         parts: [
           {
             type: "text",
@@ -2785,7 +2853,7 @@ describe("CodexAppServerClient", () => {
         id: "item-image-2",
         role: "user",
         text: "",
-        createdAt: undefined,
+        createdAt: 1_763_500_150_000,
         parts: [
           {
             type: "image",
