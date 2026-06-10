@@ -64,6 +64,17 @@ export type TaskMonitorUsageSnapshot = {
   };
 };
 
+export type TaskMonitorCompletionSource =
+  | {
+      type: "monitor_tool";
+    }
+  | {
+      type: "pwragent_fallback";
+      reason: string;
+      recoveryAttempted: boolean;
+      terminalStatus?: "completed" | "failed" | "cancelled";
+    };
+
 export type TaskMonitorToolArgsByOperation = {
   create_monitor_delegation: CreateMonitorDelegationToolArgs;
   inject_progress: InjectMonitorProgressToolArgs;
@@ -107,6 +118,7 @@ export type TaskMonitorProgressData = {
 };
 
 export type TaskMonitorCompletionData = TaskMonitorProgressData & {
+  completionSource?: TaskMonitorCompletionSource;
   outcome: CompleteMonitoringToolArgs["outcome"];
   parentTurn?: {
     status: "started" | "queued";
