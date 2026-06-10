@@ -217,7 +217,8 @@ function persistFinalizedUsageEntry(params: {
   if (
     !params.entry ||
     params.entry.status !== "completed" ||
-    tokenUsageActivityScope(params.entry) !== "turn"
+    (tokenUsageActivityScope(params.entry) !== "turn" &&
+      !isDurableMonitorUsageActivity(params.entry))
   ) {
     return;
   }
@@ -3553,6 +3554,12 @@ export function useThreadSessionState(params: {
           }
 
           if (taskMonitorUsageEntry) {
+            persistFinalizedUsageEntry({
+              backend: event.backend,
+              desktopApi,
+              entry: taskMonitorUsageEntry,
+              threadId: notificationThreadId,
+            });
             const nextResponse = appendThreadEntries(
               current.response,
               {

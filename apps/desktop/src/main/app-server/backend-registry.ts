@@ -2318,15 +2318,19 @@ function isUsageActivityEntry(
       entry.id.startsWith("live-turn-usage-") ||
       entry.summary.startsWith("Latest request usage:") ||
       entry.summary.startsWith("Turn usage:") ||
+      entry.summary.startsWith("Monitor usage:") ||
       entry.summary.startsWith("Usage:"))
   );
 }
 
 function usageActivityScope(
   entry: AppServerThreadActivityEntry,
-): "latest-request" | "total" | "turn" | undefined {
+): "latest-request" | "monitor" | "total" | "turn" | undefined {
   if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
     return "turn";
+  }
+  if (entry.summary.startsWith("Monitor usage:")) {
+    return "monitor";
   }
   if (entry.summary.startsWith("Latest request usage:")) {
     return "latest-request";
@@ -2374,15 +2378,18 @@ function mergeImmutableUsageActivities(params: {
   replay: AppServerThreadReplay;
   activities?: AppServerThreadActivityEntry[];
 }): AppServerThreadReplay {
-  const immutableTurnUsageActivities = params.activities?.filter(
-    (activity) => usageActivityScope(activity) === "turn",
+  const immutableUsageActivities = params.activities?.filter(
+    (activity) => {
+      const scope = usageActivityScope(activity);
+      return scope === "turn" || scope === "monitor";
+    },
   );
-  if (!immutableTurnUsageActivities?.length) {
+  if (!immutableUsageActivities?.length) {
     return params.replay;
   }
 
   let entries = params.replay.entries;
-  for (const activity of immutableTurnUsageActivities) {
+  for (const activity of immutableUsageActivities) {
     const activityScope = usageActivityScope(activity);
     const activityTurnId = activity.turn?.id;
     entries = entries.filter((entry) => {

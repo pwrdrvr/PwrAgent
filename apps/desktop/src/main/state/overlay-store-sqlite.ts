@@ -366,7 +366,8 @@ export class SqliteOverlayStore {
     };
     if (
       !params.activity.id.startsWith("live-turn-usage-") &&
-      !params.activity.summary.startsWith("Turn usage:")
+      !params.activity.summary.startsWith("Turn usage:") &&
+      !params.activity.summary.startsWith("Monitor usage:")
     ) {
       return { overlay: current, persisted: false };
     }

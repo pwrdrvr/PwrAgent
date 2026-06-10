@@ -263,7 +263,8 @@ function createOverlayStoreMock(params?: {
       };
       if (
         !activity.id.startsWith("live-turn-usage-") &&
-        !activity.summary.startsWith("Turn usage:")
+        !activity.summary.startsWith("Turn usage:") &&
+        !activity.summary.startsWith("Monitor usage:")
       ) {
         return { overlay: current, persisted: false };
       }

@@ -277,6 +277,38 @@ describe("SqliteOverlayStore — thread reactions", () => {
     );
   });
 
+  it("persists completed monitor usage activities", async () => {
+    const persisted = await store.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: "thread-1",
+      activity: {
+        type: "activity",
+        id: "monitor-1:usage:completion:1500",
+        summary: "Monitor usage: 100 uncached in · 200 cached · 30 out",
+        status: "completed",
+        createdAt: 1500,
+        details: [
+          {
+            id: "monitor-1:usage:completion:1500-input",
+            kind: "read",
+            label: "Input: 300 tokens (100 uncached, 200 cached)",
+            status: "completed",
+          },
+        ],
+      },
+    });
+
+    expect(persisted.persisted).toBe(true);
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.immutableUsageActivities).toHaveLength(1);
+    expect(overlay?.immutableUsageActivities?.[0]?.summary).toBe(
+      "Monitor usage: 100 uncached in · 200 cached · 30 out",
+    );
+  });
+
   it("preserves reactions when another sqlite handle performs an unrelated overlay write", async () => {
     await addTestReactions(store);
 
