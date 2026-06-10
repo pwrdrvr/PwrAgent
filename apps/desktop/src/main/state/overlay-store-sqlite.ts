@@ -43,6 +43,12 @@ export type DirectoryGitStatusCacheEntry = {
   gitStatus?: NavigationDirectoryGitStatus;
 };
 
+export type PrStatusCacheEntry = {
+  prKey: string;
+  fetchedAt: number;
+  pr: PrSummary;
+};
+
 function parseDirectoryGitStatusCachePayload(
   payload: string | null,
 ): NavigationDirectoryGitStatus | undefined {
@@ -679,6 +685,62 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT pr_key, fetched_at, payload
+         FROM pr_status_cache`,
+      )
+      .all() as Array<{
+        pr_key: string;
+        fetched_at: number;
+        payload: string;
+      }>;
+
+    const entries: Record<string, PrStatusCacheEntry> = {};
+    for (const row of rows) {
+      try {
+        entries[row.pr_key] = {
+          prKey: row.pr_key,
+          fetchedAt: row.fetched_at,
+          pr: JSON.parse(row.payload) as PrSummary,
+        };
+      } catch {
+        // Ignore malformed cache rows. A future refresh rewrites the row.
+      }
+    }
+    return entries;
+  }
+
+  async writePrStatusCacheEntries(entries: PrStatusCacheEntry[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const insert = this.stateDb.raw.prepare(
+      `INSERT OR REPLACE INTO pr_status_cache(
+         pr_key,
+         org,
+         repo,
+         number,
+         fetched_at,
+         payload
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const write = this.stateDb.raw.transaction(() => {
+      for (const entry of entries) {
+        insert.run(
+          entry.prKey,
+          entry.pr.org,
+          entry.pr.repo,
+          entry.pr.number,
+          entry.fetchedAt,
+          JSON.stringify(entry.pr),
+        );
+      }
+    });
+    write();
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -1300,6 +1362,8 @@ export type OverlayStoreLike = Pick<
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
+  | "readPrStatusCache"
+  | "writePrStatusCacheEntries"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"

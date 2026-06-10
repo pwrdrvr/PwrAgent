@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
+  PrStatusCacheEntry,
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
 import {
@@ -410,6 +411,7 @@ class DesktopAppServerService {
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly pendingPrStatusRefreshes = new Map<string, Promise<void>>();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
+  private prStatusRegistryLoaded = false;
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -747,6 +749,7 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    await this.loadPrStatusRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const snapshotThreads = this.applyCanonicalPrStatuses(snapshot.threads);
     await this.loadDirectoryGitStatusCache();
@@ -1078,6 +1081,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
     });
+    await this.loadPrStatusRegistry();
     const persistedPrs = existing?.prs ?? [];
     this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
     const existingPrs = this.canonicalizePrs(persistedPrs);
@@ -1122,12 +1126,14 @@ class DesktopAppServerService {
     }
 
     if (existingPrs.length > 0) {
-      this.startCanonicalPullRequestRefresh({
-        backend,
-        request,
-        requestKey,
-        previousPrs: existingPrs,
-      });
+      if ((request.trigger ?? "scheduled") === "user") {
+        this.startCanonicalPullRequestRefresh({
+          backend,
+          request,
+          requestKey,
+          previousPrs: existingPrs,
+        });
+      }
       return {
         backend,
         threadId: request.threadId,
@@ -1167,6 +1173,7 @@ class DesktopAppServerService {
     });
     const fetchedAt = Date.now();
     this.rememberPrStatuses(prs, fetchedAt);
+    await this.writePrStatusesToCache(prs, fetchedAt);
 
     // Persist even an empty result so we don't refetch unchanged state on
     // every renderer trigger. The fetchedAt timestamp lets a future TTL
@@ -1247,9 +1254,11 @@ class DesktopAppServerService {
         : "lastScheduledRefreshRequestedAt";
     const due = keys.some((key) => {
       const entry = this.prStatusRegistry.get(key);
-      const lastRequestedAt = entry?.[timestampField];
+      const lastRequestedAt = Math.max(
+        entry?.[timestampField] ?? 0,
+        entry?.fetchedAt ?? 0,
+      );
       return (
-        typeof lastRequestedAt !== "number" ||
         now - lastRequestedAt >= minInterval
       );
     });
@@ -1289,6 +1298,29 @@ class DesktopAppServerService {
         fetchedAt,
       });
     }
+  }
+
+  private async loadPrStatusRegistry(): Promise<void> {
+    if (this.prStatusRegistryLoaded) {
+      return;
+    }
+    this.prStatusRegistryLoaded = true;
+    const entries = await this.getOverlayStore().readPrStatusCache();
+    for (const entry of Object.values(entries)) {
+      this.rememberPrStatuses([entry.pr], entry.fetchedAt);
+    }
+  }
+
+  private async writePrStatusesToCache(
+    prs: PrSummary[],
+    fetchedAt: number,
+  ): Promise<void> {
+    const entries: PrStatusCacheEntry[] = prs.map((pr) => ({
+      prKey: getPrStatusKey(pr),
+      fetchedAt,
+      pr,
+    }));
+    await this.getOverlayStore().writePrStatusCacheEntries(entries);
   }
 
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
@@ -1811,6 +1843,7 @@ class DesktopAppServerService {
     this.pendingThreadPullRequestRefreshes.clear();
     this.prStatusRegistry.clear();
     this.pendingPrStatusRefreshes.clear();
+    this.prStatusRegistryLoaded = false;
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();

@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 13;
+export const CURRENT_STATE_DB_USER_VERSION = 14;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -435,6 +435,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS thread_search_fts USING fts5(
 );
 `;
 
+const PR_STATUS_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_status_cache (
+  pr_key     TEXT PRIMARY KEY,
+  org        TEXT NOT NULL,
+  repo       TEXT NOT NULL,
+  number     INTEGER NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  payload    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_status_cache_fetched
+  ON pr_status_cache(fetched_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -558,6 +571,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 13) {
       db.transaction(() => {
         db.exec(THREAD_SEARCH_SCHEMA);
+        db.pragma("user_version = 13");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 14) {
+      db.transaction(() => {
+        db.exec(PR_STATUS_CACHE_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -707,6 +726,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(AUTOMATION_SCHEMA);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     db.exec(THREAD_SEARCH_SCHEMA);
+    db.exec(PR_STATUS_CACHE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

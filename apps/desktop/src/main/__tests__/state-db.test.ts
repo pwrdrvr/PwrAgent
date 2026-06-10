@@ -18,19 +18,23 @@ afterEach(() => {
 });
 
 describe("StateDb", () => {
-  it("creates ACP registry, installed-agent, and session tables", () => {
+  it("creates additive runtime cache tables", () => {
     const tables = stateDb.raw
       .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?) ORDER BY name`,
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?) ORDER BY name`,
       )
-      .all("acp_installed_agents", "acp_registry_cache", "acp_sessions") as Array<{
-      name: string;
-    }>;
+      .all(
+        "acp_installed_agents",
+        "acp_registry_cache",
+        "acp_sessions",
+        "pr_status_cache",
+      ) as Array<{ name: string }>;
 
     expect(tables.map((table) => table.name)).toEqual([
       "acp_installed_agents",
       "acp_registry_cache",
       "acp_sessions",
+      "pr_status_cache",
     ]);
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,

@@ -144,4 +144,31 @@ describe("SqliteOverlayStore — thread PRs", () => {
     });
     expect(next.prs).toEqual([]);
   });
+
+  it("persists canonical PR status cache rows across reopen", async () => {
+    await store.writePrStatusCacheEntries([
+      {
+        prKey: "pwrdrvr/pwragent#179",
+        fetchedAt: 1234,
+        pr: prPassing,
+      },
+    ]);
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    const reopenedStore = new SqliteOverlayStore(reopened);
+    await expect(reopenedStore.readPrStatusCache()).resolves.toEqual({
+      "pwrdrvr/pwragent#179": {
+        prKey: "pwrdrvr/pwragent#179",
+        fetchedAt: 1234,
+        pr: prPassing,
+      },
+    });
+    reopened.close();
+
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+  });
 });
