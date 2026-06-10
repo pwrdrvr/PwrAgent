@@ -6178,6 +6178,343 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("seeds launchpad review turns before stray turn starts arrive", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          optimisticActiveTurn: {
+            id: "turn-review",
+            statusText: "Reviewing",
+            startedAt: 1_500,
+            reviewDisplayText: "Review changes against main",
+          },
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Reviewing");
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          type: "review",
+          review: "Review changes against main",
+          turn: expect.objectContaining({
+            id: "turn-review",
+            status: "in_progress",
+          }),
+        }),
+      ]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            itemId: "call-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "npm view dive",
+          },
+        } as any,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Waiting for approval");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+  });
+
+  it("repairs a stray launchpad start when optimistic review metadata arrives after events", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result, rerender } = renderHook(
+      ({ includeOptimisticReview }: { includeOptimisticReview: boolean }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+            ...(includeOptimisticReview
+              ? {
+                  optimisticActiveTurn: {
+                    id: "turn-review",
+                    statusText: "Reviewing",
+                    startedAt: 1_500,
+                    reviewDisplayText: "Review changes against main",
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeOptimisticReview: false } }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-stray");
+
+    rerender({ includeOptimisticReview: true });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Reviewing");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+  });
+
+  it("does not reseed a launchpad active turn after idle hydration clears it", async () => {
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [
+          {
+            type: "review" as const,
+            id: "review-1",
+            review: "Code review",
+            displayText: "Code review",
+            createdAt: 2_000,
+            turn: {
+              id: "turn-review",
+              status: "completed" as const,
+              startedAt: 1_500,
+              completedAt: 2_500,
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const optimisticThread = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      optimisticActiveTurn: {
+        id: "turn-review",
+        statusText: "Reviewing",
+        startedAt: 1_500,
+        reviewDisplayText: "Review changes against main",
+      },
+    };
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: optimisticThread,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+    });
+
+    rerender({ currentThread: { ...optimisticThread } });
+    await flushReactUpdates();
+
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+  });
+
+  it("seeds launchpad active turns alongside optimistic user messages", async () => {
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          optimisticUserMessage: {
+            text: "Start from launchpad",
+            createdAt: 1_500,
+          },
+          optimisticActiveTurn: {
+            id: "turn-1",
+            statusText: "Thinking",
+            startedAt: 1_500,
+          },
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-1");
+      expect(result.current.pendingStatusText).toBe("Thinking");
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          type: "message",
+          role: "user",
+          text: "Start from launchpad",
+        }),
+      ]);
+    });
+  });
+
   it("stores context window usage from token usage notifications", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {

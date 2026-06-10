@@ -86,6 +86,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
     imageParts?: AppServerThreadImagePart[];
     createdAt?: number;
   };
+  optimisticActiveTurn?: {
+    id: ThreadIdentifier;
+    statusText?: string;
+    startedAt?: number;
+    reviewDisplayText?: string;
+  };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
   /** GitHub pull requests detected for this thread's linked directories + branch. */

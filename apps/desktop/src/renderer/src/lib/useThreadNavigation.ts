@@ -1620,6 +1620,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   workMode: NavigationLaunchpadDraft["workMode"];
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
+  optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
 }): NavigationThreadSummary {
   const titlePrompt =
@@ -1642,6 +1643,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
+    optimisticActiveTurn: params.optimisticActiveTurn,
     linkedDirectories:
       params.launchpad.directoryPath && params.launchpad.directoryKind !== "workspace"
         ? [
@@ -1718,6 +1720,25 @@ function buildOptimisticUserMessage(
     ...(imageParts.length > 0 ? { imageParts } : {}),
     createdAt: Date.now(),
   };
+}
+
+function reviewDisplayTextFromTarget(
+  target: AppServerReviewTarget | undefined
+): string | undefined {
+  if (!target) {
+    return undefined;
+  }
+
+  switch (target.type) {
+    case "uncommittedChanges":
+      return "Review current changes";
+    case "baseBranch":
+      return `Review changes against ${target.branch}`;
+    case "commit":
+      return `Review commit ${target.sha}`;
+    case "custom":
+      return "Review custom instructions";
+  }
 }
 
 type UseThreadNavigationOptions = {
@@ -2723,6 +2744,8 @@ export function useThreadNavigation(
         buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           ? {
               ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
+              optimisticActiveTurn:
+                thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
               optimisticUserMessage:
                 thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
             }
@@ -3583,6 +3606,20 @@ export function useThreadNavigation(
         optimisticUserMessage: response.turnStartFailure
           ? undefined
           : buildOptimisticUserMessage(input),
+        optimisticActiveTurn: response.turnId && !response.turnStartFailure
+          ? {
+              id: response.turnId,
+              statusText: reviewTarget
+                ? "Reviewing"
+                : collaborationMode
+                  ? "Planning"
+                  : "Thinking",
+              startedAt: Date.now(),
+              ...(reviewTarget
+                ? { reviewDisplayText: reviewDisplayTextFromTarget(reviewTarget) }
+                : {}),
+            }
+          : undefined,
         parentThreadId: materializeParentThreadId,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);

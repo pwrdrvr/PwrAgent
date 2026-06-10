@@ -1200,7 +1200,6 @@ describe("App", () => {
           threadId: string;
           executionMode: "default";
           workMode: "local";
-          turnId: string;
         }>((resolve) => {
           resolveMaterializeLaunchpad = () => {
             resolve({
@@ -1208,7 +1207,6 @@ describe("App", () => {
               threadId: "thread-2",
               executionMode: "default" as const,
               workMode: "local" as const,
-              turnId: "turn-1",
             });
           };
         })
@@ -2254,7 +2252,6 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "local" as const,
-      turnId: "turn-1",
     }));
     const agentEventListeners = new Set<
       (event: {
