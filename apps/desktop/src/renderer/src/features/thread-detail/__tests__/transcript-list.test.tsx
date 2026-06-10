@@ -358,7 +358,7 @@ describe("TranscriptList", () => {
     const copyText = vi.fn(async () => undefined);
     const messageText = `Intro prose should stay in the normal readable assistant bubble.\n\n${wideMarkdownTable}\n\nFollow-up prose should not inherit the table width.`;
 
-    render(
+    const { container } = render(
       <TranscriptList
         desktopApi={{ copyText }}
         entries={[
@@ -376,6 +376,7 @@ describe("TranscriptList", () => {
     );
 
     expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
+    expect(container.querySelector(".transcript-copy-button svg")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
 
@@ -998,7 +999,7 @@ describe("TranscriptList", () => {
     const toggle = screen.getByRole("button", { name: "3 previous messages" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("Final answer.")).toBeVisible();
-    expect(screen.getByText("First commentary.")).not.toBeVisible();
+    expect(screen.queryByText("First commentary.")).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
 
@@ -1258,6 +1259,7 @@ describe("TranscriptList", () => {
 
     const workGroup = screen.getByRole("button", { name: /Worked for 1m 11s/i });
     expect(workGroup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Used 2 tools")).not.toBeInTheDocument();
 
     fireEvent.click(workGroup);
 

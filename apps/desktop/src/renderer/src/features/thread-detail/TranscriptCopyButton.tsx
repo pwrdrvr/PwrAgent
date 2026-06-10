@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -49,7 +48,6 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
           });
       }}
     >
-      <CopyIcon size={14} aria-hidden="true" />
     </button>
   );
 }
