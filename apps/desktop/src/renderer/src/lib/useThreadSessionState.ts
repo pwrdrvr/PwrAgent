@@ -2965,10 +2965,12 @@ export function useThreadSessionState(params: {
           !optimisticReviewExists
             ? [...current.optimisticEntries, optimisticReviewEntry]
             : current.optimisticEntries;
+        const nextPendingStatusText =
+          current.pendingStatusText ?? optimisticActiveTurn.statusText;
 
         if (
           current.activeTurnId === optimisticActiveTurn.id &&
-          current.pendingStatusText === optimisticActiveTurn.statusText &&
+          current.pendingStatusText === nextPendingStatusText &&
           nextOptimisticEntries === current.optimisticEntries
         ) {
           return current;
@@ -2982,8 +2984,7 @@ export function useThreadSessionState(params: {
           interacted: true,
           lastTouchedAt: Date.now(),
           optimisticEntries: nextOptimisticEntries,
-          pendingStatusText:
-            optimisticActiveTurn.statusText ?? current.pendingStatusText,
+          pendingStatusText: nextPendingStatusText,
           pendingTurnUsage: undefined,
         };
       });

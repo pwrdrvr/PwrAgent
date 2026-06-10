@@ -2254,7 +2254,6 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "local" as const,
-      turnId: "turn-1",
     }));
     const agentEventListeners = new Set<
       (event: {

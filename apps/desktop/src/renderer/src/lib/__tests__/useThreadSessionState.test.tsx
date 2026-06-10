@@ -6236,6 +6236,28 @@ describe("useThreadSessionState", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            itemId: "call-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "npm view dive",
+          },
+        } as any,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Waiting for approval");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
           method: "turn/started",
           params: {
             threadId: "thread-1",
@@ -6262,6 +6284,7 @@ describe("useThreadSessionState", () => {
             turn: {
               id: "turn-review",
               status: "completed",
+              output: [],
             },
           },
         },
