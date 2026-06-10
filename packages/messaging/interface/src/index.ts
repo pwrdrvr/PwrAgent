@@ -8,6 +8,7 @@ import type {
   AppServerThreadMessagePart,
   AppServerThreadSummary,
   PendingRequestApprovalContext,
+  FederatedThreadRef,
   MessagingBindingTargetKind,
   MessagingDeliveryScope,
   MessagingToolUpdateMode,
@@ -1447,6 +1448,7 @@ export type MessagingBindingRecord = {
   targetKind?: MessagingBindingTargetKind;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  federatedThread?: FederatedThreadRef;
   authorizedActorIds: string[];
   routingState?: MessagingAdapterState;
   /**

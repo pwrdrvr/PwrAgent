@@ -14,7 +14,11 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
+import {
+  federatedThreadIdentityKey,
+  normalizeMessagingBindingTargetKind,
+  type FederatedThreadRef,
+} from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 import type {
   MessagingDeliveryRecord,
@@ -378,6 +382,23 @@ export class SqliteMessagingStore {
         // enough across the user's history).
         if (!binding.backend) return true;
         return binding.backend === params.backend;
+      });
+  }
+
+  async findActiveBindingsForFederatedThread(
+    ref: FederatedThreadRef,
+  ): Promise<MessagingBindingRecord[]> {
+    const wanted = federatedThreadIdentityKey(ref);
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM bindings WHERE status = 'active' AND thread_id = ?",
+      )
+      .all(ref.threadId) as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
+      .filter((binding) => {
+        if (binding.revokedAt || !binding.federatedThread) return false;
+        return federatedThreadIdentityKey(binding.federatedThread) === wanted;
       });
   }
 
