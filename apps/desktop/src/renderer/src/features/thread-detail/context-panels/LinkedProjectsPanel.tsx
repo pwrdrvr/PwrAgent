@@ -71,13 +71,10 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
                       <dd className="context-grid__mono">{branch}</dd>
                     </div>
                   ) : null}
-                  <div>
-                    <dt>Working tree</dt>
-                    {/* TODO(linked-projects): replace with real dirty/clean
-                        state once a main-process `git status --porcelain`
-                        IPC exists; the row layout is ready for it. */}
-                    <dd className="linked-project__pending">status pending</dd>
-                  </div>
+                  {/* TODO(linked-projects): add a "Working tree" dirty/clean
+                      row here once a main-process `git status --porcelain`
+                      IPC exists. Omitted until then rather than shipping
+                      placeholder copy (CLAUDE.md: no placeholder UI). */}
                 </dl>
               </li>
             );

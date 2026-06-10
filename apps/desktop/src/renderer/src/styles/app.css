@@ -9890,11 +9890,6 @@ textarea,
   overflow-wrap: anywhere;
 }
 
-.linked-project__pending {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
 .composer {
   display: flex;
   flex-direction: column;

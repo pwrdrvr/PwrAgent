@@ -812,7 +812,6 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   grok: "AgentCore - Grok",
 };
 
-
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.5",
