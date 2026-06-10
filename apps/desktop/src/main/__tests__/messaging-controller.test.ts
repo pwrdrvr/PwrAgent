@@ -1448,6 +1448,62 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("preserves the workspace kind when starting an Agent from a Workspaces fallback selection", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories = [
+      {
+        key: "workspace:/Users/test/.pwragent/profiles/dev/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/dev/projects",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_500,
+      },
+      ...navigation.directories,
+    ];
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+      ) => ({
+        backend: request.launchpad?.backend ?? "codex",
+        threadId: "new-thread-1",
+        ...(request.input && request.input.length > 0 ? { turnId: "turn-1" } : {}),
+        executionMode: request.launchpad?.executionMode ?? "default",
+        workMode: request.launchpad?.workMode ?? "local",
+      }),
+    );
+    const harness = await createHarness({ navigation, materializeDirectoryLaunchpad });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          label: "Workspaces Scratchpad",
+          path: "/Users/test/.pwragent/profiles/dev/projects",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Create a scratch task"));
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:/Users/test/.pwragent/profiles/dev/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/profiles/dev/projects",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+  });
+
   it("debounces split first prompts before creating a messaging-started thread", async () => {
     vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 100 });

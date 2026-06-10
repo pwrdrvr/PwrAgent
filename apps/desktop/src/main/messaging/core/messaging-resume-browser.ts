@@ -198,10 +198,24 @@ export function directoryForProjectSelection(
   navigation: NavigationSnapshot,
   selectedProject: MessagingBrowseSelectedProject,
 ): NavigationDirectorySummary | undefined {
+  if (selectedProject.directoryKey) {
+    const keyed = navigation.directories.find((directory) =>
+      directory.key === selectedProject.directoryKey
+    );
+    if (keyed) {
+      return keyed;
+    }
+  }
+  if (selectedProject.path) {
+    const pathed = navigation.directories.find((directory) =>
+      directory.path === selectedProject.path
+    );
+    if (pathed) {
+      return pathed;
+    }
+  }
   return navigation.directories.find((directory) =>
-    selectedProject.directoryKey
-      ? directory.key === selectedProject.directoryKey
-      : directory.label === selectedProject.label,
+    directory.label === selectedProject.label
   );
 }
 
