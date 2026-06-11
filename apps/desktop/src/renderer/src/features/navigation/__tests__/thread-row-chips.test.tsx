@@ -233,6 +233,43 @@ describe("ThreadRow chip flow", () => {
     expect(addReaction?.textContent ?? "").not.toContain("+");
   });
 
+  it("prefetches terminal-only PR chip sets after hover dwell", () => {
+    vi.useFakeTimers();
+    try {
+      const onPrefetchPullRequests = vi.fn();
+      const thread: NavigationThreadSummary = {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 542,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "unknown",
+            lifecycleState: "merged",
+            checkState: "unknown",
+            reviewState: "ready_for_review",
+            mergeState: "unknown",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/542",
+          },
+        ],
+      };
+      const { container } = renderRow({
+        thread,
+        onPrefetchPullRequests,
+      });
+
+      fireEvent.mouseEnter(container.querySelector(".thread-row__chips")!);
+      vi.advanceTimersByTime(749);
+      expect(onPrefetchPullRequests).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onPrefetchPullRequests).toHaveBeenCalledWith(thread);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a full card without action controls for the drag preview", () => {
     vi.useFakeTimers();
     try {

@@ -1721,6 +1721,130 @@ describe("app server ipc", () => {
     });
   });
 
+  it("rate-limits user-triggered terminal PR lookups to once per minute", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const request = {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "fix/done",
+        directoryPaths: ["/repo"],
+      } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey({
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/done",
+        directoryPaths: ["/repo"],
+      });
+      const terminalPrs: PrSummary[] = [
+        githubPr({
+          number: 433,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "merged",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
+        }),
+      ];
+
+      getThreadOverlayState.mockResolvedValue({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: terminalPrs,
+        prsFetchedAt: 1_000_000 - 120_000,
+        prsRefreshKey: requestKey,
+      });
+      detectPullRequestsForThread.mockResolvedValue(terminalPrs);
+
+      registerAppServerIpcHandlers();
+
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+      });
+
+      vi.setSystemTime(1_000_000 + 30_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await Promise.resolve();
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(1_000_000 + 60_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the shorter user cooldown for non-terminal PR lookups", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const request = {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey({
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/open",
+        directoryPaths: ["/repo"],
+      });
+      const pendingPrs: PrSummary[] = [
+        githubPr({
+          number: 434,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "pending",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/434",
+        }),
+      ];
+
+      getThreadOverlayState.mockResolvedValue({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: pendingPrs,
+        prsFetchedAt: 2_000_000 - 120_000,
+        prsRefreshKey: requestKey,
+      });
+      detectPullRequestsForThread.mockResolvedValue(pendingPrs);
+
+      registerAppServerIpcHandlers();
+
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+      });
+
+      vi.setSystemTime(2_000_000 + 9_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await Promise.resolve();
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(2_000_000 + 10_000);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves unchanged snapshots when directory statuses are unchanged", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");

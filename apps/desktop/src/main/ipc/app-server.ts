@@ -156,6 +156,7 @@ import { ThreadSearchStore } from "../thread-search/thread-search-store";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
+const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
 const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
@@ -1336,6 +1337,10 @@ class DesktopAppServerService {
       params.lookupKey,
       params.request.trigger ?? "scheduled",
       normalizePullRequestProvider(params.request.provider),
+      params.previousPrs.length > 0
+        && params.previousPrs.every(
+          (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+        ),
     );
     if (!refreshKey) {
       return;
@@ -1460,11 +1465,14 @@ class DesktopAppServerService {
     lookupKey: string,
     trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
     provider: string,
+    terminalOnly: boolean,
   ): string | undefined {
     const now = Date.now();
     const minInterval =
       trigger === "user"
-        ? USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+        ? terminalOnly
+          ? TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+          : USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
         : THREAD_PR_REFRESH_MIN_INTERVAL_MS;
     const timestampField =
       trigger === "user"

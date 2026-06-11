@@ -103,13 +103,10 @@ export function ThreadRow(props: ThreadRowProps) {
   const prs = props.thread.prs ?? [];
   const showRepoPrefix = needsRepoPrefix(prs);
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
-  const hasNonTerminalPr = prs.some(
-    (pr) => (pr.lifecycleState ?? pr.state) !== "merged"
-      && (pr.lifecycleState ?? pr.state) !== "closed",
-  );
   // Hover prefetch: 750ms intent timer — long enough that simply scrolling
   // past doesn't fire, short enough that a deliberate hover beats the
-  // user's first click.
+  // user's first click. Terminal-only PR sets still request a user
+  // refresh; main owns the longer terminal-state rate limit.
   const hoverTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => {
     if (hoverTimerRef.current !== undefined) {
@@ -119,7 +116,6 @@ export function ThreadRow(props: ThreadRowProps) {
   }, []);
   const armHoverPrefetch = (): void => {
     if (!props.onPrefetchPullRequests) return;
-    if (!hasNonTerminalPr) return;
     if (hoverTimerRef.current !== undefined) return;
     hoverTimerRef.current = window.setTimeout(() => {
       hoverTimerRef.current = undefined;
