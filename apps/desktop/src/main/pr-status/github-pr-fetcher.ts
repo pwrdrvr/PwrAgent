@@ -18,6 +18,7 @@ const fetcherLog = getMainLogger("pwragent:pr-fetcher");
  *  against `gh 2.88.1` against pwrdrvr/PwrAgent on 2026-05-04. */
 const GH_FIELDS = [
   "number",
+  "title",
   "url",
   "state",
   "isDraft",
@@ -51,6 +52,7 @@ const DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS = 5 * 60_000;
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
 type GhPrPayload = {
   number: number;
+  title?: string;
   url: string;
   state: string;
   isDraft: boolean;
@@ -379,6 +381,7 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     number: row.number,
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
+    ...(row.title?.trim() ? { title: row.title.trim() } : {}),
     state: deriveChipState(row),
     url: row.url,
   };

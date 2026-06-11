@@ -221,6 +221,8 @@ export type PrSummary = {
   org: string;
   /** Repo name, e.g. "PwrAgent". */
   repo: string;
+  /** Last observed pull request title, when the provider returns one. */
+  title?: string;
   state: PrChipState;
   url: string;
 };

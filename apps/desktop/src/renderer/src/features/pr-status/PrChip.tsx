@@ -17,7 +17,11 @@ export function PrChip(props: PrChipProps) {
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
-  const tooltip = `${pr.org}/${pr.repo}#${pr.number} — ${stateTooltipLabel(pr.state)}`;
+  const identity = `${pr.org}/${pr.repo}#${pr.number}`;
+  const title = pr.title?.trim();
+  const tooltip = title
+    ? `${title}\n${identity} — ${stateTooltipLabel(pr.state)}`
+    : `${identity} — ${stateTooltipLabel(pr.state)}`;
 
   // role="button" span (not a real <button>) so the chip is legal HTML
   // inside the row's main <button>. stopPropagation prevents the row's

@@ -401,6 +401,7 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
         === normalizePullRequestProvider(pr.provider) &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
+      candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.url === pr.url
     );

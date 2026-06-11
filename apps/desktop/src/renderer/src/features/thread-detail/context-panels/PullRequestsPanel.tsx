@@ -25,7 +25,12 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
             <li key={prKey(pr)} className="pr-panel-row">
               <div className="pr-panel-row__main">
                 <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
-                <span className="pr-panel-row__repo">{repositoryLabel(pr)}</span>
+                <span className="pr-panel-row__details">
+                  {pr.title?.trim() ? (
+                    <span className="pr-panel-row__title">{pr.title.trim()}</span>
+                  ) : null}
+                  <span className="pr-panel-row__repo">{repositoryLabel(pr)}</span>
+                </span>
               </div>
               <span className="pr-panel-row__state">{stateLabel(pr.state)}</span>
             </li>

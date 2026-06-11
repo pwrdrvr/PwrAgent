@@ -1420,6 +1420,7 @@ describe("app server ipc", () => {
       number: 737,
       org: "pwrdrvr",
       repo: "PwrAgent",
+      title: "Retain thread pull request history",
       state: "passing",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/737",
     });
@@ -1464,6 +1465,69 @@ describe("app server ipc", () => {
         params: {
           threadId: "thread-1",
           prs: [previousPr, discoveredPr],
+        },
+      },
+    });
+  });
+
+  it("persists and publishes title-only PR updates", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "feat/title-update",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/title-update",
+      directoryPaths: ["/repo"],
+    });
+    const previousPr = githubPr({
+      number: 737,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/737",
+    });
+    const titledPr = {
+      ...previousPr,
+      title: "Retain thread pull request history",
+    };
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [previousPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([titledPr]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [titledPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: [titledPr],
         },
       },
     });

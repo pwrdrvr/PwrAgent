@@ -92,8 +92,13 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
               <li key={`${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`} className="pr-panel-row">
                 <div className="pr-panel-row__main">
                   <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
-                  <span className="pr-panel-row__repo">
-                    {pr.provider}/{pr.org}/{pr.repo}
+                  <span className="pr-panel-row__details">
+                    {pr.title?.trim() ? (
+                      <span className="pr-panel-row__title">{pr.title.trim()}</span>
+                    ) : null}
+                    <span className="pr-panel-row__repo">
+                      {pr.provider}/{pr.org}/{pr.repo}
+                    </span>
                   </span>
                 </div>
               </li>

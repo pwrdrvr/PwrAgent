@@ -330,4 +330,29 @@ describe("ThreadRow chip flow", () => {
     if (prIdx >= 0 && bindingIdx >= 0) expect(prIdx).toBeLessThan(bindingIdx);
     if (bindingIdx >= 0 && reactionIdx >= 0) expect(bindingIdx).toBeLessThan(reactionIdx);
   });
+
+  it("shows the PR title and status on separate tooltip lines", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#123/ }))
+      .toHaveAttribute(
+        "title",
+        "Retain thread pull request history\npwrdrvr/PwrAgent#123 — all checks passing",
+      );
+  });
 });

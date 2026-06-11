@@ -12,6 +12,7 @@ import {
 function rawMergedPr() {
   return {
     number: 178,
+    title: "Retain thread pull request history",
     url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     state: "MERGED",
     isDraft: false,
@@ -37,9 +38,16 @@ describe("parseGhPrPayload", () => {
       number: 178,
       org: "pwrdrvr",
       repo: "PwrAgent",
+      title: "Retain thread pull request history",
       state: "merged",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
+  });
+
+  it("omits blank titles from PrSummary", () => {
+    expect(parseGhPrPayload({ ...rawMergedPr(), title: " " })).not.toHaveProperty(
+      "title",
+    );
   });
 
   it("falls back to empty strings for missing repo/owner", () => {
@@ -360,6 +368,7 @@ describe("GithubPrFetcher", () => {
           number: 178,
           org: "pwrdrvr",
           repo: "PwrAgent",
+          title: "Retain thread pull request history",
           state: "merged",
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
@@ -377,6 +386,7 @@ describe("GithubPrFetcher", () => {
         "--limit",
         "5",
       ]);
+      expect(args[args.indexOf("--json") + 1]).toContain("title");
     });
 
     it("returns [] on subprocess failure", async () => {
