@@ -85,6 +85,34 @@ command = "pnpm dev"
     ]);
   });
 
+  it("lists .codex/env as a launchpad environment source", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-env-"));
+    const codexDir = path.join(root, ".codex");
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(
+      path.join(codexDir, "env"),
+      `
+version = 1
+name = "Local Dev"
+
+[setup]
+script = "pnpm install"
+`,
+      "utf8",
+    );
+
+    const options = await listCodexEnvironmentOptions(root);
+    expect(options).toMatchObject([
+      {
+        id: "env",
+        name: "Local Dev",
+        sourcePath: path.join(codexDir, "env"),
+        setupScript: "pnpm install",
+        actions: [],
+      },
+    ]);
+  });
+
   it("dedupes action ids when action names collide", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-env-"));
     const environmentsDir = path.join(root, ".codex", "environments");

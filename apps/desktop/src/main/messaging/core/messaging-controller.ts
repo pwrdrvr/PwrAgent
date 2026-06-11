@@ -14,6 +14,7 @@ import type {
   AppServerTurnInputItem,
   AppServerBackendKind,
   AutomationRunOutputDecision,
+  CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
@@ -202,6 +203,7 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
@@ -5168,21 +5170,45 @@ export class MessagingController {
       options,
       acpRuntime: options.acpRuntime,
     });
-    const materialized = this.options.backend.materializeDirectoryLaunchpad
-      ? await this.options.backend.materializeDirectoryLaunchpad(
-          {
-            directoryKey: messagingLaunchpadMaterializationKey(session),
-            agent: agentForNewThreadSession(session),
-            launchpad,
-            input: prepared.input,
-          },
-          {
-            onThreadMaterialized: async (started) => {
-              await bindStartedThread(started);
-            },
-          },
-        )
+    const startFirstTurnAfterEnvironmentSetup = Boolean(
+      launchpad.codexEnvironmentId,
+    );
+    const environmentSetupReporter = startFirstTurnAfterEnvironmentSetup
+      ? this.createMessagingEnvironmentSetupReporter(event)
       : undefined;
+    let materialized: Awaited<
+      ReturnType<NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>>
+    > | undefined;
+    try {
+      materialized = this.options.backend.materializeDirectoryLaunchpad
+        ? await this.options.backend.materializeDirectoryLaunchpad(
+            {
+              directoryKey: messagingLaunchpadMaterializationKey(session),
+              agent: agentForNewThreadSession(session),
+              launchpad,
+              ...(startFirstTurnAfterEnvironmentSetup
+                ? {}
+                : { input: prepared.input }),
+            },
+            {
+              ...(environmentSetupReporter
+                ? {
+                    onCodexEnvironmentSetupProgress: (
+                      setupEvent: CodexEnvironmentSetupProgressEvent,
+                    ) => {
+                      environmentSetupReporter.record(setupEvent);
+                    },
+                  }
+                : {}),
+              onThreadMaterialized: async (started) => {
+                await bindStartedThread(started);
+              },
+            },
+          )
+        : undefined;
+    } finally {
+      environmentSetupReporter?.stop();
+    }
     const started = materialized ?? (await this.options.backend.startThread!({
       backend: selectedBackend.kind,
       cwd: directory?.path ?? project.path,
@@ -5205,20 +5231,13 @@ export class MessagingController {
       navigation: optimisticNavigation,
     } = await bindStartedThread(started);
     await retireBrowseSession();
-    if (materialized?.codexEnvironmentStartupFailure) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("environment-startup-failed"),
-          createdAt: this.now(),
-          title: "Environment startup failed",
-          body: materialized.codexEnvironmentStartupFailure.message,
-          recoverable: true,
-        }),
-        updatedBinding,
+    if (startFirstTurnAfterEnvironmentSetup && materialized) {
+      await this.deliverMessagingEnvironmentSetupFinal({
+        binding: updatedBinding,
         event,
-      );
+        materialized,
+      });
       await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
-      return;
     }
     if (materialized?.turnStartFailure) {
       const activeTurn = this.getActiveTurn(updatedBinding);
@@ -5254,6 +5273,17 @@ export class MessagingController {
       });
       return;
     }
+    if (startFirstTurnAfterEnvironmentSetup) {
+      await this.startPreparedInput({
+        binding: updatedBinding,
+        input: prepared.input,
+        preview: prepared.preview,
+        threadKey: buildThreadIdentityKey(started.backend, started.threadId),
+        event,
+        navigation: optimisticNavigation,
+      });
+      return;
+    }
     if (materialized) {
       this.logger.debug?.("messaging materialized launchpad without turn id", {
         bindingId: updatedBinding.id,
@@ -5268,6 +5298,107 @@ export class MessagingController {
       event,
       navigation: optimisticNavigation,
     });
+  }
+
+  private createMessagingEnvironmentSetupReporter(
+    event: MessagingInboundEvent,
+  ): {
+    record: (setupEvent: CodexEnvironmentSetupProgressEvent) => void;
+    stop: () => void;
+  } {
+    let latestEvent: CodexEnvironmentSetupProgressEvent | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    let stopped = false;
+
+    const deliverProgress = (setupEvent: CodexEnvironmentSetupProgressEvent) => {
+      void this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("environment-setup-progress"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Environment setup running",
+          body: buildMessagingEnvironmentSetupProgressBody(setupEvent),
+        }),
+        undefined,
+        event,
+      );
+    };
+
+    const ensureInterval = () => {
+      if (interval || stopped) {
+        return;
+      }
+      interval = setInterval(() => {
+        if (latestEvent && !isTerminalCodexEnvironmentSetupProgress(latestEvent)) {
+          deliverProgress(latestEvent);
+        }
+      }, MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS);
+    };
+
+    return {
+      record: (setupEvent) => {
+        latestEvent = setupEvent;
+        if (setupEvent.phase === "started") {
+          deliverProgress(setupEvent);
+          ensureInterval();
+          return;
+        }
+        if (isTerminalCodexEnvironmentSetupProgress(setupEvent)) {
+          if (interval) {
+            clearInterval(interval);
+            interval = undefined;
+          }
+          return;
+        }
+        ensureInterval();
+      },
+      stop: () => {
+        stopped = true;
+        if (interval) {
+          clearInterval(interval);
+          interval = undefined;
+        }
+      },
+    };
+  }
+
+  private async deliverMessagingEnvironmentSetupFinal(params: {
+    binding: MessagingBindingRecord;
+    event: MessagingInboundEvent;
+    materialized: MaterializedDirectoryLaunchpadThread;
+  }): Promise<void> {
+    const runtime = params.materialized.codexEnvironmentRuntime;
+    const failure = params.materialized.codexEnvironmentStartupFailure;
+    if (failure) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("environment-startup-failed"),
+          createdAt: this.now(),
+          title: failure.phase === "action"
+            ? "Environment action failed"
+            : "Environment setup failed",
+          body: buildMessagingEnvironmentSetupFailureBody(runtime, failure.message),
+          recoverable: true,
+        }),
+        params.binding,
+        params.event,
+      );
+      return;
+    }
+
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("environment-startup-succeeded"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: runtime?.setupStatus === "skipped"
+          ? "Environment setup skipped"
+          : "Environment setup completed",
+        body: buildMessagingEnvironmentSetupSuccessBody(runtime),
+      }),
+      params.binding,
+      params.event,
+    );
   }
 
   private async navigationForResumeBrowser(
@@ -11784,6 +11915,64 @@ function formatNewThreadEnvironmentLabel(
       (environment) => environment.id === options.codexEnvironmentId,
     )?.name ?? options.codexEnvironmentId
   );
+}
+
+function isTerminalCodexEnvironmentSetupProgress(
+  event: CodexEnvironmentSetupProgressEvent,
+): boolean {
+  return event.phase === "completed" || event.phase === "failed";
+}
+
+function buildMessagingEnvironmentSetupProgressBody(
+  event: CodexEnvironmentSetupProgressEvent,
+): string {
+  const chunk = event.chunk?.trim();
+  return [
+    `Environment: ${event.environmentName}`,
+    event.command ? `Command: ${event.command}` : undefined,
+    event.cwd ? `Directory: ${event.cwd}` : undefined,
+    chunk ? `Latest output: ${truncateText(chunk, 500)}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function buildMessagingEnvironmentSetupFailureBody(
+  runtime: MaterializedDirectoryLaunchpadThread["codexEnvironmentRuntime"],
+  message: string,
+): string {
+  return [
+    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
+    runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
+    message,
+    "The thread was created and your first message will still be submitted.",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function buildMessagingEnvironmentSetupSuccessBody(
+  runtime: MaterializedDirectoryLaunchpadThread["codexEnvironmentRuntime"],
+): string {
+  const duration = formatDurationMs(runtime?.setupDurationMs);
+  return [
+    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
+    runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
+    duration ? `Duration: ${duration}` : undefined,
+    "Your first message will be submitted now.",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function formatDurationMs(durationMs: number | undefined): string | undefined {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) {
+    return undefined;
+  }
+  if (durationMs < 1_000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
 function resolveNewThreadBaseBranch(

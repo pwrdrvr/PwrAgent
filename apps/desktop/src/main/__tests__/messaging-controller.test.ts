@@ -5335,12 +5335,6 @@ describe("MessagingController", () => {
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        input: [
-          {
-            type: "text",
-            text: "Install deps and run tests",
-          },
-        ],
         launchpad: expect.objectContaining({
           codexEnvironmentId: "dev-env",
           codexEnvironmentExecutionTarget: "local",
@@ -5348,7 +5342,187 @@ describe("MessagingController", () => {
       }),
       expectMaterializeOptions(),
     );
-    expect(harness.startTurn).not.toHaveBeenCalled();
+    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    expect(materializeRequest).not.toHaveProperty("input");
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Install deps and run tests",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("continues the first messaging turn when selected environment setup fails", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentId: "dev-env",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentOptions: [
+          {
+            id: "dev-env",
+            name: "Dev Environment",
+            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+            setupScript: "pnpm install",
+            actions: [],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "started",
+          at: 1000,
+        });
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "failed",
+          error: "install failed",
+          output: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+          exitCode: 1,
+          durationMs: 2500,
+          at: 3500,
+        });
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local",
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed",
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup",
+            worktreeCleanupAvailable: false,
+          },
+        });
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local" as const,
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed" as const,
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup" as const,
+            worktreeCleanupAvailable: false,
+          },
+        };
+      },
+    );
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix the install"));
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        input: expect.anything(),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Environment setup running",
+        body: expect.stringContaining("Environment: Dev Environment"),
+      }),
+    );
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        title: "Environment setup failed",
+        body: expect.stringContaining(
+          "The thread was created and your first message will still be submitted.",
+        ),
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Fix the install",
+          },
+        ],
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+    });
   });
 
   it("clears a saved Codex environment action when switching environments", async () => {
