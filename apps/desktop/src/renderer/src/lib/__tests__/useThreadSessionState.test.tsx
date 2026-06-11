@@ -4171,6 +4171,93 @@ describe("useThreadSessionState", () => {
     expect(result.current.runningTurnUsageText).toBeUndefined();
   });
 
+  it("prices finalized active-turn usage from the token usage notification model", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            model: "gpt-5.4-mini",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_217_026,
+                cached_input_tokens: 1_120_384,
+                output_tokens: 3_721,
+                reasoning_output_tokens: 1_130,
+              },
+              total_token_usage: {
+                input_tokens: 1_217_026,
+                cached_input_tokens: 1_120_384,
+                output_tokens: 3_721,
+                reasoning_output_tokens: 1_130,
+              },
+            },
+          },
+        } as any,
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.18 list price",
+    ]);
+  });
+
   it("keeps aggregate turn usage when hydration includes per-request usage", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     let readCount = 0;

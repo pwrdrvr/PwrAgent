@@ -1363,6 +1363,34 @@ function findFirstNestedValue(value: unknown, keys: string[]): unknown {
   return undefined;
 }
 
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTokenUsageModel(params: {
+  backend: AppServerBackendKind;
+  notificationParams: Extract<
+    AppServerNotification,
+    { method: "thread/tokenUsage/updated" }
+  >["params"];
+  thread?: NavigationThreadSummary;
+  threadId: string;
+}): string | undefined {
+  return (
+    readStringValue(params.notificationParams.model) ??
+    readStringValue(
+      findFirstNestedValue(params.notificationParams.tokenUsage, [
+        "model",
+        "modelId",
+        "model_id",
+      ])
+    ) ??
+    (params.thread?.source === params.backend && params.thread.id === params.threadId
+      ? params.thread.model
+      : undefined)
+  );
+}
+
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
   const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
@@ -4010,10 +4038,12 @@ export function useThreadSessionState(params: {
             fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
           });
           const usageEntryId = `live-token-usage-${turn?.id ?? notificationThreadId}`;
-          const model =
-            thread?.source === event.backend && thread.id === notificationThreadId
-              ? thread.model
-              : undefined;
+          const model = resolveTokenUsageModel({
+            backend: event.backend,
+            notificationParams: event.notification.params,
+            thread,
+            threadId: notificationThreadId,
+          });
           let usageEntry = buildTokenUsageActivityEntry({
             id: usageEntryId,
             model,

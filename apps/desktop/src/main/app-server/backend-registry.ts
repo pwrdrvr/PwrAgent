@@ -8338,8 +8338,11 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
-        if (backend === "codex") {
-          this.recordObservedCodexSettings(notification);
+        if (
+          backend === "codex" &&
+          notification.method === "thread/codexSettings/observed"
+        ) {
+          await this.recordObservedCodexSettings(notification);
         }
         if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
           this.invalidateThreadListCache(backend);
@@ -8369,13 +8372,17 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private recordObservedCodexSettings(notification: AppServerNotification): void {
+  private async recordObservedCodexSettings(
+    notification: AppServerNotification,
+  ): Promise<void> {
     if (notification.method !== "thread/codexSettings/observed") {
       return;
     }
     const params = notification.params as {
       fastMode?: unknown;
+      model?: unknown;
       rawServiceTier?: unknown;
+      reasoningEffort?: unknown;
       serviceTier?: unknown;
       threadId?: unknown;
     };
@@ -8393,9 +8400,29 @@ export class DesktopBackendRegistry {
       observedAt: Date.now(),
     };
     this.observedCodexSettingsByThread.set(params.threadId, observed);
+    const observedModel = typeof params.model === "string" ? params.model : undefined;
+    const observedReasoningEffort =
+      typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined;
+    if (observedModel || observedReasoningEffort) {
+      const current = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: params.threadId,
+      });
+      await this.overlayStore.setThreadModelSettings({
+        backend: "codex",
+        threadId: params.threadId,
+        model: observedModel ?? current?.model,
+        reasoningEffort: observedReasoningEffort ?? current?.reasoningEffort,
+        serviceTier: current?.serviceTier,
+        fastMode: current?.fastMode,
+      });
+      this.invalidateThreadListCache("codex");
+    }
     backendRegistryLog.info("codex thread settings observed", {
       threadId: params.threadId,
+      model: observedModel ?? null,
       fastMode: observed.fastMode ?? null,
+      reasoningEffort: observedReasoningEffort ?? null,
       serviceTier: observed.serviceTier ?? null,
       rawServiceTier: observed.rawServiceTier ?? null,
     });
