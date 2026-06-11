@@ -19,6 +19,7 @@ import { getMainLogger } from "./log";
 import { resolveActiveProfilePath } from "./profile";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { attachWindowFocusSync } from "./window-focus-sync";
+import { attachWindowFullscreenSync } from "./window-fullscreen-sync";
 import {
   WINDOW_KIND_MAIN,
   registerWindowChannels,
@@ -402,6 +403,7 @@ export function createMainWindow(options?: {
 
   const { webContents } = window;
   attachWindowFocusSync(window);
+  attachWindowFullscreenSync(window);
   let rendererLoaded = false;
   let hotCpuProfilerConfigKey: string | null = null;
   let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;

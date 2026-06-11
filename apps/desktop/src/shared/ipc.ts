@@ -204,6 +204,14 @@ export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
   "image-upload:normalization-log";
 export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
+/**
+ * Main → renderer push: fired on `enter-full-screen` / `leave-full-screen`
+ * for the main window. macOS hides the traffic-light stoplights in native
+ * fullscreen, so the renderer toggles `<html data-fullscreen>` to drop the
+ * reserved stoplight inset (the dead gap that would otherwise remain where
+ * the lights used to be).
+ */
+export const WINDOW_FULLSCREEN_SYNC_CHANNEL = "window:fullscreen-sync";
 export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
 /**
  * Main → renderer push: fired when the user invokes File → New Thread

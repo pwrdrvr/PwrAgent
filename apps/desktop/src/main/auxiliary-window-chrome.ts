@@ -27,11 +27,25 @@ export function auxiliaryWindowChromeOptions(): Pick<
   | "titleBarStyle"
   | "trafficLightPosition"
   | "titleBarOverlay"
+  | "fullscreenable"
+  | "maximizable"
 > {
   if (process.platform === "darwin") {
+    // Secondary windows (Changelog / License / Logs / Activity) are
+    // supporting surfaces, not the app shell. macOS native fullscreen
+    // would hide the stoplights and strand the reserved inset in
+    // `.activity-titlebar` (the dead gap we fix on the main window), and
+    // a fullscreened helper window jumps to its own Space, away from the
+    // work it's meant to support — so turn fullscreen OFF. With
+    // `fullscreenable` false the green traffic light reverts to its
+    // classic macOS Zoom: a windowed maximize that fills the screen
+    // without leaving the current Space. Keep `maximizable` true so that
+    // button stays live (it'd grey out otherwise).
     return {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: { x: 20, y: 18 },
+      fullscreenable: false,
+      maximizable: true,
     };
   }
 

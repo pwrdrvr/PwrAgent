@@ -37,6 +37,9 @@ const desktopApi = (
           density: DesktopAppearanceDensity;
         }) => void,
       ) => () => void;
+      onWindowFullscreen?: (
+        callback: (isFullScreen: boolean) => void,
+      ) => () => void;
       platform?: string;
     };
   }
@@ -50,6 +53,21 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
       resolveTheme(appearance.theme),
       appearance.density,
     );
+  },
+);
+
+// Mirror native fullscreen state onto <html data-fullscreen>. macOS hides
+// the traffic-light stoplights in fullscreen, so app.css reads this to
+// drop the reserved stoplight inset that would otherwise leave a dead gap
+// at the left of the masthead. Only the main window ever fires this (aux
+// windows are not fullscreenable); the listener is harmless elsewhere.
+const unsubscribeFullscreen = desktopApi?.onWindowFullscreen?.(
+  (isFullScreen) => {
+    if (isFullScreen) {
+      document.documentElement.setAttribute("data-fullscreen", "true");
+    } else {
+      document.documentElement.removeAttribute("data-fullscreen");
+    }
   },
 );
 
@@ -71,6 +89,7 @@ const importMetaHot = (
 if (importMetaHot) {
   importMetaHot.dispose(() => {
     unsubscribeAppearance?.();
+    unsubscribeFullscreen?.();
     performancePruning?.stop();
   });
 }
