@@ -10190,10 +10190,75 @@ textarea,
    status label regardless of sidebar width. */
 .rail-card__status-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin: 0;
   min-width: 0;
+}
+
+/* Status pills used on a card's status line (the Pull Requests panel renders
+   one per facet: #number, lifecycle, checks, merge conflict). Strong signals
+   (passing / failing / conflict) tint the label with a theme-safe text token;
+   the rest stay neutral with a colored leading dot, so every pill is
+   contrast-safe in both themes. */
+.rail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.rail-chip--id {
+  font-family: var(--font-mono);
+}
+
+.rail-chip--ok {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success-text) 30%, transparent);
+}
+
+.rail-chip--error {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger-text) 30%, transparent);
+}
+
+.rail-chip__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+
+.rail-chip__dot--ok {
+  background: var(--status-ok);
+}
+
+.rail-chip__dot--error {
+  background: var(--status-error);
+}
+
+.rail-chip__dot--warning {
+  background: var(--status-warning);
+}
+
+.rail-chip__dot--merged {
+  background: var(--brand-purple);
+}
+
+.rail-chip__dot--neutral {
+  background: var(--status-suspended);
 }
 
 .rail-card__dot {

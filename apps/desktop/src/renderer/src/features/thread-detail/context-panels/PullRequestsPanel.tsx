@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { openExternalUrl } from "./context-rail-shared";
 
@@ -6,15 +7,16 @@ type PullRequestsPanelProps = {
 };
 
 type PrTone = "ok" | "error" | "warning" | "merged" | "neutral";
+type CheckState = NonNullable<PrSummary["checkState"]>;
 
 /**
  * Pull Requests tab — the GitHub PRs detected for this thread's linked
  * directories + branch. Reads the already-cached `thread.prs` snapshot
  * (populated + refreshed by the shared `usePullRequestRefresh` flow at the
- * app level), so opening this tab never kicks off its own `gh` poll. Each
- * PR renders as a shared `.rail-card` (matching the Sub-Agents tab): a state
- * dot + status on their own line, the title on its own row, repo + number
- * meta, and an open-in-browser action.
+ * app level — selection + a 60s tick), so opening this tab never kicks off
+ * its own `gh` poll. Each PR is a shared `.rail-card` (matching the
+ * Sub-Agents tab): a row of state pills (#number, lifecycle, a merge-conflict
+ * pill, checks) above the title, repo meta, and an open-in-browser action.
  */
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
   const prs = props.thread.prs ?? [];
@@ -25,22 +27,29 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
       {prs.length > 0 ? (
         <ul className="context-list context-list--cards">
           {prs.map((pr) => {
-            const tone = prTone(prChipState(pr));
+            const lifecycle = resolveLifecycleState(pr);
+            const isOpen = lifecycle === "open";
+            const checkState = resolveCheckState(pr);
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
-                  <span
-                    aria-hidden="true"
-                    className={`rail-card__dot rail-card__dot--${tone}`}
-                  />
-                  <span className="rail-card__status">{statusLabel(pr)}</span>
+                  <span className="rail-chip rail-chip--id">#{pr.number}</span>
+                  {lifecycle === "merged" ? statusPill("merged", "Merged") : null}
+                  {lifecycle === "closed" ? statusPill("neutral", "Closed") : null}
+                  {isOpen && pr.reviewState === "draft"
+                    ? statusPill("neutral", "Draft")
+                    : null}
+                  {isOpen && pr.mergeState === "conflicting"
+                    ? statusPill("error", "Merge conflict")
+                    : null}
+                  {isOpen
+                    ? statusPill(checkTone(checkState), checkLabel(checkState))
+                    : null}
                 </p>
                 <p className="rail-card__title" title={prTitle(pr)}>
                   {prTitle(pr)}
                 </p>
-                <p className="rail-card__meta">
-                  {repositoryLabel(pr)} · #{pr.number}
-                </p>
+                <p className="rail-card__meta">{repositoryLabel(pr)}</p>
                 <button
                   className="context-list__action"
                   type="button"
@@ -62,6 +71,15 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
   );
 }
 
+function statusPill(tone: PrTone, label: string): ReactElement {
+  return (
+    <span className={`rail-chip rail-chip--${tone}`}>
+      <span aria-hidden="true" className={`rail-chip__dot rail-chip__dot--${tone}`} />
+      {label}
+    </span>
+  );
+}
+
 function prKey(pr: PrSummary): string {
   return `${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`;
 }
@@ -74,34 +92,7 @@ function repositoryLabel(pr: PrSummary): string {
   return `${pr.provider}/${pr.org}/${pr.repo}`;
 }
 
-function statusLabel(pr: PrSummary): string {
-  const lifecycleState = resolveLifecycleState(pr);
-  if (lifecycleState === "merged") {
-    return "Merged";
-  }
-  if (lifecycleState === "closed") {
-    return "Closed";
-  }
-  const parts: string[] = [pr.reviewState === "draft" ? "Draft" : "Ready for review"];
-  if (pr.mergeState === "conflicting") {
-    parts.push("Merge conflict");
-  }
-  parts.push(checkStateLabel(resolveCheckState(pr)));
-  return parts.join(" · ");
-}
-
-/** The single dominant state, mirroring the sidebar PrChip's dot. */
-function prChipState(
-  pr: PrSummary,
-): NonNullable<PrSummary["checkState"]> | "merged" | "closed" {
-  const lifecycleState = resolveLifecycleState(pr);
-  if (lifecycleState === "merged" || lifecycleState === "closed") {
-    return lifecycleState;
-  }
-  return resolveCheckState(pr);
-}
-
-function prTone(state: ReturnType<typeof prChipState>): PrTone {
+function checkTone(state: CheckState): PrTone {
   switch (state) {
     case "passing":
       return "ok";
@@ -109,11 +100,21 @@ function prTone(state: ReturnType<typeof prChipState>): PrTone {
       return "error";
     case "pending":
       return "warning";
-    case "merged":
-      return "merged";
-    case "closed":
     case "unknown":
       return "neutral";
+  }
+}
+
+function checkLabel(state: CheckState): string {
+  switch (state) {
+    case "passing":
+      return "Checks passing";
+    case "failing":
+      return "Checks failing";
+    case "pending":
+      return "Checks pending";
+    case "unknown":
+      return "Status unknown";
   }
 }
 
@@ -127,7 +128,7 @@ function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleS
   return "open";
 }
 
-function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
+function resolveCheckState(pr: PrSummary): CheckState {
   const state = pr.checkState ?? pr.state;
   if (
     state === "passing"
@@ -138,17 +139,4 @@ function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> 
     return state;
   }
   return "unknown";
-}
-
-function checkStateLabel(state: NonNullable<PrSummary["checkState"]>): string {
-  switch (state) {
-    case "passing":
-      return "Checks passing";
-    case "failing":
-      return "Checks failing";
-    case "pending":
-      return "Checks pending";
-    case "unknown":
-      return "Status unknown";
-  }
 }

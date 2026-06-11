@@ -23,7 +23,7 @@ function threadWithPrs(prs: PrSummary[]): NavigationThreadSummary {
 }
 
 describe("PullRequestsPanel", () => {
-  it("renders each PR as a card with a state dot, title, repo/number, and open action", () => {
+  it("renders a card with #number + state pills, title, repo, and open action", () => {
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     render(
       <PullRequestsPanel
@@ -45,11 +45,10 @@ describe("PullRequestsPanel", () => {
     );
 
     const card = screen.getByRole("listitem");
-    expect(within(card).getByText("Ready for review · Checks passing")).toBeInTheDocument();
+    expect(within(card).getByText("#233")).toHaveClass("rail-chip--id");
+    expect(within(card).getByText("Checks passing")).toHaveClass("rail-chip--ok");
     expect(within(card).getByText("fix(desktop): polish the PR panel")).toBeInTheDocument();
-    expect(within(card).getByText("github.com/pwrdrvr/PwrSnap · #233")).toBeInTheDocument();
-    // The status dot carries the passing tone, not a competing inline status.
-    expect(card.querySelector(".rail-card__dot--ok")).not.toBeNull();
+    expect(within(card).getByText("github.com/pwrdrvr/PwrSnap")).toBeInTheDocument();
 
     fireEvent.click(within(card).getByRole("button", { name: /Open pwrdrvr\/PwrSnap#233/ }));
     expect(openSpy).toHaveBeenCalledWith(
@@ -59,8 +58,33 @@ describe("PullRequestsPanel", () => {
     );
   });
 
+  it("shows merge conflict as its own danger pill, distinct from the checks pill", () => {
+    render(
+      <PullRequestsPanel
+        thread={threadWithPrs([
+          {
+            provider: "github.com",
+            number: 12,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "wip",
+            state: "failing",
+            checkState: "failing",
+            lifecycleState: "open",
+            reviewState: "ready_for_review",
+            mergeState: "conflicting",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/12",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Merge conflict")).toHaveClass("rail-chip--error");
+    expect(screen.getByText("Checks failing")).toHaveClass("rail-chip--error");
+  });
+
   it("labels merged PRs and falls back to a generic title", () => {
-    const { container } = render(
+    render(
       <PullRequestsPanel
         thread={threadWithPrs([
           {
@@ -76,9 +100,11 @@ describe("PullRequestsPanel", () => {
       />,
     );
 
-    expect(screen.getByText("Merged")).toBeInTheDocument();
+    const merged = screen.getByText("Merged");
+    expect(merged.querySelector(".rail-chip__dot--merged")).not.toBeNull();
     expect(screen.getByText("Pull request #99")).toBeInTheDocument();
-    expect(container.querySelector(".rail-card__dot--merged")).not.toBeNull();
+    // Merged PRs don't show a checks pill.
+    expect(screen.queryByText(/Checks/)).not.toBeInTheDocument();
   });
 
   it("renders an empty state when there are no PRs", () => {
