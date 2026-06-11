@@ -6029,7 +6029,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("passes image filenames to Codex as adjacent text context", async () => {
+  it("does not pass image filenames to Codex as adjacent text context", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -6054,11 +6054,6 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown } })
       .find((payload) => payload.method === "turn/start");
     expect(turnStartPayload?.params?.input).toEqual([
-      {
-        type: "text",
-        text: "Attached image filename: pwrsagent-workspace-setup-in-progress-high.png",
-        text_elements: [],
-      },
       {
         type: "image",
         url: "data:image/png;base64,AQID",

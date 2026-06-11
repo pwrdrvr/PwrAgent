@@ -48,7 +48,7 @@ export async function materializeLocalImageInputs(
       await deps.mkdir(root, { recursive: true });
       const filePath = path.join(
         root,
-        `${dataImage.sha256}.${extensionForMimeType(dataImage.mimeType)}`,
+        materializedImageFileName(item.name, dataImage),
       );
       await deps.writeFile(filePath, dataImage.buffer);
       materializedFilePaths.add(filePath);
@@ -113,6 +113,48 @@ function filePathFromFileUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function materializedImageFileName(
+  name: string | undefined,
+  dataImage: { mimeType: "image/jpeg" | "image/png"; sha256: string },
+): string {
+  const extension = extensionForMimeType(dataImage.mimeType);
+  const fallback = `${dataImage.sha256}.${extension}`;
+  const basename = sanitizeImageBasename(name, extension);
+  if (!basename) {
+    return fallback;
+  }
+
+  const stem = basename.slice(0, -(extension.length + 1));
+  return `${stem}-${dataImage.sha256.slice(0, 8)}.${extension}`;
+}
+
+function sanitizeImageBasename(
+  name: string | undefined,
+  extension: "jpg" | "png",
+): string | undefined {
+  const normalized = name
+    ?.trim()
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = path.parse(normalized);
+  const stem = (parsed.name || normalized)
+    .replace(/[^a-zA-Z0-9._ -]+/g, "-")
+    .replace(/^[.\s-]+|[.\s-]+$/g, "")
+    .slice(0, 96);
+  if (!stem) {
+    return undefined;
+  }
+
+  return `${stem}.${extension}`;
 }
 
 function extensionForMimeType(mimeType: "image/jpeg" | "image/png"): "jpg" | "png" {

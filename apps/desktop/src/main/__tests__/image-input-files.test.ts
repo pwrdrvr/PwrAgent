@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { materializeLocalImageInputs } from "../app-server/image-input-files";
 
 describe("image input files", () => {
-  it("materializes PNG data URLs as stable local image inputs", async () => {
+  it("materializes named PNG data URLs with the pasted filename in the local image path", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
     const dataUrl = "data:image/png;base64,AQID";
     try {
@@ -24,8 +24,14 @@ describe("image input files", () => {
       expect(first[0]).toEqual({ type: "text", text: "Describe it" });
       expect(first[1]).toMatchObject({ type: "localImage", name: "original-paste.png" });
       const imagePath = first[1]?.type === "localImage" ? first[1].path : "";
-      expect(second[0]).toEqual({ type: "localImage", path: imagePath });
-      expect(path.basename(imagePath)).toMatch(/^[a-f0-9]{64}\.png$/);
+      expect(path.basename(imagePath)).toBe("original-paste-039058c6.png");
+      expect(second[0]).toEqual({
+        type: "localImage",
+        path: path.join(
+          tempDir,
+          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81.png",
+        ),
+      });
       await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
       await rm(tempDir, { recursive: true, force: true });

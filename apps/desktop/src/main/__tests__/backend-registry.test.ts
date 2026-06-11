@@ -10456,7 +10456,13 @@ command = "pnpm dev"
       await registry.startTurn({
         backend: "codex",
         threadId: "thread-image",
-        input: [{ type: "image", url: "data:image/png;base64,AQID" }],
+        input: [
+          {
+            type: "image",
+            name: "workspace setup.png",
+            url: "data:image/png;base64,AQID",
+          },
+        ],
       });
 
       const input = codexClient.lastStartTurnParams?.input;
@@ -10464,6 +10470,7 @@ command = "pnpm dev"
       expect(input?.[0]).toMatchObject({ type: "localImage" });
       const imagePath = input?.[0]?.type === "localImage" ? input[0].path : "";
       expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(path.basename(imagePath)).toBe("workspace setup-039058c6.png");
       await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
       await registry.close();
