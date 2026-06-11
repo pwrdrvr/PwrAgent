@@ -31,10 +31,18 @@ export function attachWindowFullscreenSync(window: BrowserWindow): void {
   window.on("leave-full-screen", () => send(false));
 
   // The renderer can mount AFTER a fullscreen transition has already
-  // happened — a dev HMR reload while fullscreen, or the window being
-  // restored into fullscreen. Re-emit the current state on every load so
-  // `<html data-fullscreen>` matches reality instead of the non-fullscreen
-  // default the renderer bootstraps with.
+  // happened — e.g. a dev HMR reload or a renderer-crash reload that keeps
+  // the same (still-fullscreen) BrowserWindow. Re-emit the current state on
+  // every load so `<html data-fullscreen>` matches reality instead of the
+  // non-fullscreen default the renderer bootstraps with.
+  //
+  // This stands in for a synchronous pre-paint bootstrap (like the
+  // data-platform / data-theme `process.argv` path): we deliberately don't
+  // have one. argv is frozen at window creation — where the window is never
+  // fullscreen — so it can't describe a later transition, and a correct
+  // synchronous read would need a blocking `ipcRenderer.sendSync`. The cost
+  // (a sub-frame over-reservation on reload-while-fullscreen, never a broken
+  // layout, never on a normal launch) doesn't justify that.
   if (typeof window.webContents?.on === "function") {
     window.webContents.on("did-finish-load", () => {
       send(
