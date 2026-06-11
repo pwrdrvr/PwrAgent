@@ -3822,6 +3822,63 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps review start history and timestamps final reviews at completion", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-history", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_781_178_065,
+            completedAt: 1_781_178_272,
+            items: [
+              {
+                type: "event_msg",
+                id: "entered-review",
+                payload: {
+                  type: "entered_review_mode",
+                  user_facing_hint: "changes against 'main'",
+                },
+              },
+              {
+                type: "exitedReviewMode",
+                id: "exited-review",
+                review: "No findings. Ready to merge.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-history",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "entered-review",
+        displayText: "Review changes against main",
+        createdAt: 1_781_178_065_000,
+      }),
+      expect.objectContaining({
+        type: "review",
+        id: "exited-review",
+        review: "No findings. Ready to merge.",
+        createdAt: 1_781_178_272_000,
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes generated in-progress activity statuses from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {

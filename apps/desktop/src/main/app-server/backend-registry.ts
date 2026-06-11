@@ -1866,6 +1866,31 @@ function turnIdFromTerminalNotification(
   return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
 }
 
+function normalizeNotificationTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return value < 1_000_000_000_000 ? value * 1_000 : value;
+}
+
+function completedAtFromTerminalNotification(
+  notification: AppServerNotification,
+): number | undefined {
+  if (
+    notification.method !== "turn/completed" &&
+    notification.method !== "turn/failed" &&
+    notification.method !== "turn/cancelled"
+  ) {
+    return undefined;
+  }
+
+  return normalizeNotificationTimestamp(
+    readRecord(notification.params.turn)?.completedAt ??
+      readRecord(notification.params.turn)?.completed_at,
+  );
+}
+
 function finalTextFromTerminalNotification(
   notification: AppServerNotification,
 ): string | undefined {
@@ -9824,6 +9849,7 @@ export class DesktopBackendRegistry {
 
   private async completeReviewSubAgent(params: {
     backend: AppServerBackendKind;
+    completedAt?: number;
     method: AppServerNotification["method"];
     threadId: string;
     turnId: string;
@@ -9835,7 +9861,7 @@ export class DesktopBackendRegistry {
     }
 
     this.activeReviewSubAgents.delete(key);
-    const completedAt = Date.now();
+    const completedAt = params.completedAt ?? Date.now();
     if (params.method === "turn/completed") {
       await this.persistReviewSubAgent(record, {
         completedAt,
@@ -12631,6 +12657,7 @@ export class DesktopBackendRegistry {
       if (turnId) {
         await this.completeReviewSubAgent({
           backend: event.backend,
+          completedAt: completedAtFromTerminalNotification(event.notification),
           method: event.notification.method,
           threadId: notification.params.threadId,
           turnId,

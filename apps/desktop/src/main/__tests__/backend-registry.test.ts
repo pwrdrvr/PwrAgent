@@ -10854,6 +10854,7 @@ command = "pnpm dev"
         turn: {
           id: "turn-review-1",
           status: "completed",
+          completedAt: 1_781_178_272,
           output: [],
         },
       },
@@ -10954,6 +10955,7 @@ command = "pnpm dev"
         turn: {
           id: "turn-review-1",
           status: "completed",
+          completedAt: 1_781_178_272,
           output: [],
         },
       },
@@ -10972,7 +10974,7 @@ command = "pnpm dev"
         outcome: "success",
         status: "success",
         lastMessage: "Review completed.",
-        completedAt: expect.any(Number),
+        completedAt: 1_781_178_272_000,
       });
 
     await registry.close();

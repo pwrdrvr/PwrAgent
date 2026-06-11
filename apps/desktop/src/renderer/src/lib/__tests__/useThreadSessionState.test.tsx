@@ -6658,6 +6658,85 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("keeps the review start marker when only the final review item arrives live", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    const finalReviewCreatedAt = Date.now() + 1_000;
+    act(() => {
+      result.current.addOptimisticReviewEntry("Review changes against main");
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review-1",
+            item: {
+              id: "turn-review-1-item",
+              type: "exitedReviewMode",
+              review: "No findings. Ready to merge.",
+              createdAt: finalReviewCreatedAt,
+              data: {
+                reviewOutput: {
+                  findings: [],
+                  overall_correctness: "patch is correct",
+                  overall_explanation: "No findings. Ready to merge.",
+                  overall_confidence_score: 0.92,
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "review" ? entry.review : entry.type
+        )
+      ).toEqual([
+        "Review changes against main",
+        "No findings. Ready to merge.",
+      ]);
+    });
+    expect(result.current.entries[1]).toMatchObject({
+      type: "review",
+      id: "turn-review-1-item",
+      createdAt: finalReviewCreatedAt,
+    });
+  });
+
   it("keeps a review turn active when a separate turn/started arrives", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

@@ -1042,9 +1042,17 @@ function reviewEntriesMatch(
   candidate: AppServerThreadReviewEntry,
   optimisticEntry: AppServerThreadReviewEntry
 ): boolean {
+  if (isReviewStartEntry(candidate) !== isReviewStartEntry(optimisticEntry)) {
+    return false;
+  }
+
   const candidateLabels = reviewEntryLabels(candidate);
   const optimisticLabels = reviewEntryLabels(optimisticEntry);
   return optimisticLabels.some((label) => candidateLabels.includes(label));
+}
+
+function isReviewStartEntry(entry: AppServerThreadReviewEntry): boolean {
+  return Boolean(entry.displayText);
 }
 
 function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
@@ -2404,6 +2412,8 @@ function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefine
 function reviewEntryFromCompletedItem(params: {
   turnId?: string;
   item?: {
+    createdAt?: number;
+    created_at?: number;
     id: string;
     type: string;
     review?: string;
@@ -2418,6 +2428,8 @@ function reviewEntryFromCompletedItem(params: {
 
   const record = item as {
     id?: unknown;
+    createdAt?: unknown;
+    created_at?: unknown;
     type?: unknown;
     review?: unknown;
     text?: unknown;
@@ -2453,7 +2465,10 @@ function reviewEntryFromCompletedItem(params: {
     ...(displayText ? { displayText } : {}),
     ...(output ? { output } : {}),
     ...(turn ? { turn } : {}),
-    createdAt: Date.now(),
+    createdAt:
+      normalizeNotificationTimestamp(record.createdAt) ??
+      normalizeNotificationTimestamp(record.created_at) ??
+      Date.now(),
   };
 }
 
@@ -3693,7 +3708,9 @@ export function useThreadSessionState(params: {
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
               optimisticEntries: current.optimisticEntries.filter(
-                (entry) => entry.type !== "review"
+                (entry) =>
+                  entry.type !== "review" ||
+                  !reviewEntriesMatch(reviewEntry, entry)
               ),
               response: nextResponse,
             };

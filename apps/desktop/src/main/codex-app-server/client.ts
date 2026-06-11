@@ -2165,7 +2165,10 @@ function extractPlanEntryFromItem(
 
 function extractReviewEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number,
+  timestamps: {
+    itemCreatedAt?: number;
+    turnCreatedAt?: number;
+  },
   turn?: AppServerThreadTurnMetadata,
 ): AppServerThreadReviewEntry | undefined {
   const reviewEvent = normalizeReviewEventItem(item);
@@ -2174,6 +2177,10 @@ function extractReviewEntryFromItem(
   }
 
   const { event, item: reviewItem, parent } = reviewEvent;
+  const createdAt =
+    timestamps.itemCreatedAt ??
+    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
+    timestamps.turnCreatedAt;
   const reviewOutput = normalizeReviewOutput(reviewItem);
   const review =
     pickRawString(reviewItem, ["review", "text"]) ??
@@ -3503,7 +3510,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         continue;
       }
 
-      const reviewEntry = extractReviewEntryFromItem(item, createdAt, turnMetadata);
+      const reviewEntry = extractReviewEntryFromItem(
+        item,
+        { itemCreatedAt, turnCreatedAt: createdAt },
+        turnMetadata
+      );
       if (reviewEntry) {
         flushActivityItems();
         const assistantReviewText =
