@@ -89,7 +89,7 @@ import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
-import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import {
@@ -458,7 +458,9 @@ class DesktopAppServerService {
       threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
-    return sanitizeRendererPayload(rewriteTranscriptImageUrlsForRenderer(response));
+    return sanitizeRendererPayload(
+      await materializeTranscriptImageUrlsForRenderer(response),
+    );
   }
 
   async persistThreadUsageActivity(
