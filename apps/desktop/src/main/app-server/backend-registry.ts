@@ -2907,6 +2907,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
+  private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
@@ -6121,18 +6122,36 @@ export class DesktopBackendRegistry {
       return params;
     }
 
+    const requestedCodexTurnModeKey =
+      params.backend === "codex"
+        ? buildActiveTurnModeKey(params.threadId, params.turnId)
+        : undefined;
+    const codexInterruptTurnId =
+      requestedCodexTurnModeKey
+        ? this.activeCodexReviewInterruptTurnIds.get(requestedCodexTurnModeKey) ??
+          params.turnId
+        : params.turnId;
+    const interruptParams =
+      params.backend === "codex" && codexInterruptTurnId !== params.turnId
+        ? { ...params, turnId: codexInterruptTurnId }
+        : params;
     const activeCodexTurnMode =
       params.backend === "codex"
         ? this.activeCodexTurnModes.get(
-            buildActiveTurnModeKey(params.threadId, params.turnId),
-          )
+            buildActiveTurnModeKey(params.threadId, codexInterruptTurnId),
+          ) ??
+          (requestedCodexTurnModeKey
+            ? this.activeCodexTurnModes.get(requestedCodexTurnModeKey)
+            : undefined)
         : undefined;
     const result =
       params.backend === "codex" && activeCodexTurnMode
-        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(params)
+        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(
+            interruptParams,
+          )
         : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, async (client) =>
-              await client.interruptTurn(params),
+              await client.interruptTurn(interruptParams),
             )
         : await this.grokClient.interruptTurn(params);
 
@@ -6140,6 +6159,12 @@ export class DesktopBackendRegistry {
       const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
       this.activeCodexTurnModes.delete(activeTurnModeKey);
       this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
+      this.clearCodexReviewInterruptMappingForTurn(result.threadId, result.turnId);
+      if (requestedCodexTurnModeKey && requestedCodexTurnModeKey !== activeTurnModeKey) {
+        this.activeCodexTurnModes.delete(requestedCodexTurnModeKey);
+        this.activeCodexReviewTurnKeys.delete(requestedCodexTurnModeKey);
+        this.activeCodexReviewInterruptTurnIds.delete(requestedCodexTurnModeKey);
+      }
     }
 
     return {
@@ -6923,13 +6948,35 @@ export class DesktopBackendRegistry {
   }
 
   private threadHasActiveCodexReviewTurn(threadId: string): boolean {
+    return Boolean(this.findActiveCodexReviewTurnKey(threadId));
+  }
+
+  private findActiveCodexReviewTurnKey(threadId: string): string | undefined {
     const prefix = `${threadId}:`;
     for (const key of this.activeCodexReviewTurnKeys) {
       if (key.startsWith(prefix)) {
-        return true;
+        return key;
       }
     }
-    return false;
+    return undefined;
+  }
+
+  private clearCodexReviewInterruptMappingForTurn(
+    threadId: string,
+    turnId: string,
+  ): void {
+    const activeTurnModeKey = buildActiveTurnModeKey(threadId, turnId);
+    this.activeCodexReviewInterruptTurnIds.delete(activeTurnModeKey);
+    for (const [reviewTurnKey, interruptTurnId] of Array.from(
+      this.activeCodexReviewInterruptTurnIds.entries()
+    )) {
+      if (
+        reviewTurnKey.startsWith(`${threadId}:`) &&
+        interruptTurnId === turnId
+      ) {
+        this.activeCodexReviewInterruptTurnIds.delete(reviewTurnKey);
+      }
+    }
   }
 
   private async resolveCodexThreadExecutionModeForActiveTurn(
@@ -12280,6 +12327,12 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
           turnId,
         );
+        const activeReviewTurnKey = this.findActiveCodexReviewTurnKey(
+          notification.params.threadId,
+        );
+        if (activeReviewTurnKey && activeReviewTurnKey !== key) {
+          this.activeCodexReviewInterruptTurnIds.set(activeReviewTurnKey, turnId);
+        }
         if (!this.activeCodexTurnModes.has(key)) {
           this.activeCodexTurnModes.set(
             key,
@@ -12319,6 +12372,10 @@ export class DesktopBackendRegistry {
         const wasKnownActiveTurn =
           !turnId.startsWith("pending:") &&
           this.activeCodexTurnModes.has(activeTurnModeKey);
+        this.clearCodexReviewInterruptMappingForTurn(
+          notification.params.threadId,
+          turnId,
+        );
         this.activeCodexTurnModes.delete(activeTurnModeKey);
         this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
         if (wasKnownActiveTurn) {

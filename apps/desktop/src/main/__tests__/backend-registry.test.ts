@@ -871,6 +871,11 @@ class MockBackendClient {
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
+      startReviewResult?: {
+        threadId: string;
+        reviewThreadId: string;
+        turnId: string;
+      };
     }
   ) {}
 
@@ -1063,7 +1068,7 @@ class MockBackendClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     this.lastStartReviewParams = params;
-    return {
+    return this.options.startReviewResult ?? {
       threadId: params.threadId,
       reviewThreadId: params.threadId,
       turnId: "turn-review-1",
@@ -10781,6 +10786,56 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Follow-up after review" }],
     });
     expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("interrupts Codex reviews with the backend active turn id", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/interrupt", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    await codexClient.emit({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-interrupt-1",
+        turn: {
+          id: "turn-interrupt-1",
+          status: "in_progress",
+          startedAt: 1_000,
+        },
+      },
+    });
+
+    await registry.interruptTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+
+    expect(codexClient.lastInterruptTurnParams).toMatchObject({
+      threadId: "thread-1",
+      turnId: "turn-interrupt-1",
+    });
 
     await registry.close();
   });
