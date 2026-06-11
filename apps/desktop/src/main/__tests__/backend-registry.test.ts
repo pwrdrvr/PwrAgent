@@ -5185,6 +5185,9 @@ script = "echo setup"
             agent: {
               name: "Inbox Agent",
               instructions: "Track inbox automations.",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1000,
             },
           },
         },
