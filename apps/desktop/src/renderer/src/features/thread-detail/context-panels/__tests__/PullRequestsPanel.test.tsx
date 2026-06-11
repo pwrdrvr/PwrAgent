@@ -87,6 +87,46 @@ describe("PullRequestsPanel", () => {
     expect(screen.getByText("Checks failing")).toHaveClass("rail-chip--alert");
   });
 
+  it("defers draft + conflict to the pills — the card's chip stays check-state", () => {
+    // Regression guard for `withStatusPills`: a draft + conflicting PR whose
+    // checks pass would, on a standalone chip, render a red dot + draft bar.
+    // Inside the card the chip must instead mirror the CHECK state (green) so
+    // it agrees with the "Checks passing" pill — draft + conflict are carried
+    // by the pills, never duplicated on the chip.
+    render(
+      <PullRequestsPanel
+        thread={threadWithPrs([
+          {
+            provider: "github.com",
+            number: 77,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "draft + conflict, checks passing",
+            state: "passing",
+            checkState: "passing",
+            lifecycleState: "open",
+            reviewState: "draft",
+            mergeState: "conflicting",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/77",
+          },
+        ])}
+      />,
+    );
+
+    const card = screen.getByRole("listitem");
+    const chip = within(card).getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#77/,
+    });
+    expect(chip).toHaveClass("pr-chip--passing");
+    expect(chip).not.toHaveClass("pr-chip--conflicting");
+    expect(chip).not.toHaveClass("pr-chip--draft");
+    expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
+    // The dimensions surface as pills instead.
+    expect(within(card).getByText("Draft")).toHaveClass("rail-chip");
+    expect(within(card).getByText("Merge conflict")).toHaveClass("rail-chip");
+    expect(within(card).getByText("Checks passing")).toHaveClass("rail-chip");
+  });
+
   it("labels merged PRs (no checks pill) and falls back to a generic title", () => {
     render(
       <PullRequestsPanel
