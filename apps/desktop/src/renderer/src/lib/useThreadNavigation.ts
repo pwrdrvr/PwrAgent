@@ -3237,12 +3237,12 @@ export function useThreadNavigation(
    * then expands the group if it was collapsed so the new child is visible.
    */
   const insertSubthreadBelowSource = useCallback(
-    (
+    async (
       backend: AppServerBackendKind,
       rootThreadId: string,
       sourceThreadId: string,
       newThreadId: string,
-    ): void => {
+    ): Promise<void> => {
       const snapshot = stateRef.current.response;
       if (!snapshot) {
         return;
@@ -3272,26 +3272,28 @@ export function useThreadNavigation(
           threadIds: nextOrder,
         }),
       }));
+      // Await the persist so callers can sequence the authoritative refresh
+      // after it commits — otherwise a refresh racing ahead of this write can
+      // momentarily resurrect the pre-insert order.
       const persistOrder = desktopApi?.updateSubthreadOrder;
       if (persistOrder) {
-        void persistOrder({
-          backend,
-          parentThreadId: rootThreadId,
-          threadIds: nextOrder,
-        })
-          .then((result) => {
-            setState((current) => ({
-              ...current,
-              response: updateSubthreadOrderInSnapshot(current.response, {
-                backend: result.backend,
-                parentThreadId: result.parentThreadId,
-                threadIds: result.threadIds,
-              }),
-            }));
-          })
-          .catch(() => {
-            void refresh(buildThreadIdentityKey(backend, rootThreadId));
+        try {
+          const result = await persistOrder({
+            backend,
+            parentThreadId: rootThreadId,
+            threadIds: nextOrder,
           });
+          setState((current) => ({
+            ...current,
+            response: updateSubthreadOrderInSnapshot(current.response, {
+              backend: result.backend,
+              parentThreadId: result.parentThreadId,
+              threadIds: result.threadIds,
+            }),
+          }));
+        } catch {
+          await refresh(buildThreadIdentityKey(backend, rootThreadId));
+        }
       }
 
       if (root?.subthreadsCollapsed) {
@@ -3466,8 +3468,9 @@ export function useThreadNavigation(
           parentThreadId: groupRoot.id,
         };
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
-        // Drop the fork directly below the card it was spawned from.
-        insertSubthreadBelowSource(
+        // Drop the fork directly below the card it was spawned from, and let
+        // the order write land before the refresh below reads it back.
+        await insertSubthreadBelowSource(
           response.backend,
           groupRoot.id,
           parent.id,
@@ -3891,9 +3894,10 @@ export function useThreadNavigation(
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
-      // card. Plain new-thread launchpads have no parent and skip this.
+      // card. Plain new-thread launchpads have no parent and skip this. Await
+      // so the order write commits before the refresh below reads it back.
       if (materializeParentThreadId) {
-        insertSubthreadBelowSource(
+        await insertSubthreadBelowSource(
           response.backend,
           materializeParentThreadId,
           launchpad.sourceThreadId ?? materializeParentThreadId,

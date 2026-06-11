@@ -2592,6 +2592,18 @@ textarea,
   box-shadow: none;
 }
 
+/* The thinking sweep is an accent-on-accent gradient — invisible on the solid
+   accent fill. Recolor it to the on-accent token so a source card that's still
+   working stays legible. */
+.thread-row.is-composer-source .thinking-scanner__beam {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 0%,
+    color-mix(in srgb, var(--accent-on) 95%, transparent) 48%,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 100%
+  );
+}
+
 .thread-row.thread-row--drag-image {
   position: fixed;
   top: 0;
