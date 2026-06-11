@@ -19,9 +19,9 @@ describe("federation policy", () => {
     expect(
       evaluateFederationSessionPolicy({
         peer: {
-          id: "child_one",
-          label: "Child",
-          role: "child",
+          id: "client_one",
+          label: "Client",
+          role: "client",
           status: "revoked",
           revokedAt: 1_000,
           capabilities: ["remote_window"],
@@ -37,9 +37,9 @@ describe("federation policy", () => {
     expect(
       evaluateFederationSessionPolicy({
         peer: {
-          id: "child_one",
-          label: "Child",
-          role: "child",
+          id: "client_one",
+          label: "Client",
+          role: "client",
           status: "connected",
           capabilities: ["remote_window"],
         },
@@ -54,9 +54,9 @@ describe("federation policy", () => {
     expect(
       evaluateFederationSessionPolicy({
         peer: {
-          id: "child_one",
-          label: "Child",
-          role: "child",
+          id: "client_one",
+          label: "Client",
+          role: "client",
           status: "connected",
           capabilities: ["remote_window"],
         },
@@ -89,13 +89,13 @@ describe("FederationSessionRegistry", () => {
 
     registry.openSession({
       sessionId: "session-1",
-      peerId: "child_one",
+      peerId: "client_one",
       connectedAt: 1_000,
       capabilities: ["remote_window"],
     });
     registry.openSession({
       sessionId: "session-2",
-      peerId: "child_one",
+      peerId: "client_one",
       connectedAt: 1_100,
       capabilities: ["remote_window"],
     });
@@ -110,7 +110,7 @@ describe("FederationSessionRegistry", () => {
 
     expect(
       registry.closePeerSessions({
-        peerId: "child_one",
+        peerId: "client_one",
         closedAt: 1_200,
         reason: "revoked",
       }),
@@ -119,7 +119,7 @@ describe("FederationSessionRegistry", () => {
 
     registry.openSession({
       sessionId: "session-3",
-      peerId: "child_two",
+      peerId: "client_two",
       connectedAt: 2_000,
       capabilities: ["federated_search"],
     });

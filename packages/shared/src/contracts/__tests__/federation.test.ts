@@ -62,7 +62,7 @@ describe("federation contracts", () => {
       id: "req-1",
       kind: "request",
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      sourceInstanceId: "child-1",
+      sourceInstanceId: "client-1",
       targetInstanceId: "gateway-1",
       method: "appServer.getNavigationSnapshot",
       createdAt: 1,
@@ -76,7 +76,7 @@ describe("federation contracts", () => {
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       requestId: request.id,
       sourceInstanceId: "gateway-1",
-      targetInstanceId: "child-1",
+      targetInstanceId: "client-1",
       createdAt: 2,
       result: { ok: true },
     } satisfies FederationProtocolEnvelope;

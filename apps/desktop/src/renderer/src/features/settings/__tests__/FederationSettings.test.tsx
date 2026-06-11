@@ -22,9 +22,9 @@ describe("FederationSettings", () => {
       publicUrl: "wss://pwragent.example.com/federation",
       peers: [
         {
-          id: "child_one",
+          id: "client_one",
           label: "Studio Mac",
-          role: "child",
+          role: "client",
           status: "connected",
           capabilities: ["thread_navigation"],
         },
@@ -69,7 +69,7 @@ describe("FederationSettings", () => {
     expect(screen.getByText("Federation diagnostics are unavailable."))
       .toBeInTheDocument();
     expect(screen.getAllByText("gateway").length).toBeGreaterThan(0);
-    expect(screen.getByText("wss://child.example.com/federation"))
+    expect(screen.getByText("wss://client.example.com/federation"))
       .toBeInTheDocument();
   });
 });
@@ -85,7 +85,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
         source: "config",
       },
       gatewayUrl: {
-        value: "wss://child.example.com/federation",
+        value: "wss://client.example.com/federation",
         source: "config",
       },
       cloudflareMtlsEnabled: { value: true, source: "config" },

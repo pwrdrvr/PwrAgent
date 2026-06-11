@@ -92,10 +92,19 @@ describe("desktop config [federation] section", () => {
 
   it("ignores unknown federation modes", () => {
     const config = parseDesktopSettingsToml(
-      '[federation]\nmode = "master"\n',
+      '[federation]\nmode = "coordinator"\n',
       "test.toml",
     );
 
     expect(config.federation).toBeUndefined();
+  });
+
+  it("maps the legacy child federation mode to client", () => {
+    const config = parseDesktopSettingsToml(
+      '[federation]\nmode = "child"\n',
+      "test.toml",
+    );
+
+    expect(config.federation?.mode).toBe("client");
   });
 });

@@ -21,7 +21,7 @@ export const FEDERATION_CAPABILITIES = [
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];
 
-export type FederationInstanceRole = "gateway" | "child" | "dual";
+export type FederationInstanceRole = "gateway" | "client" | "dual";
 
 export type FederationConnectionState =
   | "disabled"

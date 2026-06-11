@@ -85,7 +85,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       role: props.snapshot.federation.mode.value === "gateway" ||
         props.snapshot.federation.mode.value === "dual"
         ? props.snapshot.federation.mode.value
-        : "child",
+        : "client",
       status: props.snapshot.federation.mode.value === "disabled" ? "disabled" : "disconnected",
       listenUrl:
         props.snapshot.federation.mode.value === "disabled"
@@ -126,7 +126,7 @@ export function FederationSettings(props: FederationSettingsProps) {
         <div className="settings-fields">
           <SettingsField
             label="Mode"
-            sub="Gateway listens for peers; child connects to a gateway."
+            sub="Gateway listens for peers; client connects to a gateway."
             control={
               <select
                 value={mode}
@@ -177,7 +177,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Gateway URL"
-            sub="Child-mode gateway WebSocket URL."
+            sub="Client-mode gateway WebSocket URL."
             control={
               <input
                 value={gatewayUrl}
@@ -218,7 +218,7 @@ export function FederationSettings(props: FederationSettingsProps) {
         <div className="settings-fields">
           <SettingsField
             label="Generate invite"
-            sub="Creates a one-time child enrollment payload."
+            sub="Creates a one-time client enrollment payload."
             control={
               <button
                 className="button button--secondary"
@@ -240,7 +240,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           {generatedInvite ? (
             <SettingsField
               label="Invite payload"
-              sub="Paste this into the child instance."
+              sub="Paste this into the client instance."
               control={
                 <textarea
                   readOnly
@@ -252,7 +252,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           ) : null}
           <SettingsField
             label="Import invite"
-            sub="Paste a gateway invite on the child instance."
+            sub="Paste a gateway invite on the client instance."
             control={
               <textarea
                 rows={4}
@@ -318,7 +318,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Gateway URL"
-            sub="Outbound target used by child mode."
+            sub="Outbound target used by client mode."
             control={
               <code>
                 {trimmedOrUndefined(props.snapshot.federation.gatewayUrl.value) ??
@@ -420,8 +420,8 @@ function roleLabel(role: FederationInstanceRole): string {
   switch (role) {
     case "gateway":
       return "Gateway";
-    case "child":
-      return "Child";
+    case "client":
+      return "Client";
     case "dual":
       return "Dual";
   }

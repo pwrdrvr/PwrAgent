@@ -272,14 +272,14 @@ export class FederationGatewayWebSocketServer {
   }
 }
 
-export type FederationChildWebSocketClient = {
+export type FederationClientWebSocketClient = {
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   close: () => void;
 };
 
-export async function connectFederationChild(params: {
+export async function connectFederationClient(params: {
   url: string;
   mode: "enroll" | "reconnect";
   gatewayInstanceId: FederationInstanceId;
@@ -294,7 +294,7 @@ export async function connectFederationChild(params: {
   profileName?: string;
   headers?: Record<string, string>;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
-}): Promise<FederationChildWebSocketClient> {
+}): Promise<FederationClientWebSocketClient> {
   const socket = new WebSocket(params.url, {
     headers: params.headers,
   });

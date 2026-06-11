@@ -14,7 +14,7 @@ import {
 } from "../federation/federation-identity";
 import { FederationStore } from "../federation/federation-store";
 import {
-  connectFederationChild,
+  connectFederationClient,
   FederationGatewayWebSocketServer,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
@@ -38,8 +38,8 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
-  it("authenticates a child and carries protocol envelopes", async () => {
-    const childKeyPair = generateFederationIdentityKeyPair();
+  it("authenticates a client and carries protocol envelopes", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
       token: "invite-token-transport",
@@ -71,17 +71,17 @@ describe("federation transport", () => {
     const { url } = await server!.start();
 
     const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
-      void connectFederationChild({
+      void connectFederationClient({
         url,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
-        peerInstanceId: "child_one",
-        privateKeyPem: childKeyPair.privateKeyPem,
-        publicKeyPem: childKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
         capabilities: ["remote_window"],
         inviteToken: invite.token,
-        label: "Child",
-        role: "child",
+        label: "Client",
+        role: "client",
         onEnvelope: resolve,
       }).then((client) => {
         client.sendEnvelope({
@@ -90,7 +90,7 @@ describe("federation transport", () => {
           method: "thread.list",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
+          sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
         });
@@ -100,21 +100,21 @@ describe("federation transport", () => {
     await expect(received).resolves.toMatchObject({
       id: "request-1",
       kind: "request",
-      sourceInstanceId: "child_one",
+      sourceInstanceId: "client_one",
     });
     await expect(reply).resolves.toMatchObject({
       kind: "response",
       requestId: "request-1",
       result: { ok: true },
     });
-    expect(store.getPeer("child_one")).toMatchObject({
+    expect(store.getPeer("client_one")).toMatchObject({
       status: "connected",
-      pinnedPublicKeyPem: childKeyPair.publicKeyPem,
+      pinnedPublicKeyPem: clientKeyPair.publicKeyPem,
     });
   });
 
   it("rejects websocket clients that cannot prove an enrolled identity", async () => {
-    const childKeyPair = generateFederationIdentityKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
     server = new FederationGatewayWebSocketServer({
       gatewayInstanceId: "gateway_one",
       host: "127.0.0.1",
@@ -124,20 +124,20 @@ describe("federation transport", () => {
     const { url } = await server.start();
 
     await expect(
-      connectFederationChild({
+      connectFederationClient({
         url,
         mode: "reconnect",
         gatewayInstanceId: "gateway_one",
-        peerInstanceId: "child_one",
-        privateKeyPem: childKeyPair.privateKeyPem,
-        publicKeyPem: childKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
         capabilities: ["remote_window"],
       }),
     ).rejects.toThrow("unknown_peer");
   });
 
   it("rejects auth proofs signed with a client-selected nonce", async () => {
-    const childKeyPair = generateFederationIdentityKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
       token: "invite-token-stale-nonce",
@@ -166,26 +166,26 @@ describe("federation transport", () => {
         kind: "auth",
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
-        peerInstanceId: "child_one",
+        peerInstanceId: "client_one",
         protocolVersion: 1,
         nonce,
         capabilities: ["remote_window"],
         signatureBase64: signFederationMessage({
-          privateKeyPem: childKeyPair.privateKeyPem,
+          privateKeyPem: clientKeyPair.privateKeyPem,
           message: buildFederationProofMessage({
             purpose: "enroll",
             gatewayInstanceId: "gateway_one",
-            peerInstanceId: "child_one",
-            publicKeyPem: childKeyPair.publicKeyPem,
+            peerInstanceId: "client_one",
+            publicKeyPem: clientKeyPair.publicKeyPem,
             protocolVersion: 1,
             nonce,
             capabilities: ["remote_window"],
           }),
         }),
         inviteToken: invite.token,
-        publicKeyPem: childKeyPair.publicKeyPem,
-        label: "Child",
-        role: "child",
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        label: "Client",
+        role: "client",
       }),
     );
 
@@ -194,7 +194,7 @@ describe("federation transport", () => {
       failure: { code: "policy_denied" },
     });
     socket.close();
-    expect(store.getPeer("child_one")).toBeUndefined();
+    expect(store.getPeer("client_one")).toBeUndefined();
   });
 });
 

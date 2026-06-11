@@ -308,7 +308,7 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatch({
       federation: {
-        mode: "child",
+        mode: "client",
         gatewayUrl: "https://pwragent.example.com",
       },
     });
@@ -316,7 +316,7 @@ describe("DesktopSettingsService", () => {
 
     const snapshot = await service.readSettings();
     expect(snapshot.federation).toMatchObject({
-      mode: { value: "child", source: "config" },
+      mode: { value: "client", source: "config" },
       gatewayUrl: {
         value: "https://pwragent.example.com",
         source: "config",

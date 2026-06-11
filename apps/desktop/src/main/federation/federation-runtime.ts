@@ -46,9 +46,9 @@ import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationStore } from "./federation-store";
 import {
-  connectFederationChild,
+  connectFederationClient,
   FederationGatewayWebSocketServer,
-  type FederationChildWebSocketClient,
+  type FederationClientWebSocketClient,
   type FederationGatewayConnection,
 } from "./federation-transport";
 
@@ -85,7 +85,7 @@ type FederationPeerDirectoryNotification = {
 export class DesktopFederationRuntime {
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
-  private child?: FederationChildWebSocketClient;
+  private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
   private listenUrl?: string;
   private gatewayUrl?: string;
@@ -113,8 +113,8 @@ export class DesktopFederationRuntime {
   async stop(): Promise<void> {
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
-    this.child?.close();
-    this.child = undefined;
+    this.client?.close();
+    this.client = undefined;
     await this.server?.stop();
     this.server = undefined;
     this.router = undefined;
@@ -152,7 +152,7 @@ export class DesktopFederationRuntime {
       generatedAt: now,
       expiresAt,
       label: request.label,
-      role: "child",
+      role: "client",
       endpoint: gatewayUrl,
     });
     return {
@@ -178,7 +178,7 @@ export class DesktopFederationRuntime {
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
-        mode: "child",
+        mode: "client",
         gatewayUrl: payload.gatewayUrl,
       },
     });
@@ -285,16 +285,16 @@ export class DesktopFederationRuntime {
       log.info("federation gateway listening", { url: started.url });
     }
 
-    if (mode === "child" || mode === "dual") {
-      await this.connectChild(settings.federation.gatewayUrl.value.trim());
+    if (mode === "client" || mode === "dual") {
+      await this.connectClient(settings.federation.gatewayUrl.value.trim());
     }
   }
 
-  private async connectChild(gatewayUrl: string): Promise<void> {
+  private async connectClient(gatewayUrl: string): Promise<void> {
     if (!gatewayUrl) return;
     const gatewayInstanceId = getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
     if (!gatewayInstanceId) {
-      log.warn("federation child mode missing gateway instance id");
+      log.warn("federation client mode missing gateway instance id");
       return;
     }
     this.gatewayInstanceId = gatewayInstanceId;
@@ -302,7 +302,7 @@ export class DesktopFederationRuntime {
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
     this.gatewayUrl = gatewayUrl;
-    this.child = await connectFederationChild({
+    this.client = await connectFederationClient({
       url: gatewayUrl,
       mode: pendingInviteToken ? "enroll" : "reconnect",
       gatewayInstanceId,
@@ -312,19 +312,19 @@ export class DesktopFederationRuntime {
       capabilities: DEFAULT_CAPABILITIES,
       inviteToken: pendingInviteToken || undefined,
       label: getAppStateDb().getMeta("profile_name") || this.ensureLocalInstanceId(),
-      role: "child",
+      role: "client",
       onEnvelope: (envelope) =>
         void this.receiveEnvelope(envelope, gatewayInstanceId),
     });
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: DEFAULT_CAPABILITIES,
-      sendEnvelope: (envelope) => this.child?.sendEnvelope(envelope),
+      sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
     });
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
-    log.info("federation child connected", { gatewayUrl });
+    log.info("federation client connected", { gatewayUrl });
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
@@ -459,7 +459,7 @@ export class DesktopFederationRuntime {
   private defaultPeerRole(peerId: FederationInstanceId): FederationInstanceRole {
     return peerId === getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY)
       ? "gateway"
-      : "child";
+      : "client";
   }
 
   private buildPeerDirectory(

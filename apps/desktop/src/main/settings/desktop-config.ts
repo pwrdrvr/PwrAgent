@@ -1897,7 +1897,9 @@ function readHotCpuProfileTriggerMode(
 function readFederationMode(
   value: TomlScalar | undefined,
 ): DesktopFederationMode | undefined {
-  if (value === "child") return "client";
+  if (value === "child") {
+    return "client";
+  }
   return typeof value === "string" && isDesktopFederationMode(value)
     ? value
     : undefined;

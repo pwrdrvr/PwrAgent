@@ -13,7 +13,7 @@ describe("FederationRouter", () => {
       now: () => 2_000,
     });
     router.registerConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       capabilities: ["thread_navigation"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
@@ -21,14 +21,14 @@ describe("FederationRouter", () => {
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-1",
           kind: "request",
           method: "thread.list",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
+          sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
         },
@@ -45,49 +45,49 @@ describe("FederationRouter", () => {
       {
         kind: "response",
         requestId: "request-1",
-        targetInstanceId: "child_one",
+        targetInstanceId: "client_one",
       },
     ]);
   });
 
-  it("relays child-to-child envelopes when the source is authorized", async () => {
+  it("relays client-to-client envelopes when the source is authorized", async () => {
     const relayed: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
       localInstanceId: "gateway_one",
     });
     router.registerConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       capabilities: ["gateway_relay"],
       sendEnvelope: () => undefined,
     });
     router.registerConnection({
-      peerId: "child_two",
+      peerId: "client_two",
       capabilities: ["remote_window"],
       sendEnvelope: (envelope) => relayed.push(envelope),
     });
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-1",
           kind: "request",
           method: "thread.read",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
-          targetInstanceId: "child_two",
+          sourceInstanceId: "client_one",
+          targetInstanceId: "client_two",
           createdAt: 1_000,
         },
       }),
     ).resolves.toEqual({
       status: "relayed",
-      targetInstanceId: "child_two",
+      targetInstanceId: "client_two",
     });
     expect(relayed).toMatchObject([
       {
         id: "request-1",
-        targetInstanceId: "child_two",
+        targetInstanceId: "client_two",
         hopCount: 1,
       },
     ]);
@@ -103,7 +103,7 @@ describe("FederationRouter", () => {
       now: () => 2_000,
     });
     router.registerConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       capabilities: ["thread_navigation"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
@@ -111,14 +111,14 @@ describe("FederationRouter", () => {
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-1",
           kind: "request",
           method: "turn.submit",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
+          sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
         },
@@ -130,15 +130,15 @@ describe("FederationRouter", () => {
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-2",
           kind: "request",
           method: "thread.read",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
-          targetInstanceId: "child_two",
+          sourceInstanceId: "client_one",
+          targetInstanceId: "client_two",
           createdAt: 1_000,
         },
       }),
@@ -149,14 +149,14 @@ describe("FederationRouter", () => {
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-3",
           kind: "request",
           method: "thread.list",
           params: {},
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
+          sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
           deadlineAt: 1_500,

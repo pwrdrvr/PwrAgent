@@ -2,7 +2,7 @@
 
 PwrAgent instance federation lets one profile act as a gateway for other
 PwrAgent instances. The first implementation is shaped around a local gateway
-listener exposed through a stable Cloudflare Tunnel endpoint, with child
+listener exposed through a stable Cloudflare Tunnel endpoint, with client
 instances connecting back over WebSocket.
 
 ## Trust Model
@@ -23,8 +23,8 @@ instances connecting back over WebSocket.
 ## Modes
 
 - `disabled`: no federation listener or outbound federation connection.
-- `gateway`: listens locally and accepts enrolled child peers.
-- `child`: connects to the configured gateway URL.
+- `gateway`: listens locally and accepts enrolled client peers.
+- `client`: connects to the configured gateway URL.
 - `dual`: listens as a gateway and can also connect through another gateway.
 
 The current settings contract stores these under `[federation]` in the active
@@ -45,7 +45,7 @@ Secrets are stored separately under the desktop secret-store names defined by
 
 The federation transport is a bidirectional WebSocket protocol. Envelopes carry
 protocol version, source instance, optional target instance, request IDs, and
-deadlines. Gateways may relay envelopes when a child targets another enrolled
+deadlines. Gateways may relay envelopes when a client targets another enrolled
 instance.
 
 The first RPC surface intentionally maps read-oriented backend operations:
@@ -76,11 +76,11 @@ Build once, then run two isolated profiles from the same checkout:
 
 ```sh
 pnpm --filter @pwragent/desktop build
-PWRAGENT_PROFILE=master pnpm --filter @pwragent/desktop preview
-PWRAGENT_PROFILE=child pnpm --filter @pwragent/desktop preview
+PWRAGENT_PROFILE=gateway pnpm --filter @pwragent/desktop preview
+PWRAGENT_PROFILE=client pnpm --filter @pwragent/desktop preview
 ```
 
-In the master profile, open Settings -> Federation:
+In the gateway profile, open Settings -> Federation:
 
 1. Set mode to `gateway`.
 2. Keep `listen_host` as `127.0.0.1`.
@@ -90,28 +90,28 @@ In the master profile, open Settings -> Federation:
 5. Save federation settings.
 6. Generate an invite.
 
-In the child profile, open Settings -> Federation:
+In the client profile, open Settings -> Federation:
 
 1. Paste the invite into Import invite.
-2. Import it. The child switches to `child` mode and stores the gateway URL.
+2. Import it. The client switches to `client` mode and stores the gateway URL.
 3. Refresh health on both profiles.
 
-Back in the master profile:
+Back in the gateway profile:
 
-1. Confirm the child appears under Federation Instances.
-2. Click Open next to the child.
-3. The new window is scoped to the child instance for thread list, thread read,
+1. Confirm the client appears under Federation Instances.
+2. Click Open next to the client.
+3. The new window is scoped to the client instance for thread list, thread read,
    skill list, and prompt submission.
 
-In a child profile:
+In a client profile:
 
 1. Refresh Settings -> Federation after connecting.
-2. Confirm the gateway and any sibling children appear under Federation
+2. Confirm the gateway and any sibling clients appear under Federation
    Instances.
-3. Click Open next to the gateway to work against the master, or next to a
-   sibling child to route through the gateway.
+3. Click Open next to the gateway to work against the gateway, or next to a
+   sibling client to route through the gateway.
 
 Remote backend events stream back into the matching remote window, so prompt
 submission should show live turn status, tool activity, and assistant deltas
 without reopening the thread. The MVP still expects you to test against an
-existing child thread; remote new-thread creation is not wired yet.
+existing client thread; remote new-thread creation is not wired yet.

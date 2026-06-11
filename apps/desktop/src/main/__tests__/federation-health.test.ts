@@ -12,9 +12,9 @@ import {
 describe("federation health", () => {
   it("reports the configured listener and peers without exposing key material", () => {
     const peer = {
-      id: "child_one",
+      id: "client_one",
       label: "Studio Mac",
-      role: "child",
+      role: "client",
       status: "connected",
       capabilities: ["thread_navigation"],
       protocolVersion: 1,
@@ -40,9 +40,9 @@ describe("federation health", () => {
       publicUrl: "wss://pwragent.example.com/federation",
     });
     expect(health.peers[0]).toEqual({
-      id: "child_one",
+      id: "client_one",
       label: "Studio Mac",
-      role: "child",
+      role: "client",
       status: "connected",
       capabilities: ["thread_navigation"],
       protocolVersion: 1,
@@ -70,9 +70,9 @@ describe("federation health", () => {
 
   it("copies peer capabilities when normalizing public summaries", () => {
     const peer: FederationPeerSummary = {
-      id: "child_one",
+      id: "client_one",
       label: "Studio Mac",
-      role: "child",
+      role: "client",
       status: "connected",
       capabilities: ["thread_navigation"],
     };
