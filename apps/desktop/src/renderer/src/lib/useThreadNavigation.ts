@@ -217,15 +217,21 @@ function resolveCreateThreadTargetDirectory(args: {
   directories: NavigationSnapshot["directories"];
   selectedDirectory?: NavigationDirectorySummary;
   selectedThreadKey?: string;
+  /**
+   * When true, ignore the selected directory / thread context and resolve
+   * straight to the directory-less workspace target. Drives the "New chat
+   * without a directory" affordances (New Thread flyout + project picker).
+   */
+  forceWorkspace?: boolean;
 }): {
   directoryKey: string;
   directoryKind: NavigationDirectorySummary["kind"];
   directoryLabel: string;
   directoryPath?: string;
 } {
-  const { directories, selectedDirectory, selectedThreadKey } = args;
+  const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } = args;
 
-  if (selectedDirectory?.kind === "directory") {
+  if (!forceWorkspace && selectedDirectory?.kind === "directory") {
     return {
       directoryKey: selectedDirectory.key,
       directoryKind: selectedDirectory.kind,
@@ -234,7 +240,7 @@ function resolveCreateThreadTargetDirectory(args: {
     };
   }
 
-  if (selectedThreadKey) {
+  if (!forceWorkspace && selectedThreadKey) {
     const threadDirectories = directories.filter(
       (directory) =>
         directory.kind === "directory" && directory.threadKeys.includes(selectedThreadKey)
@@ -1805,7 +1811,8 @@ export function useThreadNavigation(
   browseMode: BrowseMode;
   createThread: (
     backend?: AppServerBackendKind,
-    executionMode?: ThreadExecutionMode
+    executionMode?: ThreadExecutionMode,
+    options?: { forceWorkspace?: boolean }
   ) => Promise<void>;
   createSubthread: (
     parent: NavigationThreadSummary,
@@ -1840,8 +1847,14 @@ export function useThreadNavigation(
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
   ) => Promise<void>;
+  /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
+  newThreadDirectoryLabel?: string;
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
+    preferredBackend?: AppServerBackendKind
+  ) => Promise<void>;
+  /** Switch the composer to the directory-less ("workspace") launchpad. */
+  openWorkspaceLaunchpad: (
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
@@ -2909,6 +2922,20 @@ export function useThreadNavigation(
       ?.launchpad;
   }, [directories, selectedItemKey]);
 
+  // The directory label the New Thread button would resolve to with its
+  // default (context-aware) behavior, or undefined when that resolves to the
+  // directory-less workspace. Drives the "New chat in <directory>" item in the
+  // New Thread flyout, and lets callers hide that item when there's no
+  // directory to contrast against the "without a directory" choice.
+  const newThreadDirectoryLabel = useMemo(() => {
+    const target = resolveCreateThreadTargetDirectory({
+      directories,
+      selectedDirectory,
+      selectedThreadKey,
+    });
+    return target.directoryKind === "directory" ? target.directoryLabel : undefined;
+  }, [directories, selectedDirectory, selectedThreadKey]);
+
   useEffect(() => {
     releaseRetainedUnreadThread(selectedItemKey);
   }, [releaseRetainedUnreadThread, retainedUnreadThread, selectedItemKey]);
@@ -3081,7 +3108,8 @@ export function useThreadNavigation(
   const createThread = useCallback(
     async (
       backend?: AppServerBackendKind,
-      executionMode: ThreadExecutionMode = "default"
+      executionMode: ThreadExecutionMode = "default",
+      options?: { forceWorkspace?: boolean }
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
@@ -3099,6 +3127,7 @@ export function useThreadNavigation(
           directories,
           selectedDirectory,
           selectedThreadKey,
+          forceWorkspace: options?.forceWorkspace,
         });
         const directoryKey = targetDirectory.directoryKey;
         const response = await desktopApi.ensureDirectoryLaunchpad({
@@ -3151,6 +3180,7 @@ export function useThreadNavigation(
           directories,
           selectedDirectory,
           selectedThreadKey,
+          forceWorkspace: options?.forceWorkspace,
         });
         pendingPickedLaunchpadRef.current.delete(targetDirectory.directoryKey);
         setCreatingThread(undefined);
@@ -3361,6 +3391,30 @@ export function useThreadNavigation(
       }
     },
     [desktopApi]
+  );
+
+  // Switch the composer to the directory-less "workspace" launchpad. Backs the
+  // "Chat without a directory" row in the project picker. Reuses the existing
+  // workspace pseudo-directory when the snapshot already has one, otherwise
+  // synthesizes the same key/label `resolveCreateThreadTargetDirectory` falls
+  // back to so both entry points land on the identical launchpad.
+  const openWorkspaceLaunchpad = useCallback(
+    async (preferredBackend?: AppServerBackendKind): Promise<void> => {
+      const workspaceDirectory = directories.find(
+        (directory) => directory.kind === "workspace"
+      );
+      await openDirectoryLaunchpad(
+        workspaceDirectory ?? {
+          key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+          kind: "workspace",
+          label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+        preferredBackend
+      );
+    },
+    [directories, openDirectoryLaunchpad]
   );
 
   const pickAndRegisterDirectory = useCallback(
@@ -4562,7 +4616,9 @@ export function useThreadNavigation(
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
+    newThreadDirectoryLabel,
     openDirectoryLaunchpad,
+    openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickDirectoryError,
     pickingDirectory,

@@ -275,12 +275,62 @@ describe("Sidebar", () => {
     fireEvent.click(settingsButton);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
 
+    // With no directory in context the New Thread button has no flyout, so it
+    // keeps a plain "New thread" tooltip for parity with its siblings. The
+    // tooltip/flyout live on the wrapper, so hover the wrapper, not the button.
     const newThreadButton = screen.getByRole("button", { name: "New thread" });
-    fireEvent.mouseEnter(newThreadButton);
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
     expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
-    fireEvent.mouseLeave(newThreadButton);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.mouseLeave(newThreadButton.parentElement as HTMLElement);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(newThreadButton);
+    expect(onCreateThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("reveals the New Thread flyout on hover when a directory is in context", async () => {
+    const onCreateThread = vi.fn(async () => undefined);
+    const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        newThreadDirectoryLabel="PwrAgnt"
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={onCreateThread}
+        onCreateThreadWithoutDirectory={onCreateThreadWithoutDirectory}
+        onOpenAutomations={() => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onOpenSettings={() => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const newThreadButton = screen.getByRole("button", { name: "New thread" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" });
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "New chat without a directory" })
+    );
+    expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
+    expect(onCreateThread).not.toHaveBeenCalled();
+
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" })
+    );
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 

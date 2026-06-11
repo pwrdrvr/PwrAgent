@@ -27,6 +27,7 @@ import {
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon, SearchIcon } from "../../icons";
+import { NewThreadButton } from "../chrome/NewThreadButton";
 import type {
   ArchiveThreadOptions,
   BrowseMode,
@@ -79,6 +80,9 @@ type SidebarProps = {
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
+  onCreateThreadWithoutDirectory?: () => Promise<void>;
+  /** Directory the default New Thread action resolves to (flyout label). */
+  newThreadDirectoryLabel?: string;
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -741,16 +745,12 @@ export function Sidebar(props: SidebarProps) {
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           </MastheadActionButton>
-          <MastheadActionButton
-            ariaLabel="New thread"
-            className="sidebar__icon-button"
-            disabled={Boolean(props.creatingThread)}
-            onClick={() => {
-              void props.onCreateThread();
-            }}
-          >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-          </MastheadActionButton>
+          <NewThreadButton
+            creatingThread={Boolean(props.creatingThread)}
+            directoryLabel={props.newThreadDirectoryLabel}
+            onCreateThread={() => props.onCreateThread()}
+            onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+          />
         </div>
       </header>
 

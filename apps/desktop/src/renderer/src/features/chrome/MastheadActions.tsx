@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
-import { AutomationsIcon, NewThreadIcon, SearchIcon, SettingsIcon } from "../../icons";
+import { AutomationsIcon, SearchIcon, SettingsIcon } from "../../icons";
+import { NewThreadButton } from "./NewThreadButton";
 
 /**
  * The window-level action buttons (Search / Automations / Settings / New
@@ -13,10 +14,13 @@ export type MastheadActionsProps = {
   settingsActive?: boolean;
   threadSearchActive?: boolean;
   creatingThread?: boolean;
+  /** Directory the default New Thread action resolves to (flyout label). */
+  newThreadDirectoryLabel?: string;
   onOpenAutomations?: () => void;
   onOpenSettings?: () => void;
   onToggleThreadSearch?: () => void;
   onCreateThread?: () => void | Promise<void>;
+  onCreateThreadWithoutDirectory?: () => void | Promise<void>;
 };
 
 export function MastheadActions(props: MastheadActionsProps): ReactElement {
@@ -51,17 +55,12 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
       >
         <SettingsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
       </button>
-      <button
-        type="button"
-        aria-label="New thread"
-        className="sidebar__icon-button"
-        disabled={Boolean(props.creatingThread)}
-        onClick={() => {
-          void props.onCreateThread?.();
-        }}
-      >
-        <NewThreadIcon size={16} strokeWidth={1.5} aria-hidden="true" />
-      </button>
+      <NewThreadButton
+        creatingThread={props.creatingThread}
+        directoryLabel={props.newThreadDirectoryLabel}
+        onCreateThread={() => props.onCreateThread?.()}
+        onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+      />
     </div>
   );
 }
