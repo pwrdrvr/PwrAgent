@@ -24,8 +24,9 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   const [isZoomedIn, setIsZoomedIn] = useState(false);
   const [focusedView, setFocusedView] = useState<DiffView | null>(null);
   const diff = props.detail.fileDiff;
+  const diffText = diff?.omittedReason ? "" : diff?.diff ?? "";
   const desktopApi = useDesktopApi();
-  const parsed = useMemo(() => parseUnifiedDiff(diff?.diff ?? ""), [diff?.diff]);
+  const parsed = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
   const eligibility = useMemo(() => getFocusedDiffEligibility(parsed), [parsed]);
   const hunkSummaries = useMemo(() => summarizeHunksForFocus(parsed), [parsed]);
   const fullView = useMemo(() => buildDiffView(parsed, { mode: "full" }), [parsed]);
@@ -33,10 +34,10 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   useEffect(() => {
     setIsZoomedIn(false);
     setFocusedView(null);
-  }, [diff?.diff, props.detail.path]);
+  }, [diffText, props.detail.path]);
 
   useEffect(() => {
-    if (!diff || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
+    if (!diff || diff.omittedReason || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
       return;
     }
 
@@ -45,7 +46,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     void desktopApi
       .analyzeFocusedDiff({
         filePath: props.detail.path,
-        diff: diff.diff,
+        diff: diffText,
         hunks: hunkSummaries
       })
       .then((response) => {
@@ -70,7 +71,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     return () => {
       active = false;
     };
-  }, [desktopApi, diff, eligibility.eligible, hunkSummaries, parsed, props.detail.path]);
+  }, [desktopApi, diff, diffText, eligibility.eligible, hunkSummaries, parsed, props.detail.path]);
 
   const defaultView = useMemo(() => {
     if (!eligibility.eligible) {
@@ -81,7 +82,24 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   }, [eligibility.eligible, focusedView, fullView, parsed]);
   const visibleView = isZoomedIn ? fullView : defaultView;
 
-  if (!diff || fullView.rows.length === 0) {
+  if (!diff) {
+    return null;
+  }
+
+  if (diff.omittedReason) {
+    return (
+      <div className="transcript-diff transcript-diff--omitted">
+        {props.detail.path && !props.compact ? (
+          <p className="transcript-diff__path" title={props.detail.path}>
+            {props.detail.path}
+          </p>
+        ) : null}
+        <p className="transcript-diff__omitted">{diff.omittedReason}</p>
+      </div>
+    );
+  }
+
+  if (fullView.rows.length === 0) {
     return null;
   }
 

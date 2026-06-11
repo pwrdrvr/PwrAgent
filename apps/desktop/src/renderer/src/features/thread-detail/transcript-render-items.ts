@@ -308,7 +308,7 @@ function isTerminalTurnFailureActivity(
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
+  return entry.details.some((detail) => Boolean(detail.fileDiff));
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

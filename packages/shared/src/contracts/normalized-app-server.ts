@@ -341,6 +341,8 @@ export type AppServerThreadFileDiff = {
   diff: string;
   additions: number;
   removals: number;
+  omittedReason?: string;
+  originalLength?: number;
 };
 
 export type AppServerThreadCommandDetail = {
