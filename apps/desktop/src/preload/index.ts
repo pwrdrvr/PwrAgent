@@ -347,6 +347,7 @@ import {
   THREAD_MIGRATION_RETRY_CHANNEL,
   THREAD_MIGRATION_START_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
+  WINDOW_FULLSCREEN_SYNC_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
@@ -904,6 +905,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_FOCUS_SYNC_CHANNEL, listener);
+    };
+  },
+  onWindowFullscreen: (
+    callback: (isFullScreen: boolean) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload?: { isFullScreen?: unknown },
+    ) => callback(Boolean(payload?.isFullScreen));
+    ipcRenderer.on(WINDOW_FULLSCREEN_SYNC_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_FULLSCREEN_SYNC_CHANNEL, listener);
     };
   },
   onOpenSettingsRequested: (

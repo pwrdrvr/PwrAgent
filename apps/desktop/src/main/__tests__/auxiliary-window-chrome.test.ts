@@ -67,6 +67,33 @@ afterEach(() => {
 });
 
 describe("auxiliary window chrome", () => {
+  it("trades native fullscreen for windowed zoom on macOS secondary windows", async () => {
+    setPlatform("darwin");
+    const { auxiliaryWindowChromeOptions } = await import(
+      "../auxiliary-window-chrome"
+    );
+
+    const options = auxiliaryWindowChromeOptions();
+
+    // Fullscreen off → the green traffic light reverts to a windowed
+    // Zoom. `maximizable` stays true so the button isn't greyed out.
+    expect(options.fullscreenable).toBe(false);
+    expect(options.maximizable).toBe(true);
+    expect(options.titleBarStyle).toBe("hiddenInset");
+  });
+
+  it("does not constrain fullscreen/maximize on Linux secondary windows", async () => {
+    setPlatform("linux");
+    const { auxiliaryWindowChromeOptions } = await import(
+      "../auxiliary-window-chrome"
+    );
+
+    const options = auxiliaryWindowChromeOptions();
+
+    expect(options.fullscreenable).toBeUndefined();
+    expect(options.maximizable).toBeUndefined();
+  });
+
   it("retries Linux raises after the window has had time to map", async () => {
     vi.useFakeTimers();
     setPlatform("linux");
