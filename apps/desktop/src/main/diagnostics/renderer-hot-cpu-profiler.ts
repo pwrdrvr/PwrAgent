@@ -507,6 +507,8 @@ export class RendererHotCpuProfiler {
     }
 
     this.samplingPausedForProfile = false;
+    this.previousCumulativeCpuSeconds = null;
+    this.previousSampleAtMs = null;
     if (this.stopped || this.intervalTimer || this.isTargetDestroyed()) {
       return;
     }

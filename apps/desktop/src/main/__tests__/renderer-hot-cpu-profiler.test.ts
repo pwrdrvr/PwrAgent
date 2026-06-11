@@ -317,7 +317,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(0, 100),
       createMetric(4, 100.5),
       createMetric(4, 101),
-      createMetric(0, 101),
+      createMetric(0, 110),
     ];
     const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0, 101)]);
     const profiler = new RendererHotCpuProfiler({
@@ -355,6 +355,18 @@ describe("RendererHotCpuProfiler", () => {
 
       await vi.advanceTimersByTimeAsync(config.intervalMs);
       expect(getAppMetrics).toHaveBeenCalledTimes(4);
+
+      const samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(samples.at(-1)).toMatchObject({
+        cpuPercent: 0,
+        cumulativeCpuSeconds: 110,
+        electronCpuPercent: 0,
+      });
+      expect(samples.at(-1)).not.toHaveProperty("cumulativeCpuDeltaSeconds");
+      expect(samples.at(-1)).not.toHaveProperty("wallDeltaSeconds");
     } finally {
       await profiler.stop("test-complete");
     }
