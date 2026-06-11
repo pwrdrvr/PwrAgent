@@ -111,6 +111,38 @@ describe("PullRequestsPanel", () => {
     expect(screen.queryByText(/Checks/)).not.toBeInTheDocument();
   });
 
+  it("orders PRs newest first by number", () => {
+    render(
+      <PullRequestsPanel
+        thread={threadWithPrs([
+          {
+            provider: "github.com",
+            number: 386,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "closed",
+            lifecycleState: "closed",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/386",
+          },
+          {
+            provider: "github.com",
+            number: 691,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "failing",
+            checkState: "failing",
+            lifecycleState: "open",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/691",
+          },
+        ])}
+      />,
+    );
+
+    const cards = screen.getAllByRole("listitem");
+    expect(within(cards[0]!).getByText("#691")).toBeInTheDocument();
+    expect(within(cards[1]!).getByText("#386")).toBeInTheDocument();
+  });
+
   it("renders an empty state when there are no PRs", () => {
     render(<PullRequestsPanel thread={baseThread} />);
 

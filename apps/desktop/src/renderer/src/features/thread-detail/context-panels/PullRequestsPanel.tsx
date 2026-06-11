@@ -19,7 +19,13 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  * status pills (lifecycle, merge conflict, checks), above the title + repo.
  */
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
-  const prs = props.thread.prs ?? [];
+  // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
+  // number (monotonic with creation within a repo); for the rare multi-repo
+  // thread, group by repo first so the numbers stay comparable.
+  const prs = [...(props.thread.prs ?? [])].sort((left, right) => {
+    const repoOrder = repositoryLabel(left).localeCompare(repositoryLabel(right));
+    return repoOrder !== 0 ? repoOrder : right.number - left.number;
+  });
 
   return (
     <section className="context-panel__section">
