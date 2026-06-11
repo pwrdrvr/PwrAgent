@@ -316,7 +316,9 @@ function isTerminalTurnFailureActivity(
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
+  return entry.details.some((detail) =>
+    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason)
+  );
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

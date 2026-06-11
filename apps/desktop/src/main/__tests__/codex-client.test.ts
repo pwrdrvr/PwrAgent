@@ -2621,6 +2621,198 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves add and delete patches that start with unified diff metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-metadata-patches", {
+      thread: {
+        id: "thread-metadata-patches",
+        turns: [
+          {
+            id: "turn-metadata-patches",
+            status: "completed",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "fileChange",
+                id: "item-metadata-patches",
+                status: "completed",
+                changes: [
+                  {
+                    path: "/repo/metadata-added-file.ts",
+                    kind: {
+                      type: "add"
+                    },
+                    diff: [
+                      "Index: metadata-added-file.ts",
+                      "===================================================================",
+                      "new file mode 100644",
+                      "--- /dev/null",
+                      "+++ b/metadata-added-file.ts",
+                      "@@ -0,0 +1,2 @@",
+                      "+metadata added one",
+                      "+metadata added two"
+                    ].join("\n")
+                  },
+                  {
+                    path: "/repo/metadata-deleted-file.ts",
+                    kind: {
+                      type: "delete"
+                    },
+                    diff: [
+                      "Index: metadata-deleted-file.ts",
+                      "===================================================================",
+                      "deleted file mode 100644",
+                      "--- a/metadata-deleted-file.ts",
+                      "+++ /dev/null",
+                      "@@ -1,2 +0,0 @@",
+                      "-metadata deleted one",
+                      "-metadata deleted two"
+                    ].join("\n")
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-metadata-patches"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "activity",
+        id: "activity-item-metadata-patches",
+        summary: "Edited 2 files, +2, -2",
+        createdAt: 1_763_500_150_000,
+        status: "completed",
+        turn: {
+          id: "turn-metadata-patches",
+          startedAt: 1_763_500_150_000,
+          status: "completed"
+        },
+        details: [
+          expect.objectContaining({
+            label: "Add metadata-added-file.ts",
+            fileDiff: {
+              kind: "add",
+              diff: [
+                "Index: metadata-added-file.ts",
+                "===================================================================",
+                "new file mode 100644",
+                "--- /dev/null",
+                "+++ b/metadata-added-file.ts",
+                "@@ -0,0 +1,2 @@",
+                "+metadata added one",
+                "+metadata added two"
+              ].join("\n"),
+              additions: 2,
+              removals: 0
+            }
+          }),
+          expect.objectContaining({
+            label: "Delete metadata-deleted-file.ts",
+            fileDiff: {
+              kind: "delete",
+              diff: [
+                "Index: metadata-deleted-file.ts",
+                "===================================================================",
+                "deleted file mode 100644",
+                "--- a/metadata-deleted-file.ts",
+                "+++ /dev/null",
+                "@@ -1,2 +0,0 @@",
+                "-metadata deleted one",
+                "-metadata deleted two"
+              ].join("\n"),
+              additions: 0,
+              removals: 2
+            }
+          })
+        ]
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("omits giant raw file-change payloads from inline transcript diffs", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const rawJsonl = [
+      '{"backend":"codex","captureId":"large","method":"initialize"}',
+      '{"backend":"codex","captureId":"large","method":"thread/read"}',
+      `{"backend":"codex","captureId":"large","raw":"${"x".repeat(530_000)}"}`
+    ].join("\n");
+
+    MockTransport.readThreadResultByThreadId.set("thread-large-raw-delete", {
+      thread: {
+        id: "thread-large-raw-delete",
+        turns: [
+          {
+            id: "turn-large-raw-delete",
+            status: "completed",
+            startedAt: 1_763_500_200,
+            items: [
+              {
+                type: "fileChange",
+                id: "item-large-raw-delete",
+                status: "completed",
+                changes: [
+                  {
+                    path: "/repo/apps/desktop/e2e/fixtures/codex-todo-list/raw.capture.jsonl",
+                    kind: {
+                      type: "delete"
+                    },
+                    diff: rawJsonl
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-large-raw-delete"
+    });
+
+    const fileDiff = replay.entries[0]?.type === "activity"
+      ? replay.entries[0].details[0]?.fileDiff
+      : undefined;
+
+    expect(replay.entries[0]).toEqual(
+      expect.objectContaining({
+        type: "activity",
+        summary: "Edited 1 file, +0, -3"
+      })
+    );
+    expect(fileDiff).toEqual(
+      expect.objectContaining({
+        kind: "delete",
+        diff: "",
+        additions: 0,
+        removals: 3,
+        omittedReason: expect.stringContaining("Large file diff omitted"),
+        originalLength: rawJsonl.length
+      })
+    );
+    expect(fileDiff?.omittedReason).toContain("518 KB");
+
+    await client.close();
+  });
+
   it("extracts thread status from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-idle-status", {
