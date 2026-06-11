@@ -3387,7 +3387,7 @@ describe("useThreadNavigation", () => {
       executionMode: "default",
       directoryKind: "directory",
       directoryLabel: "app",
-      directoryPath: "/repo/app",
+      directoryPath: "/repo/app/.worktrees/parent/app",
       branchName: "feature/parent",
       workMode: "worktree",
       model: "gpt-5.5",
@@ -3413,6 +3413,85 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.messagingBindings).toBeUndefined();
     expect(result.current.selectedThread?.prs).toBeUndefined();
     expect(result.current.selectedThread?.reactions).toBeUndefined();
+  });
+
+  it("forks detached worktree parents from the parent worktree path", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Detached parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      observedGitBranch: "HEAD",
+      linkedDirectories: [
+        {
+          id: "/repo/app/.worktrees/parent/app",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/app/.worktrees/parent/app",
+          kind: "worktree" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const forkThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      sourceThreadId: "thread-parent",
+      threadId: "thread-fork",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+      linkedDirectory: {
+        id: "/repo/app/.worktrees/thread-fork/app",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/thread-fork/app",
+        kind: "worktree" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      forkThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.forkThread(parentThread, "new-worktree");
+    });
+
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        branchName: expect.any(String),
+      }),
+    );
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryPath: "/repo/app/.worktrees/parent/app",
+        workMode: "worktree",
+      }),
+    );
   });
 
   it("opens local sub-thread launchpads against the parent's local checkout", async () => {
@@ -3627,7 +3706,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "subthread:codex:thread-parent:new-worktree",
       patch: expect.objectContaining({
         workMode: "worktree",
-        directoryPath: "/repo/app",
+        directoryPath: "/repo/app/.worktrees/parent/app",
         branchName: "feature/parent",
         parentThreadId: "thread-parent",
       }),

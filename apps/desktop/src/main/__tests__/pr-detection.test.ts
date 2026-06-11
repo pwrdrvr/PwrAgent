@@ -18,27 +18,12 @@ afterEach(async () => {
 });
 
 describe("detectPullRequestsForThread", () => {
-  it("uses local feature branches pointing at detached HEAD", async () => {
+  it("does not use local feature branches pointing at detached HEAD", async () => {
     const repo = await createDetachedRepoWithFeatureBranchAtHead(
       "fix/messaging-nonblocking-startup",
     );
-    const fetchedBranches: string[] = [];
     const fetcher = {
-      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) => {
-        fetchedBranches.push(branch);
-        if (branch !== "fix/messaging-nonblocking-startup") {
-          return [];
-        }
-        return [
-          {
-            number: 271,
-            org: "pwrdrvr",
-            repo: "PwrAgent",
-            state: "passing",
-            url: `https://github.com/pwrdrvr/PwrAgent/pull/${branch}`,
-          },
-        ];
-      }),
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
     } as unknown as GithubPrFetcher;
 
     const prs = await detectPullRequestsForThread({
@@ -47,10 +32,8 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(fetchedBranches).toEqual(
-      expect.arrayContaining(["fix/messaging-nonblocking-startup"]),
-    );
-    expect(prs).toHaveLength(1);
+    expect(prs).toEqual([]);
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 
   it("does not use detached HEAD at the default branch tip for PR lookup", async () => {
@@ -148,27 +131,12 @@ describe("detectPullRequestsForThread", () => {
     expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 
-  it("preserves feature branch lookup when fallback default candidates are not at HEAD", async () => {
+  it("does not infer PR lookup branches for detached HEAD even when feature branches point at it", async () => {
     const repo = await createDetachedRepoWithDevelopAndFeatureAtHead(
       "fix/detached-feature-pr",
     );
-    const fetchedBranches: string[] = [];
     const fetcher = {
-      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) => {
-        fetchedBranches.push(branch);
-        if (branch !== "fix/detached-feature-pr") {
-          return [];
-        }
-        return [
-          {
-            number: 393,
-            org: "pwrdrvr",
-            repo: "PwrAgent",
-            state: "passing",
-            url: "https://github.com/pwrdrvr/PwrAgent/pull/393",
-          },
-        ];
-      }),
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
     } as unknown as GithubPrFetcher;
 
     const prs = await detectPullRequestsForThread({
@@ -177,11 +145,8 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(fetchedBranches).toEqual(
-      expect.arrayContaining(["develop", "fix/detached-feature-pr"]),
-    );
-    expect(fetchedBranches).not.toEqual(["develop"]);
-    expect(prs).toHaveLength(1);
+    expect(prs).toEqual([]);
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 });
 

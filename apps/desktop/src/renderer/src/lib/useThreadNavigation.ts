@@ -112,11 +112,18 @@ function selectThreadWorkspace(
   const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
   const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
   const preferred = worktree ?? local;
+  const namedBranch =
+    thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
+      ? thread.observedGitBranch
+      : thread.gitBranch && thread.gitBranch !== "HEAD"
+        ? thread.gitBranch
+        : undefined;
 
   if (mode === "new-worktree") {
-    const repository = preferred?.path ?? thread.projectKey;
+    const repository =
+      worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey;
     return {
-      branchName: thread.observedGitBranch ?? thread.gitBranch,
+      branchName: namedBranch,
       directoryKind: repository ? "directory" : "workspace",
       directoryLabel: preferred?.label ?? thread.title,
       directoryPath: repository,
@@ -136,9 +143,7 @@ function selectThreadWorkspace(
         : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
     workMode: "local",
-    ...(mode === "same-worktree"
-      ? { branchName: thread.observedGitBranch ?? thread.gitBranch }
-      : {}),
+    ...(mode === "same-worktree" && namedBranch ? { branchName: namedBranch } : {}),
   };
 }
 
