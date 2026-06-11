@@ -54,11 +54,14 @@ function repositoryLabel(pr: PrSummary): string {
 }
 
 function statusLabel(pr: PrSummary): string {
+  const lifecycleState = resolveLifecycleState(pr);
   const parts: string[] = [];
-  if (pr.lifecycleState === "merged") {
+  if (lifecycleState === "merged") {
     parts.push("Merged");
-  } else if (pr.lifecycleState === "closed") {
+    return parts.join(" · ");
+  } else if (lifecycleState === "closed") {
     parts.push("Closed");
+    return parts.join(" · ");
   } else if (pr.reviewState === "draft") {
     parts.push("Draft");
   } else {
@@ -69,6 +72,16 @@ function statusLabel(pr: PrSummary): string {
   }
   parts.push(checkStateLabel(resolveCheckState(pr)));
   return parts.join(" · ");
+}
+
+function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
+  if (pr.lifecycleState) {
+    return pr.lifecycleState;
+  }
+  if (pr.state === "merged" || pr.state === "closed") {
+    return pr.state;
+  }
+  return "open";
 }
 
 function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {

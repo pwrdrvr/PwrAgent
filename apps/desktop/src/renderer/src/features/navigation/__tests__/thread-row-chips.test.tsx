@@ -363,4 +363,37 @@ describe("ThreadRow chip flow", () => {
       "pwrdrvr/PwrAgent#123 — ready for review · checks passing",
     );
   });
+
+  it("renders merged PRs as terminal purple chips without unknown check status", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 542,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            lifecycleState: "merged",
+            checkState: "unknown",
+            state: "unknown",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/542",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: "Open pwrdrvr/PwrAgent#542 (merged) in browser",
+    });
+    expect(prChip).toHaveClass("pr-chip--merged");
+    expect(prChip).not.toHaveClass("pr-chip--unknown");
+
+    fireEvent.mouseEnter(prChip);
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "pwrdrvr/PwrAgent#542 — merged",
+    );
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("status unknown");
+  });
 });

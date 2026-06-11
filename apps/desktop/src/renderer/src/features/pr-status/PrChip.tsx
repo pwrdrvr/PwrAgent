@@ -23,7 +23,7 @@ export function PrChip(props: PrChipProps) {
     : `#${pr.number}`;
   const identity = `${pr.org}/${pr.repo}#${pr.number}`;
   const title = pr.title?.trim();
-  const checkState = resolveCheckState(pr);
+  const chipState = resolveChipState(pr);
   const status = prStatusLabel(pr);
   const tooltip = title
     ? `${title}\n${identity} — ${status}`
@@ -46,7 +46,7 @@ export function PrChip(props: PrChipProps) {
         role="button"
         tabIndex={0}
         aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
-        className={`pr-chip pr-chip--${checkState}`}
+        className={`pr-chip pr-chip--${chipState}`}
         data-pr-chip=""
         onBlur={tooltipController.hide}
         onClick={handleActivate}
@@ -81,11 +81,14 @@ export function PrChip(props: PrChipProps) {
 }
 
 function prStatusLabel(pr: PrSummary): string {
+  const lifecycleState = resolveLifecycleState(pr);
   const parts: string[] = [];
-  if (pr.lifecycleState === "merged") {
+  if (lifecycleState === "merged") {
     parts.push("merged");
-  } else if (pr.lifecycleState === "closed") {
+    return parts.join(" · ");
+  } else if (lifecycleState === "closed") {
     parts.push("closed without merge");
+    return parts.join(" · ");
   } else if (pr.reviewState === "draft") {
     parts.push("draft");
   } else {
@@ -98,6 +101,26 @@ function prStatusLabel(pr: PrSummary): string {
 
   parts.push(checkStateTooltipLabel(resolveCheckState(pr)));
   return parts.join(" · ");
+}
+
+function resolveChipState(
+  pr: PrSummary,
+): NonNullable<PrSummary["checkState"]> | "merged" | "closed" {
+  const lifecycleState = resolveLifecycleState(pr);
+  if (lifecycleState === "merged" || lifecycleState === "closed") {
+    return lifecycleState;
+  }
+  return resolveCheckState(pr);
+}
+
+function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
+  if (pr.lifecycleState) {
+    return pr.lifecycleState;
+  }
+  if (pr.state === "merged" || pr.state === "closed") {
+    return pr.state;
+  }
+  return "open";
 }
 
 function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
