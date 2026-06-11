@@ -6996,6 +6996,73 @@ script = "pnpm install"
     await registry.close();
   });
 
+  it("uses submitted launchpad model settings when materializing Codex review launchpads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "review/start"],
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      reviewTarget: { type: "baseBranch", branch: "main" },
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "/review main",
+        workMode: "local",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay).toMatchObject({
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+
+    await registry.close();
+  });
+
   it("creates a scratch workspace for Codex thread creation when cwd is omitted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
@@ -10630,10 +10697,6 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
-      model: "grok-4.20-reasoning",
-      reasoningEffort: undefined,
-      serviceTier: undefined,
-      fastMode: undefined,
     });
 
     await registry.close();
@@ -17144,10 +17207,6 @@ command = "pnpm dev"
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
-        model: "gpt-5.5",
-        reasoningEffort: "medium",
-        serviceTier: undefined,
-        fastMode: undefined,
       });
       const overlay = await overlayStore.getThreadOverlayState({
         backend: "codex",

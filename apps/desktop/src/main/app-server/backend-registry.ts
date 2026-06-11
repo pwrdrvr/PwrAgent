@@ -2094,6 +2094,15 @@ type ModelSettings = {
   fastMode?: boolean;
 };
 
+function hasExplicitModelSettings(settings: ModelSettings): boolean {
+  return (
+    settings.model !== undefined ||
+    settings.reasoningEffort !== undefined ||
+    settings.serviceTier !== undefined ||
+    settings.fastMode !== undefined
+  );
+}
+
 type CodexFastModeMismatchWarning = {
   threadId: string;
   turnId: string;
@@ -6052,7 +6061,9 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
-    const modelSettings = await this.resolveModelSettings(params.backend, params);
+    const modelSettings = hasExplicitModelSettings(params)
+      ? await this.resolveModelSettings(params.backend, params)
+      : {};
 
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     try {
@@ -6146,12 +6157,7 @@ export class DesktopBackendRegistry {
       reviewSubAgentRecord,
     );
     await this.persistReviewSubAgent(reviewSubAgentRecord);
-    if (
-      modelSettings.model !== undefined ||
-      modelSettings.reasoningEffort !== undefined ||
-      modelSettings.serviceTier !== undefined ||
-      modelSettings.fastMode !== undefined
-    ) {
+    if (hasExplicitModelSettings(modelSettings)) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
         threadId: result.threadId,
@@ -8294,6 +8300,10 @@ export class DesktopBackendRegistry {
           threadId: startThreadResponse.threadId,
           target: request.reviewTarget,
           delivery: "inline",
+          model: launchpad.model,
+          reasoningEffort: launchpad.reasoningEffort,
+          serviceTier: launchpad.serviceTier,
+          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         });
         turnId = reviewResponse.turnId;
       } catch (error) {
