@@ -801,11 +801,29 @@ SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
 
 function tableColumnExists(
   db: BetterSqlite3.Database,
-  tableName: string,
+  tableName: "app_runtime_instances" | "pr_lookup_cache" | "pr_status_cache",
   columnName: string,
 ): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name: string;
-  }>;
+  const rows = readTableInfo(db, tableName);
   return rows.some((row) => row.name === columnName);
+}
+
+function readTableInfo(
+  db: BetterSqlite3.Database,
+  tableName: "app_runtime_instances" | "pr_lookup_cache" | "pr_status_cache",
+): Array<{ name: string }> {
+  switch (tableName) {
+    case "app_runtime_instances":
+      return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_lookup_cache":
+      return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_cache":
+      return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+  }
 }
