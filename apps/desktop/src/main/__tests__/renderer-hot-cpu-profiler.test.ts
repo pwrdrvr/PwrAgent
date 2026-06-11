@@ -225,6 +225,67 @@ describe("RendererHotCpuProfiler", () => {
     );
   });
 
+  it("waits for an in-flight duration profile stop before stopping the monitor", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path);
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const { target } = createTarget();
+    const profileWritten = deferred();
+    const onProfileWritten = vi.fn(async () => {
+      await profileWritten.promise;
+    });
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.5),
+      createMetric(4, 103),
+    ];
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+      onProfileWritten,
+    });
+
+    await profiler.start();
+    await vi.waitFor(() => {
+      expect(onProfileWritten).toHaveBeenCalledTimes(1);
+    });
+
+    let stopResolved = false;
+    const stopPromise = profiler.stop("test-complete").then(() => {
+      stopResolved = true;
+    });
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+
+    profileWritten.resolve();
+    await stopPromise;
+    expect(stopResolved).toBe(true);
+  });
+
   it("waits for the configured delay before sampling", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);

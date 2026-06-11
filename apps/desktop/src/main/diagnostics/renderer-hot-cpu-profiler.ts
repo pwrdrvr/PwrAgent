@@ -85,6 +85,7 @@ export class RendererHotCpuProfiler {
   private previousSampleAtMs: number | null = null;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
+  private stopProfilePromise: Promise<void> | null = null;
   private profiling = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private stopped = false;
@@ -153,7 +154,7 @@ export class RendererHotCpuProfiler {
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
 
-    if (this.profiling) {
+    if (this.profiling || this.stopProfilePromise) {
       await this.stopProfile(reason);
     }
 
@@ -404,10 +405,24 @@ export class RendererHotCpuProfiler {
   }
 
   private async stopProfile(reason: string): Promise<void> {
+    if (this.stopProfilePromise) {
+      await this.stopProfilePromise;
+      return;
+    }
+
     if (!this.profiling) {
       return;
     }
 
+    this.stopProfilePromise = this.stopProfileInner(reason);
+    try {
+      await this.stopProfilePromise;
+    } finally {
+      this.stopProfilePromise = null;
+    }
+  }
+
+  private async stopProfileInner(reason: string): Promise<void> {
     this.profiling = false;
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
