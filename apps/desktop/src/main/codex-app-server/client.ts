@@ -170,6 +170,10 @@ type RawCodexThreadListPage = {
   threads: RawCodexThreadSummary[];
 };
 
+type CodexThreadResumePayload = CodexThreadResumeParams & {
+  dynamicTools?: CodexDynamicToolSpec[] | null;
+};
+
 type SkillCatalogEntry = {
   commands?: AppServerAvailableCommandSummary[];
   cwd?: string;
@@ -4521,8 +4525,9 @@ function buildThreadResumePayloads(params: {
   reasoningEffort?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-}): CodexThreadResumeParams[] {
-  const base: CodexThreadResumeParams = {
+  dynamicTools?: CodexDynamicToolSpec[];
+}): CodexThreadResumePayload[] {
+  const base: CodexThreadResumePayload = {
     threadId: params.threadId,
     persistExtendedHistory: false,
   };
@@ -4560,6 +4565,16 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
+  }
+
+  if (params.dynamicTools?.length) {
+    return [
+      {
+        ...base,
+        dynamicTools: params.dynamicTools,
+      },
+      base,
+    ];
   }
 
   return [base];
@@ -5599,6 +5614,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -5625,6 +5641,7 @@ export class CodexAppServerClient {
           reasoningEffort: params.reasoningEffort,
           fastMode: params.fastMode,
           codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+          dynamicTools: params.dynamicTools,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       }).catch((error: unknown) => {

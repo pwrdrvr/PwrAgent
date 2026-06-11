@@ -187,6 +187,7 @@ import {
   buildMonitorDelegationPrompt,
   buildTaskMonitorDynamicToolErrorResponse,
   buildTaskMonitorDynamicToolSpecs,
+  findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
   normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
@@ -421,6 +422,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -2842,6 +2844,15 @@ function resolveGrokApiKeyForLiveClient(): string | undefined {
   }
 }
 
+function buildCodexParentDynamicToolSpecs(
+  agentToolCatalogs: Array<{ dynamicTools: CodexDynamicToolSpec[] }> = [],
+): CodexDynamicToolSpec[] {
+  return [
+    ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
+    ...buildTaskMonitorDynamicToolSpecs("parent"),
+  ];
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -5261,10 +5272,7 @@ export class DesktopBackendRegistry {
     });
     const resolvedDynamicTools =
       backend === "codex"
-        ? [
-            ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
-            ...buildTaskMonitorDynamicToolSpecs("parent"),
-          ]
+        ? buildCodexParentDynamicToolSpecs(agentToolCatalogs)
         : undefined;
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
@@ -5824,6 +5832,12 @@ export class DesktopBackendRegistry {
           ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+              const agentToolCatalogs = resolveAgentToolCatalogs({
+                agent: overlay?.agent,
+                automationInspectionHandler: this.automationInspectionHandler,
+                messagingHandler: this.messagingHandler,
+                threadInspectionHandler: this.threadInspectionHandler,
+              });
               const started = await client.startTurn({
                 threadId: params.threadId,
                 input,
@@ -5835,6 +5849,7 @@ export class DesktopBackendRegistry {
                 ...(overlay?.codexEnvironmentRuntime
                   ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                   : {}),
+                dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
               });
               activeTurnMode = effectiveMode;
               return started;
@@ -10832,6 +10847,20 @@ export class DesktopBackendRegistry {
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
     }
+    const unsupportedSessionReference = findUnsupportedCodexExecSessionReference({
+      task,
+      monitorContext: args.monitorContext,
+    });
+    if (unsupportedSessionReference) {
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "invalid_arguments",
+        [
+          `Task monitor delegations cannot use a parent-scoped ${unsupportedSessionReference} as the local-command polling handle.`,
+          "Keep polling that already-started Codex exec session in the parent turn, or create a fresh monitor delegation with the command text, cwd, terminal criteria, and desired stdout/stderr capture-file paths so the monitor child starts the command in its own session.",
+        ].join(" "),
+      );
+    }
 
     const monitorId = `monitor-${randomUUID()}`;
     const pollIntervalSeconds =
@@ -11050,18 +11079,31 @@ export class DesktopBackendRegistry {
         ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
         : {}),
     });
-    const turn = await client.startTurn({
-      threadId: thread.threadId,
-      input: [{ type: "text", text: params.prompt }],
-      ...(cwd ? { cwd } : {}),
-      approvalPolicy: modeSettings.approvalPolicy,
-      model: params.preferredModel,
-      reasoningEffort: params.preferredReasoningEffort,
-      sandbox: modeSettings.sandbox,
-      ...(overlay?.codexEnvironmentRuntime
-        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-        : {}),
-    });
+    this.reservedCodexStartThreadIds.add(thread.threadId);
+    let turn: { threadId: string; turnId: string };
+    try {
+      turn = await client.startTurn({
+        threadId: thread.threadId,
+        input: [{ type: "text", text: params.prompt }],
+        ...(cwd ? { cwd } : {}),
+        approvalPolicy: modeSettings.approvalPolicy,
+        model: params.preferredModel,
+        reasoningEffort: params.preferredReasoningEffort,
+        sandbox: modeSettings.sandbox,
+        ...(overlay?.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+          : {}),
+      });
+      this.activeTurnKeys.add(
+        buildActiveTurnKey("codex", turn.threadId, turn.turnId),
+      );
+      this.activeCodexTurnModes.set(
+        buildActiveTurnModeKey(turn.threadId, turn.turnId),
+        executionMode,
+      );
+    } finally {
+      this.reservedCodexStartThreadIds.delete(thread.threadId);
+    }
 
     backendRegistryLog.info("managed task monitor turn started", {
       executionMode,
