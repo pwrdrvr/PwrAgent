@@ -248,7 +248,6 @@ type NormalizedTokenUsage = {
 
 type PricingCatalogEntry = {
   cachedInputUsdPerMillion: number;
-  context: "short" | "long";
   displayModel: string;
   displayTier: string;
   inputUsdPerMillion: number;
@@ -260,7 +259,6 @@ type PricingCatalogEntry = {
 type UsageCostEstimate = {
   cachedInputUsd: number;
   cachedInputUsdPerMillion: number;
-  context: "short" | "long";
   displayName: string;
   inputUsdPerMillion: number;
   model: string;
@@ -280,7 +278,6 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.5",
     displayTier: "Standard",
     serviceTier: "standard",
-    context: "short",
     inputUsdPerMillion: 5,
     cachedInputUsdPerMillion: 0.5,
     outputUsdPerMillion: 30,
@@ -288,19 +285,8 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
     model: "gpt-5.5",
     displayModel: "GPT-5.5",
-    displayTier: "Standard long context",
-    serviceTier: "standard",
-    context: "long",
-    inputUsdPerMillion: 10,
-    cachedInputUsdPerMillion: 1,
-    outputUsdPerMillion: 45,
-  },
-  {
-    model: "gpt-5.5",
-    displayModel: "GPT-5.5",
     displayTier: "Fast (Priority)",
     serviceTier: "priority",
-    context: "short",
     inputUsdPerMillion: 12.5,
     cachedInputUsdPerMillion: 1.25,
     outputUsdPerMillion: 75,
@@ -310,7 +296,6 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.4",
     displayTier: "Standard",
     serviceTier: "standard",
-    context: "short",
     inputUsdPerMillion: 2.5,
     cachedInputUsdPerMillion: 0.25,
     outputUsdPerMillion: 15,
@@ -318,19 +303,8 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
     model: "gpt-5.4",
     displayModel: "GPT-5.4",
-    displayTier: "Standard long context",
-    serviceTier: "standard",
-    context: "long",
-    inputUsdPerMillion: 5,
-    cachedInputUsdPerMillion: 0.5,
-    outputUsdPerMillion: 22.5,
-  },
-  {
-    model: "gpt-5.4",
-    displayModel: "GPT-5.4",
     displayTier: "Fast (Priority)",
     serviceTier: "priority",
-    context: "short",
     inputUsdPerMillion: 5,
     cachedInputUsdPerMillion: 0.5,
     outputUsdPerMillion: 30,
@@ -340,7 +314,6 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.4 mini",
     displayTier: "Standard",
     serviceTier: "standard",
-    context: "short",
     inputUsdPerMillion: 0.75,
     cachedInputUsdPerMillion: 0.075,
     outputUsdPerMillion: 4.5,
@@ -350,7 +323,6 @@ const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.4 mini",
     displayTier: "Fast (Priority)",
     serviceTier: "priority",
-    context: "short",
     inputUsdPerMillion: 1.5,
     cachedInputUsdPerMillion: 0.15,
     outputUsdPerMillion: 9,
@@ -380,7 +352,6 @@ export function buildTokenUsageActivityEntry(params: {
   const cost = estimateUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
-    inputTokens,
     model: params.model,
     outputTokens,
     serviceTier: params.serviceTier,
@@ -471,7 +442,6 @@ export function buildTokenUsageActivityEntry(params: {
       kind: "read",
       label: `Cost unavailable: no local pricing entry for ${formatUnpricedModelName({
         fastMode: params.fastMode,
-        inputTokens,
         model: params.model,
         serviceTier: params.serviceTier,
       })}`,
@@ -585,7 +555,6 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
 function estimateUsageCost(params: {
   cachedInputTokens: number;
   fastMode?: boolean;
-  inputTokens: number;
   model?: string;
   outputTokens: number;
   serviceTier?: string;
@@ -599,12 +568,10 @@ function estimateUsageCost(params: {
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
   });
-  const context = resolvePricingContext(params.inputTokens);
   const entry = PRICING_CATALOG.find(
     (candidate) =>
       candidate.model === model &&
-      candidate.serviceTier === serviceTier &&
-      candidate.context === context,
+      candidate.serviceTier === serviceTier,
   );
   if (!entry) {
     return undefined;
@@ -612,8 +579,7 @@ function estimateUsageCost(params: {
   const standardEntry = PRICING_CATALOG.find(
     (candidate) =>
       candidate.model === model &&
-      candidate.serviceTier === "standard" &&
-      candidate.context === context,
+      candidate.serviceTier === "standard",
   );
   const uncachedInputUsd =
     (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000;
@@ -628,7 +594,6 @@ function estimateUsageCost(params: {
   return {
     cachedInputUsd,
     cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
-    context: entry.context,
     displayName: `${entry.displayModel} ${entry.displayTier}`,
     inputUsdPerMillion: entry.inputUsdPerMillion,
     model,
@@ -668,10 +633,6 @@ function resolvePricingServiceTier(params: {
     return "priority";
   }
   return undefined;
-}
-
-function resolvePricingContext(inputTokens: number): "short" | "long" {
-  return inputTokens > 128_000 ? "long" : "short";
 }
 
 function rateMultiplier(rate: number, standardRate: number | undefined): number | undefined {
@@ -753,19 +714,16 @@ function formatMultiplier(multiplier: number): string {
 
 function formatUnpricedModelName(params: {
   fastMode?: boolean;
-  inputTokens: number;
   model: string;
   serviceTier?: string;
 }): string {
   const serviceTier = resolvePricingServiceTier(params);
-  const context = resolvePricingContext(params.inputTokens);
   return [
     params.model,
     serviceTier === "priority" ? "Fast/Priority" : undefined,
     serviceTier === undefined && params.serviceTier
       ? `service tier ${params.serviceTier}`
       : undefined,
-    context === "long" ? "long context" : undefined,
   ]
     .filter(Boolean)
     .join(" ");
