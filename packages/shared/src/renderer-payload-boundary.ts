@@ -75,7 +75,9 @@ function sanitizeRendererPayloadValue(
   const sanitized: Record<string, unknown> = {};
   seen.set(value, sanitized);
   for (const [key, entry] of Object.entries(input)) {
-    const next = sanitizeRendererPayloadValue(entry, `${path}.${key}`, seen);
+    const next = isRendererImageUrlField(input, key, entry)
+      ? entry
+      : sanitizeRendererPayloadValue(entry, `${path}.${key}`, seen);
     sanitized[key] = next;
     if (next !== entry) {
       changed = true;
@@ -87,4 +89,36 @@ function sanitizeRendererPayloadValue(
     return value;
   }
   return sanitized;
+}
+
+function isRendererImageUrlField(
+  record: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const type = typeof record.type === "string" ? record.type : undefined;
+  if (key === "url" && type === "image") {
+    return isRendererImageUrl(value);
+  }
+  if (
+    key === "image_url" &&
+    (type === "image" || type === "input_image" || type === "image_url")
+  ) {
+    return isRendererImageUrl(value);
+  }
+
+  return false;
+}
+
+function isRendererImageUrl(value: string): boolean {
+  return (
+    value.startsWith("data:image/") ||
+    value.startsWith("file://") ||
+    value.startsWith("pwragent-image://") ||
+    /^https?:\/\/.+/i.test(value)
+  );
 }
