@@ -429,10 +429,16 @@ export function buildNavigationSnapshotHash(params: {
       // the next snapshot tick computes an identical hash, gets marked
       // unchanged, and the renderer keeps the stale empty thread.prs.
       prs: (thread.prs ?? []).map((pr) => ({
+        provider: pr.provider,
         number: pr.number,
         org: pr.org,
         repo: pr.repo,
+        title: pr.title ?? null,
         state: pr.state,
+        checkState: pr.checkState ?? null,
+        lifecycleState: pr.lifecycleState ?? null,
+        reviewState: pr.reviewState ?? null,
+        mergeState: pr.mergeState ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in

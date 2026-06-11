@@ -1,5 +1,5 @@
 import type { AutomationRunOutputDecision } from "./automations";
-import type { PullRequestProvider } from "./navigation";
+import type { PrSummary } from "./navigation";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
@@ -1164,21 +1164,7 @@ export type AppServerNotification =
       method: "thread/pullRequests/updated";
       params: {
         threadId: string;
-        prs: Array<{
-          provider: PullRequestProvider;
-          number: number;
-          org: string;
-          repo: string;
-          state:
-            | "merged"
-            | "failing"
-            | "passing"
-            | "draft"
-            | "pending"
-            | "closed"
-            | "unknown";
-          url: string;
-        }>;
+        prs: PrSummary[];
       };
     }
   /**
