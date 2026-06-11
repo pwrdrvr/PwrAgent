@@ -107,8 +107,67 @@ describe("buildTokenUsageActivityEntry", () => {
       "Uncached input cost: 19,549 tokens at $5.00/M = $0.098",
       "Cached input cost: 2,432 tokens at $0.50/M (0.1x uncached) = $0.002",
       "Output cost: 174 tokens at $30.00/M = $0.006",
-      "Cost: $0.11 list price for gpt-5.5",
+      "Cost: $0.11 list price for GPT-5.5 Standard",
     ]);
+  });
+
+  it("uses Fast priority rates and labels the model variant", () => {
+    const entry = buildTokenUsageActivityEntry({
+      fastMode: true,
+      id: "usage-fast",
+      model: "gpt-5.5",
+      tokenUsage: {
+        total: {
+          inputTokens: 27_697,
+          cachedInputTokens: 10_112,
+          outputTokens: 95,
+        },
+      },
+    });
+
+    expect(entry?.summary).toContain("17,585 uncached in");
+    expect(entry?.summary).toContain("10,112 cached");
+    expect(entry?.summary).toContain("$0.24 list price");
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Uncached input cost: 17,585 tokens at $12.50/M 2.5x Standard = $0.22",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Cached input cost: 10,112 tokens at $1.25/M (0.1x uncached, 2.5x Standard) = $0.013",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Output cost: 95 tokens at $75.00/M 2.5x Standard = $0.008",
+    );
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost: $0.24 list price for GPT-5.5 Fast (Priority)",
+    );
+  });
+
+  it("uses GPT-5.4 Fast priority rates with a 2x standard multiplier", () => {
+    const entry = buildTokenUsageActivityEntry({
+      fastMode: true,
+      id: "usage-fast-54",
+      model: "gpt-5.4",
+      tokenUsage: {
+        total: {
+          inputTokens: 1_000,
+          cachedInputTokens: 200,
+          outputTokens: 100,
+        },
+      },
+    });
+
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Uncached input cost: 800 tokens at $5.00/M 2.0x Standard = $0.004",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Cached input cost: 200 tokens at $0.50/M (0.1x uncached, 2.0x Standard) = <$0.001",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Output cost: 100 tokens at $30.00/M 2.0x Standard = $0.003",
+    );
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost: $0.008 list price for GPT-5.4 Fast (Priority)",
+    );
   });
 
   it("rounds list-price costs below ten cents to tenths of a penny", () => {
@@ -136,7 +195,54 @@ describe("buildTokenUsageActivityEntry", () => {
       "Output cost: 1,000 tokens at $4.50/M = $0.005",
     );
     expect(entry?.details.at(-1)?.label).toBe(
-      "Cost: $0.006 list price for gpt-5.4-mini",
+      "Cost: $0.006 list price for GPT-5.4 mini Standard",
+    );
+  });
+
+  it("uses long-context standard rates above 128K input tokens", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "usage-long-context",
+      model: "gpt-5.5",
+      tokenUsage: {
+        total: {
+          inputTokens: 130_000,
+          cachedInputTokens: 20_000,
+          outputTokens: 1_000,
+        },
+      },
+    });
+
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Uncached input cost: 110,000 tokens at $10.00/M = $1.10",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Cached input cost: 20,000 tokens at $1.00/M (0.1x uncached) = $0.020",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Output cost: 1,000 tokens at $45.00/M = $0.045",
+    );
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost: $1.17 list price for GPT-5.5 Standard long context",
+    );
+  });
+
+  it("does not estimate Fast cost for long-context requests without a Priority price", () => {
+    const entry = buildTokenUsageActivityEntry({
+      fastMode: true,
+      id: "usage-fast-long-context",
+      model: "gpt-5.5",
+      tokenUsage: {
+        total: {
+          inputTokens: 130_000,
+          cachedInputTokens: 20_000,
+          outputTokens: 1_000,
+        },
+      },
+    });
+
+    expect(entry?.summary).toBe("Usage: 110,000 uncached in · 20,000 cached · 1,000 out");
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost unavailable: no local pricing entry for gpt-5.5 Fast/Priority long context",
     );
   });
 
@@ -156,6 +262,25 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry?.summary).toBe("Usage: 80 uncached in · 20 cached · 30 out");
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost unavailable: no local pricing entry for custom-model",
+    );
+  });
+
+  it("does not estimate cost for Codex Spark without a local API price", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "usage-spark",
+      model: "gpt-5.3-codex-spark",
+      tokenUsage: {
+        total: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 30,
+        },
+      },
+    });
+
+    expect(entry?.summary).toBe("Usage: 80 uncached in · 20 cached · 30 out");
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost unavailable: no local pricing entry for gpt-5.3-codex-spark",
     );
   });
 });
@@ -194,7 +319,7 @@ describe("buildTaskMonitorUsageActivityEntry", () => {
       turn: { id: "monitor:monitor-1" },
     });
     expect(entry?.details.at(-1)?.label).toBe(
-      "Cost: <$0.001 list price for gpt-5.4-mini",
+      "Cost: <$0.001 list price for GPT-5.4 mini Standard",
     );
   });
 });
