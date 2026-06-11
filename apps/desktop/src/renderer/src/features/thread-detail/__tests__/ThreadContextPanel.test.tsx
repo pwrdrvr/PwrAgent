@@ -283,6 +283,41 @@ describe("ThreadContextPanel", () => {
     expect(detailsButtons[0]).toHaveFocus();
   });
 
+  it("labels review sub-agent usage separately from monitor usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "review:turn-review-1",
+            task: "Review changes against main",
+            status: "running",
+            createdAt: 2000,
+            updatedAt: 2500,
+            monitorThreadId: "thread-1",
+            monitorTurnId: "turn-review-1",
+            monitorUsage: {
+              summary: "800 uncached in · 200 cached · 50 out",
+              tokenUsage: {
+                inputTokens: 1000,
+                cachedInputTokens: 200,
+                uncachedInputTokens: 800,
+                outputTokens: 50,
+                totalTokens: 1050,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      screen.getByText("Review usage: 800 uncached in · 200 cached · 50 out"),
+    ).toBeInTheDocument();
+  });
+
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
 

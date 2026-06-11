@@ -8,6 +8,53 @@ import {
 } from "../live-transcript-activity";
 
 describe("buildLiveToolDetails", () => {
+  it("surfaces Codex function call activity while reviews run", () => {
+    const details = buildLiveToolDetails({
+      type: "functionCall",
+      call_id: "call-1",
+      name: "exec_command",
+      status: "completed",
+      arguments: {
+        cmd: "git diff main",
+      },
+      output: "diff --git a/app.ts b/app.ts",
+    });
+
+    expect(details).toEqual([
+      {
+        id: "call-1",
+        kind: "command",
+        label: "git diff main",
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "git diff main",
+          rawCommand: "git diff main",
+        }),
+      },
+    ]);
+  });
+
+  it("surfaces review read/search function calls as live activity", () => {
+    const details = buildLiveToolDetails({
+      type: "functionCall",
+      call_id: "call-search",
+      name: "search_query",
+      status: "inProgress",
+      arguments: {
+        query: "review/start app server",
+      },
+    });
+
+    expect(details).toEqual([
+      {
+        id: "call-search",
+        kind: "read",
+        label: "search query: review/start app server",
+        status: "in_progress",
+      },
+    ]);
+  });
+
   it("surfaces collaboration agent activity from live tool items", () => {
     const details = buildLiveToolDetails({
       type: "collabAgentToolCall",

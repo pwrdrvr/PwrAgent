@@ -398,6 +398,74 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("resumes Grok reviews with selected model settings before review/start", async () => {
+    const requests: Array<{ method: string; params?: unknown }> = [];
+    const server = {
+      request: async (method: string, params?: unknown): Promise<unknown> => {
+        requests.push({ method, params });
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
+            methods: ["thread/resume", "review/start"],
+          };
+        }
+        if (method === "thread/resume") {
+          return { threadId: "thread-1" };
+        }
+        if (method === "review/start") {
+          return {
+            threadId: "thread-1",
+            reviewThreadId: "thread-review-1",
+            turnId: "turn-review-1",
+          };
+        }
+        throw new Error(`Unexpected request ${method}`);
+      },
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(
+      client.startReview({
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "grok-4.20-reasoning",
+        serviceTier: "priority",
+        reasoningEffort: "high",
+        fastMode: true,
+      }),
+    ).resolves.toEqual({
+      threadId: "thread-1",
+      reviewThreadId: "thread-review-1",
+      turnId: "turn-review-1",
+    });
+
+    expect(requests).toEqual([
+      expect.objectContaining({ method: "initialize" }),
+      {
+        method: "thread/resume",
+        params: {
+          threadId: "thread-1",
+          model: "grok-4.20-reasoning",
+          serviceTier: "priority",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      },
+      {
+        method: "review/start",
+        params: {
+          threadId: "thread-1",
+          target: { type: "baseBranch", branch: "main" },
+          delivery: "inline",
+        },
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("fails a Grok turn that resolves without assistant text", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({

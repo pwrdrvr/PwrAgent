@@ -3988,6 +3988,94 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("refreshes the selected thread when review sub-agents change", async () => {
+    const listeners = new Set<(event: any) => void>();
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-review",
+            title: "Review thread",
+            titleSource: "explicit" as const,
+            summary: "A thread that started a review.",
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+            subAgents:
+              navigationCallCount === 1
+                ? []
+                : [
+                    {
+                      monitorId: "review:turn-review-1",
+                      task: "Review changes against main",
+                      status: "running" as const,
+                      createdAt: 1_000,
+                      updatedAt: 1_000,
+                      monitorThreadId: "thread-review",
+                      monitorTurnId: "turn-review-1",
+                    },
+                  ],
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-review");
+    });
+    expect(result.current.selectedThread?.subAgents).toEqual([]);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/subAgents/updated",
+            params: {
+              threadId: "thread-review",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.subAgents).toEqual([
+        expect.objectContaining({
+          monitorId: "review:turn-review-1",
+          task: "Review changes against main",
+          status: "running",
+        }),
+      ]);
+    });
+  });
+
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");

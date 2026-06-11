@@ -1008,11 +1008,19 @@ export class GrokAppServerClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: AppServerReviewDelivery;
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     await this.request("thread/resume", {
       threadId: params.threadId,
+      model: params.model,
+      serviceTier: params.serviceTier ?? undefined,
+      reasoningEffort: params.reasoningEffort,
+      fastMode: params.fastMode,
     });
 
     const result = await this.request("review/start", {

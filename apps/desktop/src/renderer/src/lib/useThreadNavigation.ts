@@ -2593,7 +2593,8 @@ export function useThreadNavigation(
         method === "thread/automations/updated" ||
         method === "automation/run/updated" ||
         method === "thread/turnQueue/updated" ||
-        method === "thread/agent/updated"
+        method === "thread/agent/updated" ||
+        method === "thread/subAgents/updated"
       ) {
         scheduleRefresh();
         return;

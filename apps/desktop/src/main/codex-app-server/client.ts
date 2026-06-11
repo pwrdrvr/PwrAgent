@@ -58,6 +58,7 @@ import type {
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadResumeParams as CodexThreadResumeParams,
+  ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
   TurnInterruptParams as CodexTurnInterruptParams,
   TurnStartParams as CodexTurnStartParams,
@@ -2164,7 +2165,10 @@ function extractPlanEntryFromItem(
 
 function extractReviewEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number,
+  timestamps: {
+    itemCreatedAt?: number;
+    turnCreatedAt?: number;
+  },
   turn?: AppServerThreadTurnMetadata,
 ): AppServerThreadReviewEntry | undefined {
   const reviewEvent = normalizeReviewEventItem(item);
@@ -2173,6 +2177,10 @@ function extractReviewEntryFromItem(
   }
 
   const { event, item: reviewItem, parent } = reviewEvent;
+  const createdAt =
+    timestamps.itemCreatedAt ??
+    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
+    timestamps.turnCreatedAt;
   const reviewOutput = normalizeReviewOutput(reviewItem);
   const review =
     pickRawString(reviewItem, ["review", "text"]) ??
@@ -3502,7 +3510,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         continue;
       }
 
-      const reviewEntry = extractReviewEntryFromItem(item, createdAt, turnMetadata);
+      const reviewEntry = extractReviewEntryFromItem(
+        item,
+        { itemCreatedAt, turnCreatedAt: createdAt },
+        turnMetadata
+      );
       if (reviewEntry) {
         flushActivityItems();
         const assistantReviewText =
@@ -4715,6 +4727,38 @@ function buildReviewStartPayload(params: {
   };
 }
 
+function buildThreadSettingsUpdatePayload(params: {
+  threadId: string;
+  model?: string;
+  serviceTier?: string | null;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+}): CodexThreadSettingsUpdateParams | undefined {
+  const payload: CodexThreadSettingsUpdateParams = {
+    threadId: params.threadId,
+  };
+
+  if (params.model?.trim()) {
+    payload.model = params.model.trim();
+  }
+
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
+    payload.serviceTier = serviceTier;
+  }
+
+  const effort = normalizeCodexReasoningEffort(params.reasoningEffort);
+  if (effort) {
+    payload.effort = effort;
+  }
+
+  return payload.model !== undefined ||
+    payload.serviceTier !== undefined ||
+    payload.effort !== undefined
+    ? payload
+    : undefined;
+}
+
 type CodexThreadReadPayload = CodexThreadReadParams & {
   before?: string;
   limit?: number;
@@ -5793,6 +5837,10 @@ export class CodexAppServerClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: AppServerReviewDelivery;
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
@@ -5805,10 +5853,24 @@ export class CodexAppServerClient {
         payloads: buildThreadResumePayloads({
           threadId: params.threadId,
           cwd: params.cwd,
+          model: params.model,
+          serviceTier: params.serviceTier,
+          reasoningEffort: params.reasoningEffort,
+          fastMode: params.fastMode,
           codexEnvironmentRuntime: params.codexEnvironmentRuntime,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch(() => undefined);
+    }
+
+    const settingsPayload = buildThreadSettingsUpdatePayload(params);
+    if (settingsPayload) {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/settings/update"],
+        payloads: [settingsPayload],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
     }
 
     const result = await requestWithFallbacks({
@@ -5823,8 +5885,10 @@ export class CodexAppServerClient {
     const turnRecord = asRecord(record?.turn);
     const turnId =
       extractTurnIdFromValue(result) ??
-      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]) ??
-      `pending:${reviewThreadId}`;
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]);
+    if (!turnId) {
+      throw new Error("codex app server review/start did not return turnId");
+    }
     this.pendingFirstTurnThreadResults.delete(params.threadId);
 
     return {

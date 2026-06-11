@@ -61,7 +61,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 ) : null}
                 {subAgent.monitorUsage?.summary ? (
                   <p className="subagent-card__usage">
-                    Monitor usage: {subAgent.monitorUsage.summary}
+                    {subAgent.monitorId.startsWith("review:") ? "Review" : "Monitor"} usage:{" "}
+                    {subAgent.monitorUsage.summary}
                   </p>
                 ) : null}
                 <button
