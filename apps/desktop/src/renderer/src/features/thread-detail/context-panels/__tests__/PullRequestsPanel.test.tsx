@@ -23,7 +23,7 @@ function threadWithPrs(prs: PrSummary[]): NavigationThreadSummary {
 }
 
 describe("PullRequestsPanel", () => {
-  it("renders a card with #number + state pills, title, repo, and open action", () => {
+  it("renders a card with a clickable PrChip, status pills, title, and repo", () => {
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     render(
       <PullRequestsPanel
@@ -45,8 +45,12 @@ describe("PullRequestsPanel", () => {
     );
 
     const card = screen.getByRole("listitem");
-    expect(within(card).getByText("#233")).toHaveClass("rail-chip--id");
-    expect(within(card).getByText("Checks passing")).toHaveClass("rail-chip--ok");
+    // #number is the same clickable PrChip used in the sidebar.
+    expect(within(card).getByText("#233")).toHaveClass("pr-chip__label");
+    // Status reads as a pill with a colored dot (no competing inline status).
+    const checksPill = within(card).getByText("Checks passing");
+    expect(checksPill).toHaveClass("rail-chip");
+    expect(checksPill.querySelector(".rail-chip__dot--ok")).not.toBeNull();
     expect(within(card).getByText("fix(desktop): polish the PR panel")).toBeInTheDocument();
     expect(within(card).getByText("github.com/pwrdrvr/PwrSnap")).toBeInTheDocument();
 
@@ -58,7 +62,7 @@ describe("PullRequestsPanel", () => {
     );
   });
 
-  it("shows merge conflict as its own danger pill, distinct from the checks pill", () => {
+  it("tints failing + conflicting PRs so they stand out", () => {
     render(
       <PullRequestsPanel
         thread={threadWithPrs([
@@ -79,11 +83,11 @@ describe("PullRequestsPanel", () => {
       />,
     );
 
-    expect(screen.getByText("Merge conflict")).toHaveClass("rail-chip--error");
-    expect(screen.getByText("Checks failing")).toHaveClass("rail-chip--error");
+    expect(screen.getByText("Merge conflict")).toHaveClass("rail-chip--alert");
+    expect(screen.getByText("Checks failing")).toHaveClass("rail-chip--alert");
   });
 
-  it("labels merged PRs and falls back to a generic title", () => {
+  it("labels merged PRs (no checks pill) and falls back to a generic title", () => {
     render(
       <PullRequestsPanel
         thread={threadWithPrs([
@@ -101,9 +105,9 @@ describe("PullRequestsPanel", () => {
     );
 
     const merged = screen.getByText("Merged");
+    expect(merged).toHaveClass("rail-chip");
     expect(merged.querySelector(".rail-chip__dot--merged")).not.toBeNull();
     expect(screen.getByText("Pull request #99")).toBeInTheDocument();
-    // Merged PRs don't show a checks pill.
     expect(screen.queryByText(/Checks/)).not.toBeInTheDocument();
   });
 

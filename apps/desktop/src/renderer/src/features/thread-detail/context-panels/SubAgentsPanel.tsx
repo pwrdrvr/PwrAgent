@@ -6,6 +6,7 @@ import type {
 import { useSubAgents } from "./useSubAgents";
 import { formatTimestamp } from "./context-rail-shared";
 import { subAgentStatusLabel, subAgentTone } from "./subagent-format";
+import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 
 type SubAgentsPanelProps = {
@@ -31,13 +32,9 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 {/* Status on its own line so it never competes with the
                     title for the top row (the title pushed it off before). */}
                 <p className="rail-card__status-line">
-                  <span
-                    aria-hidden="true"
-                    className={`rail-card__dot rail-card__dot--${tone}`}
-                  />
-                  <span className={`rail-card__status rail-card__status--${tone}`}>
+                  <RailStatusChip tone={tone} alert={tone === "error"}>
                     {subAgentStatusLabel(subAgent.status)}
-                  </span>
+                  </RailStatusChip>
                 </p>
                 <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}

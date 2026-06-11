@@ -1,12 +1,12 @@
-import type { ReactElement } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "./context-rail-shared";
+import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
 type PullRequestsPanelProps = {
   thread: NavigationThreadSummary;
 };
 
-type PrTone = "ok" | "error" | "warning" | "merged" | "neutral";
 type CheckState = NonNullable<PrSummary["checkState"]>;
 
 /**
@@ -14,9 +14,9 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  * directories + branch. Reads the already-cached `thread.prs` snapshot
  * (populated + refreshed by the shared `usePullRequestRefresh` flow at the
  * app level — selection + a 60s tick), so opening this tab never kicks off
- * its own `gh` poll. Each PR is a shared `.rail-card` (matching the
- * Sub-Agents tab): a row of state pills (#number, lifecycle, a merge-conflict
- * pill, checks) above the title, repo meta, and an open-in-browser action.
+ * its own `gh` poll. Each PR is a shared `.rail-card`: the clickable `PrChip`
+ * (#number, tooltip, status dot — identical to the sidebar) leads a row of
+ * status pills (lifecycle, merge conflict, checks), above the title + repo.
  */
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
   const prs = props.thread.prs ?? [];
@@ -33,31 +33,34 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
-                  <span className="rail-chip rail-chip--id">#{pr.number}</span>
-                  {lifecycle === "merged" ? statusPill("merged", "Merged") : null}
-                  {lifecycle === "closed" ? statusPill("neutral", "Closed") : null}
-                  {isOpen && pr.reviewState === "draft"
-                    ? statusPill("neutral", "Draft")
-                    : null}
-                  {isOpen && pr.mergeState === "conflicting"
-                    ? statusPill("error", "Merge conflict")
-                    : null}
-                  {isOpen
-                    ? statusPill(checkTone(checkState), checkLabel(checkState))
-                    : null}
+                  <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
+                  {lifecycle === "merged" ? (
+                    <RailStatusChip tone="merged">Merged</RailStatusChip>
+                  ) : null}
+                  {lifecycle === "closed" ? (
+                    <RailStatusChip tone="neutral">Closed</RailStatusChip>
+                  ) : null}
+                  {isOpen && pr.reviewState === "draft" ? (
+                    <RailStatusChip tone="neutral">Draft</RailStatusChip>
+                  ) : null}
+                  {isOpen && pr.mergeState === "conflicting" ? (
+                    <RailStatusChip tone="error" alert>
+                      Merge conflict
+                    </RailStatusChip>
+                  ) : null}
+                  {isOpen ? (
+                    <RailStatusChip
+                      tone={checkTone(checkState)}
+                      alert={checkState === "failing"}
+                    >
+                      {checkLabel(checkState)}
+                    </RailStatusChip>
+                  ) : null}
                 </p>
                 <p className="rail-card__title" title={prTitle(pr)}>
                   {prTitle(pr)}
                 </p>
                 <p className="rail-card__meta">{repositoryLabel(pr)}</p>
-                <button
-                  className="context-list__action"
-                  type="button"
-                  aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} in browser`}
-                  onClick={() => openExternalUrl(pr.url)}
-                >
-                  Open pull request
-                </button>
               </li>
             );
           })}
@@ -68,15 +71,6 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
         </p>
       )}
     </section>
-  );
-}
-
-function statusPill(tone: PrTone, label: string): ReactElement {
-  return (
-    <span className={`rail-chip rail-chip--${tone}`}>
-      <span aria-hidden="true" className={`rail-chip__dot rail-chip__dot--${tone}`} />
-      {label}
-    </span>
   );
 }
 
@@ -92,7 +86,7 @@ function repositoryLabel(pr: PrSummary): string {
   return `${pr.provider}/${pr.org}/${pr.repo}`;
 }
 
-function checkTone(state: CheckState): PrTone {
+function checkTone(state: CheckState): RailChipTone {
   switch (state) {
     case "passing":
       return "ok";

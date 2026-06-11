@@ -10197,47 +10197,40 @@ textarea,
   min-width: 0;
 }
 
-/* Status pills used on a card's status line (the Pull Requests panel renders
-   one per facet: #number, lifecycle, checks, merge conflict). Strong signals
-   (passing / failing / conflict) tint the label with a theme-safe text token;
-   the rest stay neutral with a colored leading dot, so every pill is
-   contrast-safe in both themes. */
+/* Status pill — the read-only sibling of the clickable `.pr-chip`: same pill
+   shape + colored leading dot + neutral label, so status reads identically
+   across the sidebar, the Sub-Agents card, and the Pull Requests card. Color
+   comes ONLY from the theme-safe `--status-*` dot palette (never the
+   `--success-text`-style text greens, which differ from the dot greens and
+   read inconsistently next to a `.pr-chip`). Failing / conflict states
+   additionally tint the pill red so they stand out. */
 .rail-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 8px;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 500;
-  line-height: 1.5;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.rail-chip--id {
-  font-family: var(--font-mono);
-}
-
-.rail-chip--ok {
-  color: var(--success-text);
-  background: var(--success-soft);
-  border-color: color-mix(in srgb, var(--success-text) 30%, transparent);
-}
-
-.rail-chip--error {
-  color: var(--danger-text);
-  background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger-text) 30%, transparent);
+.rail-chip--alert {
+  border-color: color-mix(in srgb, var(--status-error) 45%, transparent);
+  background: color-mix(in srgb, var(--status-error) 16%, transparent);
+  color: var(--text-primary);
 }
 
 .rail-chip__dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--text-muted);
 }
 
@@ -10253,20 +10246,16 @@ textarea,
   background: var(--status-warning);
 }
 
+.rail-chip__dot--active {
+  background: var(--accent);
+}
+
 .rail-chip__dot--merged {
   background: var(--brand-purple);
 }
 
 .rail-chip__dot--neutral {
   background: var(--status-suspended);
-}
-
-.rail-card__dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--text-muted);
 }
 
 /* Title sits on its own row, full width, and wraps (clamped) instead of
@@ -10300,60 +10289,6 @@ textarea,
 
 .rail-card__time-label {
   color: var(--text-secondary);
-}
-
-.rail-card__dot--active {
-  background: var(--accent);
-}
-
-.rail-card__dot--done {
-  background: var(--success-text, var(--accent));
-}
-
-.rail-card__dot--warn {
-  background: var(--danger-text);
-}
-
-.rail-card__status {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.rail-card__status--active {
-  color: var(--accent);
-}
-
-.rail-card__status--done {
-  color: var(--success-text, var(--accent));
-}
-
-.rail-card__status--warn {
-  color: var(--danger-text);
-}
-
-/* Pull-request state tones — dot only. The compound PR status ("Ready for
-   review · Checks passing") reads clearer with a neutral label + a colored
-   dot, matching the sidebar PrChip; same color tokens as `.pr-chip`. */
-.rail-card__dot--ok {
-  background: var(--status-ok);
-}
-
-.rail-card__dot--error {
-  background: var(--status-error);
-}
-
-.rail-card__dot--warning {
-  background: var(--status-warning);
-}
-
-.rail-card__dot--merged {
-  background: var(--brand-purple);
-}
-
-.rail-card__dot--neutral {
-  background: var(--status-suspended);
 }
 
 /* Generic muted meta line (e.g. a PR's repo + number). */
