@@ -303,4 +303,50 @@ describe("agent ipc", () => {
 
     disposeAgentIpcHandlers();
   });
+
+  it("caps oversized live diff payloads before broadcasting to renderer subscribers", async () => {
+    const {
+      registerAgentIpcHandlers,
+      disposeAgentIpcHandlers,
+    } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const oversizedDiff =
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
+      "x".repeat(80_000) +
+      "protocol-tail";
+
+    registerAgentIpcHandlers();
+
+    await registryListener?.({
+      backend: "codex",
+      notification: {
+        method: "turn/diff/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          diff: oversizedDiff,
+        },
+      },
+    } as AgentEvent);
+
+    const sentEvent = send.mock.calls[0]?.[1] as AgentEvent | undefined;
+    const diff =
+      sentEvent?.notification.method === "turn/diff/updated"
+        ? sentEvent.notification.params.diff
+        : undefined;
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        backend: "codex",
+      }),
+    );
+    expect(typeof diff).toBe("string");
+    expect(diff).toContain("PwrAgent renderer boundary: truncated");
+    expect(diff).toContain("$.notification.params.diff");
+    expect(diff).toContain("protocol-tail");
+    expect(diff).not.toContain("x".repeat(60_000));
+
+    disposeAgentIpcHandlers();
+  });
 });
