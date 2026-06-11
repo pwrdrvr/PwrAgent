@@ -8408,15 +8408,28 @@ export class DesktopBackendRegistry {
         backend: "codex",
         threadId: params.threadId,
       });
-      await this.overlayStore.setThreadModelSettings({
-        backend: "codex",
-        threadId: params.threadId,
+      const modelSettings = {
         model: observedModel ?? current?.model,
         reasoningEffort: observedReasoningEffort ?? current?.reasoningEffort,
         serviceTier: current?.serviceTier,
         fastMode: current?.fastMode,
+      };
+      await this.overlayStore.setThreadModelSettings({
+        backend: "codex",
+        threadId: params.threadId,
+        ...modelSettings,
       });
       this.invalidateThreadListCache("codex");
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/modelSettings/updated",
+          params: {
+            threadId: params.threadId,
+            ...modelSettings,
+          },
+        },
+      });
     }
     backendRegistryLog.info("codex thread settings observed", {
       threadId: params.threadId,
@@ -9157,6 +9170,10 @@ export class DesktopBackendRegistry {
         return {
           ...thread,
           executionMode: overlay?.executionMode ?? thread.executionMode,
+          model: overlay?.model ?? thread.model,
+          reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+          serviceTier: overlay?.serviceTier ?? thread.serviceTier,
+          fastMode: overlay?.fastMode ?? thread.fastMode,
           codexEnvironmentOptions,
         };
       }),
