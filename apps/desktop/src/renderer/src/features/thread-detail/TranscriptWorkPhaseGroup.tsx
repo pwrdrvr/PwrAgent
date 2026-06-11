@@ -28,24 +28,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
   props: TranscriptWorkPhaseGroupProps
 ) {
   const hiddenRegionId = useId();
-  const content = (
-    <div
-      id={hiddenRegionId}
-      className="transcript-work-phase-group__content"
-      hidden={props.collapsible && !props.expanded}
-    >
-      {props.entries.map((entry) =>
-        renderEntry({
-          applications: props.applications,
-          directoryPaths: props.directoryPaths,
-          desktopApi: props.desktopApi,
-          entry,
-          onOpenImage: props.onOpenImage,
-          skills: props.skills,
-        })
-      )}
-    </div>
-  );
+  const shouldRenderContent = !props.collapsible || props.expanded;
 
   return (
     <div className="transcript-work-phase-group">
@@ -65,7 +48,20 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
       ) : (
         <div className="transcript-work-phase-group__label">{props.label}</div>
       )}
-      {content}
+      {shouldRenderContent ? (
+        <div id={hiddenRegionId} className="transcript-work-phase-group__content">
+          {props.entries.map((entry) =>
+            renderEntry({
+              applications: props.applications,
+              directoryPaths: props.directoryPaths,
+              desktopApi: props.desktopApi,
+              entry,
+              onOpenImage: props.onOpenImage,
+              skills: props.skills,
+            })
+          )}
+        </div>
+      ) : null}
     </div>
   );
 });
