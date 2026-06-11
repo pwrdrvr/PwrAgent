@@ -24,6 +24,12 @@ export type PanelToggleButtonsProps = {
   railOpen: boolean;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
+  /**
+   * Render the rail (secondary) chip greyed-out and non-interactive — for
+   * views that have no context rail (e.g. thread search). The chip stays in
+   * place so the chrome doesn't shift; it just reads as "not applicable here."
+   */
+  railToggleDisabled?: boolean;
   className?: string;
 };
 
@@ -32,6 +38,7 @@ export function PanelToggleButtons({
   railOpen,
   onToggleSidebar,
   onToggleRail,
+  railToggleDisabled,
   className,
 }: PanelToggleButtonsProps): ReactElement {
   return (
@@ -41,7 +48,12 @@ export function PanelToggleButtons({
       aria-label="Window layout"
     >
       <LayoutChip kind="primary" open={sidebarOpen} onClick={onToggleSidebar} />
-      <LayoutChip kind="secondary" open={railOpen} onClick={onToggleRail} />
+      <LayoutChip
+        kind="secondary"
+        open={railOpen}
+        onClick={onToggleRail}
+        disabled={railToggleDisabled}
+      />
     </div>
   );
 }
@@ -50,13 +62,16 @@ function LayoutChip({
   kind,
   open,
   onClick,
+  disabled = false,
 }: {
   kind: "primary" | "secondary";
   open: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }): ReactElement {
-  const label =
-    kind === "primary"
+  const label = disabled
+    ? "No context rail in this view"
+    : kind === "primary"
       ? open
         ? "Hide sidebar"
         : "Show sidebar"
@@ -72,9 +87,12 @@ function LayoutChip({
       type="button"
       className={`panel-toggle__chip is-${kind} ${open ? "is-open" : "is-closed"}`}
       aria-label={label}
-      aria-pressed={open}
-      title={`${label}  (${chord})`}
-      onClick={onClick}
+      aria-pressed={disabled ? undefined : open}
+      disabled={disabled}
+      // No title when disabled: `pointer-events: none` makes a native
+      // tooltip unreachable anyway; the aria-label still names it for AT.
+      title={disabled ? undefined : `${label}  (${chord})`}
+      onClick={disabled ? undefined : onClick}
     >
       <LayoutGlyph kind={kind} open={open} />
     </button>

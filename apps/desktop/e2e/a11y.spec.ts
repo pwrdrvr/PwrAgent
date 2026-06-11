@@ -139,6 +139,28 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
     }
   });
 
+  test("thread search has no violations", async () => {
+    const app = await launchElectronApp({
+      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    });
+    try {
+      await expect(
+        app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+      ).toBeVisible();
+      // Open Search from the sidebar masthead. Before it opens, "Search
+      // threads" is unambiguously the masthead button; the autofocused
+      // search field (same accessible name, but role=textbox) is the
+      // stable signal that the search view has mounted.
+      await app.window.getByRole("button", { name: "Search threads" }).click();
+      await expect(
+        app.window.getByRole("textbox", { name: "Search threads" }),
+      ).toBeVisible();
+      await runAxe(app.window);
+    } finally {
+      await app.close();
+    }
+  });
+
   test("settings → messaging has no violations", async () => {
     const app = await launchElectronApp({
       fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),

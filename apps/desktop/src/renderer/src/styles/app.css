@@ -452,6 +452,18 @@ textarea,
   gap: 6px;
 }
 
+/* When the sidebar is hidden this cluster relocates into the thread/search
+   header, a window-drag region (`.thread-header * { drag }`). That re-marks each
+   button's icon glyph as draggable, so the center of the button becomes an OS
+   drag zone — arrow cursor, clicks eaten — while only the padding edges stay
+   clickable. Force the cluster no-drag so every pixel of every button works.
+   Scoped through `.thread-header` for specificity (0,2,0) so it beats
+   `.thread-header *` (0,1,0) regardless of source order. */
+.thread-header .masthead-actions,
+.thread-header .masthead-actions * {
+  -webkit-app-region: no-drag;
+}
+
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
    masthead's wordmark offset exactly — its 16px sidebar gutter + 80px
    stoplight reservation — so the wordmark sits in the same spot whether the
@@ -842,6 +854,17 @@ textarea,
 .panel-toggle__chip.is-open:hover {
   color: var(--accent-bright);
   background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+/* Greyed-out, non-interactive chip — e.g. the rail toggle in thread search,
+   where there is no context rail to toggle. Stays in place so the chrome
+   doesn't shift; just reads as "not applicable here." `pointer-events: none`
+   makes it fully inert so no hover state (its own or a broader selector's)
+   can darken it on mouseover. */
+.panel-toggle__chip:disabled {
+  opacity: 0.32;
+  cursor: default;
+  pointer-events: none;
 }
 
 .thread-header__main {
@@ -3634,113 +3657,126 @@ textarea,
   background: var(--bg-app);
 }
 
-.thread-search-view {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  gap: 18px;
-  padding: 28px;
-  overflow: hidden;
+/* Search reuses the shared thread title bar (ThreadPlaceholderHeader) for its
+   chrome — MSG status, sidebar toggle, disabled rail toggle — via the
+   `.thread-view` column layout. The section only owns the scrolling body
+   beneath that header. */
+.thread-search {
   background: var(--bg-app);
   color: var(--text-primary);
 }
 
-.thread-search-view__header {
+.thread-search__body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  -webkit-app-region: drag;
-}
-
-.thread-search-view__header button,
-.thread-search-view__form,
-.thread-search-results {
-  -webkit-app-region: no-drag;
-}
-
-.thread-search-view__eyebrow {
-  margin: 0 0 2px;
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.thread-search-view__header h1 {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.15;
-}
-
-.thread-search-view__form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-
-.thread-search-view__field {
-  display: grid;
+  flex: 1;
   min-width: 0;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px 24px 20px;
+  overflow: hidden;
 }
 
-.thread-search-view__field input {
+.thread-search__form {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.thread-search__field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
+.thread-search__field-icon {
+  position: absolute;
+  left: 12px;
+  display: inline-flex;
+  color: var(--text-muted);
+  pointer-events: none;
+  transition: color 120ms ease;
+}
+
+.thread-search__field:focus-within .thread-search__field-icon {
+  color: var(--accent);
+}
+
+.thread-search__field input {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 40px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 0 12px;
-  background: var(--bg-panel);
+  border-radius: 8px;
+  padding: 0 14px 0 38px;
+  background: var(--bg-input);
   color: var(--text-primary);
   font: inherit;
 }
 
-.thread-search-view__field input:focus {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+.thread-search__field input::placeholder {
+  color: var(--text-muted);
 }
 
-.thread-search-view__submit {
+.thread-search__field input:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: transparent;
+}
+
+.thread-search__submit {
+  height: 40px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
-.thread-search-view__error {
+.thread-search__error {
   margin: 0;
   border: 1px solid color-mix(in srgb, var(--status-error) 50%, var(--border-subtle));
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--status-error) 10%, transparent);
   color: var(--text-primary);
   font-size: 13px;
 }
 
-.thread-search-view__scopes {
+.thread-search__scopes {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.thread-search-view__scopes span {
+.thread-search__scopes span {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  padding: 4px 8px;
-  color: var(--text-secondary);
+  padding: 4px 10px;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
+.thread-search-results-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-search-results-meta strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .thread-search-results {
-  display: grid;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 0;
   gap: 8px;
   overflow: auto;
@@ -3753,59 +3789,181 @@ textarea,
   gap: 16px;
   width: 100%;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: 8px;
+  padding: 12px 14px;
   background: var(--bg-panel);
   color: inherit;
   text-align: left;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
 }
 
-.thread-search-result:hover,
-.thread-search-result:focus-visible {
+.thread-search-result:hover {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
 }
 
-.thread-search-result__main {
+.thread-search-result:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.thread-search-result__body {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 6px;
 }
 
 .thread-search-result__title {
   overflow: hidden;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.thread-search-result__meta,
-.thread-search-result__snippet,
-.thread-search-result__side {
+.thread-search-result__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.3;
+}
+
+.thread-search-result__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.thread-search-result__meta-item svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.thread-search-result__meta-item--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-search-result__meta-item--muted {
+  color: var(--text-muted);
+}
+
+.thread-search-result__meta-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-search-result__snippet {
   display: -webkit-box;
   overflow: hidden;
+  margin-top: 1px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
-.thread-search-result__side {
-  display: grid;
-  min-width: 96px;
-  justify-items: end;
-  align-content: start;
-  gap: 4px;
-  text-transform: capitalize;
+.thread-search-result__mark {
+  border-radius: 3px;
+  padding: 0 1px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 600;
 }
 
-.thread-search-results__empty {
-  margin: 24px 0 0;
+.thread-search-result__side {
+  display: grid;
+  justify-items: end;
+  align-content: start;
+  gap: 5px;
+  text-align: right;
+}
+
+.thread-search-result__confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.thread-search-result__confidence-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.thread-search-result__confidence--high {
+  color: var(--accent-bright);
+}
+
+.thread-search-result__confidence--medium {
+  color: var(--text-secondary);
+}
+
+.thread-search-result__confidence--low {
+  color: var(--text-muted);
+}
+
+.thread-search-result__reason {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.thread-search-empty {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 24px 56px;
+  text-align: center;
+}
+
+.thread-search-empty__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+}
+
+.thread-search-empty__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.thread-search-empty__hint {
+  margin: 0;
+  max-width: 420px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .codex-config-warning-banner {

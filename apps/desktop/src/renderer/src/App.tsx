@@ -467,6 +467,7 @@ function DesktopAppShell(props: {
   const mastheadActions = {
     automationsActive: mainView === "automations",
     settingsActive: mainView === "settings",
+    threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
     onOpenAutomations: () => {
       setMainView("automations");
@@ -474,6 +475,9 @@ function DesktopAppShell(props: {
     onOpenSettings: () => {
       setSettingsInitialSection(undefined);
       setMainView("settings");
+    },
+    onToggleThreadSearch: () => {
+      setMainView(mainView === "search" ? "thread" : "search");
     },
     onCreateThread: async () => {
       setMainView("thread");
@@ -697,7 +701,7 @@ function DesktopAppShell(props: {
             setMainView("automations");
           }}
           onOpenThreadSearch={() => {
-            setMainView("search");
+            setMainView(mainView === "search" ? "thread" : "search");
           }}
           onOpenLaunchpad={async (directory, preferredBackend) => {
             setMainView("thread");
@@ -743,7 +747,14 @@ function DesktopAppShell(props: {
           {mainView === "search" ? (
             <ThreadSearchPanel
               desktopApi={desktopApi}
-              onClose={() => setMainView("thread")}
+              onOpenMessagingActivity={openMessagingActivityWindow}
+              layout={{
+                sidebarOpen: !sidebarHidden,
+                railOpen: contextRailPinned,
+                onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+              }}
+              masthead={mastheadActions}
               onOpenResult={async (result) => {
                 setMainView("thread");
                 await navigation.showThread(result);
