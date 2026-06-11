@@ -104,4 +104,77 @@ describe("image input files", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("does not delete an old named-image directory when a child image is fresh", async () => {
+    const root = "/tmp/pwragent-image-inputs";
+    const now = 10 * 24 * 60 * 60 * 1000;
+    const stats = new Map<string, { kind: "dir" | "file"; mtimeMs: number }>();
+    const removedPaths: string[] = [];
+
+    const dependencies = {
+      now: () => now,
+      resolveRoot: () => root,
+      mkdir: async (dirPath: string) => {
+        stats.set(dirPath, { kind: "dir", mtimeMs: 0 });
+      },
+      readdir: async (dirPath: string) => {
+        const prefix = `${dirPath}${path.sep}`;
+        const entries = new Set<string>();
+        for (const candidate of stats.keys()) {
+          if (!candidate.startsWith(prefix)) {
+            continue;
+          }
+          const child = candidate.slice(prefix.length);
+          if (child && !child.includes(path.sep)) {
+            entries.add(child);
+          }
+        }
+        return [...entries];
+      },
+      stat: async (filePath: string) => {
+        const info = stats.get(filePath);
+        if (!info) {
+          throw new Error(`missing stat for ${filePath}`);
+        }
+        return {
+          isFile: () => info.kind === "file",
+          isDirectory: () => info.kind === "dir",
+          mtimeMs: info.mtimeMs,
+        };
+      },
+      writeFile: async (filePath: string) => {
+        stats.set(path.dirname(filePath), { kind: "dir", mtimeMs: 0 });
+        stats.set(filePath, { kind: "file", mtimeMs: now });
+      },
+      unlink: async (filePath: string) => {
+        stats.delete(filePath);
+      },
+      rm: async (filePath: string) => {
+        removedPaths.push(filePath);
+        const prefix = `${filePath}${path.sep}`;
+        for (const candidate of [...stats.keys()]) {
+          if (candidate === filePath || candidate.startsWith(prefix)) {
+            stats.delete(candidate);
+          }
+        }
+      },
+    };
+
+    const [first] = await materializeLocalImageInputs(
+      [{ type: "image", name: "original-paste.png", url: "data:image/png;base64,AQID" }],
+      dependencies,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const firstPath = first?.type === "localImage" ? first.path : "";
+    await materializeLocalImageInputs(
+      [{ type: "image", name: "different.png", url: "data:image/png;base64,BAUG" }],
+      dependencies,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(path.basename(firstPath)).toBe("original-paste.png");
+    expect(removedPaths).not.toContain(path.dirname(firstPath));
+    expect(stats.has(firstPath)).toBe(true);
+  });
 });

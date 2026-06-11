@@ -187,12 +187,18 @@ async function cleanupOldImageInputs(
         return;
       }
       const info = await deps.stat(filePath).catch(() => undefined);
-      if (!info?.isFile() || info.mtimeMs >= cutoff) {
-        if (info?.isDirectory?.() && info.mtimeMs < cutoff) {
+      if (info?.isDirectory?.()) {
+        if (
+          info.mtimeMs < cutoff &&
+          !(await containsFreshImageInput(filePath, deps, cutoff, excludedFilePaths))
+        ) {
           await deps
             .rm(filePath, { recursive: true, force: true })
             .catch(() => undefined);
         }
+        return;
+      }
+      if (!info?.isFile() || info.mtimeMs >= cutoff) {
         return;
       }
       if (!isSupportedImagePath(filePath)) {
@@ -201,6 +207,34 @@ async function cleanupOldImageInputs(
       await deps.unlink(filePath).catch(() => undefined);
     }),
   );
+}
+
+async function containsFreshImageInput(
+  dirPath: string,
+  deps: ImageInputFileDependencies,
+  cutoff: number,
+  excludedFilePaths: ReadonlySet<string>,
+): Promise<boolean> {
+  const entries = await deps.readdir(dirPath).catch(() => undefined);
+  if (!entries) {
+    return true;
+  }
+
+  for (const entry of entries) {
+    const childPath = path.join(dirPath, entry);
+    if (isExcludedImageInputPath(childPath, excludedFilePaths)) {
+      return true;
+    }
+    if (!isSupportedImagePath(childPath)) {
+      continue;
+    }
+    const info = await deps.stat(childPath).catch(() => undefined);
+    if (info?.isFile() && info.mtimeMs >= cutoff) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isExcludedImageInputPath(
