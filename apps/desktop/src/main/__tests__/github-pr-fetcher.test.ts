@@ -15,6 +15,7 @@ function rawMergedPr() {
     url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     state: "MERGED",
     isDraft: false,
+    mergeable: "MERGEABLE",
     mergedAt: "2026-05-05T00:06:31Z",
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
@@ -37,8 +38,31 @@ describe("parseGhPrPayload", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       state: "merged",
+      isDraft: false,
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
+  });
+
+  it("carries isDraft orthogonally and still reports the check status", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      state: "OPEN",
+      isDraft: true,
+    });
+    // Draft no longer masks the dot color — checks still drive `state`.
+    expect(summary.state).toBe("passing");
+    expect(summary.isDraft).toBe(true);
+  });
+
+  it("does not mark a closed-while-draft PR as draft", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      state: "CLOSED",
+      isDraft: true,
+      mergedAt: null,
+    });
+    expect(summary.state).toBe("closed");
+    expect(summary.isDraft).toBe(false);
   });
 
   it("falls back to empty strings for missing repo/owner", () => {
@@ -69,14 +93,45 @@ describe("deriveChipState", () => {
     ).toBe("closed");
   });
 
-  it("returns draft for OPEN + isDraft", () => {
+  it("ignores isDraft — draft is orthogonal to the dot color", () => {
+    // An OPEN draft with passing checks reports `passing`, not `draft`.
     expect(
       deriveChipState({
         ...rawMergedPr(),
         state: "OPEN",
         isDraft: true,
       }),
-    ).toBe("draft");
+    ).toBe("passing");
+  });
+
+  it("returns conflicted for OPEN + mergeable CONFLICTING, outranking checks", () => {
+    expect(
+      deriveChipState({
+        ...rawMergedPr(),
+        state: "OPEN",
+        mergeable: "CONFLICTING",
+        // Even with all checks green, a conflict blocks merge → red.
+        statusCheckRollup: [
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "COMPLETED",
+            name: "Lint",
+          },
+        ],
+      }),
+    ).toBe("conflicted");
+  });
+
+  it("does not treat UNKNOWN mergeable as a conflict", () => {
+    // GitHub reports UNKNOWN until it finishes computing mergeability.
+    expect(
+      deriveChipState({
+        ...rawMergedPr(),
+        state: "OPEN",
+        mergeable: "UNKNOWN",
+      }),
+    ).toBe("passing");
   });
 
   it("returns passing when all checks SUCCEEDED", () => {
@@ -359,6 +414,7 @@ describe("GithubPrFetcher", () => {
           org: "pwrdrvr",
           repo: "PwrAgent",
           state: "merged",
+          isDraft: false,
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
       ]);

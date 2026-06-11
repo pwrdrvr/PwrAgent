@@ -188,20 +188,25 @@ export type MessagingThreadBindingSummary = {
 };
 
 /**
- * Color states map directly to GitHub PR + check status:
- *   - merged   → state === MERGED              (purple chip)
- *   - failing  → any check FAILURE/CANCELLED/TIMED_OUT/STARTUP_FAILURE (red)
- *   - passing  → all checks SUCCESS, !isDraft  (green)
- *   - draft    → isDraft on an OPEN PR         (gray)
- *   - pending  → checks still running          (yellow)
- *   - closed   → CLOSED without merge          (gray)
- *   - unknown  → no checks reported yet, or shape we don't recognize (gray)
+ * Color states map to GitHub PR + check/merge status. This drives the chip's
+ * status dot color and is INTENTIONALLY independent of draft: a draft PR still
+ * carries its real check/merge status here, while `PrSummary.isDraft` is
+ * surfaced as a separate, non-color affordance (see PrChip).
+ *   - merged     → state === MERGED                        (purple dot)
+ *   - closed     → CLOSED without merge                    (black dot — not
+ *                  GitHub's red, by product choice)
+ *   - conflicted → OPEN + mergeable === CONFLICTING        (red dot)
+ *   - failing    → any check FAILURE/CANCELLED/TIMED_OUT/… (red dot)
+ *   - passing    → all checks SUCCESS                      (green dot)
+ *   - pending    → checks still running                    (yellow dot)
+ *   - unknown    → no checks reported yet, or a shape we
+ *                  don't recognize                         (gray dot)
  */
 export type PrChipState =
   | "merged"
+  | "conflicted"
   | "failing"
   | "passing"
-  | "draft"
   | "pending"
   | "closed"
   | "unknown";
@@ -213,6 +218,13 @@ export type PrSummary = {
   /** Repo name, e.g. "PwrAgent". */
   repo: string;
   state: PrChipState;
+  /**
+   * True when the PR is an OPEN draft. Orthogonal to `state`: the dot still
+   * reflects check/merge status while the chip renders a separate draft
+   * affordance and the tooltip notes the draft. Absent (treated as `false`)
+   * on overlay rows persisted before drafts became orthogonal.
+   */
+  isDraft?: boolean;
   url: string;
 };
 

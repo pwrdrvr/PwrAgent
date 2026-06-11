@@ -26,7 +26,7 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
           {prs.map((pr) => (
             <li key={prKey(pr)} className="pr-panel-row">
               <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openExternalUrl} />
-              <span className="pr-panel-row__state">{stateLabel(pr.state)}</span>
+              <span className="pr-panel-row__state">{stateLabel(pr)}</span>
             </li>
           ))}
         </ul>
@@ -43,7 +43,15 @@ function prKey(pr: PrSummary): string {
   return `${pr.org}/${pr.repo}#${pr.number}`;
 }
 
-function stateLabel(state: PrSummary["state"]): string {
+function stateLabel(pr: PrSummary): string {
+  const base = statusText(pr.state);
+  if (pr.isDraft) {
+    return pr.state === "unknown" ? "Draft" : `Draft · ${base}`;
+  }
+  return base;
+}
+
+function statusText(state: PrSummary["state"]): string {
   switch (state) {
     case "merged":
       return "Merged";
@@ -51,13 +59,15 @@ function stateLabel(state: PrSummary["state"]): string {
       return "Checks passing";
     case "failing":
       return "Checks failing";
-    case "draft":
-      return "Draft";
+    case "conflicted":
+      return "Merge conflict";
     case "pending":
       return "Checks pending";
     case "closed":
       return "Closed";
     case "unknown":
+      return "Status unknown";
+    default:
       return "Status unknown";
   }
 }

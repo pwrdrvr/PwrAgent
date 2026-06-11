@@ -1,5 +1,5 @@
 import type { KeyboardEvent, MouseEvent } from "react";
-import type { PrSummary } from "@pwragent/shared";
+import type { PrChipState, PrSummary } from "@pwragent/shared";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -17,7 +17,8 @@ export function PrChip(props: PrChipProps) {
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
-  const tooltip = `${pr.org}/${pr.repo}#${pr.number} — ${stateTooltipLabel(pr.state)}`;
+  const status = describeStatus(pr);
+  const tooltip = `${pr.org}/${pr.repo}#${pr.number} — ${status}`;
 
   // role="button" span (not a real <button>) so the chip is legal HTML
   // inside the row's main <button>. stopPropagation prevents the row's
@@ -34,9 +35,9 @@ export function PrChip(props: PrChipProps) {
     <span
       role="button"
       tabIndex={0}
-      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${pr.state}) in browser`}
+      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
       title={tooltip}
-      className={`pr-chip pr-chip--${pr.state}`}
+      className={`pr-chip pr-chip--${pr.state}${pr.isDraft ? " pr-chip--draft" : ""}`}
       onClick={handleActivate}
       onContextMenu={(event) => {
         if (!props.onOpenContextMenu) {
@@ -59,11 +60,26 @@ export function PrChip(props: PrChipProps) {
     >
       <span className="pr-chip__dot" aria-hidden="true" />
       <span className="pr-chip__label">{label}</span>
+      {pr.isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
     </span>
   );
 }
 
-function stateTooltipLabel(state: PrSummary["state"]): string {
+/**
+ * Human phrase for the chip's tooltip / aria-label. Draft is orthogonal to the
+ * dot color, so it leads the phrase and the check/merge status follows when we
+ * actually know it ("draft · all checks passing"); an unknown-status draft
+ * collapses to just "draft" rather than "draft · status unknown".
+ */
+function describeStatus(pr: PrSummary): string {
+  const status = statusPhrase(pr.state);
+  if (pr.isDraft) {
+    return pr.state === "unknown" ? "draft" : `draft · ${status}`;
+  }
+  return status;
+}
+
+function statusPhrase(state: PrChipState): string {
   switch (state) {
     case "merged":
       return "merged";
@@ -71,13 +87,17 @@ function stateTooltipLabel(state: PrSummary["state"]): string {
       return "all checks passing";
     case "failing":
       return "checks failing";
-    case "draft":
-      return "draft";
+    case "conflicted":
+      return "merge conflict";
     case "pending":
       return "checks pending";
     case "closed":
       return "closed without merge";
     case "unknown":
+      return "status unknown";
+    // Defensive: overlay rows persisted before this shape may carry a legacy
+    // state string (e.g. "draft"); fall back rather than render undefined.
+    default:
       return "status unknown";
   }
 }

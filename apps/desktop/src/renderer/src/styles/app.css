@@ -45,6 +45,13 @@
   --status-warning: #d99a3d;
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
+  /* Closed-without-merge PR dot. Intentionally black (not GitHub's red) —
+     product choice. Pure black reads correctly in light theme; on dark
+     surfaces it's the `--pr-dot-ring` hairline that keeps it visible. Both
+     tokens live only in this base block, so light theme inherits them and the
+     ring follows the active theme via --text-primary. */
+  --status-closed: #000000;
+  --pr-dot-ring: color-mix(in srgb, var(--text-primary) 32%, transparent);
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
 
@@ -3017,6 +3024,7 @@ textarea,
 
 
 .pr-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3049,19 +3057,52 @@ textarea,
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  /* Default gray covers `unknown` and any unexpected/legacy state value. */
   background: var(--status-suspended);
   flex: 0 0 auto;
 }
 
 .pr-chip__label {
   white-space: nowrap;
+  /* The chip squishes line-height to 1, which left the monospace digits
+     sitting high in their line box so the centered dot read as resting on
+     the text baseline. A natural line box re-centers the glyphs against the
+     dot. */
+  line-height: normal;
+}
+
+/* Draft affordance: a short, round-ended gray bar centered beneath the dot +
+   number. Orthogonal to the dot color (which still shows check/merge status),
+   it reads as an extra marker, not an underline — there's a deliberate gap
+   between it and the text. */
+.pr-chip__draft-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--status-suspended);
+  pointer-events: none;
+}
+
+.pr-chip--draft .pr-chip__label {
+  /* Lift the content a hair so the bar has breathing room under the text
+     without growing the pill. */
+  transform: translateY(-1px);
+}
+
+.pr-chip--draft .pr-chip__dot {
+  transform: translateY(-1px);
 }
 
 .pr-chip--passing .pr-chip__dot {
   background: var(--status-ok);
 }
 
-.pr-chip--failing .pr-chip__dot {
+.pr-chip--failing .pr-chip__dot,
+.pr-chip--conflicted .pr-chip__dot {
   background: var(--status-error);
 }
 
@@ -3074,10 +3115,11 @@ textarea,
   background: var(--brand-purple);
 }
 
-.pr-chip--draft .pr-chip__dot,
-.pr-chip--closed .pr-chip__dot,
-.pr-chip--unknown .pr-chip__dot {
-  background: var(--status-suspended);
+.pr-chip--closed .pr-chip__dot {
+  /* Black, by product choice (not GitHub's red). The hairline ring keeps it
+     legible on dark surfaces where pure black would vanish into the chip. */
+  background: var(--status-closed);
+  box-shadow: 0 0 0 1px var(--pr-dot-ring);
 }
 
 .thread-row__chip--muted {

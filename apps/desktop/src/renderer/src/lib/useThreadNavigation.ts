@@ -429,6 +429,7 @@ function prSummariesEqual(
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
       candidate.state === pr.state &&
+      (candidate.isDraft ?? false) === (pr.isDraft ?? false) &&
       candidate.url === pr.url
     );
   });

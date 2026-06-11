@@ -14,12 +14,16 @@ const execFileAsync = promisify(execFile);
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
 /** Fields requested from `gh pr list --json …`. Pinned by characterization
- *  against `gh 2.88.1` against pwrdrvr/PwrAgent on 2026-05-04. */
+ *  against `gh 2.88.1` against pwrdrvr/PwrAgent on 2026-05-04. `mergeable`
+ *  added 2026-06-10 to surface merge conflicts as a distinct chip state
+ *  (gh reports MERGEABLE | CONFLICTING | UNKNOWN; UNKNOWN until GitHub
+ *  finishes computing mergeability asynchronously after a push). */
 const GH_FIELDS = [
   "number",
   "url",
   "state",
   "isDraft",
+  "mergeable",
   "mergedAt",
   "headRefName",
   "headRepository",
@@ -53,6 +57,8 @@ type GhPrPayload = {
   url: string;
   state: string;
   isDraft: boolean;
+  /** "MERGEABLE" | "CONFLICTING" | "UNKNOWN" — only meaningful while OPEN. */
+  mergeable?: string | null;
   mergedAt: string | null;
   headRefName: string;
   headRepository: { name?: string } | null;
@@ -378,6 +384,10 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
     state: deriveChipState(row),
+    // Draft is orthogonal to the dot color — surfaced as its own affordance.
+    // Only OPEN PRs are meaningfully "draft"; gh leaves isDraft set on a PR
+    // that was closed while still a draft, which we don't want to advertise.
+    isDraft: row.state === "OPEN" && row.isDraft === true,
     url: row.url,
   };
 }
@@ -385,8 +395,11 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
 export function deriveChipState(row: GhPrPayload): PrChipState {
   if (row.state === "MERGED") return "merged";
   if (row.state === "CLOSED") return "closed";
-  // OPEN past this point.
-  if (row.isDraft) return "draft";
+  // OPEN past this point. Draft is NOT folded in here (it rides on
+  // PrSummary.isDraft) so a draft still reports its real check/merge status.
+  // A merge conflict outranks check status: it blocks merge regardless of CI,
+  // and both render red anyway — the tooltip disambiguates.
+  if (row.mergeable === "CONFLICTING") return "conflicted";
 
   const checks = row.statusCheckRollup ?? [];
   if (checks.length === 0) return "unknown";
