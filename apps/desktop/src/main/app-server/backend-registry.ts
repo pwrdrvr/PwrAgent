@@ -180,6 +180,7 @@ import {
   buildMonitorDelegationPrompt,
   buildTaskMonitorDynamicToolErrorResponse,
   buildTaskMonitorDynamicToolSpecs,
+  findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
   normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
@@ -10772,6 +10773,20 @@ export class DesktopBackendRegistry {
     const task = args.task?.trim();
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
+    }
+    const unsupportedSessionReference = findUnsupportedCodexExecSessionReference({
+      task,
+      monitorContext: args.monitorContext,
+    });
+    if (unsupportedSessionReference) {
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "invalid_arguments",
+        [
+          `Task monitor delegations cannot use a parent-scoped ${unsupportedSessionReference} as the local-command polling handle.`,
+          "Keep polling that already-started Codex exec session in the parent turn, or create a fresh monitor delegation with the command text, cwd, terminal criteria, and desired stdout/stderr capture-file paths so the monitor child starts the command in its own session.",
+        ].join(" "),
+      );
     }
 
     const monitorId = `monitor-${randomUUID()}`;

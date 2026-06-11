@@ -33,7 +33,7 @@ export function buildTaskMonitorDynamicToolSpecs(
     namespace: TASK_MONITOR_TOOL_NAMESPACE,
     name: "create_monitor_delegation",
     description:
-      "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: command/session id, cwd or target location, status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
+      "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. If the thing to monitor is a new local command, do not run it in the parent turn first; delegate the command text, cwd, poll cadence, terminal criteria, and desired stdout/stderr capture files in task/monitorContext so the monitor child runs the command in its own Codex tool session and can poll its own stdout/stderr buffers. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run or poll that check itself. The task and monitorContext must include the exact monitoring procedure the parent was about to perform: command to execute if not already started, cwd or target location, durable process id or remote job id when applicable, status command or wait API, poll cadence, terminal success/failure conditions, and relevant stdout/stderr output files or log collection steps. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
     inputSchema: {
       type: "object",
       properties: {
@@ -235,7 +235,12 @@ export function buildMonitorDelegationPrompt(params: {
     "",
     "<delegated_monitoring_procedure>",
     "- Use the task and monitor_context as the complete procedure for checking status.",
-    "- For a local command: use the provided session id, process id, cwd, command, or wait/poll API to check whether it is still running, then collect the final exit status and relevant output/log lines.",
+    "- For a local command that has not already been started by a durable external system: run the command yourself in this monitor thread, not in the parent thread. Use your own command-execution session for polling so stdout/stderr buffers and exit status are available to you.",
+    "- When you run a local command, capture stdout and stderr to durable files under the working directory or a temp directory. Prefer separate stdout/stderr files plus a combined output file when practical. Include those file paths and the final exit status in complete_monitoring details.",
+    "- While the command is running, poll your own command session about every poll interval. Progress updates should summarize status without dumping large stdout/stderr content.",
+    "- On terminal success or failure, inspect the relevant tail of the captured output files and include concise findings plus file paths in the final handoff.",
+    "- Do not use a parent agent's Codex exec session id, exec_command session id, or write_stdin session_id as a polling handle. Those ids are scoped to the parent agent turn and are not available to this monitor thread.",
+    "- If the only local-command handle is a parent-scoped Codex exec session id, call inject_progress with status \"blocked\" explaining that the parent must keep polling it, then call complete_monitoring with outcome \"failure\" and triggerParentTurn true.",
     "- For a remote or external operation: use the provided target identifiers, URLs, APIs, or status commands to poll until all required status checks are terminal.",
     `- Repeat the delegated status check about every ${pollInterval} seconds until the task is terminal.`,
     "- If the task or monitor_context does not include enough information to perform the same polling the parent was about to do, call inject_progress with status \"blocked\" explaining the missing input, then call complete_monitoring with outcome \"failure\" and triggerParentTurn true.",
@@ -276,7 +281,10 @@ export function buildMonitorParentAgentGuidance(params: {
     "PwrAgent starts one lightweight monitor thread for this delegation; do not call generic spawnAgent for this flow.",
     `The managed monitor uses model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort} for Codex; ACP or other runtimes should use a mini/non-thinking model or the lowest reliable reasoning setting.`,
     "Do not fork the full parent context unless the monitor task explicitly requires it; give create_monitor_delegation only the minimal task data and exact polling procedure.",
-    "Before creating the delegation, write down the exact monitoring procedure you were about to perform yourself: session/process id, cwd, command, status command or wait API, poll cadence, terminal success/failure criteria, and log lines needed for final diagnosis.",
+    "If you need to start a new local command and monitor it, call create_monitor_delegation before running the command yourself. Put the command, cwd, terminal criteria, poll cadence, and desired stdout/stderr capture-file paths in task/monitorContext so the monitor child runs it in its own Codex command session.",
+    "The monitor can poll stdout/stderr buffers for the command it starts. It cannot poll a command session that the parent already started.",
+    "Before creating the delegation, write down the exact monitoring procedure you were about to perform yourself: cwd, durable process id, status command, log file, remote job id, wait API, poll cadence, terminal success/failure criteria, and log lines needed for final diagnosis.",
+    "Do not delegate a parent-scoped Codex exec session id, exec_command session id, write_stdin session_id, or tool-session number as the only local-command handle. A managed monitor runs in a separate Codex turn and cannot read or write that parent tool session, so the parent must keep polling the already-started session or create a fresh delegation with the command text so the monitor child starts it.",
     "If you have checked something for progress for about 30 seconds and the check is repeatable, stop polling in the parent and delegate that repeatable check to the monitor.",
     "Use this for local verification commands too when the alternative is repeatedly checking whether a long-running command has finished.",
     `After the tool reports startedByPwrAgent=true, make at most one startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
@@ -314,6 +322,25 @@ export function normalizeStartupTimeoutSeconds(value: unknown): number | undefin
     return undefined;
   }
   return Math.max(10, Math.floor(value));
+}
+
+export function findUnsupportedCodexExecSessionReference(
+  args: Pick<CreateMonitorDelegationToolArgs, "monitorContext" | "task">,
+): string | undefined {
+  const text = [args.task, args.monitorContext].filter(Boolean).join("\n");
+  if (/\bwrite_stdin\b/i.test(text)) {
+    return "write_stdin session_id";
+  }
+  if (/\bexec(?:_command)?\s+session\s+(?:id\s+)?\d+\b/i.test(text)) {
+    return "Codex exec session id";
+  }
+  if (/\bsession_id\b\s*[:=]\s*\d+\b/i.test(text)) {
+    return "Codex tool session_id";
+  }
+  if (/"session_id"\s*:\s*\d+\b/i.test(text)) {
+    return "Codex tool session_id";
+  }
+  return undefined;
 }
 
 function normalizeTaskMonitorToolArguments(
