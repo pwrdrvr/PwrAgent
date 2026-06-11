@@ -473,6 +473,14 @@ textarea,
   padding-left: 96px;
 }
 
+/* In macOS fullscreen the stoplights are gone, so the wordmark no longer
+   needs to clear them. Fall back to the base 14px inset (the value every
+   non-macOS platform uses) so the breadcrumb sits flush with the rest of
+   the header instead of floating 96px in from the edge. */
+:root[data-platform="darwin"][data-fullscreen="true"] .thread-header__masthead {
+  padding-left: 14px;
+}
+
 /* Windows custom title-bar strip (File / View / Profiles / Window / Help).
    Frameless WCO draws the OS caption buttons at the top-right; this strip
    fills the rest of that line with the painted menu bar (left) and a draggable
@@ -719,6 +727,13 @@ textarea,
    platform (Linux normal frame; Windows frameless with caption buttons on
    the right, never the left) starts the brand at the left edge. */
 :root[data-platform]:not([data-platform="darwin"]) .sidebar__masthead {
+  padding-left: 0;
+}
+
+/* macOS fullscreen hides the stoplights entirely, so the 80px reservation
+   becomes a dead gap. Drop it to the left edge — same as every non-macOS
+   platform — for as long as the window stays fullscreen. */
+:root[data-platform="darwin"][data-fullscreen="true"] .sidebar__masthead {
   padding-left: 0;
 }
 
@@ -4524,6 +4539,13 @@ textarea,
 
 :root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
   .settings-nav__masthead {
+  padding-left: 0;
+}
+
+/* macOS fullscreen drops the stoplights, so the Settings nav masthead
+   collapses its 80px reservation to the left edge too — mirrors the main
+   `.sidebar__masthead` fullscreen behavior so the two screens stay aligned. */
+:root[data-platform="darwin"][data-fullscreen="true"] .settings-nav__masthead {
   padding-left: 0;
 }
 

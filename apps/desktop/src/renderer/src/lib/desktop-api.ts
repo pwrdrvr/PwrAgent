@@ -646,6 +646,16 @@ export type DesktopApi = {
   shutdownMessagingRuntime?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;
   /**
+   * Main → renderer push: fires on native `enter-full-screen` /
+   * `leave-full-screen` for the main window. The renderer toggles
+   * `<html data-fullscreen>` so the macOS traffic-light inset collapses
+   * in fullscreen (the OS hides the stoplights there). Returns an
+   * unsubscribe function.
+   */
+  onWindowFullscreen?: (
+    callback: (isFullScreen: boolean) => void,
+  ) => () => void;
+  /**
    * Main → renderer push: fires when the user invokes the app's
    * "Settings…" menu item. The main-window shell subscribes and
    * switches its main view to the Settings overlay. Returns an
