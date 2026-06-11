@@ -26,7 +26,7 @@ import {
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
-import { BranchIcon, FolderIcon } from "../../icons";
+import { BranchIcon, FolderIcon, SearchIcon } from "../../icons";
 import type {
   ArchiveThreadOptions,
   BrowseMode,
@@ -71,6 +71,7 @@ type SidebarProps = {
   activeProfile?: string;
   automationsActive?: boolean;
   profiles?: DesktopPwrAgentProfileSummary[];
+  threadSearchActive?: boolean;
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
   selectedItemKey?: string;
@@ -87,6 +88,7 @@ type SidebarProps = {
     mode: ThreadWorkspaceMode,
   ) => Promise<void>;
   onOpenAutomations?: () => void;
+  onOpenThreadSearch?: () => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -715,6 +717,14 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
 
         <div className="sidebar__masthead-actions">
+          <MastheadActionButton
+            ariaLabel="Search threads"
+            ariaPressed={props.threadSearchActive}
+            className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
+            onClick={props.onOpenThreadSearch}
+          >
+            <SearchIcon size={16} aria-hidden />
+          </MastheadActionButton>
           <MastheadActionButton
             ariaLabel="Open automations"
             ariaPressed={props.automationsActive}

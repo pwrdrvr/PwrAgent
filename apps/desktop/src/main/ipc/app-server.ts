@@ -20,6 +20,8 @@ import {
   type AppServerListSkillsResponse,
   type AppServerListThreadsRequest,
   type AppServerListThreadsResponse,
+  type ThreadSearchRequest,
+  type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
   type PersistThreadUsageActivityResponse,
   type AppServerReadThreadRequest,
@@ -92,9 +94,11 @@ import {
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { getAppStateDb } from "../state/app-state";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -138,6 +142,9 @@ import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ThreadSearchService } from "../thread-search/thread-search-service";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -362,6 +369,7 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
+  private threadSearchService: ThreadSearchService | null = null;
   private threadMigrationService: ThreadMigrationService | null = null;
   // Parent of the most recently picked directory, used as the "Add directory"
   // dialog's defaultPath so it reopens where you last browsed instead of the
@@ -376,6 +384,32 @@ class DesktopAppServerService {
       });
     }
     return this.threadMigrationService;
+  }
+
+  private getThreadSearchService(): ThreadSearchService {
+    if (!this.threadSearchService) {
+      this.threadSearchService = new ThreadSearchService(
+        new ThreadSearchStore(getAppStateDb()),
+        async ({ backend, archived }) => {
+          const threads = await getDesktopBackendRegistry().listThreads({
+            backend,
+            archived,
+            callerReason: "thread-search",
+            enrichDirectories: true,
+          });
+          return await hydrateRetainedThreadOverlayData(this.getOverlayStore(), threads);
+        },
+        new ProviderTranscriptThreadSearchAdapter(
+          async ({ backend, threadId, limit }) =>
+            await getDesktopBackendRegistry().readThread({
+              backend,
+              threadId,
+              limit,
+            }),
+        ),
+      );
+    }
+    return this.threadSearchService;
   }
 
   async listThreads(
@@ -405,6 +439,12 @@ class DesktopAppServerService {
       threads: hydratedThreads,
       workspaceRoots: resolveScratchProjectsRoots(),
     };
+  }
+
+  async searchThreads(
+    request: ThreadSearchRequest = {},
+  ): Promise<ThreadSearchResponse> {
+    return await this.getThreadSearchService().search(request);
   }
 
   async listSkills(
@@ -1598,6 +1638,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.listThreads(request);
     }
   );
+  ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
+  ipcMain.handle(
+    THREAD_SEARCH_CHANNEL,
+    async (
+      _event,
+      request?: ThreadSearchRequest,
+    ): Promise<ThreadSearchResponse> => {
+      return await appServerService.searchThreads(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_READ_THREAD_CHANNEL,
@@ -1942,6 +1992,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
+  ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);

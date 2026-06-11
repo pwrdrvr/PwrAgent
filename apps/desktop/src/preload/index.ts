@@ -49,6 +49,8 @@ import type {
   GetAutomationRunArtifactResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  ThreadSearchRequest,
+  ThreadSearchResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   PersistThreadUsageActivityRequest,
@@ -258,6 +260,7 @@ import {
   APP_UPDATE_STATUS_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -544,6 +547,10 @@ const desktopApi = Object.freeze({
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>
     await ipcRenderer.invoke(APP_SERVER_LIST_THREADS_CHANNEL, request),
+  searchThreads: async (
+    request?: ThreadSearchRequest,
+  ): Promise<ThreadSearchResponse> =>
+    await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
   listSkills: async (
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>

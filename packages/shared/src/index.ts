@@ -16,6 +16,7 @@ export * from "./contracts/messaging-tools";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
 export * from "./contracts/thread-tools";
+export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
 export * from "./profile-names";

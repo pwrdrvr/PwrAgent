@@ -14,6 +14,7 @@ export { NewThreadIcon } from "./NewThreadIcon";
 export { ProjectsIcon } from "./ProjectsIcon";
 export { PullRequestIcon } from "./PullRequestIcon";
 export { ServerIcon } from "./ServerIcon";
+export { SearchIcon } from "./SearchIcon";
 export { SettingsIcon } from "./SettingsIcon";
 export { SlackIcon } from "./SlackIcon";
 export { SmileyIcon } from "./SmileyIcon";
