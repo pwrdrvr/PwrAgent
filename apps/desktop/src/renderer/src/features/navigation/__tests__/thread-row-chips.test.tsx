@@ -331,7 +331,7 @@ describe("ThreadRow chip flow", () => {
     if (bindingIdx >= 0 && reactionIdx >= 0) expect(bindingIdx).toBeLessThan(reactionIdx);
   });
 
-  it("shows the PR title and status on separate tooltip lines", () => {
+  it("shows the PR title and status in the shared viewport tooltip", () => {
     renderRow({
       thread: {
         ...baseThread,
@@ -349,10 +349,18 @@ describe("ThreadRow chip flow", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#123/ }))
-      .toHaveAttribute(
-        "title",
-        "Retain thread pull request history\npwrdrvr/PwrAgent#123 — ready for review · checks passing",
-      );
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    expect(prChip).not.toHaveAttribute("title");
+
+    fireEvent.mouseEnter(prChip);
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveClass("viewport-tooltip");
+    expect(tooltip).toHaveTextContent("Retain thread pull request history");
+    expect(tooltip).toHaveTextContent(
+      "pwrdrvr/PwrAgent#123 — ready for review · checks passing",
+    );
   });
 });

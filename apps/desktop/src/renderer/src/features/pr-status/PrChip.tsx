@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { PrSummary } from "@pwragent/shared";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -14,6 +15,9 @@ type PrChipProps = {
 
 export function PrChip(props: PrChipProps) {
   const { pr } = props;
+  const tooltipController = useViewportTooltip({
+    className: "viewport-tooltip",
+  });
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
@@ -37,35 +41,42 @@ export function PrChip(props: PrChipProps) {
   };
 
   return (
-    <span
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
-      title={tooltip}
-      className={`pr-chip pr-chip--${checkState}`}
-      onClick={handleActivate}
-      onContextMenu={(event) => {
-        if (!props.onOpenContextMenu) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = event.currentTarget.getBoundingClientRect();
-        props.onOpenContextMenu(pr, {
-          x: event.clientX,
-          y: event.clientY,
-          anchorTop: rect.top,
-        });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          handleActivate(event);
-        }
-      }}
-    >
-      <span className="pr-chip__dot" aria-hidden="true" />
-      <span className="pr-chip__label">{label}</span>
-    </span>
+    <>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
+        className={`pr-chip pr-chip--${checkState}`}
+        data-pr-chip=""
+        onBlur={tooltipController.hide}
+        onClick={handleActivate}
+        onContextMenu={(event) => {
+          if (!props.onOpenContextMenu) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          props.onOpenContextMenu(pr, {
+            x: event.clientX,
+            y: event.clientY,
+            anchorTop: rect.top,
+          });
+        }}
+        onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            handleActivate(event);
+          }
+        }}
+        onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onMouseLeave={tooltipController.hide}
+      >
+        <span className="pr-chip__dot" aria-hidden="true" />
+        <span className="pr-chip__label">{label}</span>
+      </span>
+      {tooltipController.tooltipNode}
+    </>
   );
 }
 
