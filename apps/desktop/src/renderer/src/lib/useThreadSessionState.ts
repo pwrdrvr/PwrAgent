@@ -1052,7 +1052,24 @@ function reviewEntriesMatch(
 }
 
 function isReviewStartEntry(entry: AppServerThreadReviewEntry): boolean {
-  return Boolean(entry.displayText);
+  const displayText = entry.displayText?.trim();
+  if (!displayText || entry.output) {
+    return false;
+  }
+
+  if (entry.turn?.status === "in_progress") {
+    return true;
+  }
+
+  const normalizedDisplayText = normalizeReviewDisplayText(displayText).toLocaleLowerCase();
+  const normalizedReview = normalizeReviewDisplayText(entry.review).toLocaleLowerCase();
+  return (
+    normalizedDisplayText === normalizedReview ||
+    normalizedDisplayText === "code review started" ||
+    normalizedDisplayText.startsWith("review changes") ||
+    normalizedDisplayText.startsWith("review current") ||
+    normalizedDisplayText.startsWith("review commit")
+  );
 }
 
 function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
