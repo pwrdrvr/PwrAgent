@@ -2213,7 +2213,9 @@ describe("Sidebar", () => {
     );
 
     const prChip = screen.getByRole("button", {
-      name: "Open Giphy/GifGrabber#202 (passing) in browser",
+      // Accessible name carries the human-readable status phrase (not the raw
+      // `passing` enum) so screen readers announce what the dot means.
+      name: "Open Giphy/GifGrabber#202 (all checks passing) in browser",
     });
     fireEvent.contextMenu(prChip, { clientX: 48, clientY: 64 });
     await clickElement(
