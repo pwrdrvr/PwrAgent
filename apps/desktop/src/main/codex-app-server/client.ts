@@ -5823,8 +5823,10 @@ export class CodexAppServerClient {
     const turnRecord = asRecord(record?.turn);
     const turnId =
       extractTurnIdFromValue(result) ??
-      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]) ??
-      `pending:${reviewThreadId}`;
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]);
+    if (!turnId) {
+      throw new Error("codex app server review/start did not return turnId");
+    }
     this.pendingFirstTurnThreadResults.delete(params.threadId);
 
     return {

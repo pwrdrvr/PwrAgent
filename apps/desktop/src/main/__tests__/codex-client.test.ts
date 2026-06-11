@@ -6284,6 +6284,28 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("rejects review/start responses that omit a real turn id", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.reviewStartResult = {
+      reviewThreadId: "thread-2",
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(
+      client.startReview({
+        threadId: "thread-2",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      })
+    ).rejects.toThrow("codex app server review/start did not return turnId");
+
+    await client.close();
+  });
+
   it("maps plan-mode turns onto supported model and reasoning overrides", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadResumeResult = {
