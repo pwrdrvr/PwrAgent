@@ -782,6 +782,45 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("transcript-message__collapse-toggle");
   });
 
+  it("styles the sidebar scroll lanes with scrollbar-width only (no ::-webkit-scrollbar fat-flicker)", () => {
+    // Regression guard. A `::-webkit-scrollbar` block on these lanes
+    // makes Chromium render a fat *custom* scrollbar whenever it drops
+    // into classic-scrollbar mode (a mouse is attached, "Show scroll
+    // bars: Always" is set, or transiently while another app grabs the
+    // screen) — the webkit width overrides `scrollbar-width: thin`, so
+    // the bar visibly jumps fat and snaps back. The lanes must style the
+    // scrollbar ONLY via the standard properties so it stays thin in
+    // both overlay and classic modes.
+    // Each lane appears in more than one rule (a shared base rule plus
+    // its dedicated scroll rule), so collect every rule body for the
+    // selector and assert the scroll rule among them opts into thin.
+    for (const selector of [".sidebar-list--dense", ".directory-groups"]) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const bodies = [
+        ...css.matchAll(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g")),
+      ].map((match) => match[1]);
+      expect(bodies.some((body) => body.includes("scrollbar-width: thin;"))).toBe(
+        true
+      );
+    }
+    expect(css).not.toMatch(
+      /\.(?:sidebar-list--dense|directory-groups)::-webkit-scrollbar/
+    );
+  });
+
+  it("applies a thin, themed scrollbar to every scroller via the universal selector (scrollbar-width does not inherit)", () => {
+    // `scrollbar-color` inherits but `scrollbar-width` does NOT, so a
+    // `:root` rule alone leaves scrollers at the chunky default width in
+    // classic mode (only tinted). The universal selector sets the thin
+    // width on every element so all scroll containers (transcript,
+    // settings, …) actually render thin.
+    const universal = extractRuleBody(css, "*");
+    expect(universal).toContain("scrollbar-width: thin;");
+    expect(universal).toContain(
+      "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);"
+    );
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).not.toContain("--thinking-scanner-progress");
     expect(css).not.toContain("--thinking-scanner-full-offset");
