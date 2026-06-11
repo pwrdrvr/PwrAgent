@@ -148,6 +148,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: first },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [activity],
@@ -179,6 +180,7 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toEqual([
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [activity],
@@ -228,6 +230,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: oldFinal },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-2:active",
         collapsible: false,
         entries: [activeActivity],
@@ -324,6 +327,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: answer },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [secondActivity],

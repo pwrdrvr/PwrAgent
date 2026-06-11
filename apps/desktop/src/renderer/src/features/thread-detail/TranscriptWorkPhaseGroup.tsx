@@ -1,4 +1,4 @@
-import { memo, useId } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import type {
   AppServerSkillSummary,
   AppServerThreadEntry,
@@ -10,8 +10,10 @@ import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
+import { formatElapsedMs } from "./transcript-render-items";
 
 type TranscriptWorkPhaseGroupProps = {
+  activeStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
   directoryPaths?: string[];
@@ -40,13 +42,23 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           aria-expanded={props.expanded}
           onClick={props.onToggle}
         >
-          <span>{props.label}</span>
+          <span>
+            <TranscriptWorkPhaseGroupLabel
+              activeStartedAt={props.activeStartedAt}
+              label={props.label}
+            />
+          </span>
           <span className="transcript-work-phase-group__chevron" aria-hidden="true">
             {props.expanded ? "^" : "v"}
           </span>
         </button>
       ) : (
-        <div className="transcript-work-phase-group__label">{props.label}</div>
+        <div className="transcript-work-phase-group__label">
+          <TranscriptWorkPhaseGroupLabel
+            activeStartedAt={props.activeStartedAt}
+            label={props.label}
+          />
+        </div>
       )}
       {shouldRenderContent ? (
         <div id={hiddenRegionId} className="transcript-work-phase-group__content">
@@ -67,6 +79,33 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
 });
 
 TranscriptWorkPhaseGroup.displayName = "TranscriptWorkPhaseGroup";
+
+function TranscriptWorkPhaseGroupLabel(props: {
+  activeStartedAt?: number;
+  label: string;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (typeof props.activeStartedAt !== "number") {
+      return undefined;
+    }
+
+    setNow(Date.now());
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [props.activeStartedAt]);
+
+  if (typeof props.activeStartedAt !== "number") {
+    return props.label;
+  }
+
+  return `Working for ${formatElapsedMs(now - props.activeStartedAt)}`;
+}
 
 function renderEntry(params: {
   applications?: DesktopApplicationsSnapshot;

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAutomationCardActivityEntries } from "../automation-card-entries";
 import { TranscriptList } from "../TranscriptList";
@@ -118,6 +118,7 @@ describe("TranscriptList", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("renders messaging binding transitions without transcript history", () => {
@@ -1204,6 +1205,55 @@ describe("TranscriptList", () => {
     expect(changedIndex).toBeGreaterThan(firstActivityIndex);
     expect(commentaryIndex).toBeGreaterThan(changedIndex);
     expect(laterActivityIndex).toBeGreaterThan(commentaryIndex);
+  });
+
+  it("waits until the earliest active work threshold before ticking elapsed labels", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 10_000,
+    };
+
+    render(
+      <TranscriptList
+        activeTurnId="turn-1"
+        activeTurnStartedAt={20_000}
+        entries={[
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Read one file",
+            details: [],
+            turn: activeTurn,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_001);
+
+    act(() => {
+      vi.advanceTimersByTime(60_001);
+    });
+
+    expect(screen.getByText("Working for 1m 00s")).toBeInTheDocument();
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(screen.getByText("Working for 1m 01s")).toBeInTheDocument();
   });
 
   it("keeps just-finished live tool activity reachable when the final message arrives", async () => {
