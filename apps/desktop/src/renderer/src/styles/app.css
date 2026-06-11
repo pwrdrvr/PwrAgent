@@ -10171,8 +10171,10 @@ textarea,
   gap: 8px;
 }
 
-/* Sub-Agents panel cards. */
-.subagent-card {
+/* Shared rail card — used by the Sub-Agents and Pull Requests panels.
+   A status line (dot + label) sits on its own row above a wrapping title so
+   neither competes with the other for the top row. */
+.rail-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -10186,7 +10188,7 @@ textarea,
    title never has to share the top row (it used to push the dot + status
    out of alignment). align-items: center keeps the dot centered on the
    status label regardless of sidebar width. */
-.subagent-card__status-line {
+.rail-card__status-line {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -10194,7 +10196,7 @@ textarea,
   min-width: 0;
 }
 
-.subagent-card__dot {
+.rail-card__dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
@@ -10204,7 +10206,7 @@ textarea,
 
 /* Title sits on its own row, full width, and wraps (clamped) instead of
    truncating mid-word in a shared flex row. */
-.subagent-card__title {
+.rail-card__title {
   margin: 0;
   color: var(--text-primary);
   font-size: 13px;
@@ -10217,57 +10219,80 @@ textarea,
   overflow: hidden;
 }
 
-.subagent-card__model {
+.rail-card__model {
   margin: 0;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
 }
 
-.subagent-card__times {
+.rail-card__times {
   margin: 0;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.35;
 }
 
-.subagent-card__time-label {
+.rail-card__time-label {
   color: var(--text-secondary);
 }
 
-.subagent-card__dot--active {
+.rail-card__dot--active {
   background: var(--accent);
 }
 
-.subagent-card__dot--done {
+.rail-card__dot--done {
   background: var(--success-text, var(--accent));
 }
 
-.subagent-card__dot--warn {
+.rail-card__dot--warn {
   background: var(--danger-text);
 }
 
-.subagent-card__status {
+.rail-card__status {
   flex: 0 0 auto;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 650;
 }
 
-.subagent-card__status--active {
+.rail-card__status--active {
   color: var(--accent);
 }
 
-.subagent-card__status--done {
+.rail-card__status--done {
   color: var(--success-text, var(--accent));
 }
 
-.subagent-card__status--warn {
+.rail-card__status--warn {
   color: var(--danger-text);
 }
 
-.subagent-card__message,
-.subagent-card__usage {
+/* Pull-request state tones — dot only. The compound PR status ("Ready for
+   review · Checks passing") reads clearer with a neutral label + a colored
+   dot, matching the sidebar PrChip; same color tokens as `.pr-chip`. */
+.rail-card__dot--ok {
+  background: var(--status-ok);
+}
+
+.rail-card__dot--error {
+  background: var(--status-error);
+}
+
+.rail-card__dot--warning {
+  background: var(--status-warning);
+}
+
+.rail-card__dot--merged {
+  background: var(--brand-purple);
+}
+
+.rail-card__dot--neutral {
+  background: var(--status-suspended);
+}
+
+/* Generic muted meta line (e.g. a PR's repo + number). */
+.rail-card__meta {
   margin: 0;
   color: var(--text-muted);
   font-size: 11px;
@@ -10275,7 +10300,16 @@ textarea,
   overflow-wrap: anywhere;
 }
 
-.subagent-card__usage {
+.rail-card__message,
+.rail-card__usage {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.rail-card__usage {
   color: var(--text-secondary);
 }
 

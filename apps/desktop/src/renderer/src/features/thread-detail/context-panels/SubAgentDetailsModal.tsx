@@ -96,12 +96,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         onClick={(event) => event.stopPropagation()}
       >
         <div className="subagent-modal__head">
-          <span className="subagent-card__status-line">
+          <span className="rail-card__status-line">
             <span
               aria-hidden="true"
-              className={`subagent-card__dot subagent-card__dot--${tone}`}
+              className={`rail-card__dot rail-card__dot--${tone}`}
             />
-            <span className={`subagent-card__status subagent-card__status--${tone}`}>
+            <span className={`rail-card__status rail-card__status--${tone}`}>
               {subAgentStatusLabel(subAgent.status)}
             </span>
           </span>
