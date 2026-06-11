@@ -591,11 +591,6 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 14) {
       db.transaction(() => {
         db.exec(PR_STATUS_CACHE_SCHEMA);
-        db.pragma("user_version = 13");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 14) {
-      db.transaction(() => {
         db.exec(PR_LOOKUP_CACHE_SCHEMA);
         db.pragma("user_version = 14");
       })();
