@@ -1,50 +1,51 @@
 import { ipcMain } from "electron";
 import { subscribersForChannel } from "../window-channels";
-import type {
-  AgentEvent,
-  CancelThreadExecutionModeQueueRequest,
-  CancelThreadExecutionModeQueueResponse,
-  CheckThreadBranchDriftRequest,
-  CheckThreadBranchDriftResponse,
-  CompactThreadRequest,
-  CompactThreadResponse,
-  ForkThreadRequest,
-  ForkThreadResponse,
-  MaterializeDirectoryLaunchpadRequest,
-  MaterializeDirectoryLaunchpadResponse,
-  InterruptTurnRequest,
-  InterruptTurnResponse,
-  LatestCodexConfigWarningResponse,
-  ListBackendsRequest,
-  ListBackendsResponse,
-  QueueThreadExecutionModeRequest,
-  QueueThreadExecutionModeResponse,
-  RetainThreadBranchDriftRequest,
-  RetainThreadBranchDriftResponse,
-  RunCodexEnvironmentActionRequest,
-  RunCodexEnvironmentActionResponse,
-  SetAcpSessionRuntimeOptionRequest,
-  SetAcpSessionRuntimeOptionResponse,
-  SetCodexThreadEnvironmentRequest,
-  SetCodexThreadEnvironmentResponse,
-  SetThreadExecutionModeRequest,
-  SetThreadExecutionModeResponse,
-  SetThreadModelSettingsRequest,
-  SetThreadModelSettingsResponse,
-  SteerTurnRequest,
-  SteerTurnResponse,
-  StartReviewRequest,
-  StartReviewResponse,
-  StartThreadRequest,
-  StartThreadResponse,
-  StartTurnRequest,
-  StartTurnResponse,
-  SubmitServerRequestRequest,
-  SubmitServerRequestResponse,
-  TrustCodexProjectRequest,
-  TrustCodexProjectResponse,
-  UpdateThreadExpectedBranchRequest,
-  UpdateThreadExpectedBranchResponse,
+import {
+  sanitizeRendererPayload,
+  type AgentEvent,
+  type CancelThreadExecutionModeQueueRequest,
+  type CancelThreadExecutionModeQueueResponse,
+  type CheckThreadBranchDriftRequest,
+  type CheckThreadBranchDriftResponse,
+  type CompactThreadRequest,
+  type CompactThreadResponse,
+  type ForkThreadRequest,
+  type ForkThreadResponse,
+  type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadResponse,
+  type InterruptTurnRequest,
+  type InterruptTurnResponse,
+  type LatestCodexConfigWarningResponse,
+  type ListBackendsRequest,
+  type ListBackendsResponse,
+  type QueueThreadExecutionModeRequest,
+  type QueueThreadExecutionModeResponse,
+  type RetainThreadBranchDriftRequest,
+  type RetainThreadBranchDriftResponse,
+  type RunCodexEnvironmentActionRequest,
+  type RunCodexEnvironmentActionResponse,
+  type SetAcpSessionRuntimeOptionRequest,
+  type SetAcpSessionRuntimeOptionResponse,
+  type SetCodexThreadEnvironmentRequest,
+  type SetCodexThreadEnvironmentResponse,
+  type SetThreadExecutionModeRequest,
+  type SetThreadExecutionModeResponse,
+  type SetThreadModelSettingsRequest,
+  type SetThreadModelSettingsResponse,
+  type SteerTurnRequest,
+  type SteerTurnResponse,
+  type StartReviewRequest,
+  type StartReviewResponse,
+  type StartThreadRequest,
+  type StartThreadResponse,
+  type StartTurnRequest,
+  type StartTurnResponse,
+  type SubmitServerRequestRequest,
+  type SubmitServerRequestResponse,
+  type TrustCodexProjectRequest,
+  type TrustCodexProjectResponse,
+  type UpdateThreadExpectedBranchRequest,
+  type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
@@ -256,13 +257,14 @@ function broadcastAgentEvent(event: AgentEvent): void {
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
+  const rendererEvent = sanitizeRendererPayload(event);
 
   // Only deliver to windows that registered for this channel.
   // Secondary windows (e.g. the Messaging Activity window) opt out by
   // default — see `apps/desktop/src/main/window-channels.ts`.
   for (const webContents of subscribersForChannel(AGENT_EVENT_CHANNEL)) {
     if (typeof webContents.send !== "function") continue;
-    webContents.send(AGENT_EVENT_CHANNEL, event);
+    webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
   }
 }
 
