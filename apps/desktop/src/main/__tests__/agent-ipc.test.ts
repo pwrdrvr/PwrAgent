@@ -248,4 +248,105 @@ describe("agent ipc", () => {
 
     disposeAgentIpcHandlers();
   });
+
+  it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {
+    const {
+      registerAgentIpcHandlers,
+      disposeAgentIpcHandlers,
+    } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const oversizedOutput =
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
+      "x".repeat(80_000) +
+      "protocol-tail";
+
+    registerAgentIpcHandlers();
+
+    await registryListener?.({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "cat protocol-capture.json",
+            data: {
+              aggregatedOutput: oversizedOutput,
+            },
+          },
+        },
+      },
+    } as AgentEvent);
+
+    const sentEvent = send.mock.calls[0]?.[1] as AgentEvent | undefined;
+    const item =
+      sentEvent?.notification.method === "item/completed"
+        ? sentEvent.notification.params.item
+        : undefined;
+    const output = (item as { data?: Record<string, unknown> } | undefined)
+      ?.data?.aggregatedOutput;
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        backend: "codex",
+      }),
+    );
+    expect(typeof output).toBe("string");
+    expect(output).toContain("PwrAgent renderer boundary: truncated");
+    expect(output).toContain("$.notification.params.item.data.aggregatedOutput");
+    expect(output).toContain("protocol-tail");
+    expect(output).not.toContain("x".repeat(60_000));
+
+    disposeAgentIpcHandlers();
+  });
+
+  it("caps oversized live diff payloads before broadcasting to renderer subscribers", async () => {
+    const {
+      registerAgentIpcHandlers,
+      disposeAgentIpcHandlers,
+    } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const oversizedDiff =
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
+      "x".repeat(80_000) +
+      "protocol-tail";
+
+    registerAgentIpcHandlers();
+
+    await registryListener?.({
+      backend: "codex",
+      notification: {
+        method: "turn/diff/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          diff: oversizedDiff,
+        },
+      },
+    } as AgentEvent);
+
+    const sentEvent = send.mock.calls[0]?.[1] as AgentEvent | undefined;
+    const diff =
+      sentEvent?.notification.method === "turn/diff/updated"
+        ? sentEvent.notification.params.diff
+        : undefined;
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        backend: "codex",
+      }),
+    );
+    expect(typeof diff).toBe("string");
+    expect(diff).toContain("PwrAgent renderer boundary: truncated");
+    expect(diff).toContain("$.notification.params.diff");
+    expect(diff).toContain("protocol-tail");
+    expect(diff).not.toContain("x".repeat(60_000));
+
+    disposeAgentIpcHandlers();
+  });
 });

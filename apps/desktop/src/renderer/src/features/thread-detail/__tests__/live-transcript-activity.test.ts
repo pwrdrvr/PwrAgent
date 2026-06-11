@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendCommandOutputDelta,
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
@@ -37,6 +38,40 @@ describe("buildLiveToolDetails", () => {
       },
     ]);
     expect(details[0]?.command?.output).toContain("Still running reviewer output.");
+  });
+});
+
+describe("appendCommandOutputDelta", () => {
+  it("caps accumulated live command output before it can grow unbounded in renderer state", () => {
+    const entry = appendCommandOutputDelta(
+      {
+        type: "activity",
+        id: "activity-1",
+        summary: "Ran command",
+        status: "in_progress",
+        details: [
+          {
+            id: "cmd-1",
+            kind: "command",
+            label: "cat protocol-capture.json",
+            command: {
+              displayCommand: "cat protocol-capture.json",
+              output: "start\n",
+            },
+          },
+        ],
+      },
+      {
+        itemId: "cmd-1",
+        delta: `{"backend":"codex","captureId":"large"}${"x".repeat(80_000)}tail`,
+      },
+    );
+
+    const output = entry.details[0]?.command?.output ?? "";
+    expect(output.length).toBeLessThan(36_000);
+    expect(output).toContain("PwrAgent renderer boundary: truncated");
+    expect(output).toContain("original length");
+    expect(output).not.toContain("x".repeat(60_000));
   });
 });
 

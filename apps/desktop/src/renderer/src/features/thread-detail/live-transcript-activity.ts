@@ -1,9 +1,10 @@
-import type {
-  AppServerSource,
-  AppServerThreadActivityDetail,
-  AppServerThreadActivityEntry,
-  AppServerThreadCommandDetail,
-  AppServerThreadTurnMetadata,
+import {
+  truncateRendererPayloadString,
+  type AppServerSource,
+  type AppServerThreadActivityDetail,
+  type AppServerThreadActivityEntry,
+  type AppServerThreadCommandDetail,
+  type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
 
 export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
@@ -981,7 +982,10 @@ export function appendCommandOutputDelta(
       command: {
         displayCommand: detail.command?.displayCommand ?? detail.label,
         ...detail.command,
-        output: `${detail.command?.output ?? ""}${params.delta}`,
+        output: truncateRendererPayloadString(
+          `${detail.command?.output ?? ""}${params.delta}`,
+          "live command output",
+        ),
       },
     };
   });

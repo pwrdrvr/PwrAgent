@@ -6,6 +6,7 @@ import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
+  AppServerReadThreadResponse,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
@@ -415,6 +416,73 @@ describe("app server ipc", () => {
         path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
+  });
+
+  it("caps oversized transcript payload strings before readThread crosses IPC", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const oversizedOutput =
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
+      "x".repeat(80_000) +
+      "protocol-tail";
+
+    const oversizedReadThreadResponse: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1234,
+      threadId: "thread-large",
+      replay: {
+        entries: [
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Ran command",
+            status: "completed",
+            details: [
+              {
+                id: "cmd-1",
+                kind: "command",
+                label: "cat protocol-capture.json",
+                command: {
+                  displayCommand: "cat protocol-capture.json",
+                  output: oversizedOutput,
+                },
+              },
+            ],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+      threadStatus: "idle",
+    };
+    readThread.mockResolvedValueOnce(oversizedReadThreadResponse as never);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+      {},
+      { backend: "codex", threadId: "thread-large" },
+    ) as AppServerReadThreadResponse | undefined;
+    const entry = response?.replay.entries[0];
+    const output =
+      entry?.type === "activity"
+        ? entry.details[0]?.command?.output ?? ""
+        : "";
+
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-large",
+      before: undefined,
+      limit: undefined,
+    });
+    expect(output.length).toBeLessThan(36_000);
+    expect(output).toContain("PwrAgent renderer boundary: truncated");
+    expect(output).toContain("$.replay.entries[0].details[0].command.output");
+    expect(output).toContain("protocol-tail");
+    expect(output).not.toContain("x".repeat(60_000));
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {
