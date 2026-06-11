@@ -1,4 +1,5 @@
 import type { AutomationRunOutputDecision } from "./automations";
+import type { PullRequestProvider } from "./navigation";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
@@ -1164,6 +1165,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         prs: Array<{
+          provider: PullRequestProvider;
           number: number;
           org: string;
           repo: string;

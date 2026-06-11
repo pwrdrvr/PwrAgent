@@ -824,7 +824,7 @@ export class SqliteOverlayStore {
           directoryPaths,
           fetchedAt: row.fetched_at,
           prs: (JSON.parse(row.payload) as PrSummary[]).map((pr) =>
-            normalizePrSummary({ ...pr, provider }),
+            normalizePrSummary({ ...pr, provider: pr.provider ?? provider }),
           ),
         };
       } catch {

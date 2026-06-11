@@ -39,6 +39,15 @@ const prPassing: PrSummary = {
   url: "https://github.com/pwrdrvr/PwrAgent/pull/179",
 };
 
+const enterprisePrPassing: PrSummary = {
+  provider: "ghe.pwrdrvr.test",
+  number: 179,
+  org: "pwrdrvr",
+  repo: "PwrAgent",
+  state: "passing",
+  url: "https://ghe.pwrdrvr.test/pwrdrvr/PwrAgent/pull/179",
+};
+
 describe("SqliteOverlayStore — thread PRs", () => {
   it("starts with no prs on a thread that has never been touched", async () => {
     const overlay = await store.getThreadOverlayState({
@@ -205,5 +214,29 @@ describe("SqliteOverlayStore — thread PRs", () => {
 
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
+  });
+
+  it("preserves PR providers inside branch lookup cache payloads", async () => {
+    await store.writePrLookupCacheEntry({
+      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      provider: "github.com",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 2345,
+      prs: [enterprisePrPassing],
+    });
+
+    const entries = await store.readPrLookupCache();
+
+    expect(entries).toEqual({
+      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
+        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+        provider: "github.com",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        fetchedAt: 2345,
+        prs: [enterprisePrPassing],
+      },
+    });
   });
 });
