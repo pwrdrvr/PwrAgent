@@ -6,6 +6,15 @@ type PrChipProps = {
   pr: PrSummary;
   /** When the thread spans multiple repos, render the org/repo prefix. */
   showRepoPrefix: boolean;
+  /**
+   * Set when the chip is rendered next to explicit status pills (the Pull
+   * Requests card). The chip then DEFERS draft + merge-conflict to those
+   * pills: the dot stays mirrored to the check state — so it agrees with the
+   * sibling "Checks …" pill instead of competing with it — and the draft bar
+   * is dropped. Standalone chips (sidebar rows) leave this off and surface
+   * draft / conflict on the chip itself, since there are no pills there.
+   */
+  withStatusPills?: boolean;
   onOpen: (url: string) => void;
   onOpenContextMenu?: (
     pr: PrSummary,
@@ -33,10 +42,13 @@ export function PrChip(props: PrChipProps) {
   // than replacing it: an OPEN draft keeps its real status color and gains a
   // separate affordance bar, and a conflict recolors the dot red (see the
   // `.pr-chip--draft` / `.pr-chip--conflicting` rules in app.css). Both only
-  // apply while the PR is open — a merged/closed chip owns its own dot color.
+  // apply while the PR is open — a merged/closed chip owns its own dot color —
+  // and only when the chip is standalone; next to status pills the dot defers
+  // to them so it never disagrees with the "Checks …" pill.
   const isOpen = resolveLifecycleState(pr) === "open";
-  const isDraft = isOpen && pr.reviewState === "draft";
-  const isConflicting = isOpen && pr.mergeState === "conflicting";
+  const surfaceAffordances = isOpen && !props.withStatusPills;
+  const isDraft = surfaceAffordances && pr.reviewState === "draft";
+  const isConflicting = surfaceAffordances && pr.mergeState === "conflicting";
   const className = [
     "pr-chip",
     `pr-chip--${chipState}`,

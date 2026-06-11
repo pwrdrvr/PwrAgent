@@ -25,9 +25,14 @@ function basePr(overrides: Partial<PrSummary> = {}): PrSummary {
   };
 }
 
-function renderChip(pr: PrSummary) {
+function renderChip(pr: PrSummary, opts: { withStatusPills?: boolean } = {}) {
   const { container } = render(
-    <PrChip pr={pr} showRepoPrefix={false} onOpen={vi.fn()} />,
+    <PrChip
+      pr={pr}
+      showRepoPrefix={false}
+      onOpen={vi.fn()}
+      withStatusPills={opts.withStatusPills}
+    />,
   );
   return container.querySelector(".pr-chip") as HTMLElement;
 }
@@ -69,5 +74,31 @@ describe("PrChip", () => {
     expect(chip).not.toHaveClass("pr-chip--draft");
     expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
     expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
+  });
+
+  it("defers draft + conflict to sibling pills when withStatusPills is set", () => {
+    // In the Pull Requests card the chip sits next to explicit pills, so the
+    // dot must stay the check-state color (agreeing with the "Checks …" pill)
+    // and drop the draft bar — no competing inline status.
+    const pr = basePr({
+      reviewState: "draft",
+      mergeState: "conflicting",
+      checkState: "passing",
+    });
+
+    const standalone = renderChip(pr);
+    expect(standalone).toHaveClass("pr-chip--draft");
+    expect(standalone).toHaveClass("pr-chip--conflicting");
+    expect(standalone.querySelector(".pr-chip__draft-bar")).not.toBeNull();
+
+    cleanup();
+
+    const withPills = renderChip(pr, { withStatusPills: true });
+    expect(withPills).toHaveClass("pr-chip--passing");
+    expect(withPills).not.toHaveClass("pr-chip--draft");
+    expect(withPills).not.toHaveClass("pr-chip--conflicting");
+    expect(withPills.querySelector(".pr-chip__draft-bar")).toBeNull();
+    // The accessible name still reports the full status for screen readers.
+    expect(withPills).toHaveAttribute("aria-label", expect.stringContaining("draft · merge conflict"));
   });
 });
