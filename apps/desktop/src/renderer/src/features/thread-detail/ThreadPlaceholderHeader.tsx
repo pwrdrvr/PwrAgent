@@ -9,6 +9,8 @@ type ThreadPlaceholderLayoutControls = {
   railOpen: boolean;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
+  /** Grey out the rail toggle for views with no context rail (search). */
+  railToggleDisabled?: boolean;
 };
 
 type ThreadPlaceholderHeaderProps = {
@@ -62,6 +64,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
               railOpen={props.layout.railOpen}
               onToggleSidebar={props.layout.onToggleSidebar}
               onToggleRail={props.layout.onToggleRail}
+              railToggleDisabled={props.layout.railToggleDisabled}
             />
           ) : null}
           <MessagingStatusBar

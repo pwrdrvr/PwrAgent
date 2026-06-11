@@ -1,22 +1,184 @@
-import { useState, type FormEvent } from "react";
-import type { AppServerBackendKind, ThreadSearchResponse } from "@pwragent/shared";
+import { useState, type FormEvent, type ReactNode } from "react";
+import type {
+  AppServerBackendKind,
+  MessagingChannelKind,
+  ThreadSearchConfidenceBand,
+  ThreadSearchMatchReasonKind,
+  ThreadSearchResponse,
+  ThreadSearchResult,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { SearchIcon } from "../../icons";
+import type { MastheadActionsProps } from "../chrome/MastheadActions";
+import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
+import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
 type ThreadSearchPanelProps = {
   desktopApi?: DesktopApi;
-  onClose: () => void;
   onOpenResult: (result: {
     backend: AppServerBackendKind;
     threadId: string;
   }) => Promise<void> | void;
+  onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  /**
+   * Window panel toggles + relocated masthead, threaded straight through to
+   * the shared {@link ThreadPlaceholderHeader} so search wears the same title
+   * bar as the thread view — the MSG status, the sidebar toggle, and the
+   * (disabled) rail toggle stay put instead of vanishing behind a bespoke
+   * header. Optional so the component still renders bare in unit tests.
+   */
+  layout?: {
+    sidebarOpen: boolean;
+    railOpen: boolean;
+    onToggleSidebar: () => void;
+    onToggleRail: () => void;
+  };
+  masthead?: MastheadActionsProps;
 };
+
+const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
+  exact_title: "Exact title",
+  title_token_overlap: "Title match",
+  summary_match: "Summary match",
+  project_match: "Project match",
+  directory_match: "Directory match",
+  path_match: "Path match",
+  branch_match: "Branch match",
+  backend_match: "Backend match",
+  model_match: "Model match",
+  time_filter: "Recent",
+  archive_filter: "Archived",
+  provider_content_match: "Message content",
+  semantic_match: "Semantic match",
+  recent_activity: "Recent activity",
+};
+
+function describeMatchReason(kind: ThreadSearchMatchReasonKind | undefined): string {
+  if (!kind) {
+    return "Match";
+  }
+  return MATCH_REASON_LABELS[kind] ?? kind.replaceAll("_", " ");
+}
+
+function basename(value: string): string {
+  const trimmed = value.replace(/[\\/]+$/, "");
+  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return cut >= 0 ? trimmed.slice(cut + 1) : trimmed;
+}
+
+/**
+ * Wrap each query token where it appears in a snippet so the matched text
+ * reads as a tangerine highlight instead of a flat gray run. React owns the
+ * escaping; we only split on literal, regex-escaped tokens.
+ */
+function highlightSnippet(text: string, query: string): ReactNode[] {
+  const tokens = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((token) => token.length >= 2),
+    ),
+  ).sort((a, b) => b.length - a.length);
+  if (tokens.length === 0) {
+    return [text];
+  }
+  const escaped = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const splitter = new RegExp(`(${escaped.join("|")})`, "ig");
+  const tokenSet = new Set(tokens);
+  return text.split(splitter).map((part, index) =>
+    part && tokenSet.has(part.toLowerCase()) ? (
+      <mark key={index} className="thread-search-result__mark">
+        {part}
+      </mark>
+    ) : (
+      <span key={index}>{part}</span>
+    ),
+  );
+}
+
+function ThreadSearchResultRow(props: {
+  result: ThreadSearchResult;
+  query: string;
+  onOpen: () => void;
+}): ReactNode {
+  const { result, query } = props;
+  const directory = result.linkedDirectories[0];
+  // `projectKey` is often a full checkout/worktree path (Codex keys projects by
+  // cwd), so collapse whatever we resolve down to its final path segment — the
+  // repo folder — and let the branch carry the distinguishing detail.
+  const rawWorkspace = result.projectKey ?? directory?.label ?? directory?.path;
+  const workspaceLabel = rawWorkspace ? basename(rawWorkspace) : undefined;
+  const WorkspaceIcon = directory?.kind === "worktree" ? WorktreeIcon : FolderIcon;
+  const titleNormalized = result.title.trim().toLowerCase();
+  const snippet = result.snippets.find(
+    (entry) => entry.text.trim().toLowerCase() !== titleNormalized,
+  )?.text;
+
+  return (
+    <button className="thread-search-result" type="button" onClick={props.onOpen}>
+      <span className="thread-search-result__body">
+        <span className="thread-search-result__title">{result.title}</span>
+        <span className="thread-search-result__meta">
+          <span className="chip chip--backend">{result.backend}</span>
+          {workspaceLabel ? (
+            <span className="thread-search-result__meta-item">
+              <WorkspaceIcon size={13} aria-hidden />
+              <span className="thread-search-result__meta-text">{workspaceLabel}</span>
+            </span>
+          ) : null}
+          {result.gitBranch ? (
+            <span className="thread-search-result__meta-item thread-search-result__meta-item--mono">
+              <BranchIcon size={13} aria-hidden />
+              <span className="thread-search-result__meta-text">{result.gitBranch}</span>
+            </span>
+          ) : null}
+          {result.model ? (
+            <span className="thread-search-result__meta-item thread-search-result__meta-item--mono thread-search-result__meta-item--muted">
+              <span className="thread-search-result__meta-text">{result.model}</span>
+            </span>
+          ) : null}
+        </span>
+        {snippet ? (
+          <span className="thread-search-result__snippet">{highlightSnippet(snippet, query)}</span>
+        ) : null}
+      </span>
+      <span className="thread-search-result__side">
+        <span
+          className={`thread-search-result__confidence thread-search-result__confidence--${result.confidence}`}
+        >
+          <span className="thread-search-result__confidence-dot" aria-hidden />
+          {result.confidence}
+        </span>
+        <span className="thread-search-result__reason">
+          {describeMatchReason(result.matchReasons[0]?.kind)}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function ThreadSearchEmptyState(props: {
+  title: string;
+  hint: string;
+}): ReactNode {
+  return (
+    <div className="thread-search-empty">
+      <span className="thread-search-empty__glyph" aria-hidden>
+        <SearchIcon size={22} />
+      </span>
+      <p className="thread-search-empty__title">{props.title}</p>
+      <p className="thread-search-empty__hint">{props.hint}</p>
+    </div>
+  );
+}
 
 export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState<ThreadSearchResponse>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+
+  const searchUnavailable = !props.desktopApi?.searchThreads;
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -41,92 +203,105 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     }
   };
 
+  const resultCount = response?.results.length ?? 0;
+
   return (
-    <section className="thread-search-view" aria-label="Thread search">
-      <header className="thread-search-view__header">
-        <div>
-          <p className="thread-search-view__eyebrow">Threads</p>
-          <h1>Search</h1>
-        </div>
-        <button className="button button--ghost" type="button" onClick={props.onClose}>
-          Close
-        </button>
-      </header>
+    <section className="thread-view thread-search" aria-label="Thread search">
+      <ThreadPlaceholderHeader
+        desktopApi={props.desktopApi}
+        title="Search"
+        onOpenMessagingActivity={props.onOpenMessagingActivity}
+        layout={
+          props.layout ? { ...props.layout, railToggleDisabled: true } : undefined
+        }
+        masthead={props.masthead}
+      />
 
-      <form className="thread-search-view__form" onSubmit={(event) => void submit(event)}>
-        <label className="thread-search-view__field">
-          <span>Query</span>
-          <input
-            autoFocus
-            value={query}
-            placeholder="Search threads"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <button
-          className="button button--primary thread-search-view__submit"
-          disabled={loading || !query.trim() || !props.desktopApi?.searchThreads}
-          type="submit"
-        >
-          <SearchIcon size={15} aria-hidden />
-          <span>{loading ? "Searching" : "Search"}</span>
-        </button>
-      </form>
-
-      {error ? <p className="thread-search-view__error">{error}</p> : null}
-
-      {response?.unavailableScopes.length ? (
-        <div className="thread-search-view__scopes" aria-label="Unavailable scopes">
-          {response.unavailableScopes.map((scope, index) => (
-            <span key={`${scope.scope}:${scope.backend ?? "all"}:${index}`}>
-              {scope.backend ? `${scope.backend} ` : ""}
-              {scope.scope.replace("_", " ")}: {scope.reason}
+      <div className="thread-search__body">
+        <form className="thread-search-view__form" onSubmit={(event) => void submit(event)}>
+          <div className="thread-search-view__field">
+            <span className="thread-search-view__field-icon" aria-hidden>
+              <SearchIcon size={16} />
             </span>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="thread-search-results" role="list">
-        {response?.results.map((result) => (
-          <div key={result.identityKey} role="listitem">
-            <button
-              className="thread-search-result"
-              type="button"
-              onClick={() => {
-                void props.onOpenResult({
-                  backend: result.backend,
-                  threadId: result.threadId,
-                });
-              }}
-            >
-              <span className="thread-search-result__main">
-                <span className="thread-search-result__title">{result.title}</span>
-                <span className="thread-search-result__meta">
-                  {[
-                    result.backend,
-                    result.projectKey,
-                    result.linkedDirectories[0]?.label,
-                    result.model,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-                {result.snippets[0] ? (
-                  <span className="thread-search-result__snippet">
-                    {result.snippets[0].text}
-                  </span>
-                ) : null}
-              </span>
-              <span className="thread-search-result__side">
-                <span>{result.confidence}</span>
-                <span>{result.matchReasons[0]?.kind.replaceAll("_", " ") ?? "match"}</span>
-              </span>
-            </button>
+            <input
+              autoFocus
+              aria-label="Search threads"
+              value={query}
+              placeholder="Search by title, message content, or branch"
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </div>
-        ))}
-        {response && response.results.length === 0 ? (
-          <p className="thread-search-results__empty">No matches</p>
+          <button
+            className="button button--primary thread-search-view__submit"
+            disabled={loading || !query.trim() || searchUnavailable}
+            type="submit"
+          >
+            <SearchIcon size={15} aria-hidden />
+            <span>{loading ? "Searching" : "Search"}</span>
+          </button>
+        </form>
+
+        {error ? <p className="thread-search-view__error">{error}</p> : null}
+
+        {response?.unavailableScopes.length ? (
+          <div className="thread-search-view__scopes" aria-label="Unavailable scopes">
+            {response.unavailableScopes.map((scope, index) => (
+              <span key={`${scope.scope}:${scope.backend ?? "all"}:${index}`}>
+                {scope.backend ? `${scope.backend} ` : ""}
+                {scope.scope.replace("_", " ")}: {scope.reason}
+              </span>
+            ))}
+          </div>
         ) : null}
+
+        {response && resultCount > 0 ? (
+          <p className="thread-search-results-meta">
+            <span>
+              <strong>{resultCount}</strong> {resultCount === 1 ? "thread" : "threads"}
+            </span>
+            {response.truncated ? <span>Showing the top matches</span> : null}
+          </p>
+        ) : null}
+
+        {loading && !response ? (
+          <ThreadSearchEmptyState
+            title="Searching threads…"
+            hint="Looking across titles, summaries, branches, and message content."
+          />
+        ) : response ? (
+          resultCount > 0 ? (
+            <div className="thread-search-results" role="list">
+              {response.results.map((result) => (
+                <div key={result.identityKey} role="listitem">
+                  <ThreadSearchResultRow
+                    result={result}
+                    query={response.query}
+                    onOpen={() => {
+                      void props.onOpenResult({
+                        backend: result.backend,
+                        threadId: result.threadId,
+                      });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ThreadSearchEmptyState
+              title="No threads match that search"
+              hint={`Nothing came back for “${response.query}”. Try a broader term or different wording.`}
+            />
+          )
+        ) : (
+          <ThreadSearchEmptyState
+            title={searchUnavailable ? "Search is unavailable" : "Search your threads"}
+            hint={
+              searchUnavailable
+                ? "Thread search isn’t available in this session yet."
+                : "Find any thread by its title, summary, linked branch, or message content across every backend."
+            }
+          />
+        )}
       </div>
     </section>
   );

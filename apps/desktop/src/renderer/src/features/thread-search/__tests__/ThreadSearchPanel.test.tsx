@@ -42,12 +42,11 @@ describe("ThreadSearchPanel", () => {
     render(
       <ThreadSearchPanel
         desktopApi={{ searchThreads } as DesktopApi}
-        onClose={vi.fn()}
         onOpenResult={onOpenResult}
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Query"), {
+    fireEvent.change(screen.getByLabelText("Search threads"), {
       target: { value: "branch drift" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
