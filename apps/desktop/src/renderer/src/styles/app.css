@@ -464,6 +464,64 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+/* New Thread button + hover/focus flyout. The button keeps its default
+   click action; the flyout drops down (right-aligned so it never spills off
+   the sidebar's right edge) with the explicit "in directory" / "without a
+   directory" choices. */
+.new-thread-button {
+  position: relative;
+  display: inline-flex;
+}
+
+.new-thread-menu {
+  position: absolute;
+  z-index: 40;
+  top: 100%;
+  right: 0;
+  /* Transparent top spacer keeps the hover region contiguous between the
+     button and the card, so sliding the pointer into the menu does not fire
+     pointerleave on the wrapper and close it before the cursor lands. */
+  padding-top: 6px;
+}
+
+.new-thread-menu__card {
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.new-thread-menu__item {
+  width: 100%;
+  display: block;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.new-thread-menu__item:hover,
+.new-thread-menu__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
    masthead's wordmark offset exactly — its 16px sidebar gutter + 80px
    stoplight reservation — so the wordmark sits in the same spot whether the
@@ -11576,6 +11634,48 @@ textarea,
   color: var(--danger-text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+/* "Chat without a directory" row — pinned above the recents so the
+   directory-less choice is always reachable regardless of the filtered list. */
+.project-picker__row--no-directory {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.project-picker__row--no-directory.is-active {
+  color: var(--accent-bright);
+}
+
+.project-picker__no-directory-icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-picker__no-directory-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* Diagonal strike across the folder glyph → "no directory". currentColor
+   follows the row text color so it tracks the hover/active accent. */
+.project-picker__no-directory-slash {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  transform: translateX(-50%) rotate(45deg);
+  background: currentColor;
+  border-radius: 1px;
 }
 
 .workspace-handoff-modal {

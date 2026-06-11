@@ -152,6 +152,7 @@ type ComposerProps = {
    * these through and the picker won't render.
    */
   onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
+  onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
@@ -5673,6 +5674,14 @@ export function Composer(props: ComposerProps) {
                 props.onClearPickDirectoryError?.();
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
+              onSelectNoDirectory={
+                props.onSelectNoDirectoryFromPicker
+                  ? () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onSelectNoDirectoryFromPicker?.();
+                    }
+                  : undefined
+              }
               onPickFromDisk={() => {
                 props.onClearPickDirectoryError?.();
                 props.onPickAndRegisterDirectory?.();

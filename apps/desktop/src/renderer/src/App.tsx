@@ -469,6 +469,7 @@ function DesktopAppShell(props: {
     settingsActive: mainView === "settings",
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
+    newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -482,6 +483,10 @@ function DesktopAppShell(props: {
     onCreateThread: async () => {
       setMainView("thread");
       await navigation.createThread();
+    },
+    onCreateThreadWithoutDirectory: async () => {
+      setMainView("thread");
+      await navigation.createThread(undefined, "default", { forceWorkspace: true });
     },
   };
   const threadViewProps = {
@@ -531,6 +536,9 @@ function DesktopAppShell(props: {
     pickingDirectory: navigation.pickingDirectory,
     onSelectDirectoryFromPicker: (directory) => {
       void navigation.openDirectoryLaunchpad(directory);
+    },
+    onSelectNoDirectoryFromPicker: () => {
+      void navigation.openWorkspaceLaunchpad();
     },
     onPickAndRegisterDirectory: () => {
       void navigation.pickAndRegisterDirectory();
@@ -685,9 +693,16 @@ function DesktopAppShell(props: {
           threadSearchActive={mainView === "search"}
           settingsActive={mainView === "settings"}
           onBrowseModeChange={navigation.setBrowseMode}
+          newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
           onCreateThread={async () => {
             setMainView("thread");
             await navigation.createThread();
+          }}
+          onCreateThreadWithoutDirectory={async () => {
+            setMainView("thread");
+            await navigation.createThread(undefined, "default", {
+              forceWorkspace: true,
+            });
           }}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");

@@ -852,6 +852,7 @@ export type ThreadViewProps = {
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
   onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
+  onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
@@ -2150,6 +2151,7 @@ export function ThreadView(props: ThreadViewProps) {
               onMaterializeLaunchpad={handleMaterializeLaunchpad}
               onUpdateLaunchpad={props.onUpdateLaunchpad}
               onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
+              onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
               onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
               onClearPickDirectoryError={props.onClearPickDirectoryError}
               pickDirectoryError={props.pickDirectoryError}

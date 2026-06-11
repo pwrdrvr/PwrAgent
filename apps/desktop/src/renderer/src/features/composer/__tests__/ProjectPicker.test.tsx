@@ -214,6 +214,70 @@ describe("ProjectPicker", () => {
     expect(screen.getByText(/no tracked directories yet/i)).toBeInTheDocument();
   });
 
+  it("renders 'Chat without a directory' only when onSelectNoDirectory is provided", () => {
+    const { rerender } = render(
+      <ProjectPicker
+        directories={[dirA]}
+        onSelect={() => undefined}
+        onPickFromDisk={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
+    expect(
+      screen.queryByRole("button", { name: /chat without a directory/i }),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ProjectPicker
+        directories={[dirA]}
+        onSelect={() => undefined}
+        onPickFromDisk={() => undefined}
+        onSelectNoDirectory={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /chat without a directory/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks 'Chat without a directory' active and invokes onSelectNoDirectory", () => {
+    const onSelectNoDirectory = vi.fn();
+    render(
+      <ProjectPicker
+        directories={[dirA]}
+        onSelect={() => undefined}
+        onPickFromDisk={() => undefined}
+        onSelectNoDirectory={onSelectNoDirectory}
+      />,
+    );
+
+    // No value set → the launchpad is directory-less, so the row is active.
+    fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
+    const row = screen.getByRole("button", { name: /chat without a directory/i });
+    expect(row).toHaveAttribute("aria-pressed", "true");
+    expect(row.className).toContain("is-active");
+
+    fireEvent.click(row);
+    expect(onSelectNoDirectory).toHaveBeenCalledOnce();
+  });
+
+  it("does not mark 'Chat without a directory' active when a directory is selected", () => {
+    render(
+      <ProjectPicker
+        value={dirA}
+        directories={[dirA]}
+        onSelect={() => undefined}
+        onPickFromDisk={() => undefined}
+        onSelectNoDirectory={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /project: pwragent/i }));
+    expect(
+      screen.getByRole("button", { name: /chat without a directory/i }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("closes the popover when Escape is pressed", () => {
     render(
       <ProjectPicker
