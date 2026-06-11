@@ -213,6 +213,46 @@ describe("transcript image protocol", () => {
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
+  it("keeps data image URLs when materialization writes fail", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const dataUrl = "data:image/png;base64,AQID";
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex",
+        fetchedAt: 1,
+        threadId: "thread-images",
+        replay: {
+          entries: [],
+          messages: [
+            {
+              id: "message-1",
+              role: "user",
+              text: "what's in this?",
+              parts: [{ type: "image", url: dataUrl }],
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      },
+      {
+        resolveRoot: () => path.join(tempDir, "thread-images"),
+        writeFile: async () => {
+          throw new Error("disk full");
+        },
+      }
+    );
+
+    expect(response.replay.messages[0]?.parts).toEqual([
+      { type: "image", url: dataUrl },
+    ]);
+  });
+
   it("leaves unsupported and malformed data image URLs unchanged", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

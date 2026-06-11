@@ -207,19 +207,23 @@ async function materializeTranscriptMessagePartImageUrl(
     backend: response.backend,
     threadId: response.threadId,
   });
-  await deps.mkdir(root, { recursive: true });
-  const filePath = path.join(root, `${dataImage.sha256}.${dataImage.extension}`);
-  let writePromise = materializedFileWrites.get(filePath);
-  if (!writePromise) {
-    writePromise = deps.writeFile(filePath, dataImage.buffer).then(() => undefined);
-    materializedFileWrites.set(filePath, writePromise);
-  }
-  await writePromise;
+  try {
+    await deps.mkdir(root, { recursive: true });
+    const filePath = path.join(root, `${dataImage.sha256}.${dataImage.extension}`);
+    let writePromise = materializedFileWrites.get(filePath);
+    if (!writePromise) {
+      writePromise = deps.writeFile(filePath, dataImage.buffer).then(() => undefined);
+      materializedFileWrites.set(filePath, writePromise);
+    }
+    await writePromise;
 
-  return {
-    ...part,
-    url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
-  };
+    return {
+      ...part,
+      url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
+    };
+  } catch {
+    return part;
+  }
 }
 
 function rewriteTranscriptEntryImageUrls(entry: AppServerThreadEntry): AppServerThreadEntry {
