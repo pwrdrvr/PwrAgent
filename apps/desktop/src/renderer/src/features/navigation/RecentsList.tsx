@@ -10,6 +10,7 @@ import {
   isPinnedThread,
   moveThreadKey,
   parseThreadIdentityKey,
+  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
   didDragLeaveCurrentTarget,
@@ -20,6 +21,7 @@ import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  composerSourceThreadKey?: string;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -81,22 +83,6 @@ export function RecentsList(props: RecentsListProps) {
     children.push(thread);
     childrenByParentKey.set(parentKey, children);
   }
-  const sortSubthreads = (
-    parent: NavigationThreadSummary,
-    children: NavigationThreadSummary[],
-  ): NavigationThreadSummary[] => {
-    const order = new Map(
-      (parent.subthreadOrder ?? []).map((threadId, index) => [threadId, index]),
-    );
-    return [...children].sort((left, right) => {
-      const leftRank = order.get(left.id);
-      const rightRank = order.get(right.id);
-      if (leftRank !== undefined || rightRank !== undefined) {
-        return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
-      }
-      return (right.createdAt ?? 0) - (left.createdAt ?? 0);
-    });
-  };
   const pinnedThreads = topLevelThreads
     .filter(isPinnedThread)
     .sort(comparePinnedThreads);
@@ -135,7 +121,7 @@ export function RecentsList(props: RecentsListProps) {
 
   const renderSubthreads = (parent: NavigationThreadSummary) => {
     const parentKey = buildThreadIdentityKey(parent.source, parent.id);
-    const children = sortSubthreads(parent, childrenByParentKey.get(parentKey) ?? []);
+    const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
     if (children.length === 0 || parent.subthreadsCollapsed) {
       return null;
     }
@@ -150,6 +136,7 @@ export function RecentsList(props: RecentsListProps) {
             <ThreadRow
               key={childKey}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              composerSourceThreadKey={props.composerSourceThreadKey}
               dropIndicator={
                 dropIndicator?.targetKey === rowDropKey
                   ? dropIndicator.position
@@ -232,12 +219,13 @@ export function RecentsList(props: RecentsListProps) {
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = buildThreadIdentityKey(thread.source, thread.id);
-    const children = sortSubthreads(thread, childrenByParentKey.get(key) ?? []);
+    const children = sortSubthreadSummaries(thread, childrenByParentKey.get(key) ?? []);
     const pinned = isPinnedThread(thread);
     return (
       <div key={key} className="thread-group">
         <ThreadRow
           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+          composerSourceThreadKey={props.composerSourceThreadKey}
           dropIndicator={
             dropIndicator?.targetKey === key
               ? dropIndicator.position

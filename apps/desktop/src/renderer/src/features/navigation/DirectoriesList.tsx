@@ -21,6 +21,7 @@ import {
   isPinnedThread,
   moveDirectoryKey,
   moveThreadKey,
+  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
   FolderIcon,
@@ -37,6 +38,7 @@ import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -424,25 +426,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (!thread.parentThreadId) return true;
       return !visibleThreadKeys.has(buildThreadIdentityKey(thread.source, thread.parentThreadId));
     });
-    const sortSubthreads = (
-      parent: NavigationThreadSummary,
-      children: NavigationThreadSummary[],
-    ): NavigationThreadSummary[] => {
-      const order = new Map(
-        (parent.subthreadOrder ?? []).map((threadId, index) => [threadId, index]),
-      );
-      return [...children].sort((left, right) => {
-        const leftRank = order.get(left.id);
-        const rightRank = order.get(right.id);
-        if (leftRank !== undefined || rightRank !== undefined) {
-          return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
-        }
-        return (right.createdAt ?? 0) - (left.createdAt ?? 0);
-      });
-    };
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
-      const children = sortSubthreads(parent, childThreadsByParentKey.get(parentKey) ?? []);
+      const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
       if (children.length === 0 || parent.subthreadsCollapsed) {
         return null;
       }
@@ -452,6 +438,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             <ThreadRow
               key={`${directory.key}:${buildThreadIdentityKey(child.source, child.id)}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               includeLinkedDirectories
               linkedDirectoryMode="kind"
@@ -739,6 +726,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           dropIndicator={
                             dropIndicator?.targetKey === rowDropKey
@@ -886,6 +874,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories

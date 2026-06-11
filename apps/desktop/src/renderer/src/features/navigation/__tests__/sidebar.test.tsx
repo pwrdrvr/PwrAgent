@@ -522,6 +522,55 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menuitem", { name: "Fork in Local" })).toBeNull();
   });
 
+  it("exposes sub-thread and fork actions on a child card", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const onForkThread = vi.fn(async () => undefined);
+    const forkBackends: BackendSummary[] = [
+      {
+        ...backends[0]!,
+        capabilities: { ...backends[0]!.capabilities, forkThread: true },
+      },
+    ];
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child cleanup",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+    render(
+      <Sidebar
+        backends={forkBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // A child card now offers the same spawn actions; the parent hook
+    // re-parents the result to the group root, so the menu can stay open.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
+    );
+    expect(onCreateSubthread).toHaveBeenCalledWith(childThread, "same-worktree");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Fork into Same Worktree" }),
+    );
+    expect(onForkThread).toHaveBeenCalledWith(childThread, "same-worktree");
+  });
+
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
     render(
       <Sidebar

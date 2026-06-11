@@ -901,6 +901,7 @@ export type ThreadViewProps = {
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
+  onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
   onUpdatePendingUserInput?: (
     requestId: string,
@@ -2149,6 +2150,7 @@ export function ThreadView(props: ThreadViewProps) {
                 props.onDismissFullAccessRiskWarning
               }
               onMaterializeLaunchpad={handleMaterializeLaunchpad}
+              onCancelLaunchpad={props.onCancelLaunchpad}
               onUpdateLaunchpad={props.onUpdateLaunchpad}
               onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
               onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}

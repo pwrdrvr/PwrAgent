@@ -115,6 +115,8 @@ type ComposerProps = {
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
+  /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
+  onCancelLaunchpad?: (directoryKey: string) => void;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
@@ -6110,6 +6112,18 @@ export function Composer(props: ComposerProps) {
               }}
             >
               {interrupting ? "Stopping…" : "Stop"}
+            </button>
+          ) : null}
+          {props.launchpad && props.onCancelLaunchpad ? (
+            <button
+              className="button button--ghost"
+              disabled={sending}
+              type="button"
+              onClick={() => {
+                props.onCancelLaunchpad?.(props.launchpad!.directoryKey);
+              }}
+            >
+              Cancel
             </button>
           ) : null}
           <button

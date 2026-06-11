@@ -587,6 +587,7 @@ function DesktopAppShell(props: {
       : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
+    onCancelLaunchpad: navigation.discardLaunchpad,
     onMaterializeLaunchpad: navigation.materializeDirectoryLaunchpad,
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
@@ -686,6 +687,7 @@ function DesktopAppShell(props: {
           launchpadError={navigation.launchpadError}
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+          composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}
