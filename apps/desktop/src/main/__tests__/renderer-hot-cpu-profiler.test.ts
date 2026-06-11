@@ -354,12 +354,16 @@ describe("RendererHotCpuProfiler", () => {
       await vi.waitFor(() => expect(debuggerApi.detach).toHaveBeenCalled());
 
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      expect(getAppMetrics).toHaveBeenCalledTimes(4);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(4));
 
-      const samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      let samples: Array<Record<string, unknown>> = [];
+      await vi.waitFor(async () => {
+        samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(samples).toHaveLength(4);
+      });
       expect(samples.at(-1)).toMatchObject({
         cpuPercent: 0,
         cumulativeCpuSeconds: 110,
