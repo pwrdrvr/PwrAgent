@@ -9395,22 +9395,6 @@ textarea,
   min-height: 0;
 }
 
-.context-panel__header {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.context-panel__title {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
 .context-panel__scroll {
   flex: 1;
   min-height: 0;
@@ -10040,18 +10024,15 @@ textarea,
   background: var(--surface-overlay-faint);
 }
 
-.subagent-card__header {
+/* Status line: dot + label on their own row, above the title, so the
+   title never has to share the top row (it used to push the dot + status
+   out of alignment). align-items: center keeps the dot centered on the
+   status label regardless of sidebar width. */
+.subagent-card__status-line {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.subagent-card__title-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
   min-width: 0;
 }
 
@@ -10059,9 +10040,41 @@ textarea,
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: 5px;
   border-radius: 999px;
   background: var(--text-muted);
+}
+
+/* Title sits on its own row, full width, and wraps (clamped) instead of
+   truncating mid-word in a shared flex row. */
+.subagent-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subagent-card__model {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.subagent-card__times {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.subagent-card__time-label {
+  color: var(--text-secondary);
 }
 
 .subagent-card__dot--active {
@@ -10106,6 +10119,111 @@ textarea,
 
 .subagent-card__usage {
   color: var(--text-secondary);
+}
+
+/* Sub-agent Details modal — a centered, in-window dialog (mirrors the
+   transcript image lightbox) portaled to the body so it escapes the rail's
+   clipping. Opened from the card's Details button. */
+.subagent-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-opaque);
+}
+
+.subagent-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 560px);
+  max-height: min(100vh - 96px, 720px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.subagent-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subagent-modal__close {
+  flex: 0 0 auto;
+}
+
+.subagent-modal__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.subagent-modal__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.subagent-modal__facts div {
+  display: contents;
+}
+
+.subagent-modal__facts dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.subagent-modal__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.subagent-modal__mono {
+  font-family: var(--font-mono);
+}
+
+.subagent-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.subagent-modal__section h3 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.subagent-modal__body,
+.subagent-modal__usage-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.subagent-modal__usage-summary {
+  color: var(--text-muted);
 }
 
 /* Pull Requests panel rows. */

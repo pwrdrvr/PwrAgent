@@ -111,8 +111,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
 
   const activeTab = props.activeTab;
-  const activeTabMeta =
-    CONTEXT_TABS.find((tab) => tab.id === activeTab) ?? CONTEXT_TABS[0]!;
   const topTabs = CONTEXT_TABS.filter((tab) => !tab.bottom);
   const bottomTabs = CONTEXT_TABS.filter((tab) => tab.bottom);
 
@@ -452,9 +450,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       {open ? (
         <div className="context-panel">
           <div className="context-panel__inner">
-            <div className="context-panel__header">
-              <span className="context-panel__title">{activeTabMeta.label}</span>
-            </div>
+            {/* No panel title here — each panel's own section <h3> is the
+                title. A separate header duplicated it verbatim on the
+                single-section tabs (Sub-agents, Automations, …). */}
             <div
               className="context-panel__scroll"
               id="context-rail-panel"

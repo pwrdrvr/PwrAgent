@@ -1,14 +1,10 @@
 import type {
   NavigationThreadSummary,
-  ThreadSubAgentStatus,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 
-export type SubAgentStatus = ThreadSubAgentStatus;
-export type SubAgentSummary = ThreadSubAgentSummary;
-
 export type UseSubAgentsResult = {
-  subAgents: SubAgentSummary[];
+  subAgents: ThreadSubAgentSummary[];
   loading: boolean;
   /** True when the running backend exposes the monitor surface. */
   supported: boolean;
