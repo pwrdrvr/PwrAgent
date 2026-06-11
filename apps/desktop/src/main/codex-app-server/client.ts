@@ -2361,11 +2361,51 @@ function extractFileChangeText(params: {
 }
 
 function looksLikeUnifiedDiff(text: string): boolean {
-  const prefix = text.slice(0, 512).trimStart();
+  let lineStart = 0;
+  while (lineStart <= text.length && lineStart < 4096) {
+    const lineEnd = text.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? text.length : lineEnd;
+    const line = text.slice(lineStart, end).trim();
+    if (!line) {
+      lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+      continue;
+    }
+
+    if (
+      line.startsWith("diff --git ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("@@ ")
+    ) {
+      return true;
+    }
+
+    if (!isUnifiedDiffMetadataLine(line)) {
+      return false;
+    }
+
+    lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+  }
+
+  return false;
+}
+
+function isUnifiedDiffMetadataLine(line: string): boolean {
   return (
-    prefix.startsWith("diff --git ") ||
-    prefix.startsWith("--- ") ||
-    prefix.startsWith("@@ ")
+    line.startsWith("Index: ") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file mode ") ||
+    line.startsWith("deleted file mode ") ||
+    line.startsWith("old mode ") ||
+    line.startsWith("new mode ") ||
+    line.startsWith("similarity index ") ||
+    line.startsWith("dissimilarity index ") ||
+    line.startsWith("rename from ") ||
+    line.startsWith("rename to ") ||
+    line.startsWith("copy from ") ||
+    line.startsWith("copy to ") ||
+    line.startsWith("Binary files ") ||
+    line === "GIT binary patch" ||
+    /^=+$/.test(line)
   );
 }
 

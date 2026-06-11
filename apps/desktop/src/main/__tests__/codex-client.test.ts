@@ -2621,6 +2621,127 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves add and delete patches that start with unified diff metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-metadata-patches", {
+      thread: {
+        id: "thread-metadata-patches",
+        turns: [
+          {
+            id: "turn-metadata-patches",
+            status: "completed",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "fileChange",
+                id: "item-metadata-patches",
+                status: "completed",
+                changes: [
+                  {
+                    path: "/repo/metadata-added-file.ts",
+                    kind: {
+                      type: "add"
+                    },
+                    diff: [
+                      "Index: metadata-added-file.ts",
+                      "===================================================================",
+                      "new file mode 100644",
+                      "--- /dev/null",
+                      "+++ b/metadata-added-file.ts",
+                      "@@ -0,0 +1,2 @@",
+                      "+metadata added one",
+                      "+metadata added two"
+                    ].join("\n")
+                  },
+                  {
+                    path: "/repo/metadata-deleted-file.ts",
+                    kind: {
+                      type: "delete"
+                    },
+                    diff: [
+                      "Index: metadata-deleted-file.ts",
+                      "===================================================================",
+                      "deleted file mode 100644",
+                      "--- a/metadata-deleted-file.ts",
+                      "+++ /dev/null",
+                      "@@ -1,2 +0,0 @@",
+                      "-metadata deleted one",
+                      "-metadata deleted two"
+                    ].join("\n")
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-metadata-patches"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "activity",
+        id: "activity-item-metadata-patches",
+        summary: "Edited 2 files, +2, -2",
+        createdAt: 1_763_500_150_000,
+        status: "completed",
+        turn: {
+          id: "turn-metadata-patches",
+          startedAt: 1_763_500_150_000,
+          status: "completed"
+        },
+        details: [
+          expect.objectContaining({
+            label: "Add metadata-added-file.ts",
+            fileDiff: {
+              kind: "add",
+              diff: [
+                "Index: metadata-added-file.ts",
+                "===================================================================",
+                "new file mode 100644",
+                "--- /dev/null",
+                "+++ b/metadata-added-file.ts",
+                "@@ -0,0 +1,2 @@",
+                "+metadata added one",
+                "+metadata added two"
+              ].join("\n"),
+              additions: 2,
+              removals: 0
+            }
+          }),
+          expect.objectContaining({
+            label: "Delete metadata-deleted-file.ts",
+            fileDiff: {
+              kind: "delete",
+              diff: [
+                "Index: metadata-deleted-file.ts",
+                "===================================================================",
+                "deleted file mode 100644",
+                "--- a/metadata-deleted-file.ts",
+                "+++ /dev/null",
+                "@@ -1,2 +0,0 @@",
+                "-metadata deleted one",
+                "-metadata deleted two"
+              ].join("\n"),
+              additions: 0,
+              removals: 2
+            }
+          })
+        ]
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("omits giant raw file-change payloads from inline transcript diffs", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const rawJsonl = [
