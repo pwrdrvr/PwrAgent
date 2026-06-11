@@ -90,6 +90,7 @@ export class RendererHotCpuProfiler {
   private profileCount = 0;
   private stopProfilePromise: Promise<void> | null = null;
   private profiling = false;
+  private samplingPausedForProfile = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private stopped = false;
@@ -249,7 +250,11 @@ export class RendererHotCpuProfiler {
       });
       this.logger.error("[pwragent:hot-cpu] sample failed", error);
     } finally {
-      this.scheduleNextSample();
+      if (!this.profiling) {
+        this.scheduleNextSample();
+      } else {
+        this.samplingPausedForProfile = true;
+      }
     }
   }
 
@@ -492,7 +497,21 @@ export class RendererHotCpuProfiler {
       this.activeProfileTrigger = null;
       this.activeProfileHeapSnapshots = [];
       this.detachDebugger();
+      this.resumeSamplingAfterProfile();
     }
+  }
+
+  private resumeSamplingAfterProfile(): void {
+    if (!this.samplingPausedForProfile) {
+      return;
+    }
+
+    this.samplingPausedForProfile = false;
+    if (this.stopped || this.intervalTimer || this.isTargetDestroyed()) {
+      return;
+    }
+
+    this.scheduleNextSample();
   }
 
   private async captureHeapSnapshot(index: number, phase: string): Promise<void> {

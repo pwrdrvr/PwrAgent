@@ -286,6 +286,80 @@ describe("RendererHotCpuProfiler", () => {
     expect(stopResolved).toBe(true);
   });
 
+  it("pauses process metric sampling while the renderer CPU profiler is active", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "10000",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const { target, debuggerApi } = createTarget();
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 100.5),
+      createMetric(4, 101),
+      createMetric(0, 101),
+    ];
+    const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0, 101)]);
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics,
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 5),
+    });
+
+    try {
+      await profiler.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
+      expect(getAppMetrics).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs * 4);
+      expect(getAppMetrics).toHaveBeenCalledTimes(3);
+      expect(debuggerApi.sendCommand).not.toHaveBeenCalledWith("Profiler.stop");
+
+      await vi.runOnlyPendingTimersAsync();
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+      await vi.waitFor(() => expect(debuggerApi.detach).toHaveBeenCalled());
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      expect(getAppMetrics).toHaveBeenCalledTimes(4);
+    } finally {
+      await profiler.stop("test-complete");
+    }
+  });
+
   it("waits for the configured delay before sampling", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
