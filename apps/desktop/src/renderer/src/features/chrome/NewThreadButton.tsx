@@ -6,6 +6,7 @@ import {
   type ReactElement,
 } from "react";
 import { NewThreadIcon } from "../../icons";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
  * The masthead "New thread" button with a hover/focus flyout.
@@ -20,7 +21,8 @@ import { NewThreadIcon } from "../../icons";
  * The flyout only renders when there's a directory to contrast against the
  * workspace choice (`directoryLabel` set) and a directory-less handler exists.
  * When the context already resolves to the directory-less workspace, the two
- * items would be identical, so the button behaves as a plain button.
+ * items would be identical, so the button falls back to a plain "New thread"
+ * tooltip — matching the hover affordance of its masthead siblings.
  *
  * Shared by the sidebar masthead and the relocated thread-header / Windows
  * title-bar placements so every surface reads identically.
@@ -41,19 +43,35 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
   const wrapperRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
   const hasFlyout = Boolean(
     props.directoryLabel && props.onCreateThreadWithoutDirectory,
   );
   const menuOpen = open && hasFlyout && !props.creatingThread;
 
+  // With no flyout to reveal, keep a plain "New thread" tooltip so the button
+  // has the same hover/focus affordance as its (tooltip-bearing) siblings.
+  const showTooltip = (): void => {
+    if (!hasFlyout && buttonRef.current) {
+      tooltip.show(buttonRef.current, "New thread");
+    }
+  };
+
   useEffect(() => {
     if (!menuOpen) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setOpen(false);
+      if (event.key !== "Escape") {
+        return;
+      }
+      setOpen(false);
+      // Only pull focus back to the trigger when focus is actually inside the
+      // flyout (keyboard-driven). A hover-opened menu must close without
+      // stealing focus. The onFocus guard below then keeps this refocus from
+      // re-opening the just-dismissed menu.
+      if (wrapperRef.current?.contains(document.activeElement)) {
         buttonRef.current?.focus();
       }
     };
@@ -66,12 +84,28 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
       ref={wrapperRef}
       className="new-thread-button"
       data-state={menuOpen ? "open" : "closed"}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
+      onMouseEnter={() => {
+        setOpen(true);
+        showTooltip();
+      }}
+      onMouseLeave={() => {
+        setOpen(false);
+        tooltip.hide();
+      }}
+      onFocus={(event) => {
+        // Only react to focus entering the wrapper from outside. Focus moving
+        // within the wrapper (e.g. Escape refocusing the trigger from a menu
+        // item) must not re-open the menu or re-trigger the tooltip.
+        if (wrapperRef.current?.contains(event.relatedTarget as Node)) {
+          return;
+        }
+        setOpen(true);
+        showTooltip();
+      }}
       onBlur={(event) => {
         if (!wrapperRef.current?.contains(event.relatedTarget as Node)) {
           setOpen(false);
+          tooltip.hide();
         }
       }}
     >
@@ -86,6 +120,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
         disabled={Boolean(props.creatingThread)}
         onClick={() => {
           setOpen(false);
+          tooltip.hide();
           void props.onCreateThread();
         }}
       >
@@ -125,6 +160,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
           </div>
         </div>
       ) : null}
+      {tooltip.tooltipNode}
     </span>
   );
 }

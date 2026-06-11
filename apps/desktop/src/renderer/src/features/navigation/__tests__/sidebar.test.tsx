@@ -275,10 +275,14 @@ describe("Sidebar", () => {
     fireEvent.click(settingsButton);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
 
-    // The New Thread button carries a hover flyout instead of a viewport
-    // tooltip; with no directory in context it behaves as a plain button.
+    // With no directory in context the New Thread button has no flyout, so it
+    // keeps a plain "New thread" tooltip for parity with its siblings. The
+    // tooltip/flyout live on the wrapper, so hover the wrapper, not the button.
     const newThreadButton = screen.getByRole("button", { name: "New thread" });
-    fireEvent.mouseEnter(newThreadButton);
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.mouseLeave(newThreadButton.parentElement as HTMLElement);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(newThreadButton);
     expect(onCreateThread).toHaveBeenCalledTimes(1);

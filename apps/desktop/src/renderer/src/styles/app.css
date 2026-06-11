@@ -475,6 +475,9 @@ textarea,
 
 .new-thread-menu {
   position: absolute;
+  /* Matches the title-bar z-index; the title bar forms its own stacking
+     context, so within the masthead this reliably layers above sibling
+     content without competing with it. */
   z-index: 40;
   top: 100%;
   right: 0;
@@ -11640,7 +11643,7 @@ textarea,
    directory-less choice is always reachable regardless of the filtered list. */
 .project-picker__row--no-directory {
   flex: 0 0 auto;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .project-picker__row--no-directory.is-active {
