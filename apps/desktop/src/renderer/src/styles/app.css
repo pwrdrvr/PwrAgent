@@ -3162,11 +3162,12 @@ textarea,
 }
 
 /* Merge conflict outranks check status for the dot color: it blocks merge
-   regardless of CI. Kept LAST among the dot-color rules so it wins over the
-   co-applied check-state class (e.g. `pr-chip--pending pr-chip--conflicting`)
-   by source order — they share specificity. Only set on OPEN PRs, so it never
-   competes with the merged/closed dots. */
-.pr-chip--conflicting .pr-chip__dot {
+   regardless of CI. The doubled `.pr-chip.pr-chip--conflicting` qualifier
+   gives this (0,3,0) specificity so it beats the co-applied check-state class
+   (e.g. `pr-chip--pending pr-chip--conflicting`, 0,2,0) regardless of source
+   order — a reorder or auto-format can't silently flip it back. Only set on
+   OPEN PRs, so it never competes with the merged/closed dots. */
+.pr-chip.pr-chip--conflicting .pr-chip__dot {
   background: var(--status-error);
 }
 
