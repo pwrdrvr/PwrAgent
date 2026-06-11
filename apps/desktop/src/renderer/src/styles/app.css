@@ -452,6 +452,18 @@ textarea,
   gap: 6px;
 }
 
+/* When the sidebar is hidden this cluster relocates into the thread/search
+   header, a window-drag region (`.thread-header * { drag }`). That re-marks each
+   button's icon glyph as draggable, so the center of the button becomes an OS
+   drag zone — arrow cursor, clicks eaten — while only the padding edges stay
+   clickable. Force the cluster no-drag so every pixel of every button works.
+   Scoped through `.thread-header` for specificity (0,2,0) so it beats
+   `.thread-header *` (0,1,0) regardless of source order. */
+.thread-header .masthead-actions,
+.thread-header .masthead-actions * {
+  -webkit-app-region: no-drag;
+}
+
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
    masthead's wordmark offset exactly — its 16px sidebar gutter + 80px
    stoplight reservation — so the wordmark sits in the same spot whether the
