@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
@@ -15,10 +16,11 @@ import type { ContextTabId } from "../context-panels/context-tab";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
-// When the rail is open, the active tab's title renders in the panel
-// header. The default tab is "info" → "Thread info", so its presence is a
-// stable "the panel is revealed" signal (the old "Auto-hide" pill is gone).
-const REVEALED_SIGNAL = "Thread info";
+// When the rail is open, the active tab's panel content renders. The
+// default tab is "info"; its first (unconditional) section heading is a
+// stable "the panel is revealed" signal. There is no separate panel title
+// anymore — each panel's own section <h3> is the title.
+const REVEALED_SIGNAL = "Linked directories";
 
 afterEach(() => {
   cleanup();
@@ -234,6 +236,7 @@ describe("ThreadContextPanel", () => {
             status: "success",
             createdAt: 1000,
             updatedAt: 1500,
+            completedAt: 1500,
           },
         ],
       },
@@ -250,7 +253,29 @@ describe("ThreadContextPanel", () => {
     expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(
       "Watch CI until it completes.",
     );
-    expect(screen.getAllByRole("button", { name: "History" })[0]).toBeDisabled();
+    // Every card shows a labeled start time; the completed one also shows
+    // the optional end time.
+    expect(screen.getAllByText("Started")).toHaveLength(2);
+    expect(screen.getByText("Ended")).toBeInTheDocument();
+
+    // Details (renamed from the disabled History button) opens a modal with
+    // the request, final response, model, and token/pricing breakdown.
+    const detailsButtons = screen.getAllByRole("button", { name: "Details" });
+    expect(detailsButtons[0]).toBeEnabled();
+    fireEvent.click(detailsButtons[0]!);
+    const dialog = screen.getByRole("dialog");
+    const modal = within(dialog);
+    expect(
+      modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
+    ).toBeInTheDocument();
+    expect(modal.getByText("Final response")).toBeInTheDocument();
+    expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
+    expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
+    expect(modal.getByText("gpt-5.4-mini")).toBeInTheDocument();
+    expect(modal.getByText("1,060")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
