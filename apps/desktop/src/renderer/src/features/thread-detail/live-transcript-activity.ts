@@ -97,7 +97,9 @@ function normalizeTimestamp(value: unknown): number | undefined {
 }
 
 function readToolArgument(item: Record<string, unknown>, key: string): string | undefined {
-  return readString(readRecord(item.arguments), key);
+  const argumentsRecord =
+    readRecord(item.arguments) ?? readRecord(item.input);
+  return readString(argumentsRecord, key);
 }
 
 function readToolOutputText(item: Record<string, unknown>): string | undefined {
@@ -888,6 +890,14 @@ function buildLiveToolLabel(
     );
   }
 
+  if (itemType === "functioncall" && toolName === "exec_command") {
+    const command =
+      readToolArgument(item, "cmd") ??
+      readToolArgument(item, "command") ??
+      readToolArgument(item, "displayCommand");
+    return command ? formatCommandLabel(command) : formatLiveToolName(toolName, status);
+  }
+
   if (itemType === "mcptoolcall") {
     const serverName = readString(item, "server") ?? readString(item, "serverName");
     return formatMcpToolName(serverName, toolName, status);
@@ -1019,6 +1029,7 @@ export function buildLiveToolDetails(
   if (
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&
+    itemType !== "functioncall" &&
     itemType !== "mcptoolcall" &&
     itemType !== "collabagenttoolcall" &&
     itemType !== "websearch"
@@ -1026,7 +1037,13 @@ export function buildLiveToolDetails(
     return [];
   }
 
-  const itemId = readString(item, "id") ?? readString(item, "itemId") ?? "tool";
+  const itemId =
+    readString(item, "id") ??
+    readString(item, "itemId") ??
+    readString(item, "item_id") ??
+    readString(item, "call_id") ??
+    readString(item, "callId") ??
+    "tool";
   const toolName =
     readString(item, "tool") ??
     readString(item, "toolName") ??
@@ -1040,18 +1057,29 @@ export function buildLiveToolDetails(
       ? summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result)
       : summarizeToolOutput(readToolOutputText(item));
   const elapsedMs = readElapsedMs(item);
-  const command = itemType === "commandexecution" ? readString(item, "command") : undefined;
-  const commandDetail = itemType === "commandexecution"
-    ? buildLiveCommandDetail(item, command, elapsedMs)
-    : itemType === "collabagenttoolcall"
-      ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
-    : undefined;
+  const command =
+    itemType === "commandexecution"
+      ? readString(item, "command")
+      : itemType === "functioncall" && toolName === "exec_command"
+        ? readToolArgument(item, "cmd") ??
+          readToolArgument(item, "command") ??
+          readToolArgument(item, "displayCommand")
+        : undefined;
+  const isExecFunctionCall = itemType === "functioncall" && toolName === "exec_command";
+  const commandDetail =
+    itemType === "commandexecution" || isExecFunctionCall
+      ? buildLiveCommandDetail(item, command, elapsedMs)
+      : itemType === "collabagenttoolcall"
+        ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
+        : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
       kind:
         itemType === "commandexecution"
           ? readCommandActivityKind(item)
+          : isExecFunctionCall
+            ? "command"
           : itemType === "websearch" || toolName.startsWith("search_")
             ? "read"
             : "command",
