@@ -4279,7 +4279,7 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            model: "gpt-5.4-mini",
+            model: "gpt-5.4",
             tokenUsage: {
               last_token_usage: {
                 input_tokens: 1_217_026,
@@ -4319,7 +4319,7 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Done.",
-      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.18 list price",
+      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $1.13 list price",
     ]);
   });
 
