@@ -431,6 +431,10 @@ type BackendClient = {
     threadId: string;
     target: StartReviewRequest["target"];
     delivery?: StartReviewRequest["delivery"];
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
@@ -6048,6 +6052,7 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
+    const modelSettings = await this.resolveModelSettings(params.backend, params);
 
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     try {
@@ -6080,6 +6085,7 @@ export class DesktopBackendRegistry {
           threadId: params.threadId,
           target: params.target,
           delivery: params.delivery ?? "inline",
+          ...modelSettings,
           ...(cwd ? { cwd } : {}),
           ...(overlay?.codexEnvironmentRuntime
             ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
@@ -6140,6 +6146,18 @@ export class DesktopBackendRegistry {
       reviewSubAgentRecord,
     );
     await this.persistReviewSubAgent(reviewSubAgentRecord);
+    if (
+      modelSettings.model !== undefined ||
+      modelSettings.reasoningEffort !== undefined ||
+      modelSettings.serviceTier !== undefined ||
+      modelSettings.fastMode !== undefined
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: result.threadId,
+        ...modelSettings,
+      });
+    }
 
     return {
       backend: params.backend,

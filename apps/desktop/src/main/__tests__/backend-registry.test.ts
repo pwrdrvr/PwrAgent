@@ -1064,6 +1064,10 @@ class MockBackendClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
@@ -10626,6 +10630,10 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "grok-4.20-reasoning",
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: undefined,
     });
 
     await registry.close();
@@ -10674,12 +10682,20 @@ command = "pnpm dev"
       threadId: "thread-env",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
     });
 
     expect(codexClient.lastStartReviewParams).toMatchObject({
       threadId: "thread-env",
       cwd: "/repo/app",
       codexEnvironmentRuntime,
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
     });
 
     await registry.close();
@@ -17128,6 +17144,10 @@ command = "pnpm dev"
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        serviceTier: undefined,
+        fastMode: undefined,
       });
       const overlay = await overlayStore.getThreadOverlayState({
         backend: "codex",

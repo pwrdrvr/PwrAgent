@@ -167,7 +167,15 @@ describe("useQueuedTurnRelease", () => {
         composerDraftStore,
         desktopApi,
         selectedThread: thread("thread-b"),
-        threads: [thread("thread-a"), thread("thread-b")],
+        threads: [
+          thread("thread-a", {
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            serviceTier: "priority",
+            fastMode: true,
+          }),
+          thread("thread-b"),
+        ],
       })
     );
 
@@ -312,7 +320,15 @@ describe("useQueuedTurnRelease", () => {
         composerDraftStore,
         desktopApi,
         selectedThread: thread("thread-b"),
-        threads: [thread("thread-a"), thread("thread-b")],
+        threads: [
+          thread("thread-a", {
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            serviceTier: "priority",
+            fastMode: true,
+          }),
+          thread("thread-b"),
+        ],
       })
     );
 
@@ -385,7 +401,15 @@ describe("useQueuedTurnRelease", () => {
         composerDraftStore,
         desktopApi,
         selectedThread: thread("thread-b"),
-        threads: [thread("thread-a"), thread("thread-b")],
+        threads: [
+          thread("thread-a", {
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            serviceTier: "priority",
+            fastMode: true,
+          }),
+          thread("thread-b"),
+        ],
       })
     );
 
@@ -418,6 +442,10 @@ describe("useQueuedTurnRelease", () => {
           branch: "main",
         },
         delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
       });
     });
     expect(startTurn).not.toHaveBeenCalled();

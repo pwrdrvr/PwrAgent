@@ -1008,6 +1008,10 @@ export class GrokAppServerClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: AppServerReviewDelivery;
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 

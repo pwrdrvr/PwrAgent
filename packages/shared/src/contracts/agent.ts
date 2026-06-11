@@ -229,6 +229,10 @@ export type StartReviewRequest = {
   threadId: ThreadIdentifier;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type StartReviewResponse = {

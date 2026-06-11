@@ -288,6 +288,10 @@ export function useQueuedTurnRelease(params: {
           );
           return;
         }
+        const reviewFastMode =
+          releaseThread.source === "codex" && typeof releaseThread.fastMode === "boolean"
+            ? releaseThread.fastMode
+            : undefined;
 
         try {
           await startReview({
@@ -295,6 +299,12 @@ export function useQueuedTurnRelease(params: {
             threadId: releaseThread.id,
             target: reviewCommand.target,
             delivery: "inline",
+            ...(releaseThread.model ? { model: releaseThread.model } : {}),
+            ...(releaseThread.reasoningEffort
+              ? { reasoningEffort: releaseThread.reasoningEffort }
+              : {}),
+            ...(releaseThread.serviceTier ? { serviceTier: releaseThread.serviceTier } : {}),
+            ...(reviewFastMode !== undefined ? { fastMode: reviewFastMode } : {}),
           });
         } catch (error) {
           restoreQueuedTurn(

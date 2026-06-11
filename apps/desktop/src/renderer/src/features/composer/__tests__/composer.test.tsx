@@ -4124,6 +4124,77 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("starts slash reviews with the current composer model settings", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsFast: true,
+                  supportsReasoning: true,
+                },
+              ],
+              reasoningEfforts: ["medium", "high"],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              startReview: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+      });
+    });
+  });
+
   it("ignores a duplicate slash review submit while the review start is pending", async () => {
     const startTurn = vi.fn();
     const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");
@@ -4512,6 +4583,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        model: "gpt-5.5",
       });
     });
   });

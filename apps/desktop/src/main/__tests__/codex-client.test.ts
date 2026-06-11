@@ -828,6 +828,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/settings/update") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/start") {
       if (MockTransport.turnStartPreResponseNotification) {
         this.messageHandler(JSON.stringify(MockTransport.turnStartPreResponseNotification));
@@ -6231,6 +6242,9 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
       cwd: "/Users/example/project",
       codexEnvironmentRuntime: {
         environmentId: "env",
@@ -6260,14 +6274,28 @@ describe("CodexAppServerClient", () => {
         method: "thread/resume",
         params: expect.objectContaining({
           threadId: "thread-2",
+          model: "gpt-5.5",
+          serviceTier: "priority",
           cwd: "/Users/example/project",
           "config": {
+            fast_mode: true,
             "shell_environment_policy.set.PATH":
               "/Users/example/project/.venv/bin:/usr/bin",
             "shell_environment_policy.set.VIRTUAL_ENV":
               "/Users/example/project/.venv",
           },
         }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/settings/update",
+        params: {
+          threadId: "thread-2",
+          model: "gpt-5.5",
+          effort: "high",
+          serviceTier: "priority",
+        },
       }),
     );
     expect(requests).toContainEqual(
