@@ -104,6 +104,9 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry?.details.map((detail) => detail.label)).toEqual([
       "Input: 21,981 tokens (19,549 uncached, 2,432 cached)",
       "Output: 174 tokens, including 25 reasoning",
+      "Uncached input cost: 19,549 tokens at $5.00/M = $0.098",
+      "Cached input cost: 2,432 tokens at $0.50/M (0.1x uncached) = $0.002",
+      "Output cost: 174 tokens at $30.00/M = $0.006",
       "Cost: $0.11 list price for gpt-5.5",
     ]);
   });
@@ -123,6 +126,15 @@ describe("buildTokenUsageActivityEntry", () => {
 
     expect(entry?.summary).toContain("Usage: 1,000 uncached in");
     expect(entry?.summary).toContain("$0.006 list price");
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Uncached input cost: 1,000 tokens at $0.75/M = <$0.001",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Cached input cost: 0 tokens at $0.075/M (0.1x uncached) = $0.000",
+    );
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Output cost: 1,000 tokens at $4.50/M = $0.005",
+    );
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost: $0.006 list price for gpt-5.4-mini",
     );

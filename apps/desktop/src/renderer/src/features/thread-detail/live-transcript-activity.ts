@@ -253,6 +253,17 @@ type PricingCatalogEntry = {
   outputUsdPerMillion: number;
 };
 
+type UsageCostEstimate = {
+  cachedInputUsd: number;
+  cachedInputUsdPerMillion: number;
+  inputUsdPerMillion: number;
+  model: string;
+  outputUsd: number;
+  outputUsdPerMillion: number;
+  totalUsd: number;
+  uncachedInputUsd: number;
+};
+
 const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
     model: "gpt-5.5",
@@ -331,6 +342,39 @@ export function buildTokenUsageActivityEntry(params: {
     },
   ];
   if (cost) {
+    details.push(
+      {
+        id: `${params.id}-uncached-input-cost`,
+        kind: "read",
+        label: `Uncached input cost: ${formatTokenCount(
+          uncachedInputTokens,
+        )} tokens at ${formatUsdPerMillion(
+          cost.inputUsdPerMillion,
+        )}/M = ${formatUsd(cost.uncachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `${params.id}-cached-input-cost`,
+        kind: "read",
+        label: `Cached input cost: ${formatTokenCount(
+          cachedInputTokens,
+        )} tokens at ${formatUsdPerMillion(
+          cost.cachedInputUsdPerMillion,
+        )}/M (${formatPriceFactor(
+          cost.cachedInputUsdPerMillion,
+          cost.inputUsdPerMillion,
+        )} uncached) = ${formatUsd(cost.cachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `${params.id}-output-cost`,
+        kind: "read",
+        label: `Output cost: ${formatTokenCount(outputTokens)} tokens at ${formatUsdPerMillion(
+          cost.outputUsdPerMillion,
+        )}/M = ${formatUsd(cost.outputUsd)}`,
+        status: "completed",
+      },
+    );
     details.push({
       id: `${params.id}-cost`,
       kind: "read",
@@ -454,7 +498,7 @@ function estimateUsageCost(params: {
   model?: string;
   outputTokens: number;
   uncachedInputTokens: number;
-}): { model: string; totalUsd: number } | undefined {
+}): UsageCostEstimate | undefined {
   const model = params.model?.trim();
   if (!model) {
     return undefined;
@@ -463,11 +507,26 @@ function estimateUsageCost(params: {
   if (!entry) {
     return undefined;
   }
-  const totalUsd =
-    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
-    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
+  const uncachedInputUsd =
+    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000;
+  const cachedInputUsd =
+    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000;
+  const outputUsd =
     (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
-  return { model, totalUsd };
+  const totalUsd =
+    uncachedInputUsd +
+    cachedInputUsd +
+    outputUsd;
+  return {
+    cachedInputUsd,
+    cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
+    inputUsdPerMillion: entry.inputUsdPerMillion,
+    model,
+    outputUsd,
+    outputUsdPerMillion: entry.outputUsdPerMillion,
+    totalUsd,
+    uncachedInputUsd,
+  };
 }
 
 function formatTokenCount(value: number): string {
@@ -493,6 +552,26 @@ function formatUsd(value: number): string {
     minimumFractionDigits: 2,
     style: "currency",
   }).format(Math.ceil(value * 100) / 100);
+}
+
+function formatUsdPerMillion(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(value);
+}
+
+function formatPriceFactor(discountedRate: number, standardRate: number): string {
+  if (standardRate <= 0) {
+    return "unknown factor";
+  }
+  const factor = discountedRate / standardRate;
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 1,
+  }).format(factor)}x`;
 }
 
 function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
