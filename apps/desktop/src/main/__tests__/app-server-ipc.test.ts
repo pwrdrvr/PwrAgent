@@ -243,6 +243,40 @@ const getAuthStatus = vi.fn(async () => ({
 }));
 const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
 
+function githubPr(pr: Omit<PrSummary, "provider">): PrSummary {
+  return { provider: "github.com", ...pr };
+}
+
+function buildThreadPrRequestKey(params: {
+  backend: string;
+  threadId: string;
+  branch: string;
+  directoryPaths: string[];
+  provider?: string;
+}): string {
+  return JSON.stringify({
+    lookupVersion: 3,
+    backend: params.backend,
+    threadId: params.threadId,
+    provider: params.provider ?? "github.com",
+    branch: params.branch,
+    directoryPaths: params.directoryPaths,
+  });
+}
+
+function buildPrLookupKey(params: {
+  branch: string;
+  directoryPaths: string[];
+  provider?: string;
+}): string {
+  return JSON.stringify({
+    lookupVersion: 2,
+    provider: params.provider ?? "github.com",
+    branch: params.branch,
+    directoryPaths: params.directoryPaths,
+  });
+}
+
 vi.mock("electron", () => ({
   app: {
     getPath: vi.fn(() => "/tmp/pwragent-userdata"),
@@ -765,27 +799,26 @@ describe("app server ipc", () => {
       branch: "fix/desktop-source-link-goto",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "fix/desktop-source-link-goto",
       directoryPaths: ["/repo"],
     });
-    const stalePassingPr: PrSummary = {
+    const stalePassingPr = githubPr({
       number: 433,
       org: "pwrdrvr",
       repo: "PwrAgent",
       state: "passing",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
-    };
-    const mergedPr: PrSummary = {
+    });
+    const mergedPr = githubPr({
       number: 430,
       org: "pwrdrvr",
       repo: "PwrAgent",
       state: "merged",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/430",
-    };
+    });
     const refreshedPrs: PrSummary[] = [
       { ...stalePassingPr, state: "merged" },
       mergedPr,
@@ -811,6 +844,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [stalePassingPr, mergedPr],
     });
@@ -843,12 +877,14 @@ describe("app server ipc", () => {
     });
     expect(writePrStatusCacheEntries).toHaveBeenCalledWith([
       {
-        prKey: "pwrdrvr/pwragent#433",
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#433",
         fetchedAt: expect.any(Number),
         pr: refreshedPrs[0],
       },
       {
-        prKey: "pwrdrvr/pwragent#430",
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#430",
         fetchedAt: expect.any(Number),
         pr: refreshedPrs[1],
       },
@@ -858,13 +894,13 @@ describe("app server ipc", () => {
   it("serves the same canonical PR state across different thread overlays", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
-    const stalePr: PrSummary = {
+    const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
       repo: "codex",
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
-    };
+    });
     const passingPr: PrSummary = {
       ...stalePr,
       state: "passing",
@@ -883,15 +919,13 @@ describe("app server ipc", () => {
       ...baseRequest,
       threadId: "019eb2e4-840b-7fb1-979c-af66091712c0",
     } satisfies RefreshThreadPullRequestsRequest;
-    const threadOneRequestKey = JSON.stringify({
-      lookupVersion: 2,
+    const threadOneRequestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: threadOneRequest.threadId,
       branch: baseRequest.branch,
       directoryPaths: baseRequest.directoryPaths,
     });
-    const threadTwoRequestKey = JSON.stringify({
-      lookupVersion: 2,
+    const threadTwoRequestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: threadTwoRequest.threadId,
       branch: baseRequest.branch,
@@ -941,6 +975,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: threadTwoRequest.threadId,
+      provider: "github.com",
       ghAvailable: true,
       prs: [passingPr],
     });
@@ -950,13 +985,13 @@ describe("app server ipc", () => {
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
-    const stalePr: PrSummary = {
+    const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
       repo: "codex",
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
-    };
+    });
     const cachedPr: PrSummary = {
       ...stalePr,
       state: "passing",
@@ -968,21 +1003,20 @@ describe("app server ipc", () => {
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
-    const lookupKey = JSON.stringify({
-      lookupVersion: 1,
+    const lookupKey = buildPrLookupKey({
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
     readPrStatusCache.mockResolvedValueOnce({
-      "openai/codex#727": {
-        prKey: "openai/codex#727",
+      "github.com/openai/codex#727": {
+        provider: "github.com",
+        prKey: "github.com/openai/codex#727",
         fetchedAt: Date.now() - 120_000,
         pr: cachedPr,
       },
@@ -990,6 +1024,7 @@ describe("app server ipc", () => {
     readPrLookupCache.mockResolvedValueOnce({
       [lookupKey]: {
         lookupKey,
+        provider: "github.com",
         branch: "hot-cpu-capture-presets",
         directoryPaths: ["/repo"],
         fetchedAt: Date.now(),
@@ -1016,6 +1051,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [cachedPr],
     });
@@ -1025,13 +1061,13 @@ describe("app server ipc", () => {
   it("skips user-triggered PR refresh when the persisted cache was fetched recently", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
-    const cachedPr: PrSummary = {
+    const cachedPr = githubPr({
       number: 727,
       org: "OpenAI",
       repo: "codex",
       state: "passing",
       url: "https://github.com/OpenAI/codex/pull/727",
-    };
+    });
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1039,21 +1075,20 @@ describe("app server ipc", () => {
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
-    const lookupKey = JSON.stringify({
-      lookupVersion: 1,
+    const lookupKey = buildPrLookupKey({
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
     readPrStatusCache.mockResolvedValueOnce({
-      "openai/codex#727": {
-        prKey: "openai/codex#727",
+      "github.com/openai/codex#727": {
+        provider: "github.com",
+        prKey: "github.com/openai/codex#727",
         fetchedAt: Date.now(),
         pr: cachedPr,
       },
@@ -1061,6 +1096,7 @@ describe("app server ipc", () => {
     readPrLookupCache.mockResolvedValueOnce({
       [lookupKey]: {
         lookupKey,
+        provider: "github.com",
         branch: "hot-cpu-capture-presets",
         directoryPaths: ["/repo"],
         fetchedAt: Date.now(),
@@ -1087,6 +1123,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [cachedPr],
     });
@@ -1096,13 +1133,13 @@ describe("app server ipc", () => {
   it("persists fresh lookup-cache hits to the requesting thread overlay", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
-    const cachedPr: PrSummary = {
+    const cachedPr = githubPr({
       number: 727,
       org: "OpenAI",
       repo: "codex",
       state: "passing",
       url: "https://github.com/OpenAI/codex/pull/727",
-    };
+    });
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1110,22 +1147,21 @@ describe("app server ipc", () => {
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
     const fetchedAt = Date.now();
-    const lookupKey = JSON.stringify({
-      lookupVersion: 1,
+    const lookupKey = buildPrLookupKey({
       branch: "hot-cpu-capture-presets",
       directoryPaths: ["/repo"],
     });
     readPrLookupCache.mockResolvedValueOnce({
       [lookupKey]: {
         lookupKey,
+        provider: "github.com",
         branch: "hot-cpu-capture-presets",
         directoryPaths: ["/repo"],
         fetchedAt,
@@ -1140,9 +1176,10 @@ describe("app server ipc", () => {
       prs: [],
       prsFetchedAt: Date.now() - 300_000,
       prsRefreshKey: JSON.stringify({
-        lookupVersion: 2,
+        lookupVersion: 3,
         backend: "codex",
         threadId: "thread-1",
+        provider: "github.com",
         branch: "old-branch",
         directoryPaths: ["/repo"],
       }),
@@ -1158,6 +1195,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [cachedPr],
     });
@@ -1185,13 +1223,13 @@ describe("app server ipc", () => {
       threadId: "thread-2",
     } satisfies RefreshThreadPullRequestsRequest;
     const fetchedPrs: PrSummary[] = [
-      {
+      githubPr({
         number: 249,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "passing",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/249",
-      },
+      }),
     ];
     let resolveFetch: ((prs: PrSummary[]) => void) | undefined;
     detectPullRequestsForThread.mockReturnValueOnce(
@@ -1209,12 +1247,14 @@ describe("app server ipc", () => {
       {
         backend: "codex",
         threadId: "thread-1",
+        provider: "github.com",
         ghAvailable: true,
         prs: [],
       },
       {
         backend: "codex",
         threadId: "thread-2",
+        provider: "github.com",
         ghAvailable: true,
         prs: [],
       },
@@ -1250,8 +1290,7 @@ describe("app server ipc", () => {
       branch: "feat/no-pr-yet",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "feat/no-pr-yet",
@@ -1279,6 +1318,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [],
     });
@@ -1293,21 +1333,20 @@ describe("app server ipc", () => {
       branch: "feat/no-pr-yet",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "feat/no-pr-yet",
       directoryPaths: ["/repo"],
     });
     const fetchedPrs: PrSummary[] = [
-      {
+      githubPr({
         number: 438,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "pending",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/438",
-      },
+      }),
     ];
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -1330,6 +1369,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [],
     });
@@ -1362,30 +1402,29 @@ describe("app server ipc", () => {
       branch: "fix/new-branch",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "fix/new-branch",
       directoryPaths: ["/repo"],
     });
     const terminalPrs: PrSummary[] = [
-      {
+      githubPr({
         number: 433,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "merged",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
-      },
+      }),
     ];
     const newBranchPrs: PrSummary[] = [
-      {
+      githubPr({
         number: 438,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "pending",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/438",
-      },
+      }),
     ];
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -1394,8 +1433,7 @@ describe("app server ipc", () => {
       extraLinkedDirectories: [],
       prs: terminalPrs,
       prsFetchedAt: Date.now() - 120_000,
-      prsRefreshKey: JSON.stringify({
-        lookupVersion: 2,
+      prsRefreshKey: buildThreadPrRequestKey({
         backend: "codex",
         threadId: "thread-1",
         branch: "fix/old-branch",
@@ -1414,6 +1452,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: [],
     });
@@ -1444,28 +1483,27 @@ describe("app server ipc", () => {
       branch: "fix/done",
       directoryPaths: ["/repo"],
     } satisfies RefreshThreadPullRequestsRequest;
-    const requestKey = JSON.stringify({
-      lookupVersion: 2,
+    const requestKey = buildThreadPrRequestKey({
       backend: "codex",
       threadId: "thread-1",
       branch: "fix/done",
       directoryPaths: ["/repo"],
     });
     const terminalPrs: PrSummary[] = [
-      {
+      githubPr({
         number: 433,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "merged",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
-      },
-      {
+      }),
+      githubPr({
         number: 430,
         org: "pwrdrvr",
         repo: "PwrAgent",
         state: "closed",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/430",
-      },
+      }),
     ];
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -1489,6 +1527,7 @@ describe("app server ipc", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      provider: "github.com",
       ghAvailable: true,
       prs: terminalPrs,
       shortCircuited: true,
@@ -1640,20 +1679,21 @@ describe("app server ipc", () => {
   it("marks snapshots changed when canonical PR statuses update thread PRs", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
-    const stalePr: PrSummary = {
+    const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
       repo: "codex",
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
-    };
+    });
     const cachedPr: PrSummary = {
       ...stalePr,
       state: "passing",
     };
     readPrStatusCache.mockResolvedValueOnce({
-      "openai/codex#727": {
-        prKey: "openai/codex#727",
+      "github.com/openai/codex#727": {
+        provider: "github.com",
+        prKey: "github.com/openai/codex#727",
         fetchedAt: Date.now(),
         pr: cachedPr,
       },

@@ -3305,6 +3305,7 @@ describe("useThreadNavigation", () => {
       ],
       prs: [
         {
+          provider: "github.com",
           number: 123,
           org: "pwrdrvr",
           repo: "PwrAgent",

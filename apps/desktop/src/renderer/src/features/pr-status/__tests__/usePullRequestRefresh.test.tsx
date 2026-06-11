@@ -37,9 +37,11 @@ function buildResponse(
   return {
     backend: "codex",
     threadId: "thread-1",
+    provider: "github.com",
     ghAvailable: true,
     prs: [
       {
+        provider: "github.com",
         number: 249,
         org: "pwrdrvr",
         repo: "PwrAgent",

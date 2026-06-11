@@ -206,7 +206,16 @@ export type PrChipState =
   | "closed"
   | "unknown";
 
+export const DEFAULT_PULL_REQUEST_PROVIDER = "github.com";
+export type PullRequestProvider = string;
+
 export type PrSummary = {
+  /**
+   * Forge host that owns the PR namespace, e.g. "github.com" or a future
+   * GitHub Enterprise/GitLab host. Owner/repo/number are only unique inside
+   * this provider.
+   */
+  provider: PullRequestProvider;
   number: number;
   /** Repo owner login, e.g. "pwrdrvr". */
   org: string;
@@ -711,6 +720,8 @@ export type ReorderDirectoryPinsResponse = {
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Forge host for this lookup. Defaults to github.com while GitHub is the only provider. */
+  provider?: PullRequestProvider;
   /**
    * Refresh intent controls main-process coalescing. Scheduled polling is
    * rate-limited globally and per PR; direct user interaction gets a much
@@ -730,6 +741,7 @@ export type RefreshThreadPullRequestsRequest = {
 export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  provider: PullRequestProvider;
   prs: PrSummary[];
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;

@@ -120,6 +120,7 @@ const pullRequestThread: NavigationThreadSummary = {
   ...sharedThread,
   prs: [
     {
+      provider: "github.com",
       number: 202,
       org: "Giphy",
       repo: "GifGrabber",

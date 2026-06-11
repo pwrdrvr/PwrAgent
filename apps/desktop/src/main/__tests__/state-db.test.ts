@@ -42,4 +42,16 @@ describe("StateDb", () => {
       CURRENT_STATE_DB_USER_VERSION,
     );
   });
+
+  it("creates provider-aware pull request cache columns", () => {
+    const prStatusColumns = stateDb.raw
+      .prepare("PRAGMA table_info(pr_status_cache)")
+      .all() as Array<{ name: string }>;
+    const prLookupColumns = stateDb.raw
+      .prepare("PRAGMA table_info(pr_lookup_cache)")
+      .all() as Array<{ name: string }>;
+
+    expect(prStatusColumns.map((column) => column.name)).toContain("provider");
+    expect(prLookupColumns.map((column) => column.name)).toContain("provider");
+  });
 });

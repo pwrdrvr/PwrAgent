@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 14;
+export const CURRENT_STATE_DB_USER_VERSION = 15;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -438,6 +438,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS thread_search_fts USING fts5(
 const PR_STATUS_CACHE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pr_status_cache (
   pr_key     TEXT PRIMARY KEY,
+  provider   TEXT NOT NULL DEFAULT 'github.com',
   org        TEXT NOT NULL,
   repo       TEXT NOT NULL,
   number     INTEGER NOT NULL,
@@ -451,6 +452,7 @@ CREATE INDEX IF NOT EXISTS idx_pr_status_cache_fetched
 const PR_LOOKUP_CACHE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pr_lookup_cache (
   lookup_key      TEXT PRIMARY KEY,
+  provider        TEXT NOT NULL DEFAULT 'github.com',
   branch          TEXT NOT NULL,
   directory_paths TEXT NOT NULL,
   fetched_at      INTEGER NOT NULL,
@@ -595,6 +597,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 14) {
       db.transaction(() => {
         db.exec(PR_LOOKUP_CACHE_SCHEMA);
+        db.pragma("user_version = 14");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 15) {
+      db.transaction(() => {
+        ensurePullRequestProviderColumns(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -746,12 +754,13 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    ensurePullRequestProviderColumns(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
   })();
 
-  if (!appRuntimeInstancesColumnExists(db, "cwd_hash")) {
+  if (!tableColumnExists(db, "app_runtime_instances", "cwd_hash")) {
     db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
   }
   db.exec(`
@@ -760,11 +769,42 @@ CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
 `);
 }
 
-function appRuntimeInstancesColumnExists(
+function ensurePullRequestProviderColumns(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "pr_status_cache", "provider")) {
+    db.exec(
+      "ALTER TABLE pr_status_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
+    );
+  }
+  db.exec(`
+UPDATE pr_status_cache
+SET
+  provider = COALESCE(NULLIF(provider, ''), 'github.com'),
+  pr_key = COALESCE(NULLIF(provider, ''), 'github.com')
+    || '/'
+    || lower(org)
+    || '/'
+    || lower(repo)
+    || '#'
+    || number
+`);
+
+  if (!tableColumnExists(db, "pr_lookup_cache", "provider")) {
+    db.exec(
+      "ALTER TABLE pr_lookup_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
+    );
+  }
+  db.exec(`
+UPDATE pr_lookup_cache
+SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
+`);
+}
+
+function tableColumnExists(
   db: BetterSqlite3.Database,
+  tableName: string,
   columnName: string,
 ): boolean {
-  const rows = db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
     name: string;
   }>;
   return rows.some((row) => row.name === columnName);

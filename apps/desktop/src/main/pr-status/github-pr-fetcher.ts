@@ -6,6 +6,7 @@ import type {
   PrChipState,
   PrSummary,
 } from "@pwragent/shared";
+import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -374,12 +375,21 @@ export class GithubPrFetcher {
  */
 export function parseGhPrPayload(row: GhPrPayload): PrSummary {
   return {
+    provider: parsePullRequestProvider(row.url),
     number: row.number,
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
     state: deriveChipState(row),
     url: row.url,
   };
+}
+
+function parsePullRequestProvider(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase() || DEFAULT_PULL_REQUEST_PROVIDER;
+  } catch {
+    return DEFAULT_PULL_REQUEST_PROVIDER;
+  }
 }
 
 export function deriveChipState(row: GhPrPayload): PrChipState {

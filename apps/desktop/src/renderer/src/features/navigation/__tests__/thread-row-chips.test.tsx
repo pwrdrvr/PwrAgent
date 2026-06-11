@@ -306,6 +306,7 @@ describe("ThreadRow chip flow", () => {
       reactions: ["🙂"],
       prs: [
         {
+          provider: "github.com",
           number: 123,
           org: "pwrdrvr",
           repo: "PwrAgent",

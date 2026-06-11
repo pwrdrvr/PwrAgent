@@ -22,6 +22,7 @@ afterEach(() => {
 });
 
 const prMerged: PrSummary = {
+  provider: "github.com",
   number: 178,
   org: "pwrdrvr",
   repo: "PwrAgent",
@@ -30,6 +31,7 @@ const prMerged: PrSummary = {
 };
 
 const prPassing: PrSummary = {
+  provider: "github.com",
   number: 179,
   org: "pwrdrvr",
   repo: "PwrAgent",
@@ -148,7 +150,8 @@ describe("SqliteOverlayStore — thread PRs", () => {
   it("persists canonical PR status cache rows across reopen", async () => {
     await store.writePrStatusCacheEntries([
       {
-        prKey: "pwrdrvr/pwragent#179",
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
         fetchedAt: 1234,
         pr: prPassing,
       },
@@ -160,8 +163,9 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const reopened = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopened);
     await expect(reopenedStore.readPrStatusCache()).resolves.toEqual({
-      "pwrdrvr/pwragent#179": {
-        prKey: "pwrdrvr/pwragent#179",
+      "github.com/pwrdrvr/pwragent#179": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
         fetchedAt: 1234,
         pr: prPassing,
       },
@@ -174,7 +178,8 @@ describe("SqliteOverlayStore — thread PRs", () => {
 
   it("persists branch lookup cache rows across reopen", async () => {
     await store.writePrLookupCacheEntry({
-      lookupKey: "lookup:repo:branch",
+      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      provider: "github.com",
       branch: "feat/pr-chip",
       directoryPaths: ["/repo"],
       fetchedAt: 2345,
@@ -187,8 +192,9 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const reopened = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopened);
     await expect(reopenedStore.readPrLookupCache()).resolves.toEqual({
-      "lookup:repo:branch": {
-        lookupKey: "lookup:repo:branch",
+      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
+        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+        provider: "github.com",
         branch: "feat/pr-chip",
         directoryPaths: ["/repo"],
         fetchedAt: 2345,

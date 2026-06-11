@@ -33,6 +33,7 @@ function rawMergedPr() {
 describe("parseGhPrPayload", () => {
   it("maps the pinned JSON shape into a PrSummary", () => {
     expect(parseGhPrPayload(rawMergedPr())).toEqual({
+      provider: "github.com",
       number: 178,
       org: "pwrdrvr",
       repo: "PwrAgent",
@@ -355,6 +356,7 @@ describe("GithubPrFetcher", () => {
       });
       expect(result).toEqual([
         {
+          provider: "github.com",
           number: 178,
           org: "pwrdrvr",
           repo: "PwrAgent",

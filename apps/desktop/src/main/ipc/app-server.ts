@@ -89,7 +89,10 @@ import {
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  DEFAULT_PULL_REQUEST_PROVIDER,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
   disposeDesktopBackendRegistry,
@@ -339,9 +342,10 @@ function getThreadPullRequestsRequestKey(
   request: RefreshThreadPullRequestsRequest,
 ): string {
   return JSON.stringify({
-    lookupVersion: 2,
+    lookupVersion: 3,
     backend,
     threadId: request.threadId,
+    provider: normalizePullRequestProvider(request.provider),
     branch: request.branch.trim(),
     directoryPaths: request.directoryPaths,
   });
@@ -353,17 +357,35 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
 }
 
 function getPullRequestLookupKey(
-  request: Pick<RefreshThreadPullRequestsRequest, "branch" | "directoryPaths">,
+  request: Pick<
+    RefreshThreadPullRequestsRequest,
+    "provider" | "branch" | "directoryPaths"
+  >,
 ): string {
   return JSON.stringify({
-    lookupVersion: 1,
+    lookupVersion: 2,
+    provider: normalizePullRequestProvider(request.provider),
     branch: request.branch.trim(),
     directoryPaths: normalizePrLookupDirectoryPaths(request.directoryPaths),
   });
 }
 
-function getPrStatusKey(pr: Pick<PrSummary, "org" | "repo" | "number">): string {
-  return `${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+function normalizePullRequestProvider(provider: string | undefined): string {
+  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER;
+}
+
+function normalizePrSummary(pr: PrSummary): PrSummary {
+  return {
+    ...pr,
+    provider: normalizePullRequestProvider(pr.provider),
+  };
+}
+
+function getPrStatusKey(
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
+): string {
+  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
 }
 
 function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
@@ -375,6 +397,8 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
     const candidate = right[index];
     return (
       candidate?.number === pr.number &&
+      normalizePullRequestProvider(candidate.provider)
+        === normalizePullRequestProvider(pr.provider) &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
       candidate.state === pr.state &&
@@ -393,6 +417,7 @@ type PrStatusRegistryEntry = {
 type PrLookupRegistryEntry = {
   prs: PrSummary[];
   fetchedAt: number;
+  provider: string;
   branch: string;
   directoryPaths: string[];
   lastScheduledRefreshRequestedAt?: number;
@@ -1106,12 +1131,14 @@ class DesktopAppServerService {
     request: RefreshThreadPullRequestsRequest,
     requestKey: string,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    const provider = normalizePullRequestProvider(request.provider);
     const fetcher = this.getPrFetcher();
     const ghAvailable = await fetcher.isGhAvailable();
     if (!ghAvailable) {
       return {
         backend,
         threadId: request.threadId,
+        provider,
         prs: [],
         ghAvailable: false,
       };
@@ -1136,6 +1163,7 @@ class DesktopAppServerService {
     if (existingLookupMatches) {
       this.rememberPrLookup({
         lookupKey,
+        provider,
         branch,
         directoryPaths: lookupDirectoryPaths,
         prs: existingPrs,
@@ -1184,6 +1212,7 @@ class DesktopAppServerService {
       return {
         backend,
         threadId: request.threadId,
+        provider,
         prs: currentLookupPrs,
         ghAvailable: true,
         shortCircuited: true,
@@ -1194,6 +1223,7 @@ class DesktopAppServerService {
       return {
         backend,
         threadId: request.threadId,
+        provider,
         prs: currentLookupPrs,
         ghAvailable: true,
       };
@@ -1211,6 +1241,7 @@ class DesktopAppServerService {
     return {
       backend,
       threadId: request.threadId,
+      provider,
       prs: currentLookupPrs,
       ghAvailable: true,
     };
@@ -1221,16 +1252,17 @@ class DesktopAppServerService {
     lookupKey: string;
     lookupDirectoryPaths: string[];
   }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
-    const prs = await detectPullRequestsForThread({
+    const prs = (await detectPullRequestsForThread({
       fetcher: this.getPrFetcher(),
       branch: params.request.branch.trim(),
       directoryPaths: params.request.directoryPaths,
-    });
+    })).map(normalizePrSummary);
     const fetchedAt = Date.now();
     this.rememberPrStatuses(prs, fetchedAt);
     await this.writePrStatusesToCache(prs, fetchedAt);
     this.rememberPrLookup({
       lookupKey: params.lookupKey,
+      provider: normalizePullRequestProvider(params.request.provider),
       branch: params.request.branch.trim(),
       directoryPaths: params.lookupDirectoryPaths,
       prs,
@@ -1238,6 +1270,7 @@ class DesktopAppServerService {
     });
     await this.writePrLookupToCache({
       lookupKey: params.lookupKey,
+      provider: normalizePullRequestProvider(params.request.provider),
       branch: params.request.branch.trim(),
       directoryPaths: params.lookupDirectoryPaths,
       prs,
@@ -1264,6 +1297,7 @@ class DesktopAppServerService {
     const refreshKey = this.claimPullRequestLookupRefreshKey(
       params.lookupKey,
       params.request.trigger ?? "scheduled",
+      normalizePullRequestProvider(params.request.provider),
     );
     if (!refreshKey) {
       return;
@@ -1385,6 +1419,7 @@ class DesktopAppServerService {
   private claimPullRequestLookupRefreshKey(
     lookupKey: string,
     trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+    provider: string,
   ): string | undefined {
     const now = Date.now();
     const minInterval =
@@ -1414,6 +1449,7 @@ class DesktopAppServerService {
       this.prLookupRegistry.set(lookupKey, {
         prs: [],
         fetchedAt: 0,
+        provider: normalizePullRequestProvider(provider),
         branch: "",
         directoryPaths: [],
         [timestampField]: now,
@@ -1424,7 +1460,7 @@ class DesktopAppServerService {
   }
 
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
-    for (const pr of prs) {
+    for (const pr of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
@@ -1440,6 +1476,7 @@ class DesktopAppServerService {
 
   private rememberPrLookup(entry: {
     lookupKey: string;
+    provider: string;
     branch: string;
     directoryPaths: string[];
     prs: PrSummary[];
@@ -1451,9 +1488,10 @@ class DesktopAppServerService {
     }
     this.prLookupRegistry.set(entry.lookupKey, {
       ...current,
+      provider: normalizePullRequestProvider(entry.provider),
       branch: entry.branch,
       directoryPaths: entry.directoryPaths,
-      prs: entry.prs,
+      prs: entry.prs.map(normalizePrSummary),
       fetchedAt: entry.fetchedAt,
     });
   }
@@ -1485,7 +1523,8 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
   ): Promise<void> {
-    const entries: PrStatusCacheEntry[] = prs.map((pr) => ({
+    const entries: PrStatusCacheEntry[] = prs.map(normalizePrSummary).map((pr) => ({
+      provider: normalizePullRequestProvider(pr.provider),
       prKey: getPrStatusKey(pr),
       fetchedAt,
       pr,
@@ -1498,7 +1537,10 @@ class DesktopAppServerService {
   }
 
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
-    return prs.map((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr);
+    return prs.map((pr) => {
+      const normalized = normalizePrSummary(pr);
+      return this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr ?? normalized;
+    });
   }
 
   private seedPrStatusRegistryFromThreads(
