@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   DirectoryGitStatusCacheEntry,
   OverlayStoreLike,
+  PrLookupCacheEntry,
+  PrStatusCacheEntry,
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
 import {
@@ -48,6 +50,7 @@ import {
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationSnapshot,
   type AutomationThreadSummary,
+  type PrSummary,
   type ReorderDirectoryPinsRequest,
   type ReorderDirectoryPinsResponse,
   type ReorderThreadPinsRequest,
@@ -85,6 +88,10 @@ import {
   type UpdateDirectoryLaunchpadResponse,
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
+} from "@pwragent/shared";
+import {
+  DEFAULT_PULL_REQUEST_PROVIDER,
+  buildThreadIdentityKey,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
@@ -148,6 +155,10 @@ import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
+const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
+const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
+const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
+const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
 const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 
@@ -332,12 +343,151 @@ function getThreadPullRequestsRequestKey(
   request: RefreshThreadPullRequestsRequest,
 ): string {
   return JSON.stringify({
-    lookupVersion: 2,
+    lookupVersion: 3,
     backend,
     threadId: request.threadId,
+    provider: normalizePullRequestProvider(request.provider),
     branch: request.branch.trim(),
     directoryPaths: request.directoryPaths,
   });
+}
+
+function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
+  return [...new Set(directoryPaths.map((path) => path.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function getPullRequestLookupKey(
+  request: Pick<
+    RefreshThreadPullRequestsRequest,
+    "provider" | "branch" | "directoryPaths"
+  >,
+): string {
+  return JSON.stringify({
+    lookupVersion: 2,
+    provider: normalizePullRequestProvider(request.provider),
+    branch: request.branch.trim(),
+    directoryPaths: normalizePrLookupDirectoryPaths(request.directoryPaths),
+  });
+}
+
+function normalizePullRequestProvider(provider: string | undefined): string {
+  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER;
+}
+
+function normalizePrSummary(pr: PrSummary): PrSummary {
+  const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
+  return {
+    ...pr,
+    provider: normalizePullRequestProvider(pr.provider),
+    state: checkState,
+    checkState,
+    lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
+    reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
+    mergeState: pr.mergeState ?? "unknown",
+  };
+}
+
+function normalizePrCheckState(
+  state: string | undefined,
+): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycleState"] {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
+
+function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
+  return state === "draft" ? "draft" : "ready_for_review";
+}
+
+function getPrStatusKey(
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
+): string {
+  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+}
+
+function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((pr, index) => {
+    const candidate = right[index];
+    return (
+      candidate?.number === pr.number &&
+      normalizePullRequestProvider(candidate.provider)
+        === normalizePullRequestProvider(pr.provider) &&
+      candidate.org === pr.org &&
+      candidate.repo === pr.repo &&
+      candidate.title === pr.title &&
+      candidate.state === pr.state &&
+      candidate.checkState === pr.checkState &&
+      candidate.lifecycleState === pr.lifecycleState &&
+      candidate.reviewState === pr.reviewState &&
+      candidate.mergeState === pr.mergeState &&
+      candidate.url === pr.url
+    );
+  });
+}
+
+type PrStatusRegistryEntry = {
+  pr: PrSummary;
+  fetchedAt: number;
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+type PrLookupRegistryEntry = {
+  prs: PrSummary[];
+  fetchedAt: number;
+  provider: string;
+  branch: string;
+  directoryPaths: string[];
+  lastScheduledRefreshRequestedAt?: number;
+  lastUserRefreshRequestedAt?: number;
+};
+
+type PrLookupSubscriber = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  requestKey: string;
+  previousPrs: PrSummary[];
+};
+
+class PrStatusTokenBucket {
+  private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
+  private updatedAt = Date.now();
+
+  tryTake(now = Date.now()): boolean {
+    const elapsedMs = Math.max(0, now - this.updatedAt);
+    this.tokens = Math.min(
+      PR_STATUS_TOKEN_BUCKET_CAPACITY,
+      this.tokens +
+        (elapsedMs * PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE) / 60_000,
+    );
+    this.updatedAt = now;
+
+    if (this.tokens < 1) {
+      return false;
+    }
+
+    this.tokens -= 1;
+    return true;
+  }
 }
 
 class DesktopAppServerService {
@@ -353,6 +503,16 @@ class DesktopAppServerService {
     string,
     Promise<RefreshThreadPullRequestsResponse>
   >();
+  private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
+  private readonly prLookupRegistry = new Map<string, PrLookupRegistryEntry>();
+  private readonly pendingPrLookupRefreshes = new Map<string, Promise<void>>();
+  private readonly prLookupSubscribers = new Map<
+    string,
+    Map<string, PrLookupSubscriber>
+  >();
+  private readonly prStatusTokenBucket = new PrStatusTokenBucket();
+  private prStatusRegistryLoaded = false;
+  private prLookupRegistryLoaded = false;
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -692,6 +852,10 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    this.seedPrStatusRegistryFromThreads(snapshot.threads);
+    const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
@@ -718,8 +882,10 @@ class DesktopAppServerService {
 
     return {
       ...snapshot,
+      threads: canonicalSnapshot.threads,
       directories,
-      unchanged: snapshot.unchanged && directoriesUnchanged,
+      unchanged:
+        snapshot.unchanged && directoriesUnchanged && !canonicalSnapshot.changed,
     };
   }
 
@@ -1004,12 +1170,14 @@ class DesktopAppServerService {
     request: RefreshThreadPullRequestsRequest,
     requestKey: string,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    const provider = normalizePullRequestProvider(request.provider);
     const fetcher = this.getPrFetcher();
     const ghAvailable = await fetcher.isGhAvailable();
     if (!ghAvailable) {
       return {
         backend,
         threadId: request.threadId,
+        provider,
         prs: [],
         ghAvailable: false,
       };
@@ -1020,8 +1188,45 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
     });
-    const existingPrs = existing?.prs ?? [];
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    const persistedPrs = existing?.prs ?? [];
+    this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
+    const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
+    const lookupKey = getPullRequestLookupKey(request);
+    const lookupDirectoryPaths = normalizePrLookupDirectoryPaths(
+      request.directoryPaths,
+    );
+    const existingLookupMatches = existing?.prsRefreshKey === requestKey;
+    if (existingLookupMatches) {
+      this.rememberPrLookup({
+        lookupKey,
+        provider,
+        branch,
+        directoryPaths: lookupDirectoryPaths,
+        prs: existingPrs,
+        fetchedAt: existing?.prsFetchedAt ?? 0,
+      });
+    }
+    const lookupEntry = this.prLookupRegistry.get(lookupKey);
+    const currentLookupPrs = lookupEntry
+      ? this.canonicalizePrs(lookupEntry.prs)
+      : existingLookupMatches
+        ? existingPrs
+        : [];
+    const knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    if (lookupEntry && lookupEntry.fetchedAt > 0) {
+      await this.persistPullRequestLookupHit({
+        backend,
+        request,
+        requestKey,
+        persistedPrs,
+        persistedRefreshKey: existing?.prsRefreshKey,
+        prs: currentLookupPrs,
+        fetchedAt: lookupEntry.fetchedAt,
+      });
+    }
     // Terminal-state short-circuit: once every cached PR for a lookup is
     // merged or closed, we do not need to re-query gh for the same
     // branch/directory lookup.
@@ -1036,17 +1241,20 @@ class DesktopAppServerService {
     // programmatically can read `shortCircuited: true` off the
     // response.
     const allExistingPrsTerminal =
-      existingPrs.length > 0
-      && existingPrs.every((pr) => pr.state === "merged" || pr.state === "closed");
+      currentLookupPrs.length > 0
+      && currentLookupPrs.every(
+        (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+      );
     if (
       allExistingPrsTerminal
       && branch !== "HEAD"
-      && existing?.prsRefreshKey === requestKey
+      && request.trigger !== "user"
     ) {
       return {
         backend,
         threadId: request.threadId,
-        prs: existingPrs,
+        provider,
+        prs: knownPrs,
         ghAvailable: true,
         shortCircuited: true,
       };
@@ -1056,43 +1264,404 @@ class DesktopAppServerService {
       return {
         backend,
         threadId: request.threadId,
-        prs: existingPrs,
+        provider,
+        prs: knownPrs,
         ghAvailable: true,
       };
     }
 
-    const lastFetchedAt = existing?.prsFetchedAt;
-    if (
-      typeof lastFetchedAt === "number" &&
-      Date.now() - lastFetchedAt < THREAD_PR_REFRESH_MIN_INTERVAL_MS &&
-      existing?.prsRefreshKey === requestKey
-    ) {
-      return {
-        backend,
-        threadId: request.threadId,
-        prs: existingPrs,
-        ghAvailable: true,
-      };
-    }
-
-    const prs = await detectPullRequestsForThread({
-      fetcher,
-      branch,
-      directoryPaths: request.directoryPaths,
+    this.startPullRequestLookupRefresh({
+      backend,
+      request,
+      requestKey,
+      lookupKey,
+      lookupDirectoryPaths,
+      previousPrs: knownPrs,
     });
 
-    // Persist even an empty result so we don't refetch unchanged state on
-    // every renderer trigger. The fetchedAt timestamp lets a future TTL
-    // policy (if we add one) reason about staleness without any extra
-    // bookkeeping.
-    await overlay.setThreadPullRequests({
+    return {
       backend,
       threadId: request.threadId,
+      provider,
+      prs: knownPrs,
+      ghAvailable: true,
+    };
+  }
+
+  private async fetchPullRequestLookup(params: {
+    request: RefreshThreadPullRequestsRequest;
+    lookupKey: string;
+    lookupDirectoryPaths: string[];
+  }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
+    const prs = (await detectPullRequestsForThread({
+      fetcher: this.getPrFetcher(),
+      branch: params.request.branch.trim(),
+      directoryPaths: params.request.directoryPaths,
+    })).map(normalizePrSummary);
+    const fetchedAt = Date.now();
+    this.rememberPrStatuses(prs, fetchedAt);
+    await this.writePrStatusesToCache(prs, fetchedAt);
+    this.rememberPrLookup({
+      lookupKey: params.lookupKey,
+      provider: normalizePullRequestProvider(params.request.provider),
+      branch: params.request.branch.trim(),
+      directoryPaths: params.lookupDirectoryPaths,
       prs,
-      refreshKey: requestKey,
+      fetchedAt,
+    });
+    await this.writePrLookupToCache({
+      lookupKey: params.lookupKey,
+      provider: normalizePullRequestProvider(params.request.provider),
+      branch: params.request.branch.trim(),
+      directoryPaths: params.lookupDirectoryPaths,
+      prs,
+      fetchedAt,
     });
 
-    return { backend, threadId: request.threadId, prs, ghAvailable: true };
+    return { prs, fetchedAt };
+  }
+
+  private startPullRequestLookupRefresh(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    lookupKey: string;
+    lookupDirectoryPaths: string[];
+    previousPrs: PrSummary[];
+  }): void {
+    const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
+    if (pending) {
+      this.addPullRequestLookupSubscriber(params.lookupKey, params);
+      return;
+    }
+
+    const refreshKey = this.claimPullRequestLookupRefreshKey(
+      params.lookupKey,
+      params.request.trigger ?? "scheduled",
+      normalizePullRequestProvider(params.request.provider),
+      params.previousPrs.length > 0
+        && params.previousPrs.every(
+          (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+        ),
+    );
+    if (!refreshKey) {
+      return;
+    }
+
+    this.addPullRequestLookupSubscriber(params.lookupKey, params);
+    const promise = this.fetchPullRequestLookup(params)
+      .then(async ({ prs, fetchedAt }) => {
+        await this.persistPullRequestLookupSubscribers({
+          lookupKey: params.lookupKey,
+          prs,
+          fetchedAt,
+        });
+      })
+      .catch((error) => {
+        appServerLog.warn("background PR lookup refresh failed", {
+          threadId: params.request.threadId,
+          refreshKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.pendingPrLookupRefreshes.get(params.lookupKey) === promise) {
+          this.pendingPrLookupRefreshes.delete(params.lookupKey);
+          this.prLookupSubscribers.delete(params.lookupKey);
+        }
+      });
+    this.pendingPrLookupRefreshes.set(params.lookupKey, promise);
+  }
+
+  private addPullRequestLookupSubscriber(
+    lookupKey: string,
+    params: {
+      backend: AppServerBackendKind;
+      request: RefreshThreadPullRequestsRequest;
+      requestKey: string;
+      previousPrs: PrSummary[];
+    },
+  ): void {
+    const subscribers =
+      this.prLookupSubscribers.get(lookupKey) ?? new Map<string, PrLookupSubscriber>();
+    const threadKey = buildThreadIdentityKey(
+      params.backend,
+      params.request.threadId,
+    );
+    subscribers.set(threadKey, {
+      backend: params.backend,
+      threadId: params.request.threadId,
+      requestKey: params.requestKey,
+      previousPrs: params.previousPrs,
+    });
+    this.prLookupSubscribers.set(lookupKey, subscribers);
+  }
+
+  private async persistPullRequestLookupSubscribers(params: {
+    lookupKey: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): Promise<void> {
+    const subscribers = this.prLookupSubscribers.get(params.lookupKey);
+    if (!subscribers?.size) {
+      return;
+    }
+
+    await Promise.all(
+      [...subscribers.values()].map(async (subscriber) => {
+        const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
+        await this.getOverlayStore().setThreadPullRequests({
+          backend: subscriber.backend,
+          threadId: subscriber.threadId,
+          prs: nextPrs,
+          fetchedAt: params.fetchedAt,
+          refreshKey: subscriber.requestKey,
+        });
+
+        if (!prSummariesEqual(subscriber.previousPrs, nextPrs)) {
+          await this.publishThreadPullRequestsUpdated({
+            backend: subscriber.backend,
+            threadId: subscriber.threadId,
+            prs: nextPrs,
+          });
+        }
+      }),
+    );
+  }
+
+  private async persistPullRequestLookupHit(params: {
+    backend: AppServerBackendKind;
+    request: RefreshThreadPullRequestsRequest;
+    requestKey: string;
+    persistedPrs: PrSummary[];
+    persistedRefreshKey?: string;
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): Promise<void> {
+    const nextPrs = this.mergePrHistory(params.persistedPrs, params.prs);
+    if (
+      params.persistedRefreshKey === params.requestKey
+      && prSummariesEqual(params.persistedPrs, nextPrs)
+    ) {
+      return;
+    }
+
+    await this.getOverlayStore().setThreadPullRequests({
+      backend: params.backend,
+      threadId: params.request.threadId,
+      prs: nextPrs,
+      fetchedAt: params.fetchedAt,
+      refreshKey: params.requestKey,
+    });
+
+    if (!prSummariesEqual(params.persistedPrs, nextPrs)) {
+      await this.publishThreadPullRequestsUpdated({
+        backend: params.backend,
+        threadId: params.request.threadId,
+        prs: nextPrs,
+      });
+    }
+  }
+
+  private claimPullRequestLookupRefreshKey(
+    lookupKey: string,
+    trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
+    provider: string,
+    terminalOnly: boolean,
+  ): string | undefined {
+    const now = Date.now();
+    const minInterval =
+      trigger === "user"
+        ? terminalOnly
+          ? TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+          : USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
+        : THREAD_PR_REFRESH_MIN_INTERVAL_MS;
+    const timestampField =
+      trigger === "user"
+        ? "lastUserRefreshRequestedAt"
+        : "lastScheduledRefreshRequestedAt";
+    const entry = this.prLookupRegistry.get(lookupKey);
+    const lastRequestedAt = Math.max(
+      entry?.[timestampField] ?? 0,
+      entry?.fetchedAt ?? 0,
+    );
+    const due = now - lastRequestedAt >= minInterval;
+    if (!due) {
+      return undefined;
+    }
+    if (trigger === "scheduled" && !this.prStatusTokenBucket.tryTake(now)) {
+      return undefined;
+    }
+
+    if (entry) {
+      entry[timestampField] = now;
+    } else {
+      this.prLookupRegistry.set(lookupKey, {
+        prs: [],
+        fetchedAt: 0,
+        provider: normalizePullRequestProvider(provider),
+        branch: "",
+        directoryPaths: [],
+        [timestampField]: now,
+      });
+    }
+
+    return lookupKey;
+  }
+
+  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
+    for (const pr of prs.map(normalizePrSummary)) {
+      const key = getPrStatusKey(pr);
+      const current = this.prStatusRegistry.get(key);
+      if (current && current.fetchedAt > fetchedAt) {
+        continue;
+      }
+      this.prStatusRegistry.set(key, {
+        ...current,
+        pr,
+        fetchedAt,
+      });
+    }
+  }
+
+  private rememberPrLookup(entry: {
+    lookupKey: string;
+    provider: string;
+    branch: string;
+    directoryPaths: string[];
+    prs: PrSummary[];
+    fetchedAt: number;
+  }): void {
+    const current = this.prLookupRegistry.get(entry.lookupKey);
+    if (current && current.fetchedAt > entry.fetchedAt) {
+      return;
+    }
+    this.prLookupRegistry.set(entry.lookupKey, {
+      ...current,
+      provider: normalizePullRequestProvider(entry.provider),
+      branch: entry.branch,
+      directoryPaths: entry.directoryPaths,
+      prs: entry.prs.map(normalizePrSummary),
+      fetchedAt: entry.fetchedAt,
+    });
+  }
+
+  private async loadPrStatusRegistry(): Promise<void> {
+    if (this.prStatusRegistryLoaded) {
+      return;
+    }
+    this.prStatusRegistryLoaded = true;
+    const entries = await this.getOverlayStore().readPrStatusCache();
+    for (const entry of Object.values(entries)) {
+      this.rememberPrStatuses([entry.pr], entry.fetchedAt);
+    }
+  }
+
+  private async loadPrLookupRegistry(): Promise<void> {
+    if (this.prLookupRegistryLoaded) {
+      return;
+    }
+    this.prLookupRegistryLoaded = true;
+    const entries = await this.getOverlayStore().readPrLookupCache();
+    for (const entry of Object.values(entries)) {
+      this.rememberPrLookup(entry);
+      this.rememberPrStatuses(entry.prs, entry.fetchedAt);
+    }
+  }
+
+  private async writePrStatusesToCache(
+    prs: PrSummary[],
+    fetchedAt: number,
+  ): Promise<void> {
+    const entries: PrStatusCacheEntry[] = prs.map(normalizePrSummary).map((pr) => ({
+      provider: normalizePullRequestProvider(pr.provider),
+      prKey: getPrStatusKey(pr),
+      fetchedAt,
+      pr,
+    }));
+    await this.getOverlayStore().writePrStatusCacheEntries(entries);
+  }
+
+  private async writePrLookupToCache(entry: PrLookupCacheEntry): Promise<void> {
+    await this.getOverlayStore().writePrLookupCacheEntry(entry);
+  }
+
+  private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
+    return prs.map((pr) => {
+      const normalized = normalizePrSummary(pr);
+      return this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr ?? normalized;
+    });
+  }
+
+  private mergePrHistory(
+    existingPrs: PrSummary[],
+    discoveredPrs: PrSummary[],
+  ): PrSummary[] {
+    const merged = this.canonicalizePrs(existingPrs);
+    const indexes = new Map<string, number>();
+    merged.forEach((pr, index) => {
+      indexes.set(getPrStatusKey(pr), index);
+    });
+
+    for (const pr of this.canonicalizePrs(discoveredPrs)) {
+      const key = getPrStatusKey(pr);
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(pr);
+      } else {
+        merged[existingIndex] = pr;
+      }
+    }
+
+    return merged;
+  }
+
+  private seedPrStatusRegistryFromThreads(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      if (!thread.prs?.length) {
+        continue;
+      }
+      this.rememberPrStatuses(thread.prs, 0);
+    }
+  }
+
+  private applyCanonicalPrStatuses(
+    threads: NavigationSnapshot["threads"],
+  ): { threads: NavigationSnapshot["threads"]; changed: boolean } {
+    let changed = false;
+    const canonicalThreads = threads.map((thread) => {
+      if (!thread.prs?.length) {
+        return thread;
+      }
+      const prs = this.canonicalizePrs(thread.prs);
+      if (prSummariesEqual(thread.prs, prs)) {
+        return thread;
+      }
+      changed = true;
+      return { ...thread, prs };
+    });
+
+    return { threads: canonicalThreads, changed };
+  }
+
+  private async publishThreadPullRequestsUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): Promise<void> {
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: params.backend,
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: params.threadId,
+          prs: params.prs,
+        },
+      },
+    });
   }
 
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
@@ -1568,6 +2137,13 @@ class DesktopAppServerService {
     this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
     this.pendingNavigationSnapshots.clear();
+    this.pendingThreadPullRequestRefreshes.clear();
+    this.prStatusRegistry.clear();
+    this.prLookupRegistry.clear();
+    this.pendingPrLookupRefreshes.clear();
+    this.prLookupSubscribers.clear();
+    this.prStatusRegistryLoaded = false;
+    this.prLookupRegistryLoaded = false;
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();

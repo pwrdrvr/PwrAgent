@@ -982,6 +982,82 @@ describe("RendererHotCpuProfiler", () => {
     ).toHaveLength(1);
   });
 
+  it("waits for an in-flight duration stop before detaching", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path);
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const stopCommand = deferred<{ profile: { nodes: Array<{ id: number }> } }>();
+    const { target, debuggerApi } = createTarget();
+    debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Profiler.stop") {
+        return stopCommand.promise;
+      }
+
+      return {};
+    });
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [createMetric(89)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await (
+      profiler as unknown as {
+        startProfile: (options: {
+          capturedAt: string;
+          cpuPercent: number;
+          pid: number;
+        }) => Promise<void>;
+      }
+    ).startProfile({
+      capturedAt: new Date().toISOString(),
+      cpuPercent: 89,
+      pid: 1234,
+    });
+
+    await vi.advanceTimersByTimeAsync(config.profileDurationMs);
+    await vi.waitFor(() => {
+      expect(
+        debuggerApi.sendCommand.mock.calls.filter(
+          ([method]) => method === "Profiler.stop",
+        ),
+      ).toHaveLength(1);
+    });
+
+    const stopPromise = profiler.stop("test-complete");
+    await Promise.resolve();
+
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+
+    stopCommand.resolve({ profile: { nodes: [{ id: 1 }] } });
+    await stopPromise;
+
+    expect(debuggerApi.detach).toHaveBeenCalled();
+  });
+
   it("does not query debugger attachment when the renderer is destroyed", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);

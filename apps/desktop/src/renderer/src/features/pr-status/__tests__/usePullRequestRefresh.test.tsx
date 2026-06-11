@@ -37,9 +37,11 @@ function buildResponse(
   return {
     backend: "codex",
     threadId: "thread-1",
+    provider: "github.com",
     ghAvailable: true,
     prs: [
       {
+        provider: "github.com",
         number: 249,
         org: "pwrdrvr",
         repo: "PwrAgent",
@@ -71,6 +73,7 @@ describe("usePullRequestRefresh", () => {
       expect(refreshThreadPullRequests).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
+        trigger: "scheduled",
         branch: "feat/pr-chip",
         directoryPaths: ["/repo"],
       });
@@ -201,6 +204,7 @@ describe("usePullRequestRefresh", () => {
     expect(refreshThreadPullRequests).toHaveBeenLastCalledWith({
       backend: "codex",
       threadId: "thread-1",
+      trigger: "scheduled",
       branch: "feat/next",
       directoryPaths: ["/repo"],
     });
@@ -227,7 +231,33 @@ describe("usePullRequestRefresh", () => {
       expect(refreshThreadPullRequests).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
+        trigger: "scheduled",
         branch: "fix/new-pr",
+        directoryPaths: ["/repo"],
+      });
+    });
+  });
+
+  it("marks hover prefetches as user-triggered refreshes", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { result } = renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+      }),
+    );
+
+    result.current.prefetch(buildThread());
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "feat/pr-chip",
         directoryPaths: ["/repo"],
       });
     });

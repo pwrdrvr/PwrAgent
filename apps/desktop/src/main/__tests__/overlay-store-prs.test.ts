@@ -21,21 +21,66 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-const prMerged: PrSummary = {
+const prMerged: PrSummary = pr({
+  provider: "github.com",
   number: 178,
   org: "pwrdrvr",
   repo: "PwrAgent",
   state: "merged",
   url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
-};
+});
 
-const prPassing: PrSummary = {
+const prPassing: PrSummary = pr({
+  provider: "github.com",
   number: 179,
   org: "pwrdrvr",
   repo: "PwrAgent",
   state: "passing",
   url: "https://github.com/pwrdrvr/PwrAgent/pull/179",
-};
+});
+
+const enterprisePrPassing: PrSummary = pr({
+  provider: "ghe.pwrdrvr.test",
+  number: 179,
+  org: "pwrdrvr",
+  repo: "PwrAgent",
+  state: "passing",
+  url: "https://ghe.pwrdrvr.test/pwrdrvr/PwrAgent/pull/179",
+});
+
+function pr(
+  value: Omit<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">
+    & Partial<Pick<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">>,
+): PrSummary {
+  const checkState = value.checkState ?? normalizeCheckState(value.state);
+  return {
+    ...value,
+    state: checkState,
+    checkState,
+    lifecycleState: value.lifecycleState ?? legacyLifecycleState(value.state),
+    reviewState: value.reviewState ?? (value.state === "draft" ? "draft" : "ready_for_review"),
+    mergeState: value.mergeState ?? "unknown",
+  };
+}
+
+function normalizeCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary["lifecycleState"]> {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
 
 describe("SqliteOverlayStore — thread PRs", () => {
   it("starts with no prs on a thread that has never been touched", async () => {
@@ -68,12 +113,12 @@ describe("SqliteOverlayStore — thread PRs", () => {
     await store.setThreadPullRequests({
       backend: "codex",
       threadId: "thread-1",
-      prs: [{ ...prPassing, state: "pending" }],
+      prs: [pr({ ...prPassing, state: "pending", checkState: "pending" })],
     });
     await store.setThreadPullRequests({
       backend: "codex",
       threadId: "thread-1",
-      prs: [{ ...prPassing, state: "failing" }],
+      prs: [pr({ ...prPassing, state: "failing", checkState: "failing" })],
     });
 
     const overlay = await store.getThreadOverlayState({
@@ -143,5 +188,89 @@ describe("SqliteOverlayStore — thread PRs", () => {
       prs: [],
     });
     expect(next.prs).toEqual([]);
+  });
+
+  it("persists canonical PR status cache rows across reopen", async () => {
+    await store.writePrStatusCacheEntries([
+      {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
+        fetchedAt: 1234,
+        pr: prPassing,
+      },
+    ]);
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    const reopenedStore = new SqliteOverlayStore(reopened);
+    await expect(reopenedStore.readPrStatusCache()).resolves.toEqual({
+      "github.com/pwrdrvr/pwragent#179": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
+        fetchedAt: 1234,
+        pr: prPassing,
+      },
+    });
+    reopened.close();
+
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+  });
+
+  it("persists branch lookup cache rows across reopen", async () => {
+    await store.writePrLookupCacheEntry({
+      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      provider: "github.com",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 2345,
+      prs: [prPassing],
+    });
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    const reopenedStore = new SqliteOverlayStore(reopened);
+    await expect(reopenedStore.readPrLookupCache()).resolves.toEqual({
+      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
+        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+        provider: "github.com",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        fetchedAt: 2345,
+        prs: [prPassing],
+      },
+    });
+    reopened.close();
+
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+  });
+
+  it("preserves PR providers inside branch lookup cache payloads", async () => {
+    await store.writePrLookupCacheEntry({
+      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      provider: "github.com",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 2345,
+      prs: [enterprisePrPassing],
+    });
+
+    const entries = await store.readPrLookupCache();
+
+    expect(entries).toEqual({
+      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
+        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+        provider: "github.com",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        fetchedAt: 2345,
+        prs: [enterprisePrPassing],
+      },
+    });
   });
 });

@@ -1,4 +1,5 @@
 import type { AutomationRunOutputDecision } from "./automations";
+import type { PrSummary } from "./navigation";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
@@ -1164,6 +1165,13 @@ export type AppServerNotification =
       params: {
         parentThreadId: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "thread/pullRequests/updated";
+      params: {
+        threadId: string;
+        prs: PrSummary[];
       };
     }
   /**

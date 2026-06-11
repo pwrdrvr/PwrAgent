@@ -5,6 +5,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  PrSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -3305,6 +3306,7 @@ describe("useThreadNavigation", () => {
       ],
       prs: [
         {
+          provider: "github.com",
           number: 123,
           org: "pwrdrvr",
           repo: "PwrAgent",
@@ -4111,6 +4113,94 @@ describe("useThreadNavigation", () => {
     // renderer for transcript rendering.
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("applies pull request update notification payloads before unchanged refreshes", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const initialPr: PrSummary = {
+      provider: "github.com",
+      number: 123,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    };
+    const updatedPr: PrSummary = {
+      ...initialPr,
+      title: "Preserve PR title updates",
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-1"],
+        threads: [
+          {
+            id: "thread-1",
+            title: "First thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            prs: [initialPr],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })
+      .mockResolvedValue({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: true,
+        inboxThreadKeys: ["codex:thread-1"],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prs?.[0]?.title).toBeUndefined();
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/pullRequests/updated",
+            params: {
+              threadId: "thread-1",
+              prs: [updatedPr],
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
     });
   });
 

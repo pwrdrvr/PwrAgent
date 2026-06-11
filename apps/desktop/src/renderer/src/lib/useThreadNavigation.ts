@@ -15,6 +15,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  PrSummary,
   ThreadAgentMetadata,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -431,9 +432,15 @@ function prSummariesEqual(
     const candidate = rightPrs[index];
     return (
       candidate?.number === pr.number &&
+      candidate.provider === pr.provider &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
+      candidate.title === pr.title &&
       candidate.state === pr.state &&
+      candidate.checkState === pr.checkState &&
+      candidate.lifecycleState === pr.lifecycleState &&
+      candidate.reviewState === pr.reviewState &&
+      candidate.mergeState === pr.mergeState &&
       candidate.url === pr.url
     );
   });
@@ -1166,7 +1173,40 @@ function applyThreadNameUpdate(
         ...snapshot,
         threads,
       }
-      : snapshot;
+    : snapshot;
+}
+
+function applyThreadPullRequestsUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: { backend: AppServerBackendKind; threadId: string; prs: PrSummary[] }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    if (prSummariesEqual(thread.prs, params.prs)) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      prs: params.prs,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
 }
 
 function applyThreadModelSettingsUpdate(
@@ -2294,6 +2334,23 @@ export function useThreadNavigation(
       }
 
       if (method === "navigation/threadDirectories/updated") {
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/pullRequests/updated") {
+        const { threadId, prs } = event.notification.params as {
+          threadId: string;
+          prs: PrSummary[];
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadPullRequestsUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            prs,
+          }),
+        }));
         scheduleRefresh();
         return;
       }

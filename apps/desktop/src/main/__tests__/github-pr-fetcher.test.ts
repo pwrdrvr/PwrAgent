@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GithubPrFetcher,
   deriveChipState,
+  deriveLifecycleState,
+  deriveMergeState,
+  deriveReviewState,
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
@@ -12,9 +15,12 @@ import {
 function rawMergedPr() {
   return {
     number: 178,
+    title: "Retain thread pull request history",
     url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     state: "MERGED",
     isDraft: false,
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
     mergedAt: "2026-05-05T00:06:31Z",
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
@@ -33,12 +39,24 @@ function rawMergedPr() {
 describe("parseGhPrPayload", () => {
   it("maps the pinned JSON shape into a PrSummary", () => {
     expect(parseGhPrPayload(rawMergedPr())).toEqual({
+      provider: "github.com",
       number: 178,
       org: "pwrdrvr",
       repo: "PwrAgent",
-      state: "merged",
+      title: "Retain thread pull request history",
+      state: "passing",
+      checkState: "passing",
+      lifecycleState: "merged",
+      reviewState: "ready_for_review",
+      mergeState: "unknown",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
+  });
+
+  it("omits blank titles from PrSummary", () => {
+    expect(parseGhPrPayload({ ...rawMergedPr(), title: " " })).not.toHaveProperty(
+      "title",
+    );
   });
 
   it("falls back to empty strings for missing repo/owner", () => {
@@ -52,31 +70,42 @@ describe("parseGhPrPayload", () => {
   });
 });
 
-describe("deriveChipState", () => {
-  it("returns merged for MERGED state regardless of checks", () => {
-    expect(deriveChipState({ ...rawMergedPr(), state: "MERGED" })).toBe(
-      "merged",
-    );
+describe("derive PR states", () => {
+  it("keeps lifecycle separate from check state", () => {
+    const row = { ...rawMergedPr(), state: "MERGED" };
+    expect(deriveLifecycleState(row)).toBe("merged");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("returns closed for CLOSED state without merge", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "CLOSED",
-        mergedAt: null,
-      }),
-    ).toBe("closed");
+  it("keeps closed lifecycle separate from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "CLOSED",
+      mergedAt: null,
+    };
+    expect(deriveLifecycleState(row)).toBe("closed");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("returns draft for OPEN + isDraft", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        isDraft: true,
-      }),
-    ).toBe("draft");
+  it("keeps draft review state separate from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      isDraft: true,
+    };
+    expect(deriveReviewState(row)).toBe("draft");
+    expect(deriveChipState(row)).toBe("passing");
+  });
+
+  it("detects merge conflicts separately from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      mergeable: "CONFLICTING",
+      mergeStateStatus: "DIRTY",
+    };
+    expect(deriveMergeState(row)).toBe("conflicting");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
   it("returns passing when all checks SUCCEEDED", () => {
@@ -355,10 +384,16 @@ describe("GithubPrFetcher", () => {
       });
       expect(result).toEqual([
         {
+          provider: "github.com",
           number: 178,
           org: "pwrdrvr",
           repo: "PwrAgent",
-          state: "merged",
+          title: "Retain thread pull request history",
+          state: "passing",
+          checkState: "passing",
+          lifecycleState: "merged",
+          reviewState: "ready_for_review",
+          mergeState: "unknown",
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
       ]);
@@ -375,6 +410,7 @@ describe("GithubPrFetcher", () => {
         "--limit",
         "5",
       ]);
+      expect(args[args.indexOf("--json") + 1]).toContain("title");
     });
 
     it("returns [] on subprocess failure", async () => {

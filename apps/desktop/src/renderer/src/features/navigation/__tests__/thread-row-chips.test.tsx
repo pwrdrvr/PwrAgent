@@ -233,6 +233,43 @@ describe("ThreadRow chip flow", () => {
     expect(addReaction?.textContent ?? "").not.toContain("+");
   });
 
+  it("prefetches terminal-only PR chip sets after hover dwell", () => {
+    vi.useFakeTimers();
+    try {
+      const onPrefetchPullRequests = vi.fn();
+      const thread: NavigationThreadSummary = {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 542,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "unknown",
+            lifecycleState: "merged",
+            checkState: "unknown",
+            reviewState: "ready_for_review",
+            mergeState: "unknown",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/542",
+          },
+        ],
+      };
+      const { container } = renderRow({
+        thread,
+        onPrefetchPullRequests,
+      });
+
+      fireEvent.mouseEnter(container.querySelector(".thread-row__chips")!);
+      vi.advanceTimersByTime(749);
+      expect(onPrefetchPullRequests).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onPrefetchPullRequests).toHaveBeenCalledWith(thread);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a full card without action controls for the drag preview", () => {
     vi.useFakeTimers();
     try {
@@ -306,6 +343,7 @@ describe("ThreadRow chip flow", () => {
       reactions: ["🙂"],
       prs: [
         {
+          provider: "github.com",
           number: 123,
           org: "pwrdrvr",
           repo: "PwrAgent",
@@ -328,5 +366,71 @@ describe("ThreadRow chip flow", () => {
     // Each chip type that's present comes after the previous one.
     if (prIdx >= 0 && bindingIdx >= 0) expect(prIdx).toBeLessThan(bindingIdx);
     if (bindingIdx >= 0 && reactionIdx >= 0) expect(bindingIdx).toBeLessThan(reactionIdx);
+  });
+
+  it("shows the PR title and status in the shared viewport tooltip", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    expect(prChip).not.toHaveAttribute("title");
+
+    fireEvent.mouseEnter(prChip);
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveClass("viewport-tooltip");
+    expect(tooltip).toHaveTextContent("Retain thread pull request history");
+    expect(tooltip).toHaveTextContent(
+      "pwrdrvr/PwrAgent#123 — ready for review · checks passing",
+    );
+  });
+
+  it("renders merged PRs as terminal purple chips without unknown check status", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 542,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            lifecycleState: "merged",
+            checkState: "unknown",
+            state: "unknown",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/542",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: "Open pwrdrvr/PwrAgent#542 (merged) in browser",
+    });
+    expect(prChip).toHaveClass("pr-chip--merged");
+    expect(prChip).not.toHaveClass("pr-chip--unknown");
+
+    fireEvent.mouseEnter(prChip);
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "pwrdrvr/PwrAgent#542 — merged",
+    );
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("status unknown");
   });
 });
