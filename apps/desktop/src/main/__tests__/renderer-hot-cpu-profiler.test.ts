@@ -178,18 +178,20 @@ describe("RendererHotCpuProfiler", () => {
 
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
     expect(debuggerApi.detach).toHaveBeenCalled();
-    expect(onProfileWritten).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileFilename: "renderer-hot-0001.cpuprofile",
-        profilePath: sessionResult.session.createProfilePath(1),
-        sessionDirectory: sessionResult.session.directoryPath,
-        sessionDirectoryName: sessionResult.session.directoryName,
-        triggerConsecutiveSamples: 2,
-        triggerCpuPercent: 75,
-        triggerMode: "sustained",
-        triggerThresholdPercent: 50,
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(onProfileWritten).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileFilename: "renderer-hot-0001.cpuprofile",
+          profilePath: sessionResult.session.createProfilePath(1),
+          sessionDirectory: sessionResult.session.directoryPath,
+          sessionDirectoryName: sessionResult.session.directoryName,
+          triggerConsecutiveSamples: 2,
+          triggerCpuPercent: 75,
+          triggerMode: "sustained",
+          triggerThresholdPercent: 50,
+        }),
+      );
+    });
 
     const profile = JSON.parse(
       await fs.readFile(
@@ -223,6 +225,157 @@ describe("RendererHotCpuProfiler", () => {
         }),
       ]),
     );
+  });
+
+  it("waits for an in-flight duration profile stop before stopping the monitor", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path);
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const { target } = createTarget();
+    const profileWritten = deferred();
+    const onProfileWritten = vi.fn(async () => {
+      await profileWritten.promise;
+    });
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 101.5),
+      createMetric(4, 103),
+    ];
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
+      onProfileWritten,
+    });
+
+    await profiler.start();
+    await vi.waitFor(() => {
+      expect(onProfileWritten).toHaveBeenCalledTimes(1);
+    });
+
+    let stopResolved = false;
+    const stopPromise = profiler.stop("test-complete").then(() => {
+      stopResolved = true;
+    });
+    await Promise.resolve();
+    expect(stopResolved).toBe(false);
+
+    profileWritten.resolve();
+    await stopPromise;
+    expect(stopResolved).toBe(true);
+  });
+
+  it("pauses process metric sampling while the renderer CPU profiler is active", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "10000",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const { target, debuggerApi } = createTarget();
+    let nowCallCount = 0;
+    const metrics = [
+      createMetric(0, 100),
+      createMetric(4, 100.5),
+      createMetric(4, 101),
+      createMetric(0, 110),
+    ];
+    const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0, 101)]);
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics,
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      now: () => new Date(1_780_000_000_000 + nowCallCount++ * 5),
+    });
+
+    try {
+      await profiler.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
+      expect(getAppMetrics).toHaveBeenCalledTimes(3);
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs * 4);
+      expect(getAppMetrics).toHaveBeenCalledTimes(3);
+      expect(debuggerApi.sendCommand).not.toHaveBeenCalledWith("Profiler.stop");
+
+      await vi.runOnlyPendingTimersAsync();
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+      await vi.waitFor(() => expect(debuggerApi.detach).toHaveBeenCalled());
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(4));
+
+      let samples: Array<Record<string, unknown>> = [];
+      await vi.waitFor(async () => {
+        samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(samples).toHaveLength(4);
+      });
+      expect(samples.at(-1)).toMatchObject({
+        cpuPercent: 0,
+        cumulativeCpuSeconds: 110,
+        electronCpuPercent: 0,
+      });
+      expect(samples.at(-1)).not.toHaveProperty("cumulativeCpuDeltaSeconds");
+      expect(samples.at(-1)).not.toHaveProperty("wallDeltaSeconds");
+    } finally {
+      await profiler.stop("test-complete");
+    }
   });
 
   it("waits for the configured delay before sampling", async () => {
@@ -425,6 +578,7 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target } = createTarget();
     const onHeapSnapshotLimitReached = vi.fn(async () => undefined);
+    const onProfileWritten = vi.fn();
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -435,6 +589,7 @@ describe("RendererHotCpuProfiler", () => {
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       onHeapSnapshotLimitReached,
+      onProfileWritten,
       session: sessionResult.session,
       target,
       logger: {
@@ -466,6 +621,29 @@ describe("RendererHotCpuProfiler", () => {
       "renderer-hot-0001-mid.heapsnapshot",
       "renderer-hot-0001-stop.heapsnapshot",
     ]);
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        heapSnapshotArtifacts: [
+          {
+            filename: "renderer-hot-0001-start.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "start"),
+            phase: "start",
+          },
+          {
+            filename: "renderer-hot-0001-mid.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "mid"),
+            phase: "mid",
+          },
+          {
+            filename: "renderer-hot-0001-stop.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "stop"),
+            phase: "stop",
+          },
+        ],
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+      }),
+    );
 
     const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
       .trim()
@@ -487,6 +665,112 @@ describe("RendererHotCpuProfiler", () => {
         }),
         expect.objectContaining({ type: "heap-snapshot-limit-reached" }),
       ]),
+    );
+  });
+
+  it("waits for an in-flight heap snapshot before handing off profile artifacts", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "1000",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT: "1",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT_LIMIT: "3",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const midSnapshot = deferred();
+    const { target, debuggerApi } = createTarget();
+    target.takeHeapSnapshot.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("-mid.")) {
+        await midSnapshot.promise;
+      }
+    });
+    const onProfileWritten = vi.fn();
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [createMetric(89)],
+      onProfileWritten,
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await (
+      profiler as unknown as {
+        startProfile: (options: {
+          capturedAt: string;
+          cpuPercent: number;
+          pid: number;
+        }) => Promise<void>;
+      }
+    ).startProfile({
+      capturedAt: new Date().toISOString(),
+      cpuPercent: 89,
+      pid: 1234,
+    });
+
+    const midCapture = (
+      profiler as unknown as {
+        captureHeapSnapshot: (index: number, phase: string) => Promise<void>;
+      }
+    ).captureHeapSnapshot(1, "mid");
+    await vi.waitFor(() => {
+      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    const stopProfile = (
+      profiler as unknown as { stopProfile: (reason: string) => Promise<void> }
+    ).stopProfile("duration-elapsed");
+    await vi.waitFor(() => {
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    });
+
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(2);
+    expect(onProfileWritten).not.toHaveBeenCalled();
+
+    midSnapshot.resolve();
+    await Promise.all([midCapture, stopProfile]);
+
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        heapSnapshotArtifacts: [
+          {
+            filename: "renderer-hot-0001-start.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "start"),
+            phase: "start",
+          },
+          {
+            filename: "renderer-hot-0001-mid.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "mid"),
+            phase: "mid",
+          },
+          {
+            filename: "renderer-hot-0001-stop.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "stop"),
+            phase: "stop",
+          },
+        ],
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+      }),
     );
   });
 
@@ -542,8 +826,12 @@ describe("RendererHotCpuProfiler", () => {
       expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
     });
 
-    await profiler.stop("settings-disabled");
+    const stopProfiler = profiler.stop("settings-disabled");
+    await vi.waitFor(() => {
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    });
     startSnapshot.resolve();
+    await stopProfiler;
     await new Promise((resolve) =>
       setTimeout(resolve, config.profileDurationMs * 2),
     );
@@ -692,6 +980,82 @@ describe("RendererHotCpuProfiler", () => {
     expect(
       debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop"),
     ).toHaveLength(1);
+  });
+
+  it("waits for an in-flight duration stop before detaching", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path);
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const stopCommand = deferred<{ profile: { nodes: Array<{ id: number }> } }>();
+    const { target, debuggerApi } = createTarget();
+    debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Profiler.stop") {
+        return stopCommand.promise;
+      }
+
+      return {};
+    });
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [createMetric(89)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await (
+      profiler as unknown as {
+        startProfile: (options: {
+          capturedAt: string;
+          cpuPercent: number;
+          pid: number;
+        }) => Promise<void>;
+      }
+    ).startProfile({
+      capturedAt: new Date().toISOString(),
+      cpuPercent: 89,
+      pid: 1234,
+    });
+
+    await vi.advanceTimersByTimeAsync(config.profileDurationMs);
+    await vi.waitFor(() => {
+      expect(
+        debuggerApi.sendCommand.mock.calls.filter(
+          ([method]) => method === "Profiler.stop",
+        ),
+      ).toHaveLength(1);
+    });
+
+    const stopPromise = profiler.stop("test-complete");
+    await Promise.resolve();
+
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+
+    stopCommand.resolve({ profile: { nodes: [{ id: 1 }] } });
+    await stopPromise;
+
+    expect(debuggerApi.detach).toHaveBeenCalled();
   });
 
   it("does not query debugger attachment when the renderer is destroyed", async () => {

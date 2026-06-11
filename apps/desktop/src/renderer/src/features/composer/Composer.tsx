@@ -3140,7 +3140,11 @@ export function Composer(props: ComposerProps) {
     }));
     const input: AppServerTurnInputItem[] = [
       ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
-      ...imageParts.map(({ url }) => ({ type: "image" as const, url })),
+      ...attachments.map((attachment) => ({
+        type: "image" as const,
+        name: attachment.name,
+        url: attachment.url,
+      })),
     ];
 
     return { displayText, imageParts, input };
@@ -5748,8 +5752,9 @@ export function Composer(props: ComposerProps) {
               disabled={launchpadSubmitting}
               kind="branch"
               value={
-                props.launchpad.branchName ??
-                props.directory?.gitStatus?.currentBranch ??
+                normalizeSelectableLaunchpadBranch(props.launchpad.branchName) ??
+                normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch) ??
+                props.directory?.gitStatus?.defaultBranch ??
                 ""
               }
               options={launchpadBranchOptions.map((branch) => ({
@@ -6555,16 +6560,25 @@ function buildLaunchpadBranchOptions(
   const candidates = [
     launchpad.branchName,
     directory?.gitStatus?.currentBranch,
+    directory?.gitStatus?.defaultBranch,
     ...(directory?.gitStatus?.branches ?? []),
   ];
   const options = new Set<string>();
   for (const candidate of candidates) {
-    const value = candidate?.trim();
+    const value = normalizeSelectableLaunchpadBranch(candidate);
     if (value) {
       options.add(value);
     }
   }
   return [...options];
+}
+
+function normalizeSelectableLaunchpadBranch(branch?: string): string | undefined {
+  const value = branch?.trim();
+  if (!value || value.toUpperCase() === "HEAD") {
+    return undefined;
+  }
+  return value;
 }
 
 function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {

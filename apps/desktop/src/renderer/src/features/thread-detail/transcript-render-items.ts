@@ -13,11 +13,14 @@ export type TranscriptRenderItem =
     }
   | {
       type: "workPhaseGroup";
+      activeStartedAt?: number;
       id: string;
       collapsible: boolean;
       entries: AppServerThreadEntry[];
       label: string;
     };
+
+export const ACTIVE_WORK_GROUP_THRESHOLD_MS = 60_000;
 
 export function buildTranscriptRenderItems(params: {
   entries: AppServerThreadEntry[];
@@ -64,6 +67,7 @@ export function buildTranscriptRenderItems(params: {
 }
 
 type RenderGroup = {
+  activeStartedAt?: number;
   collapsible: boolean;
   entries: AppServerThreadEntry[];
   id: string;
@@ -84,7 +88,10 @@ function buildActiveWorkGroups(
     startedAtCandidates.length > 0 ? Math.min(...startedAtCandidates) : undefined;
   const elapsedMs =
     typeof startedAt === "number" ? Math.max(now - startedAt, 0) : undefined;
-  if (typeof elapsedMs !== "number" || elapsedMs <= 60_000) {
+  if (
+    typeof elapsedMs !== "number" ||
+    elapsedMs <= ACTIVE_WORK_GROUP_THRESHOLD_MS
+  ) {
     return [];
   }
 
@@ -103,6 +110,7 @@ function buildActiveWorkGroups(
 
   return [
     {
+      activeStartedAt: startedAt,
       collapsible: false,
       entries: activeEntries,
       id: `work:${activeTurnId}:active`,
@@ -308,7 +316,9 @@ function isTerminalTurnFailureActivity(
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
+  return entry.details.some((detail) =>
+    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason)
+  );
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

@@ -6561,6 +6561,7 @@ describe("MessagingController", () => {
           },
           {
             type: "image",
+            name: "screen.png",
             url: "data:image/png;base64,AQID",
           },
           {

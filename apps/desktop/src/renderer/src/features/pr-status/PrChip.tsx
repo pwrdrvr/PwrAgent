@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from "react";
-import type { PrChipState, PrSummary } from "@pwragent/shared";
+import type { PrSummary } from "@pwragent/shared";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -14,11 +15,36 @@ type PrChipProps = {
 
 export function PrChip(props: PrChipProps) {
   const { pr } = props;
+  const tooltipController = useViewportTooltip({
+    className: "viewport-tooltip",
+  });
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
-  const status = describeStatus(pr);
-  const tooltip = `${pr.org}/${pr.repo}#${pr.number} — ${status}`;
+  const identity = `${pr.org}/${pr.repo}#${pr.number}`;
+  const title = pr.title?.trim();
+  const chipState = resolveChipState(pr);
+  const status = prStatusLabel(pr);
+  const tooltip = title
+    ? `${title}\n${identity} — ${status}`
+    : `${identity} — ${status}`;
+
+  // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
+  // than replacing it: an OPEN draft keeps its real status color and gains a
+  // separate affordance bar, and a conflict recolors the dot red (see the
+  // `.pr-chip--draft` / `.pr-chip--conflicting` rules in app.css). Both only
+  // apply while the PR is open — a merged/closed chip owns its own dot color.
+  const isOpen = resolveLifecycleState(pr) === "open";
+  const isDraft = isOpen && pr.reviewState === "draft";
+  const isConflicting = isOpen && pr.mergeState === "conflicting";
+  const className = [
+    "pr-chip",
+    `pr-chip--${chipState}`,
+    isDraft ? "pr-chip--draft" : "",
+    isConflicting ? "pr-chip--conflicting" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   // role="button" span (not a real <button>) so the chip is legal HTML
   // inside the row's main <button>. stopPropagation prevents the row's
@@ -32,72 +58,114 @@ export function PrChip(props: PrChipProps) {
   };
 
   return (
-    <span
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
-      title={tooltip}
-      className={`pr-chip pr-chip--${pr.state}${pr.isDraft ? " pr-chip--draft" : ""}`}
-      onClick={handleActivate}
-      onContextMenu={(event) => {
-        if (!props.onOpenContextMenu) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = event.currentTarget.getBoundingClientRect();
-        props.onOpenContextMenu(pr, {
-          x: event.clientX,
-          y: event.clientY,
-          anchorTop: rect.top,
-        });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          handleActivate(event);
-        }
-      }}
-    >
-      <span className="pr-chip__dot" aria-hidden="true" />
-      <span className="pr-chip__label">{label}</span>
-      {pr.isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
-    </span>
+    <>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
+        className={className}
+        data-pr-chip=""
+        onBlur={tooltipController.hide}
+        onClick={handleActivate}
+        onContextMenu={(event) => {
+          if (!props.onOpenContextMenu) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          props.onOpenContextMenu(pr, {
+            x: event.clientX,
+            y: event.clientY,
+            anchorTop: rect.top,
+          });
+        }}
+        onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            handleActivate(event);
+          }
+        }}
+        onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onMouseLeave={tooltipController.hide}
+      >
+        <span className="pr-chip__dot" aria-hidden="true" />
+        <span className="pr-chip__label">{label}</span>
+        {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
+      </span>
+      {tooltipController.tooltipNode}
+    </>
   );
 }
 
-/**
- * Human phrase for the chip's tooltip / aria-label. Draft is orthogonal to the
- * dot color, so it leads the phrase and the check/merge status follows when we
- * actually know it ("draft · all checks passing"); an unknown-status draft
- * collapses to just "draft" rather than "draft · status unknown".
- */
-function describeStatus(pr: PrSummary): string {
-  const status = statusPhrase(pr.state);
-  if (pr.isDraft) {
-    return pr.state === "unknown" ? "draft" : `draft · ${status}`;
+function prStatusLabel(pr: PrSummary): string {
+  const lifecycleState = resolveLifecycleState(pr);
+  const parts: string[] = [];
+  if (lifecycleState === "merged") {
+    parts.push("merged");
+    return parts.join(" · ");
+  } else if (lifecycleState === "closed") {
+    parts.push("closed without merge");
+    return parts.join(" · ");
+  } else if (pr.reviewState === "draft") {
+    parts.push("draft");
+  } else {
+    parts.push("ready for review");
   }
-  return status;
+
+  if (pr.mergeState === "conflicting") {
+    parts.push("merge conflict");
+  }
+
+  parts.push(checkStateTooltipLabel(resolveCheckState(pr)));
+  return parts.join(" · ");
 }
 
-function statusPhrase(state: PrChipState): string {
+function resolveChipState(
+  pr: PrSummary,
+): NonNullable<PrSummary["checkState"]> | "merged" | "closed" {
+  const lifecycleState = resolveLifecycleState(pr);
+  if (lifecycleState === "merged" || lifecycleState === "closed") {
+    return lifecycleState;
+  }
+  return resolveCheckState(pr);
+}
+
+function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
+  if (pr.lifecycleState) {
+    return pr.lifecycleState;
+  }
+  if (pr.state === "merged" || pr.state === "closed") {
+    return pr.state;
+  }
+  return "open";
+}
+
+function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
+  return pr.checkState ?? normalizeLegacyCheckState(pr.state);
+}
+
+function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function checkStateTooltipLabel(state: NonNullable<PrSummary["checkState"]>): string {
   switch (state) {
-    case "merged":
-      return "merged";
     case "passing":
-      return "all checks passing";
+      return "checks passing";
     case "failing":
       return "checks failing";
-    case "conflicted":
-      return "merge conflict";
     case "pending":
       return "checks pending";
-    case "closed":
-      return "closed without merge";
     case "unknown":
-      return "status unknown";
-    // Defensive: overlay rows persisted before this shape may carry a legacy
-    // state string (e.g. "draft"); fall back rather than render undefined.
-    default:
       return "status unknown";
   }
 }

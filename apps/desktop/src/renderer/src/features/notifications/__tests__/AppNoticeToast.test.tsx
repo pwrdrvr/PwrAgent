@@ -41,6 +41,33 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("copies an explicit handoff value without rendering it", () => {
+    const copyText = vi.fn(async () => undefined);
+    const handoff = [
+      "PwrAgent captured a renderer CPU profile.",
+      "Heap snapshot start path: /Users/test/.pwragent/diagnostics/renderer-hot-0001-start.heapsnapshot",
+      "Heap snapshot stop path: /Users/test/.pwragent/diagnostics/renderer-hot-0001-stop.heapsnapshot",
+    ].join("\n");
+
+    render(
+      <AppNoticeToast
+        desktopApi={{ copyText }}
+        notice={{
+          ...notice,
+          copyText: handoff,
+          detail: "Session: hot-cpu-2026-06-10-2211-bd972c",
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Session: hot-cpu-2026-06-10-2211-bd972c")).toBeInTheDocument();
+    expect(screen.queryByText(/Heap snapshot start path/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyText).toHaveBeenCalledWith(handoff);
+  });
+
   it("auto-dismisses unless the notice is hovered", () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GithubPrFetcher,
   deriveChipState,
+  deriveLifecycleState,
+  deriveMergeState,
+  deriveReviewState,
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
@@ -12,10 +15,12 @@ import {
 function rawMergedPr() {
   return {
     number: 178,
+    title: "Retain thread pull request history",
     url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     state: "MERGED",
     isDraft: false,
     mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
     mergedAt: "2026-05-05T00:06:31Z",
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
@@ -34,35 +39,24 @@ function rawMergedPr() {
 describe("parseGhPrPayload", () => {
   it("maps the pinned JSON shape into a PrSummary", () => {
     expect(parseGhPrPayload(rawMergedPr())).toEqual({
+      provider: "github.com",
       number: 178,
       org: "pwrdrvr",
       repo: "PwrAgent",
-      state: "merged",
-      isDraft: false,
+      title: "Retain thread pull request history",
+      state: "passing",
+      checkState: "passing",
+      lifecycleState: "merged",
+      reviewState: "ready_for_review",
+      mergeState: "unknown",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
   });
 
-  it("carries isDraft orthogonally and still reports the check status", () => {
-    const summary = parseGhPrPayload({
-      ...rawMergedPr(),
-      state: "OPEN",
-      isDraft: true,
-    });
-    // Draft no longer masks the dot color — checks still drive `state`.
-    expect(summary.state).toBe("passing");
-    expect(summary.isDraft).toBe(true);
-  });
-
-  it("does not mark a closed-while-draft PR as draft", () => {
-    const summary = parseGhPrPayload({
-      ...rawMergedPr(),
-      state: "CLOSED",
-      isDraft: true,
-      mergedAt: null,
-    });
-    expect(summary.state).toBe("closed");
-    expect(summary.isDraft).toBe(false);
+  it("omits blank titles from PrSummary", () => {
+    expect(parseGhPrPayload({ ...rawMergedPr(), title: " " })).not.toHaveProperty(
+      "title",
+    );
   });
 
   it("falls back to empty strings for missing repo/owner", () => {
@@ -76,62 +70,42 @@ describe("parseGhPrPayload", () => {
   });
 });
 
-describe("deriveChipState", () => {
-  it("returns merged for MERGED state regardless of checks", () => {
-    expect(deriveChipState({ ...rawMergedPr(), state: "MERGED" })).toBe(
-      "merged",
-    );
+describe("derive PR states", () => {
+  it("keeps lifecycle separate from check state", () => {
+    const row = { ...rawMergedPr(), state: "MERGED" };
+    expect(deriveLifecycleState(row)).toBe("merged");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("returns closed for CLOSED state without merge", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "CLOSED",
-        mergedAt: null,
-      }),
-    ).toBe("closed");
+  it("keeps closed lifecycle separate from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "CLOSED",
+      mergedAt: null,
+    };
+    expect(deriveLifecycleState(row)).toBe("closed");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("ignores isDraft — draft is orthogonal to the dot color", () => {
-    // An OPEN draft with passing checks reports `passing`, not `draft`.
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        isDraft: true,
-      }),
-    ).toBe("passing");
+  it("keeps draft review state separate from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      isDraft: true,
+    };
+    expect(deriveReviewState(row)).toBe("draft");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("returns conflicted for OPEN + mergeable CONFLICTING, outranking checks", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        mergeable: "CONFLICTING",
-        // Even with all checks green, a conflict blocks merge → red.
-        statusCheckRollup: [
-          {
-            __typename: "CheckRun",
-            conclusion: "SUCCESS",
-            status: "COMPLETED",
-            name: "Lint",
-          },
-        ],
-      }),
-    ).toBe("conflicted");
-  });
-
-  it("does not treat UNKNOWN mergeable as a conflict", () => {
-    // GitHub reports UNKNOWN until it finishes computing mergeability.
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        mergeable: "UNKNOWN",
-      }),
-    ).toBe("passing");
+  it("detects merge conflicts separately from check state", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      mergeable: "CONFLICTING",
+      mergeStateStatus: "DIRTY",
+    };
+    expect(deriveMergeState(row)).toBe("conflicting");
+    expect(deriveChipState(row)).toBe("passing");
   });
 
   it("returns passing when all checks SUCCEEDED", () => {
@@ -410,11 +384,16 @@ describe("GithubPrFetcher", () => {
       });
       expect(result).toEqual([
         {
+          provider: "github.com",
           number: 178,
           org: "pwrdrvr",
           repo: "PwrAgent",
-          state: "merged",
-          isDraft: false,
+          title: "Retain thread pull request history",
+          state: "passing",
+          checkState: "passing",
+          lifecycleState: "merged",
+          reviewState: "ready_for_review",
+          mergeState: "unknown",
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
       ]);
@@ -431,6 +410,7 @@ describe("GithubPrFetcher", () => {
         "--limit",
         "5",
       ]);
+      expect(args[args.indexOf("--json") + 1]).toContain("title");
     });
 
     it("returns [] on subprocess failure", async () => {

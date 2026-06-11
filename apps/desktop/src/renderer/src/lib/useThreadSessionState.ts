@@ -1363,6 +1363,78 @@ function findFirstNestedValue(value: unknown, keys: string[]): unknown {
   return undefined;
 }
 
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTokenUsageModel(params: {
+  backend: AppServerBackendKind;
+  notificationParams: Extract<
+    AppServerNotification,
+    { method: "thread/tokenUsage/updated" }
+  >["params"];
+  thread?: NavigationThreadSummary;
+  threadId: string;
+}): string | undefined {
+  return (
+    readStringValue(params.notificationParams.model) ??
+    readStringValue(
+      findFirstNestedValue(params.notificationParams.tokenUsage, [
+        "model",
+        "modelId",
+        "model_id",
+      ])
+    ) ??
+    (params.thread?.source === params.backend && params.thread.id === params.threadId
+      ? params.thread.model
+      : undefined)
+  );
+}
+
+function resolveTokenUsageServiceTier(params: {
+  backend: AppServerBackendKind;
+  notificationParams: Extract<
+    AppServerNotification,
+    { method: "thread/tokenUsage/updated" }
+  >["params"];
+  thread?: NavigationThreadSummary;
+  threadId: string;
+}): string | undefined {
+  return (
+    readStringValue(
+      findFirstNestedValue(params.notificationParams.tokenUsage, [
+        "serviceTier",
+        "service_tier",
+      ])
+    ) ??
+    (params.thread?.source === params.backend && params.thread.id === params.threadId
+      ? params.thread.serviceTier
+      : undefined)
+  );
+}
+
+function resolveTokenUsageFastMode(params: {
+  backend: AppServerBackendKind;
+  notificationParams: Extract<
+    AppServerNotification,
+    { method: "thread/tokenUsage/updated" }
+  >["params"];
+  thread?: NavigationThreadSummary;
+  threadId: string;
+}): boolean | undefined {
+  const tokenUsageFastMode = findFirstNestedValue(params.notificationParams.tokenUsage, [
+    "fastMode",
+    "fast_mode",
+  ]);
+  if (typeof tokenUsageFastMode === "boolean") {
+    return tokenUsageFastMode;
+  }
+
+  return params.thread?.source === params.backend && params.thread.id === params.threadId
+    ? params.thread.fastMode
+    : undefined;
+}
+
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
   const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
@@ -1524,7 +1596,9 @@ function deriveTurnUsageBaseline(params: {
 function buildPendingTurnUsage(params: {
   contextWindow?: ThreadContextWindowState;
   existing?: TurnUsageAccumulator;
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
 }): {
@@ -1555,8 +1629,10 @@ function buildPendingTurnUsage(params: {
     : usageRecords.latestUsage;
   const entry = turnUsage
     ? buildTokenUsageActivityEntry({
+        fastMode: params.fastMode,
         id: `live-turn-usage-${turnId}`,
         model: params.model,
+        serviceTier: params.serviceTier,
         summaryPrefix: "Turn usage",
         tokenUsage: tokenUsagePayloadFromBreakdown(turnUsage),
         turn: params.turn,
@@ -4010,13 +4086,29 @@ export function useThreadSessionState(params: {
             fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
           });
           const usageEntryId = `live-token-usage-${turn?.id ?? notificationThreadId}`;
-          const model =
-            thread?.source === event.backend && thread.id === notificationThreadId
-              ? thread.model
-              : undefined;
+          const model = resolveTokenUsageModel({
+            backend: event.backend,
+            notificationParams: event.notification.params,
+            thread,
+            threadId: notificationThreadId,
+          });
+          const serviceTier = resolveTokenUsageServiceTier({
+            backend: event.backend,
+            notificationParams: event.notification.params,
+            thread,
+            threadId: notificationThreadId,
+          });
+          const fastMode = resolveTokenUsageFastMode({
+            backend: event.backend,
+            notificationParams: event.notification.params,
+            thread,
+            threadId: notificationThreadId,
+          });
           let usageEntry = buildTokenUsageActivityEntry({
+            fastMode,
             id: usageEntryId,
             model,
+            serviceTier,
             tokenUsage: event.notification.params.tokenUsage,
             turn,
           });
@@ -4031,7 +4123,9 @@ export function useThreadSessionState(params: {
             const turnUsage = buildPendingTurnUsage({
               contextWindow: current.contextWindow,
               existing: current.pendingTurnUsage,
+              fastMode,
               model,
+              serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
               turn,
             });

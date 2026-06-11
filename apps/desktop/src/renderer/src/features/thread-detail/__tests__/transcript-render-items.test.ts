@@ -148,6 +148,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: first },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [activity],
@@ -179,6 +180,7 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toEqual([
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [activity],
@@ -228,6 +230,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: oldFinal },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-2:active",
         collapsible: false,
         entries: [activeActivity],
@@ -324,6 +327,7 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: answer },
       {
         type: "workPhaseGroup",
+        activeStartedAt: 1_000,
         id: "work:turn-1:active",
         collapsible: false,
         entries: [secondActivity],
@@ -495,6 +499,108 @@ describe("buildTranscriptRenderItems", () => {
       },
       { type: "entry", entry: answer },
       { type: "entry", entry: diffActivity },
+    ]);
+  });
+
+  it("keeps empty non-omitted file diffs nested with ordinary work", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used 2 tools",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Final answer.", turn);
+    const emptyDiffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "diff-empty",
+      summary: "Edited 1 file, +0, -0",
+      details: [
+        {
+          id: "diff-detail-empty",
+          kind: "write",
+          label: "Update binary.dat",
+          fileDiff: {
+            kind: "update",
+            additions: 0,
+            removals: 0,
+            diff: "",
+          },
+        },
+      ],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, emptyDiffActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:diff-empty:complete",
+        collapsible: true,
+        entries: [emptyDiffActivity],
+        label: "More work",
+      },
+    ]);
+  });
+
+  it("renders omitted file diffs as top-level activity", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used 2 tools",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Final answer.", turn);
+    const omittedDiffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "diff-omitted",
+      summary: "Edited 1 file, +0, -3",
+      details: [
+        {
+          id: "diff-detail-omitted",
+          kind: "write",
+          label: "Delete raw.capture.jsonl",
+          fileDiff: {
+            kind: "delete",
+            additions: 0,
+            removals: 3,
+            diff: "",
+            omittedReason: "Large file diff omitted from transcript view (518 KB).",
+            originalLength: 530_180,
+          },
+        },
+      ],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, omittedDiffActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      { type: "entry", entry: omittedDiffActivity },
     ]);
   });
 

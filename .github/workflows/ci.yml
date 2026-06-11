@@ -265,43 +265,15 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           FORCE_LIVE_AGENT_CORE: ${{ contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core') }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
-          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           live_agent_core_label="ci:live-agent-core"
-
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            base="$PR_BASE_SHA"
-            head="$PR_HEAD_SHA"
-          else
-            base="$PUSH_BEFORE_SHA"
-            head="$GITHUB_SHA"
-          fi
-
-          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
-            base="$(git rev-list --max-parents=0 "$head")"
-          fi
 
           relevant=false
           matched_path=""
           if [[ "$EVENT_NAME" == "pull_request" && "$FORCE_LIVE_AGENT_CORE" == "true" ]]; then
             relevant=true
             matched_path="pull request label present: $live_agent_core_label"
-          else
-            git diff --name-only "$base" "$head" > changed-files.txt
-
-            while IFS= read -r path; do
-              case "$path" in
-                packages/agent-core/src/app-server/*|packages/agent-core/src/config/*|packages/agent-core/src/persistence/*|packages/agent-core/src/providers/*|packages/agent-core/src/testing/*|packages/agent-core/src/tools/*|packages/agent-core/src/__tests__/grok-live.test.ts|packages/agent-core/package.json|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc)
-                  relevant=true
-                  matched_path="$path"
-                  break
-                  ;;
-              esac
-            done < changed-files.txt
           fi
 
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
@@ -313,9 +285,9 @@ jobs:
             {
               echo "### Live Agent Core"
               echo
-              echo "Skipped live agent-core smoke test because no agent-core inputs changed."
+              echo "Skipped live agent-core smoke test because the \`$live_agent_core_label\` PR label is not present."
               echo
-              echo "Relevant inputs: live app-server/provider/config/tool paths, the live test itself, agent-core package metadata, root dependency/test config, or the \`ci:live-agent-core\` PR label."
+              echo "Add \`$live_agent_core_label\` and rerun CI when live provider coverage is needed."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

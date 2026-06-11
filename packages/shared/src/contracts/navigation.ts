@@ -98,7 +98,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
-  /** GitHub pull requests detected for this thread's linked directories + branch. */
+  /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
   codexEnvironmentOptions?: CodexEnvironmentOption[];
@@ -187,44 +187,45 @@ export type MessagingThreadBindingSummary = {
   activeAt?: number;
 };
 
-/**
- * Color states map to GitHub PR + check/merge status. This drives the chip's
- * status dot color and is INTENTIONALLY independent of draft: a draft PR still
- * carries its real check/merge status here, while `PrSummary.isDraft` is
- * surfaced as a separate, non-color affordance (see PrChip).
- *   - merged     → state === MERGED                        (purple dot)
- *   - closed     → CLOSED without merge                    (black dot — not
- *                  GitHub's red, by product choice)
- *   - conflicted → OPEN + mergeable === CONFLICTING        (red dot)
- *   - failing    → any check FAILURE/CANCELLED/TIMED_OUT/… (red dot)
- *   - passing    → all checks SUCCESS                      (green dot)
- *   - pending    → checks still running                    (yellow dot)
- *   - unknown    → no checks reported yet, or a shape we
- *                  don't recognize                         (gray dot)
- */
+/** Check states drive the PR chip dot color only. */
 export type PrChipState =
-  | "merged"
-  | "conflicted"
   | "failing"
   | "passing"
   | "pending"
-  | "closed"
   | "unknown";
 
+export type PrLegacyChipState = "merged" | "draft" | "closed";
+
+export type PrLifecycleState = "open" | "merged" | "closed";
+export type PrReviewState = "draft" | "ready_for_review";
+export type PrMergeState = "mergeable" | "conflicting" | "unknown";
+
+export const DEFAULT_PULL_REQUEST_PROVIDER = "github.com";
+export type PullRequestProvider = string;
+
 export type PrSummary = {
+  /**
+   * Forge host that owns the PR namespace, e.g. "github.com" or a future
+   * GitHub Enterprise/GitLab host. Owner/repo/number are only unique inside
+   * this provider.
+   */
+  provider: PullRequestProvider;
   number: number;
   /** Repo owner login, e.g. "pwrdrvr". */
   org: string;
   /** Repo name, e.g. "PwrAgent". */
   repo: string;
-  state: PrChipState;
+  /** Last observed pull request title, when the provider returns one. */
+  title?: string;
   /**
-   * True when the PR is an OPEN draft. Orthogonal to `state`: the dot still
-   * reflects check/merge status while the chip renders a separate draft
-   * affordance and the tooltip notes the draft. Absent (treated as `false`)
-   * on overlay rows persisted before drafts became orthogonal.
+   * Deprecated compatibility alias for `checkState`. New writers keep this
+   * check-only so review/lifecycle/mergeability never collide with checks.
    */
-  isDraft?: boolean;
+  state: PrChipState | PrLegacyChipState;
+  checkState?: PrChipState;
+  lifecycleState?: PrLifecycleState;
+  reviewState?: PrReviewState;
+  mergeState?: PrMergeState;
   url: string;
 };
 
@@ -723,6 +724,14 @@ export type ReorderDirectoryPinsResponse = {
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Forge host for this lookup. Defaults to github.com while GitHub is the only provider. */
+  provider?: PullRequestProvider;
+  /**
+   * Refresh intent controls main-process coalescing. Scheduled polling is
+   * rate-limited globally and per PR; direct user interaction gets a much
+   * shorter per-PR cooldown and bypasses the global GitHub token bucket.
+   */
+  trigger?: "scheduled" | "user";
   /** Branch the renderer believes the thread is on. */
   branch: string;
   /**
@@ -736,12 +745,13 @@ export type RefreshThreadPullRequestsRequest = {
 export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  provider: PullRequestProvider;
   prs: PrSummary[];
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**
-   * True when main short-circuited the gh fetch because at least one
-   * PR for this thread is already in a terminal state (`merged` or
+   * True when main short-circuited the gh fetch because the lookup's
+   * known PRs are already in terminal lifecycle states (`merged` or
    * `closed`). Returned PRs are the persisted overlay snapshot.
    */
   shortCircuited?: boolean;
@@ -851,10 +861,9 @@ export type ThreadOverlayState = {
   /** Persisted disclosure state for the parent's child section. */
   subthreadsCollapsed?: boolean;
   /**
-   * GitHub pull requests detected for this thread, persisted across
-   * restarts so chips appear instantly on relaunch and so we can
-   * short-circuit re-fetching once a PR reaches a terminal state
-   * (`merged` / `closed`).
+   * Pull requests known for this thread, persisted across restarts so chips
+   * appear instantly on relaunch. The list is append-only by PR identity for
+   * sidebar/history purposes; status refreshes replace matching entries.
    */
   prs?: PrSummary[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */

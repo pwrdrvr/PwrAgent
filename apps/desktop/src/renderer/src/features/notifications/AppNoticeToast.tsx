@@ -11,6 +11,7 @@ export type AppNoticeToastNotice = {
   title: string;
   message: string;
   detail?: string;
+  copyText?: string;
 };
 
 export function AppNoticeToast(props: {
@@ -57,9 +58,11 @@ export function AppNoticeToast(props: {
     return null;
   }
 
-  const copyValue = [props.notice.title, props.notice.message, props.notice.detail]
-    .filter(Boolean)
-    .join("\n");
+  const copyValue =
+    props.notice.copyText ??
+    [props.notice.title, props.notice.message, props.notice.detail]
+      .filter(Boolean)
+      .join("\n");
 
   return (
     <aside

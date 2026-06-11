@@ -2234,14 +2234,16 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* 4px gutters on both sides hold row content clear of the scroll
-     container's `overflow: hidden` clip. The right gutter also keeps the
-     selected row's accent-border from kissing the scrollbar thumb. The
-     left gutter is what makes the focus-visible outline (2px wide at
-     2px offset → extends 4px outside the row's box) visible on the left
-     edge of the active row — without it the outline gets clipped against
-     the sidebar's left wall and the selected row reads as missing a side. */
-  padding-inline: 4px;
+  /* Asymmetric gutters. Left (4px) keeps the focus-visible outline
+     (2px wide at 2px offset → extends 4px outside the row's box) clear
+     of the sidebar's left wall — without it the outline clips and the
+     active row reads as missing a side. Right (8px) holds row content —
+     and the per-directory launchpad (+) button on directory headers —
+     well clear of the native scrollbar thumb that lives in the reserved
+     gutter, so the auto-hiding bar never visually kisses the + button
+     when it appears. (Bumped from 4px after the thumb read as crowding
+     the launchpad button.) */
+  padding-inline: 4px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
@@ -2257,9 +2259,9 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
-     rationale. */
-  padding-inline: 4px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the asymmetric
+     gutter rationale (4px left / 8px right for scrollbar clearance). */
+  padding-inline: 4px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
@@ -3101,8 +3103,7 @@ textarea,
   background: var(--status-ok);
 }
 
-.pr-chip--failing .pr-chip__dot,
-.pr-chip--conflicted .pr-chip__dot {
+.pr-chip--failing .pr-chip__dot {
   background: var(--status-error);
 }
 
@@ -3120,6 +3121,15 @@ textarea,
      legible on dark surfaces where pure black would vanish into the chip. */
   background: var(--status-closed);
   box-shadow: 0 0 0 1px var(--pr-dot-ring);
+}
+
+/* Merge conflict outranks check status for the dot color: it blocks merge
+   regardless of CI. Kept LAST among the dot-color rules so it wins over the
+   co-applied check-state class (e.g. `pr-chip--pending pr-chip--conflicting`)
+   by source order — they share specificity. Only set on OPEN PRs, so it never
+   competes with the merged/closed dots. */
+.pr-chip--conflicting .pr-chip__dot {
+  background: var(--status-error);
 }
 
 .thread-row__chip--muted {
@@ -3379,7 +3389,15 @@ textarea,
 }
 
 .directory-row__threads {
+  /* Mirror the 8px left inset on the right so the sticky directory
+     header (which spans the full `.directory-row` width) covers a
+     selected row's accent border with the same 8px overlap on both
+     edges. Without the right inset the row's right border aligned
+     exactly with the header's right edge, so a 1px orange sliver
+     leaked through when a selected row scrolled under the pinned
+     header. */
   padding-left: 8px;
+  padding-right: 8px;
 }
 
 .directory-row__thread-divider {
@@ -3664,6 +3682,180 @@ textarea,
      the existing 188px nav + content grid; no outer gutter needed. */
   padding: 0;
   background: var(--bg-app);
+}
+
+.thread-search-view {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.thread-search-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  -webkit-app-region: drag;
+}
+
+.thread-search-view__header button,
+.thread-search-view__form,
+.thread-search-results {
+  -webkit-app-region: no-drag;
+}
+
+.thread-search-view__eyebrow {
+  margin: 0 0 2px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.thread-search-view__header h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.thread-search-view__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.thread-search-view__field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.thread-search-view__field input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.thread-search-view__field input:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-search-view__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.thread-search-view__error {
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--status-error) 50%, var(--border-subtle));
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--status-error) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.thread-search-view__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thread-search-view__scopes span {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-search-results {
+  display: grid;
+  min-height: 0;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.thread-search-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg-panel);
+  color: inherit;
+  text-align: left;
+}
+
+.thread-search-result:hover,
+.thread-search-result:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.thread-search-result__main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.thread-search-result__title {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-search-result__meta,
+.thread-search-result__snippet,
+.thread-search-result__side {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.thread-search-result__snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.thread-search-result__side {
+  display: grid;
+  min-width: 96px;
+  justify-items: end;
+  align-content: start;
+  gap: 4px;
+  text-transform: capitalize;
+}
+
+.thread-search-results__empty {
+  margin: 24px 0 0;
+  color: var(--text-secondary);
 }
 
 .codex-config-warning-banner {
@@ -8855,6 +9047,18 @@ textarea,
   word-break: break-word;
 }
 
+.transcript-diff__omitted {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.transcript-diff--omitted .transcript-diff__omitted:first-child {
+  padding-top: 12px;
+}
+
 .transcript-diff__toolbar {
   display: flex;
   align-items: center;
@@ -9239,22 +9443,6 @@ textarea,
   width: 100%;
   height: 100%;
   min-height: 0;
-}
-
-.context-panel__header {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.context-panel__title {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
 }
 
 .context-panel__scroll {
@@ -9886,18 +10074,15 @@ textarea,
   background: var(--surface-overlay-faint);
 }
 
-.subagent-card__header {
+/* Status line: dot + label on their own row, above the title, so the
+   title never has to share the top row (it used to push the dot + status
+   out of alignment). align-items: center keeps the dot centered on the
+   status label regardless of sidebar width. */
+.subagent-card__status-line {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.subagent-card__title-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
   min-width: 0;
 }
 
@@ -9905,9 +10090,41 @@ textarea,
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: 5px;
   border-radius: 999px;
   background: var(--text-muted);
+}
+
+/* Title sits on its own row, full width, and wraps (clamped) instead of
+   truncating mid-word in a shared flex row. */
+.subagent-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subagent-card__model {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.subagent-card__times {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.subagent-card__time-label {
+  color: var(--text-secondary);
 }
 
 .subagent-card__dot--active {
@@ -9954,6 +10171,111 @@ textarea,
   color: var(--text-secondary);
 }
 
+/* Sub-agent Details modal — a centered, in-window dialog (mirrors the
+   transcript image lightbox) portaled to the body so it escapes the rail's
+   clipping. Opened from the card's Details button. */
+.subagent-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-opaque);
+}
+
+.subagent-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 560px);
+  max-height: min(100vh - 96px, 720px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.subagent-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subagent-modal__close {
+  flex: 0 0 auto;
+}
+
+.subagent-modal__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.subagent-modal__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.subagent-modal__facts div {
+  display: contents;
+}
+
+.subagent-modal__facts dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.subagent-modal__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.subagent-modal__mono {
+  font-family: var(--font-mono);
+}
+
+.subagent-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.subagent-modal__section h3 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.subagent-modal__body,
+.subagent-modal__usage-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.subagent-modal__usage-summary {
+  color: var(--text-muted);
+}
+
 /* Pull Requests panel rows. */
 .pr-panel-list {
   gap: 8px;
@@ -9961,9 +10283,41 @@ textarea,
 
 .pr-panel-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.pr-panel-row__main {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pr-panel-row__details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pr-panel-row__title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-panel-row__repo {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .pr-panel-row__state {

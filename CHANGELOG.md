@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.0-beta.31 - 2026-06-11
+
+- Added agentic thread search with a dedicated search panel, FTS-backed thread indexing, provider adapters, navigation contracts, and renderer/main coverage so users can search across existing agent threads instead of manually scanning the sidebar.
+- Added subagent task monitoring and dynamic PwrAgent tool-routing foundations, including task monitor tools, thread and messaging agent tools, shared contracts, and backend wiring for future agent-driven thread and messaging workflows.
+- Redesigned the thread context rail into tabbed panels for thread info, linked projects, pull requests, provider status, and subagents, with shell-level panel toggles and keyboard chords that avoid Windows double-toggle and macOS Option-compose issues.
+- Improved Windows desktop behavior with custom frameless window chrome, source-display window placement, main-window-close app quit behavior, and a themed quit-confirmation dialog that hides the native menu bar.
+- Improved composer and transcript usability with redesigned pasted-image attachments, materialized transcript data images, preserved Codex message timestamps and usage pricing, oversized diff omission, lower transcript DOM weight, and capped renderer protocol payloads.
+- Improved messaging reliability with status card pickers, outbound activity summaries, transcript-tail resume reposts, deleted Telegram topic cleanup, projected launchpad option materialization, slow-mode status navigation, and ACP replay leak prevention.
+- Added in-app update controls in Settings, clearer update actions, and corrected release process guidance so beta releases that should update users stay on GitHub's Latest channel.
+- Expanded hot CPU diagnostics with capture presets, heap snapshot handoff, compact profile handoff behavior, paused wakeup sampling during CPU profiles, dev performance-measure pruning, and reduced replay typecheck overhead.
+- Fixed environment setup, review turns, Kimi approval commands, PR/title detection, noisy logs, broken stdio failures, env-action elapsed formatting, sidebar sticky-header coverage, child-worktree branch selection, and launchpad review state seeding.
+- Updated release/CI Actions to newer setup actions and added broad regression coverage across agent tools, backend registry behavior, messaging, transcript rendering, update checks, window placement, keyboard accelerators, thread search, and hot CPU profiling.
+
 ## v1.0.0-beta.30 - 2026-06-08
 
 - Added the Windows port foundation with a Windows CI lane, NSIS installer packaging, Git-for-Windows bash command execution, process-tree cleanup, and cross-platform path handling. Windows installers are built as unsigned workflow artifacts while code signing is still pending.

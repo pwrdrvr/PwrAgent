@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
-import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
+import type {
+  HotCpuProfileCapturedEvent,
+  HotCpuProfileHeapSnapshotArtifact,
+} from "../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
@@ -85,8 +88,12 @@ export class RendererHotCpuProfiler {
   private previousSampleAtMs: number | null = null;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
+  private stopProfilePromise: Promise<void> | null = null;
   private profiling = false;
+  private samplingPausedForProfile = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
+  private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
+  private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
 
   constructor(options: {
@@ -153,7 +160,7 @@ export class RendererHotCpuProfiler {
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
 
-    if (this.profiling) {
+    if (this.profiling || this.stopProfilePromise) {
       await this.stopProfile(reason);
     }
 
@@ -244,7 +251,11 @@ export class RendererHotCpuProfiler {
       });
       this.logger.error("[pwragent:hot-cpu] sample failed", error);
     } finally {
-      this.scheduleNextSample();
+      if (!this.profiling) {
+        this.scheduleNextSample();
+      } else {
+        this.samplingPausedForProfile = true;
+      }
     }
   }
 
@@ -347,6 +358,7 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.enable");
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
+      this.activeProfileHeapSnapshots = [];
       this.activeProfileTrigger = {
         triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
         triggerCpuPercent: options.cpuPercent,
@@ -404,10 +416,24 @@ export class RendererHotCpuProfiler {
   }
 
   private async stopProfile(reason: string): Promise<void> {
+    if (this.stopProfilePromise) {
+      await this.stopProfilePromise;
+      return;
+    }
+
     if (!this.profiling) {
       return;
     }
 
+    this.stopProfilePromise = this.stopProfileInner(reason);
+    try {
+      await this.stopProfilePromise;
+    } finally {
+      this.stopProfilePromise = null;
+    }
+  }
+
+  private async stopProfileInner(reason: string): Promise<void> {
     this.profiling = false;
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
@@ -446,10 +472,13 @@ export class RendererHotCpuProfiler {
         this.config.captureHeapSnapshot &&
         this.target.takeHeapSnapshot
       ) {
+        await this.drainActiveHeapSnapshotCaptures();
         await this.captureHeapSnapshot(index, "stop");
       }
+      await this.drainActiveHeapSnapshotCaptures();
       await this.onProfileWritten?.({
         capturedAt: this.now().toISOString(),
+        heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
         profilePath,
         sessionDirectory: this.session.directoryPath,
@@ -469,11 +498,42 @@ export class RendererHotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
       this.activeProfileTrigger = null;
+      this.activeProfileHeapSnapshots = [];
+      this.activeProfileHeapSnapshotCaptures.clear();
       this.detachDebugger();
+      this.resumeSamplingAfterProfile();
     }
   }
 
+  private resumeSamplingAfterProfile(): void {
+    if (!this.samplingPausedForProfile) {
+      return;
+    }
+
+    this.samplingPausedForProfile = false;
+    this.previousCumulativeCpuSeconds = null;
+    this.previousSampleAtMs = null;
+    if (this.stopped || this.intervalTimer || this.isTargetDestroyed()) {
+      return;
+    }
+
+    this.scheduleNextSample();
+  }
+
   private async captureHeapSnapshot(index: number, phase: string): Promise<void> {
+    const capture = this.writeHeapSnapshot(index, phase);
+    if (index === this.profileCount) {
+      this.activeProfileHeapSnapshotCaptures.add(capture);
+    }
+
+    try {
+      await capture;
+    } finally {
+      this.activeProfileHeapSnapshotCaptures.delete(capture);
+    }
+  }
+
+  private async writeHeapSnapshot(index: number, phase: string): Promise<void> {
     if (!this.target.takeHeapSnapshot) {
       return;
     }
@@ -500,6 +560,13 @@ export class RendererHotCpuProfiler {
     try {
       await this.target.takeHeapSnapshot(snapshotPath);
       await this.session.registerArtifact(snapshotFilename);
+      if (index === this.profileCount) {
+        this.activeProfileHeapSnapshots.push({
+          filename: snapshotFilename,
+          path: snapshotPath,
+          phase,
+        });
+      }
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "heap-snapshot-written",
@@ -529,6 +596,12 @@ export class RendererHotCpuProfiler {
       if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
         await this.notifyHeapSnapshotLimitReached();
       }
+    }
+  }
+
+  private async drainActiveHeapSnapshotCaptures(): Promise<void> {
+    while (this.activeProfileHeapSnapshotCaptures.size > 0) {
+      await Promise.all([...this.activeProfileHeapSnapshotCaptures]);
     }
   }
 

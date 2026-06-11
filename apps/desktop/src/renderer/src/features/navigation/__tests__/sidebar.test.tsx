@@ -120,6 +120,7 @@ const pullRequestThread: NavigationThreadSummary = {
   ...sharedThread,
   prs: [
     {
+      provider: "github.com",
       number: 202,
       org: "Giphy",
       repo: "GifGrabber",
@@ -2213,9 +2214,7 @@ describe("Sidebar", () => {
     );
 
     const prChip = screen.getByRole("button", {
-      // Accessible name carries the human-readable status phrase (not the raw
-      // `passing` enum) so screen readers announce what the dot means.
-      name: "Open Giphy/GifGrabber#202 (all checks passing) in browser",
+      name: "Open Giphy/GifGrabber#202 (ready for review · checks passing) in browser",
     });
     fireEvent.contextMenu(prChip, { clientX: 48, clientY: 64 });
     await clickElement(

@@ -31,8 +31,16 @@ export async function buildAiSdkMessages(params: {
       continue;
     }
     if (item.type === "image") {
+      const name = item.name?.trim();
+      if (name) {
+        content.push({ type: "text", text: `Attached image filename: ${name}` });
+      }
       content.push(parseImageUrl(item.url));
       continue;
+    }
+    const name = item.name?.trim();
+    if (name) {
+      content.push({ type: "text", text: `Attached image filename: ${name}` });
     }
     content.push(await readLocalImage(item.path));
   }

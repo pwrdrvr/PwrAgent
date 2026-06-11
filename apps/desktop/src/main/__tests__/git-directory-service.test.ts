@@ -310,6 +310,57 @@ describe("GitDirectoryService", () => {
     expect(branchesAfter).toEqual(branchesBefore);
   });
 
+  it("uses the default branch when a detached launchpad passes HEAD", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const mainRevision = runGit(repoDir, ["rev-parse", "main"]);
+    runGit(repoDir, ["checkout", "release"]);
+    execFileSync(
+      "git",
+      ["-C", repoDir, "commit", "--allow-empty", "-m", "Release branch"],
+      { stdio: "ignore" },
+    );
+    const releaseRevision = runGit(repoDir, ["rev-parse", "release"]);
+    runGit(repoDir, ["checkout", "-B", "feature-with-pr"]);
+    execFileSync(
+      "git",
+      ["-C", repoDir, "commit", "--allow-empty", "-m", "Feature PR branch"],
+      { stdio: "ignore" },
+    );
+    const featureRevision = runGit(repoDir, ["rev-parse", "HEAD"]);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-source-detached-worktree-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", "--detach", sourceWorktree, releaseRevision]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: sourceWorktree,
+      workMode: "worktree",
+      branchName: "HEAD",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    const repoRealPath = await realpath(repoDir);
+    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(repoRealPath);
+    expect(workspace.cwd).toBeDefined();
+    expect(
+      toForwardSlashes(workspace.cwd!).startsWith(
+        `${toForwardSlashes(path.join(repoRealPath, ".worktrees"))}/`,
+      ),
+    ).toBe(true);
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(releaseRevision);
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(featureRevision);
+  });
+
   it("creates an attached branch worktree and reuses it for the same branch", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

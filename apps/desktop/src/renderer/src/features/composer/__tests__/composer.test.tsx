@@ -3076,6 +3076,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "steer.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],
@@ -6130,6 +6131,47 @@ describe("Composer", () => {
     ).toHaveAttribute("aria-selected", "true");
   });
 
+  it("defaults detached new-worktree launchpads to the repository default branch", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/.codex/worktrees/mq8mwn78/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            defaultBranch: "main",
+            branches: ["fix/layout-chord-single-owner", "main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:new-worktree",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/.codex/worktrees/mq8mwn78/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "HEAD",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "Renderer hot CPU profile",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    fireEvent.click(screen.getByLabelText("Base branch"));
+    expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
+  });
+
   it("shows handoff to local for existing worktree threads", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const openApplication = vi.fn(async () => ({ opened: true as const }));
@@ -8053,6 +8095,7 @@ describe("Composer", () => {
           { type: "text", text: "Describe this screenshot" },
           {
             type: "image",
+            name: "screenshot.jpeg",
             url: expect.stringMatching(/^data:image\/jpeg;base64,/),
           },
         ],
@@ -8141,6 +8184,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "diagram.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],
@@ -8595,6 +8639,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "demo.gif",
             url: expect.stringMatching(/^data:image\/gif;base64,/),
           },
         ],
@@ -8662,6 +8707,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "clipboard-item.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],

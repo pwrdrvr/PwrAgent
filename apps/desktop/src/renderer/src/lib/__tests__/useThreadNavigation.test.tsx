@@ -5,6 +5,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  PrSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -3305,6 +3306,7 @@ describe("useThreadNavigation", () => {
       ],
       prs: [
         {
+          provider: "github.com",
           number: 123,
           org: "pwrdrvr",
           repo: "PwrAgent",
@@ -3387,7 +3389,7 @@ describe("useThreadNavigation", () => {
       executionMode: "default",
       directoryKind: "directory",
       directoryLabel: "app",
-      directoryPath: "/repo/app",
+      directoryPath: "/repo/app/.worktrees/parent/app",
       branchName: "feature/parent",
       workMode: "worktree",
       model: "gpt-5.5",
@@ -3413,6 +3415,85 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.messagingBindings).toBeUndefined();
     expect(result.current.selectedThread?.prs).toBeUndefined();
     expect(result.current.selectedThread?.reactions).toBeUndefined();
+  });
+
+  it("forks detached worktree parents from the parent worktree path", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Detached parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      observedGitBranch: "HEAD",
+      linkedDirectories: [
+        {
+          id: "/repo/app/.worktrees/parent/app",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/app/.worktrees/parent/app",
+          kind: "worktree" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const forkThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      sourceThreadId: "thread-parent",
+      threadId: "thread-fork",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+      linkedDirectory: {
+        id: "/repo/app/.worktrees/thread-fork/app",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/thread-fork/app",
+        kind: "worktree" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      forkThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.forkThread(parentThread, "new-worktree");
+    });
+
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        branchName: expect.any(String),
+      }),
+    );
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryPath: "/repo/app/.worktrees/parent/app",
+        workMode: "worktree",
+      }),
+    );
   });
 
   it("opens local sub-thread launchpads against the parent's local checkout", async () => {
@@ -3627,7 +3708,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "subthread:codex:thread-parent:new-worktree",
       patch: expect.objectContaining({
         workMode: "worktree",
-        directoryPath: "/repo/app",
+        directoryPath: "/repo/app/.worktrees/parent/app",
         branchName: "feature/parent",
         parentThreadId: "thread-parent",
       }),
@@ -4032,6 +4113,94 @@ describe("useThreadNavigation", () => {
     // renderer for transcript rendering.
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("applies pull request update notification payloads before unchanged refreshes", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const initialPr: PrSummary = {
+      provider: "github.com",
+      number: 123,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    };
+    const updatedPr: PrSummary = {
+      ...initialPr,
+      title: "Preserve PR title updates",
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-1"],
+        threads: [
+          {
+            id: "thread-1",
+            title: "First thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            prs: [initialPr],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })
+      .mockResolvedValue({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: true,
+        inboxThreadKeys: ["codex:thread-1"],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prs?.[0]?.title).toBeUndefined();
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/pullRequests/updated",
+            params: {
+              threadId: "thread-1",
+              prs: [updatedPr],
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
     });
   });
 

@@ -1,9 +1,10 @@
-import type {
-  AppServerSource,
-  AppServerThreadActivityDetail,
-  AppServerThreadActivityEntry,
-  AppServerThreadCommandDetail,
-  AppServerThreadTurnMetadata,
+import {
+  truncateRendererPayloadString,
+  type AppServerSource,
+  type AppServerThreadActivityDetail,
+  type AppServerThreadActivityEntry,
+  type AppServerThreadCommandDetail,
+  type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
 
 export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
@@ -247,35 +248,92 @@ type NormalizedTokenUsage = {
 
 type PricingCatalogEntry = {
   cachedInputUsdPerMillion: number;
+  displayModel: string;
+  displayTier: string;
   inputUsdPerMillion: number;
   model: string;
   outputUsdPerMillion: number;
+  serviceTier: "standard" | "priority";
+};
+
+type UsageCostEstimate = {
+  cachedInputUsd: number;
+  cachedInputUsdPerMillion: number;
+  displayName: string;
+  inputUsdPerMillion: number;
+  model: string;
+  outputUsd: number;
+  outputUsdPerMillion: number;
+  serviceTier: "standard" | "priority";
+  standardCachedInputRateMultiplier?: number;
+  standardInputRateMultiplier?: number;
+  standardOutputRateMultiplier?: number;
+  totalUsd: number;
+  uncachedInputUsd: number;
 };
 
 const PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
     model: "gpt-5.5",
+    displayModel: "GPT-5.5",
+    displayTier: "Standard",
+    serviceTier: "standard",
     inputUsdPerMillion: 5,
     cachedInputUsdPerMillion: 0.5,
     outputUsdPerMillion: 30,
   },
   {
+    model: "gpt-5.5",
+    displayModel: "GPT-5.5",
+    displayTier: "Fast (Priority)",
+    serviceTier: "priority",
+    inputUsdPerMillion: 12.5,
+    cachedInputUsdPerMillion: 1.25,
+    outputUsdPerMillion: 75,
+  },
+  {
     model: "gpt-5.4",
+    displayModel: "GPT-5.4",
+    displayTier: "Standard",
+    serviceTier: "standard",
     inputUsdPerMillion: 2.5,
     cachedInputUsdPerMillion: 0.25,
     outputUsdPerMillion: 15,
   },
   {
+    model: "gpt-5.4",
+    displayModel: "GPT-5.4",
+    displayTier: "Fast (Priority)",
+    serviceTier: "priority",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
+  },
+  {
     model: "gpt-5.4-mini",
+    displayModel: "GPT-5.4 mini",
+    displayTier: "Standard",
+    serviceTier: "standard",
     inputUsdPerMillion: 0.75,
     cachedInputUsdPerMillion: 0.075,
     outputUsdPerMillion: 4.5,
   },
+  {
+    model: "gpt-5.4-mini",
+    displayModel: "GPT-5.4 mini",
+    displayTier: "Fast (Priority)",
+    serviceTier: "priority",
+    inputUsdPerMillion: 1.5,
+    cachedInputUsdPerMillion: 0.15,
+    outputUsdPerMillion: 9,
+  },
 ];
 
 export function buildTokenUsageActivityEntry(params: {
+  fastMode?: boolean;
   id: string;
   model?: string;
+  serviceTier?: string;
   summaryPrefix?: string;
   tokenUsage: unknown;
   turn?: AppServerThreadTurnMetadata;
@@ -293,8 +351,10 @@ export function buildTokenUsageActivityEntry(params: {
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const cost = estimateUsageCost({
     cachedInputTokens,
+    fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
   const summaryParts = [
@@ -330,17 +390,61 @@ export function buildTokenUsageActivityEntry(params: {
     },
   ];
   if (cost) {
+    details.push(
+      {
+        id: `${params.id}-uncached-input-cost`,
+        kind: "read",
+        label: `Uncached input cost: ${formatTokenCount(
+          uncachedInputTokens,
+        )} tokens at ${formatUsdPerMillion(
+          cost.inputUsdPerMillion,
+        )}/M${formatStandardRateSuffix(
+          cost.standardInputRateMultiplier,
+        )} = ${formatUsd(cost.uncachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `${params.id}-cached-input-cost`,
+        kind: "read",
+        label: `Cached input cost: ${formatTokenCount(
+          cachedInputTokens,
+        )} tokens at ${formatUsdPerMillion(
+          cost.cachedInputUsdPerMillion,
+        )}/M (${formatPriceFactor(
+          cost.cachedInputUsdPerMillion,
+          cost.inputUsdPerMillion,
+        )} uncached${formatStandardRateSuffix(
+          cost.standardCachedInputRateMultiplier,
+          ", ",
+        )}) = ${formatUsd(cost.cachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `${params.id}-output-cost`,
+        kind: "read",
+        label: `Output cost: ${formatTokenCount(outputTokens)} tokens at ${formatUsdPerMillion(
+          cost.outputUsdPerMillion,
+        )}/M${formatStandardRateSuffix(
+          cost.standardOutputRateMultiplier,
+        )} = ${formatUsd(cost.outputUsd)}`,
+        status: "completed",
+      },
+    );
     details.push({
       id: `${params.id}-cost`,
       kind: "read",
-      label: `Cost: ${formatUsd(cost.totalUsd)} list price for ${cost.model}`,
+      label: `Cost: ${formatUsd(cost.totalUsd)} list price for ${cost.displayName}`,
       status: "completed",
     });
   } else if (params.model) {
     details.push({
       id: `${params.id}-cost-unavailable`,
       kind: "read",
-      label: `Cost unavailable: no local pricing entry for ${params.model}`,
+      label: `Cost unavailable: no local pricing entry for ${formatUnpricedModelName({
+        fastMode: params.fastMode,
+        model: params.model,
+        serviceTier: params.serviceTier,
+      })}`,
       status: "completed",
     });
   }
@@ -450,23 +554,93 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
 
 function estimateUsageCost(params: {
   cachedInputTokens: number;
+  fastMode?: boolean;
   model?: string;
   outputTokens: number;
+  serviceTier?: string;
   uncachedInputTokens: number;
-}): { model: string; totalUsd: number } | undefined {
+}): UsageCostEstimate | undefined {
   const model = params.model?.trim();
   if (!model) {
     return undefined;
   }
-  const entry = PRICING_CATALOG.find((candidate) => candidate.model === model);
+  const serviceTier = resolvePricingServiceTier({
+    fastMode: params.fastMode,
+    serviceTier: params.serviceTier,
+  });
+  const entry = PRICING_CATALOG.find(
+    (candidate) =>
+      candidate.model === model &&
+      candidate.serviceTier === serviceTier,
+  );
   if (!entry) {
     return undefined;
   }
-  const totalUsd =
-    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
-    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
+  const standardEntry = PRICING_CATALOG.find(
+    (candidate) =>
+      candidate.model === model &&
+      candidate.serviceTier === "standard",
+  );
+  const uncachedInputUsd =
+    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000;
+  const cachedInputUsd =
+    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000;
+  const outputUsd =
     (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
-  return { model, totalUsd };
+  const totalUsd =
+    uncachedInputUsd +
+    cachedInputUsd +
+    outputUsd;
+  return {
+    cachedInputUsd,
+    cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
+    displayName: `${entry.displayModel} ${entry.displayTier}`,
+    inputUsdPerMillion: entry.inputUsdPerMillion,
+    model,
+    outputUsd,
+    outputUsdPerMillion: entry.outputUsdPerMillion,
+    serviceTier: entry.serviceTier,
+    standardCachedInputRateMultiplier: rateMultiplier(
+      entry.cachedInputUsdPerMillion,
+      standardEntry?.cachedInputUsdPerMillion,
+    ),
+    standardInputRateMultiplier: rateMultiplier(
+      entry.inputUsdPerMillion,
+      standardEntry?.inputUsdPerMillion,
+    ),
+    standardOutputRateMultiplier: rateMultiplier(
+      entry.outputUsdPerMillion,
+      standardEntry?.outputUsdPerMillion,
+    ),
+    totalUsd,
+    uncachedInputUsd,
+  };
+}
+
+function resolvePricingServiceTier(params: {
+  fastMode?: boolean;
+  serviceTier?: string;
+}): "standard" | "priority" | undefined {
+  if (params.fastMode === true) {
+    return "priority";
+  }
+
+  const serviceTier = params.serviceTier?.trim().toLowerCase();
+  if (!serviceTier || serviceTier === "default" || serviceTier === "standard") {
+    return "standard";
+  }
+  if (serviceTier === "fast" || serviceTier === "priority") {
+    return "priority";
+  }
+  return undefined;
+}
+
+function rateMultiplier(rate: number, standardRate: number | undefined): number | undefined {
+  if (!standardRate || standardRate <= 0) {
+    return undefined;
+  }
+  const multiplier = rate / standardRate;
+  return Math.abs(multiplier - 1) < 0.001 ? undefined : multiplier;
 }
 
 function formatTokenCount(value: number): string {
@@ -483,7 +657,7 @@ function formatUsd(value: number): string {
       maximumFractionDigits: 3,
       minimumFractionDigits: 3,
       style: "currency",
-    }).format(Math.ceil(value * 1_000) / 1_000);
+    }).format(roundUpCurrency(value, 3));
   }
 
   return new Intl.NumberFormat(undefined, {
@@ -491,7 +665,68 @@ function formatUsd(value: number): string {
     maximumFractionDigits: 2,
     minimumFractionDigits: 2,
     style: "currency",
-  }).format(Math.ceil(value * 100) / 100);
+  }).format(roundUpCurrency(value, 2));
+}
+
+function roundUpCurrency(value: number, fractionDigits: number): number {
+  if (value <= 0) {
+    return 0;
+  }
+  const scale = 10 ** fractionDigits;
+  return Math.ceil(value * scale - Number.EPSILON * scale) / scale;
+}
+
+function formatUsdPerMillion(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    currency: "USD",
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(value);
+}
+
+function formatPriceFactor(discountedRate: number, standardRate: number): string {
+  if (standardRate <= 0) {
+    return "unknown factor";
+  }
+  const factor = discountedRate / standardRate;
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 1,
+  }).format(factor)}x`;
+}
+
+function formatStandardRateSuffix(
+  multiplier: number | undefined,
+  prefix = " ",
+): string {
+  return multiplier === undefined
+    ? ""
+    : `${prefix}${formatMultiplier(multiplier)} Standard`;
+}
+
+function formatMultiplier(multiplier: number): string {
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 1,
+  }).format(multiplier)}x`;
+}
+
+function formatUnpricedModelName(params: {
+  fastMode?: boolean;
+  model: string;
+  serviceTier?: string;
+}): string {
+  const serviceTier = resolvePricingServiceTier(params);
+  return [
+    params.model,
+    serviceTier === "priority" ? "Fast/Priority" : undefined,
+    serviceTier === undefined && params.serviceTier
+      ? `service tier ${params.serviceTier}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
@@ -981,7 +1216,10 @@ export function appendCommandOutputDelta(
       command: {
         displayCommand: detail.command?.displayCommand ?? detail.label,
         ...detail.command,
-        output: `${detail.command?.output ?? ""}${params.delta}`,
+        output: truncateRendererPayloadString(
+          `${detail.command?.output ?? ""}${params.delta}`,
+          "live command output",
+        ),
       },
     };
   });

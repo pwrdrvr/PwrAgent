@@ -106,4 +106,33 @@ describe("TranscriptDiff", () => {
 
     expect(screen.getByText("const keep3 = 3;")).toBeInTheDocument();
   });
+
+  it("renders omitted large diffs without focused analysis", () => {
+    const analyzeFocusedDiff = vi.fn();
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      analyzeFocusedDiff
+    };
+
+    render(
+      <TranscriptDiff
+        detail={{
+          ...DETAIL,
+          fileDiff: {
+            kind: "delete",
+            additions: 0,
+            removals: 3,
+            diff: "",
+            omittedReason: "Large file diff omitted from transcript view (518 KB).",
+            originalLength: 530_180
+          }
+        }}
+      />
+    );
+
+    expect(
+      screen.getByText("Large file diff omitted from transcript view (518 KB).")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+    expect(analyzeFocusedDiff).not.toHaveBeenCalled();
+  });
 });

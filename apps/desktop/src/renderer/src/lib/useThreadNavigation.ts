@@ -15,6 +15,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  PrSummary,
   ThreadAgentMetadata,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -112,11 +113,18 @@ function selectThreadWorkspace(
   const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
   const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
   const preferred = worktree ?? local;
+  const namedBranch =
+    thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
+      ? thread.observedGitBranch
+      : thread.gitBranch && thread.gitBranch !== "HEAD"
+        ? thread.gitBranch
+        : undefined;
 
   if (mode === "new-worktree") {
-    const repository = preferred?.path ?? thread.projectKey;
+    const repository =
+      worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey;
     return {
-      branchName: thread.observedGitBranch ?? thread.gitBranch,
+      branchName: namedBranch,
       directoryKind: repository ? "directory" : "workspace",
       directoryLabel: preferred?.label ?? thread.title,
       directoryPath: repository,
@@ -136,9 +144,7 @@ function selectThreadWorkspace(
         : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
     workMode: "local",
-    ...(mode === "same-worktree"
-      ? { branchName: thread.observedGitBranch ?? thread.gitBranch }
-      : {}),
+    ...(mode === "same-worktree" && namedBranch ? { branchName: namedBranch } : {}),
   };
 }
 
@@ -426,10 +432,15 @@ function prSummariesEqual(
     const candidate = rightPrs[index];
     return (
       candidate?.number === pr.number &&
+      candidate.provider === pr.provider &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
+      candidate.title === pr.title &&
       candidate.state === pr.state &&
-      (candidate.isDraft ?? false) === (pr.isDraft ?? false) &&
+      candidate.checkState === pr.checkState &&
+      candidate.lifecycleState === pr.lifecycleState &&
+      candidate.reviewState === pr.reviewState &&
+      candidate.mergeState === pr.mergeState &&
       candidate.url === pr.url
     );
   });
@@ -1162,7 +1173,40 @@ function applyThreadNameUpdate(
         ...snapshot,
         threads,
       }
-      : snapshot;
+    : snapshot;
+}
+
+function applyThreadPullRequestsUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: { backend: AppServerBackendKind; threadId: string; prs: PrSummary[] }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    if (prSummariesEqual(thread.prs, params.prs)) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      prs: params.prs,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
 }
 
 function applyThreadModelSettingsUpdate(
@@ -2290,6 +2334,23 @@ export function useThreadNavigation(
       }
 
       if (method === "navigation/threadDirectories/updated") {
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/pullRequests/updated") {
+        const { threadId, prs } = event.notification.params as {
+          threadId: string;
+          prs: PrSummary[];
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadPullRequestsUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            prs,
+          }),
+        }));
         scheduleRefresh();
         return;
       }

@@ -63,6 +63,41 @@ describe("buildAiSdkMessages", () => {
     }
   });
 
+  it("adds filename context before named image parts", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "ai-sdk-message-"));
+    const imagePath = path.join(tempDir, "local.png");
+    await writeFile(imagePath, Buffer.from([4, 5, 6]));
+    try {
+      const messages = await buildAiSdkMessages({
+        input: [
+          { type: "image", name: "pasted-screenshot.png", url: "data:image/png;base64,AQID" },
+          { type: "localImage", name: "materialized-screenshot.png", path: imagePath },
+        ],
+      });
+      expect(messages).toEqual([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Attached image filename: pasted-screenshot.png" },
+            {
+              type: "image",
+              image: new URL("data:image/png;base64,AQID"),
+              mediaType: "image/png",
+            },
+            { type: "text", text: "Attached image filename: materialized-screenshot.png" },
+            {
+              type: "image",
+              image: Buffer.from([4, 5, 6]),
+              mediaType: "image/png",
+            },
+          ],
+        },
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects file URLs because remote xAI cannot access them", async () => {
     await expect(
       buildAiSdkMessages({

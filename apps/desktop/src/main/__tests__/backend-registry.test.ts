@@ -46,6 +46,7 @@ import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
+import type { ThreadSearchService } from "../thread-search/thread-search-service";
 
 const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgentRecords: vi.fn(
@@ -751,6 +752,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: unknown;
   };
   interruptTurnCallCount = 0;
   lastInterruptTurnParams?: {
@@ -1042,6 +1044,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     if (this.options.startTurnError) {
@@ -5114,6 +5117,110 @@ script = "echo setup"
         name: "Inbox Agent",
       }),
     });
+
+    await registry.close();
+  });
+
+  it("passes task monitor parent tools when continuing existing Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "existing-thread",
+      input: [{ type: "text", text: "continue" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
+      [
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+      ],
+    );
+    expect(
+      (codexClient.lastStartTurnParams?.dynamicTools as Array<{
+        namespace: string;
+        name: string;
+      }> | undefined)
+        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        .map((tool) => tool.name),
+    ).toEqual(["create_monitor_delegation"]);
+
+    await registry.close();
+  });
+
+  it("preserves Agent dynamic tools when continuing existing Agent Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:existing-agent-thread": {
+            backend: "codex",
+            threadId: "existing-agent-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            agent: {
+              name: "Inbox Agent",
+              instructions: "Track inbox automations.",
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1000,
+            },
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "existing-agent-thread",
+      input: [{ type: "text", text: "continue" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+      ]),
+    );
 
     await registry.close();
   });
@@ -9207,7 +9314,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Use this thread's model settings" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-modelled",
       input: [{ type: "text", text: "Use this thread's model settings" }],
       approvalPolicy: "on-request",
@@ -9225,7 +9332,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-plain",
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
       approvalPolicy: "on-request",
@@ -9535,6 +9642,89 @@ command = "pnpm dev"
     });
   });
 
+  it("persists observed Codex model settings for later thread snapshots", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-observed-model",
+          title: "Observed model thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-observed-model": {
+          backend: "codex",
+          threadId: "thread-observed-model",
+          executionMode: "default",
+          serviceTier: "fast",
+          fastMode: true,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await codexClient.emit({
+      method: "thread/codexSettings/observed",
+      params: {
+        threadId: "thread-observed-model",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: null,
+        fastMode: false,
+      },
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-observed-model",
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "fast",
+      fastMode: true,
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/modelSettings/updated",
+        params: {
+          threadId: "thread-observed-model",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
+          serviceTier: "fast",
+          fastMode: true,
+        },
+      },
+    });
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-observed-model",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "fast",
+        fastMode: true,
+      }),
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("resumes Codex turns in the current handoff worktree cwd", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -9600,7 +9790,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Run npm view dive" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
       input: [{ type: "text", text: "Run npm view dive" }],
       approvalPolicy: "never",
@@ -10372,7 +10562,13 @@ command = "pnpm dev"
       await registry.startTurn({
         backend: "codex",
         threadId: "thread-image",
-        input: [{ type: "image", url: "data:image/png;base64,AQID" }],
+        input: [
+          {
+            type: "image",
+            name: "workspace setup.png",
+            url: "data:image/png;base64,AQID",
+          },
+        ],
       });
 
       const input = codexClient.lastStartTurnParams?.input;
@@ -10380,6 +10576,10 @@ command = "pnpm dev"
       expect(input?.[0]).toMatchObject({ type: "localImage" });
       const imagePath = input?.[0]?.type === "localImage" ? input[0].path : "";
       expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(path.basename(path.dirname(imagePath))).toBe(
+        "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      );
+      expect(path.basename(imagePath)).toBe("workspace setup.png");
       await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
       await registry.close();
@@ -11404,6 +11604,160 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("routes thread inspection search through the thread search service when available", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [],
+    });
+    const search = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 2_000,
+      query: "branch drift",
+      filters: {
+        backend: "all" as const,
+        includeArchived: true,
+        projectKeys: ["PwrAgent"],
+        directoryPaths: ["/repo/pwragent"],
+        models: ["gpt-5.5"],
+        dateRange: { from: 1_000, to: 3_000 },
+      },
+      contentMode: "required" as const,
+      semanticMode: "required" as const,
+      searchedScopes: ["metadata", "projection"] as const,
+      unavailableScopes: [
+        {
+          scope: "semantic" as const,
+          reason: "disabled" as const,
+          message: "Semantic thread search is disabled.",
+        },
+      ],
+      results: [
+        {
+          backend: "codex" as const,
+          threadId: "thread-1",
+          identityKey: "codex:thread-1",
+          title: "Branch drift dialog screenshots",
+          summary: "Discussed screenshot capture.",
+          projectKey: "PwrAgent",
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "directory:/repo/pwragent",
+              kind: "local" as const,
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+          source: "codex" as const,
+          model: "gpt-5.5",
+          score: 42,
+          confidence: "medium" as const,
+          matchReasons: [{ kind: "provider_content_match" as const }],
+          snippets: [
+            {
+              scope: "provider_content" as const,
+              field: "message:user",
+              text: "We need branch drift dialog screenshots.",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadSearchService: { search } as unknown as ThreadSearchService,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "search_threads",
+        arguments: {
+          query: "branch drift",
+          includeArchived: true,
+          projectKeys: ["PwrAgent"],
+          directoryPaths: ["/repo/pwragent"],
+          models: ["gpt-5.5"],
+          updatedAfter: 1_000,
+          updatedBefore: 3_000,
+          contentMode: "required",
+          semanticMode: "required",
+          limit: 5,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(search).toHaveBeenCalledWith({
+      query: "branch drift",
+      filters: {
+        backend: "all",
+        includeArchived: true,
+        projectKeys: ["PwrAgent"],
+        directoryPaths: ["/repo/pwragent"],
+        models: ["gpt-5.5"],
+        dateRange: { from: 1_000, to: 3_000 },
+      },
+      limit: 5,
+      contentMode: "required",
+      semanticMode: "required",
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      query: "branch drift",
+      searchedScopes: ["metadata", "projection"],
+      unavailableScopes: [
+        {
+          scope: "semantic",
+          reason: "disabled",
+        },
+      ],
+      contentMode: "required",
+      semanticMode: "required",
+      threads: [
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          title: "Branch drift dialog screenshots",
+          confidence: "medium",
+          snippets: [
+            {
+              scope: "provider_content",
+              field: "message:user",
+            },
+          ],
+        },
+      ],
+      totalCount: 1,
+      limit: 5,
+      truncated: false,
+    });
+
+    await registry.close();
+  });
+
   it("lists recent lightweight thread candidates for Agent thread search", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
@@ -11837,7 +12191,9 @@ command = "pnpm dev"
     expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.4-mini");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");
-    expect(String(payload.parentAgentGuidance)).toContain("session/process id");
+    expect(String(payload.parentAgentGuidance)).toContain("Do not delegate an already-running parent tool session");
+    expect(String(payload.parentAgentGuidance)).toContain("exec_command/write_stdin stdin, stdout, stderr, or exit status");
+    expect(String(payload.parentAgentGuidance)).toContain("captures stdout/stderr");
     expect(String(payload.parentAgentGuidance)).toContain("about 30 seconds");
     expect(String(payload.parentAgentGuidance)).toContain("repeatable check");
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
@@ -11874,7 +12230,11 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
     expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
     expect(String(payload.prompt)).toContain("Poll/heartbeat interval: 30 seconds");
-    expect(String(payload.prompt)).toContain("local command");
+    expect(String(payload.prompt)).toContain("local build/test/script");
+    expect(String(payload.prompt)).toContain("Parent-local tool session ids are not portable");
+    expect(String(payload.prompt)).toContain("capture stdout/stderr and exit status");
+    expect(String(payload.prompt)).toContain("capture stdout and stderr to durable files");
+    expect(String(payload.prompt)).toContain("durable OS-level process id");
     expect(String(payload.prompt)).toContain("remote or external operation");
     expect(String(payload.prompt)).toContain("<delegated_monitoring_procedure>");
     expect(String(payload.prompt)).toContain("same polling the parent was about to do");
@@ -11882,6 +12242,204 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("before the first external poll or sleep");
     expect(String(payload.prompt)).toContain("Every poll should produce one non-waking progress injection");
     expect(String(payload.prompt)).toContain("complete_monitoring exactly once");
+
+    await registry.close();
+  });
+
+  it("tracks managed task monitor turns as in-progress quit work", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "parent-turn",
+        callId: "call-monitor",
+        requestId: "call-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: {
+            id: "parent-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:monitor-thread"],
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await registry.close();
+  });
+
+  it("rejects task monitor delegations that only reference a parent Codex exec session", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Monitor exec session 89902 until ./scripts/verify-giphy-button-swift.sh exits.",
+          monitorContext:
+            "Poll write_stdin with session_id: 89902 and collect stdout/stderr.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                "Task monitor delegations cannot use a parent-scoped write_stdin session_id as the local-command polling handle. Keep polling that already-started Codex exec session in the parent turn, or create a fresh monitor delegation with the command text, cwd, terminal criteria, and desired stdout/stderr capture-file paths so the monitor child starts the command in its own session.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("allows external numeric session ids in task monitor delegations", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Poll the external build service until session_id: 89902 finishes.",
+          monitorContext:
+            "Call ./scripts/check-build-status --session_id=89902 and stop when the service reports success or failure.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      ephemeral: true,
+      model: "gpt-5.4-mini",
+    });
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
   });

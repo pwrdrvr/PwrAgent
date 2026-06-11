@@ -1,4 +1,5 @@
 import type { AutomationRunOutputDecision } from "./automations";
+import type { PrSummary } from "./navigation";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
@@ -15,11 +16,15 @@ export type AppServerTextInputItem = {
 
 export type AppServerImageInputItem = {
   type: "image";
+  /** User-visible filename / attachment label when available. */
+  name?: string;
   url: string;
 };
 
 export type AppServerLocalImageInputItem = {
   type: "localImage";
+  /** User-visible filename / attachment label when available. */
+  name?: string;
   path: string;
 };
 
@@ -341,6 +346,8 @@ export type AppServerThreadFileDiff = {
   diff: string;
   additions: number;
   removals: number;
+  omittedReason?: string;
+  originalLength?: number;
 };
 
 export type AppServerThreadCommandDetail = {
@@ -863,6 +870,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        model?: string;
         tokenUsage: unknown;
       };
     }
@@ -1157,6 +1165,13 @@ export type AppServerNotification =
       params: {
         parentThreadId: string;
         collapsed: boolean;
+      };
+    }
+  | {
+      method: "thread/pullRequests/updated";
+      params: {
+        threadId: string;
+        prs: PrSummary[];
       };
     }
   /**

@@ -7,10 +7,14 @@ import type {
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
+import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();
+const performancePruning = import.meta.env.DEV
+  ? installDevPerformancePruning()
+  : undefined;
 
 // Subscribe to main → renderer appearance broadcasts. Every window
 // (including secondary surfaces like changelog, app-log, license,
@@ -67,6 +71,7 @@ const importMetaHot = (
 if (importMetaHot) {
   importMetaHot.dispose(() => {
     unsubscribeAppearance?.();
+    performancePruning?.stop();
   });
 }
 

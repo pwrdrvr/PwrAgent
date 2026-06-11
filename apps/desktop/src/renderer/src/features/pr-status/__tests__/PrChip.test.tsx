@@ -6,12 +6,20 @@ import { PrChip } from "../PrChip";
 
 afterEach(cleanup);
 
+// New-shape row (post #734): `state` stays check-only while review / lifecycle
+// / merge dimensions ride on their own fields. The chip layers draft + conflict
+// affordances on top of the check-state dot.
 function basePr(overrides: Partial<PrSummary> = {}): PrSummary {
   return {
+    provider: "github.com",
     number: 743,
     org: "pwrdrvr",
     repo: "PwrAgent",
     state: "passing",
+    checkState: "passing",
+    lifecycleState: "open",
+    reviewState: "ready_for_review",
+    mergeState: "mergeable",
     url: "https://github.com/pwrdrvr/PwrAgent/pull/743",
     ...overrides,
   };
@@ -25,41 +33,41 @@ function renderChip(pr: PrSummary) {
 }
 
 describe("PrChip", () => {
-  it("colors the dot by check status and renders no draft affordance when not a draft", () => {
-    const chip = renderChip(basePr({ state: "passing" }));
+  it("colors the dot by check state with no draft affordance for a ready PR", () => {
+    const chip = renderChip(basePr({ checkState: "passing" }));
     expect(chip).toHaveClass("pr-chip--passing");
     expect(chip).not.toHaveClass("pr-chip--draft");
+    expect(chip).not.toHaveClass("pr-chip--conflicting");
     expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
-    expect(chip).toHaveAttribute("title", expect.stringContaining("all checks passing"));
+    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("checks passing"));
   });
 
-  it("treats draft as orthogonal — dot keeps the status color, plus a draft bar", () => {
-    // An OPEN draft whose checks pass: green dot (passing) AND the draft bar.
-    const chip = renderChip(basePr({ state: "passing", isDraft: true }));
+  it("keeps the check-state dot color and adds a bar for an open draft", () => {
+    const chip = renderChip(
+      basePr({ reviewState: "draft", checkState: "passing" }),
+    );
+    // Dot color still reflects checks; draft is a separate affordance.
     expect(chip).toHaveClass("pr-chip--passing");
     expect(chip).toHaveClass("pr-chip--draft");
     expect(chip.querySelector(".pr-chip__draft-bar")).not.toBeNull();
-    // Tooltip surfaces both the draft and the underlying check status.
-    expect(chip).toHaveAttribute("title", expect.stringContaining("draft · all checks passing"));
+    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("draft · checks passing"));
   });
 
-  it("collapses an unknown-status draft tooltip to just 'draft'", () => {
-    const chip = renderChip(basePr({ state: "unknown", isDraft: true }));
-    expect(chip).toHaveClass("pr-chip--draft");
-    const title = chip.getAttribute("title") ?? "";
-    expect(title).toContain("— draft");
-    expect(title).not.toContain("status unknown");
+  it("recolors the dot red and labels the conflict for a conflicting PR", () => {
+    const chip = renderChip(basePr({ mergeState: "conflicting" }));
+    expect(chip).toHaveClass("pr-chip--conflicting");
+    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("merge conflict"));
   });
 
-  it("labels a conflicted PR as a merge conflict", () => {
-    const chip = renderChip(basePr({ state: "conflicted" }));
-    expect(chip).toHaveClass("pr-chip--conflicted");
-    expect(chip).toHaveAttribute("title", expect.stringContaining("merge conflict"));
-  });
-
-  it("labels a closed-without-merge PR distinctly from unknown", () => {
-    const chip = renderChip(basePr({ state: "closed" }));
+  it("renders a closed PR distinctly and without a draft affordance", () => {
+    // A PR closed while still a draft must NOT show the draft bar — the bar is
+    // gated on an OPEN lifecycle.
+    const chip = renderChip(
+      basePr({ lifecycleState: "closed", reviewState: "draft" }),
+    );
     expect(chip).toHaveClass("pr-chip--closed");
-    expect(chip).toHaveAttribute("title", expect.stringContaining("closed without merge"));
+    expect(chip).not.toHaveClass("pr-chip--draft");
+    expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
+    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
   });
 });

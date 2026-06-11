@@ -103,6 +103,46 @@ function inputSchemaForOperation(
             description:
               "Restrict results to PwrAgent Agent threads only. Leave false when the user asks to find an ordinary coding thread.",
           },
+          projectKeys: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Exact PwrAgent project keys to require, for example `PwrAgent`.",
+          },
+          directoryPaths: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Exact linked local or worktree directory paths to require.",
+          },
+          models: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Exact model ids to require when the user remembers the model.",
+          },
+          updatedAfter: {
+            type: "integer",
+            description:
+              "Only include threads updated at or after this Unix epoch millisecond timestamp.",
+          },
+          updatedBefore: {
+            type: "integer",
+            description:
+              "Only include threads updated at or before this Unix epoch millisecond timestamp.",
+          },
+          contentMode: {
+            type: "string",
+            enum: ["metadata", "available", "required"],
+            description:
+              "Use `metadata` for title/project/folder search only, `available` to also search bounded provider transcript content when possible, or `required` when content search must be attempted.",
+          },
+          semanticMode: {
+            type: "string",
+            enum: ["disabled", "available", "required"],
+            description:
+              "Semantic search mode. Currently disabled unless a future local semantic index is configured.",
+          },
           limit: {
             type: "integer",
             minimum: 1,

@@ -50,6 +50,7 @@ import {
 } from "../../shared/hot-cpu-profile";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
+import { ThreadSearchPanel } from "./features/thread-search/ThreadSearchPanel";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -158,9 +159,9 @@ function DesktopAppShell(props: {
   const [contextRailPinned, setContextRailPinned] = useState(false);
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
-  const [mainView, setMainView] = useState<"thread" | "settings" | "automations">(
-    "thread",
-  );
+  const [mainView, setMainView] = useState<
+    "thread" | "settings" | "automations" | "search"
+  >("thread");
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -208,15 +209,22 @@ function DesktopAppShell(props: {
 
   useEffect(() => {
     return desktopApi?.onHotCpuProfileCaptured?.((event) => {
+      const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
+      const heapSnapshotSummary =
+        heapSnapshotCount > 0
+          ? ` ${heapSnapshotCount} heap snapshots captured.`
+          : "";
       setHotCpuProfileNotice({
         autoDismiss: false,
+        copyText: buildHotCpuProfileHandoffMessage(event),
+        detail: `Session: ${event.sessionDirectoryName}`,
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: "CPU profile captured",
         message: [
           `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
-          "Copy this notice to hand off the profile path.",
-        ].join(" "),
-        detail: buildHotCpuProfileHandoffMessage(event),
+          heapSnapshotSummary,
+          " Copy this notice to hand off the profile path.",
+        ].join(""),
       });
     });
   }, [desktopApi]);
@@ -670,6 +678,7 @@ function DesktopAppShell(props: {
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}
           automationsActive={mainView === "automations"}
+          threadSearchActive={mainView === "search"}
           settingsActive={mainView === "settings"}
           onBrowseModeChange={navigation.setBrowseMode}
           onCreateThread={async () => {
@@ -686,6 +695,9 @@ function DesktopAppShell(props: {
           }}
           onOpenAutomations={() => {
             setMainView("automations");
+          }}
+          onOpenThreadSearch={() => {
+            setMainView("search");
           }}
           onOpenLaunchpad={async (directory, preferredBackend) => {
             setMainView("thread");
@@ -728,7 +740,16 @@ function DesktopAppShell(props: {
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }`}
         >
-          {threadDetailPending ? (
+          {mainView === "search" ? (
+            <ThreadSearchPanel
+              desktopApi={desktopApi}
+              onClose={() => setMainView("thread")}
+              onOpenResult={async (result) => {
+                setMainView("thread");
+                await navigation.showThread(result);
+              }}
+            />
+          ) : threadDetailPending ? (
             <section className="thread-view thread-view--pending">
               <ThreadPlaceholderHeader
                 desktopApi={desktopApi}

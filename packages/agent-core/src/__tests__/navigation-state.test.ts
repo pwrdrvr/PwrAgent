@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AppServerThreadSummary,
   AutomationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 
 import {
@@ -112,6 +113,61 @@ describe("navigation automation summaries", () => {
       buildNavigationSnapshotHash({
         backend: "codex",
         threads: [threadWithAutomation!],
+      }),
+    );
+  });
+
+  it("includes PR titles in the navigation snapshot hash", () => {
+    const prWithoutTitle: PrSummary = {
+      provider: "github.com",
+      number: 727,
+      org: "OpenAI",
+      repo: "codex",
+      state: "passing",
+      url: "https://github.com/OpenAI/codex/pull/727",
+    };
+    const prWithTitle: PrSummary = {
+      ...prWithoutTitle,
+      title: "Preserve PR titles",
+    };
+    const [threadWithoutTitle] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [prWithoutTitle],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+    const [threadWithTitle] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [prWithTitle],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+
+    expect(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithoutTitle!],
+      }),
+    ).not.toBe(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithTitle!],
       }),
     );
   });

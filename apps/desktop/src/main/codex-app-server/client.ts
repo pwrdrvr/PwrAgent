@@ -100,6 +100,7 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.2",
 ] as const;
 const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
+const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
 
 type CodexClientOptions = {
   command?: string;
@@ -167,6 +168,10 @@ export type CodexThreadMigrationMetadata = AppServerThreadSummary & {
 type RawCodexThreadListPage = {
   nextCursor?: string;
   threads: RawCodexThreadSummary[];
+};
+
+type CodexThreadResumePayload = CodexThreadResumeParams & {
+  dynamicTools?: CodexDynamicToolSpec[] | null;
 };
 
 type SkillCatalogEntry = {
@@ -2345,7 +2350,12 @@ function extractFileChangeText(params: {
     }
 
     const diff = extractDiffText(params.change);
-    return diff !== undefined ? { source: "diff", text: diff } : undefined;
+    if (diff === undefined) {
+      return undefined;
+    }
+    return looksLikeUnifiedDiff(diff)
+      ? { source: "diff", text: diff }
+      : { source: "content", text: diff };
   }
 
   const diff =
@@ -2354,36 +2364,102 @@ function extractFileChangeText(params: {
   return diff !== undefined ? { source: "diff", text: diff } : undefined;
 }
 
+function looksLikeUnifiedDiff(text: string): boolean {
+  let lineStart = 0;
+  while (lineStart <= text.length && lineStart < 4096) {
+    const lineEnd = text.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? text.length : lineEnd;
+    const line = text.slice(lineStart, end).trim();
+    if (!line) {
+      lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+      continue;
+    }
+
+    if (
+      line.startsWith("diff --git ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("@@ ")
+    ) {
+      return true;
+    }
+
+    if (!isUnifiedDiffMetadataLine(line)) {
+      return false;
+    }
+
+    lineStart = lineEnd === -1 ? text.length + 1 : lineEnd + 1;
+  }
+
+  return false;
+}
+
+function isUnifiedDiffMetadataLine(line: string): boolean {
+  return (
+    line.startsWith("Index: ") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file mode ") ||
+    line.startsWith("deleted file mode ") ||
+    line.startsWith("old mode ") ||
+    line.startsWith("new mode ") ||
+    line.startsWith("similarity index ") ||
+    line.startsWith("dissimilarity index ") ||
+    line.startsWith("rename from ") ||
+    line.startsWith("rename to ") ||
+    line.startsWith("copy from ") ||
+    line.startsWith("copy to ") ||
+    line.startsWith("Binary files ") ||
+    line === "GIT binary patch" ||
+    /^=+$/.test(line)
+  );
+}
+
 function summarizeDiff(diff: string): { additions: number; removals: number } {
   let additions = 0;
   let removals = 0;
 
-  for (const line of diff.split("\n")) {
+  let lineStart = 0;
+  while (lineStart <= diff.length) {
+    const lineEnd = diff.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? diff.length : lineEnd;
+    if (lineEnd === -1 && end === lineStart) {
+      break;
+    }
+
     if (
-      !line ||
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@") ||
-      line.startsWith("\\")
+      end === lineStart ||
+      diff.startsWith("+++", lineStart) ||
+      diff.startsWith("---", lineStart) ||
+      diff.startsWith("@@", lineStart) ||
+      diff.startsWith("\\", lineStart)
     ) {
+      lineStart = lineEnd === -1 ? diff.length + 1 : lineEnd + 1;
       continue;
     }
 
-    if (line.startsWith("+")) {
+    if (diff.charCodeAt(lineStart) === 43) {
       additions += 1;
-      continue;
-    }
-
-    if (line.startsWith("-")) {
+    } else if (diff.charCodeAt(lineStart) === 45) {
       removals += 1;
     }
+
+    lineStart = lineEnd === -1 ? diff.length + 1 : lineEnd + 1;
   }
 
   return { additions, removals };
 }
 
 function countContentLines(content: string): number {
-  return splitFileContentLines(content).length;
+  if (content.length === 0) {
+    return 0;
+  }
+
+  let lines = content.endsWith("\n") ? 0 : 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      lines += 1;
+    }
+  }
+  return lines;
 }
 
 function splitFileContentLines(content: string): string[] {
@@ -2441,16 +2517,38 @@ function buildFileChangeDiff(params: {
   changeType: "add" | "delete" | "update";
   text: FileChangeText;
   path?: string;
-}): string {
-  if (params.text.source === "diff") {
-    return params.text.text;
+}): { diff: string; omittedReason?: string; originalLength?: number } {
+  if (params.text.text.length > MAX_INLINE_FILE_DIFF_CHARS) {
+    return {
+      diff: "",
+      omittedReason: `Large file diff omitted from transcript view (${formatByteSize(
+        params.text.text.length
+      )}).`,
+      originalLength: params.text.text.length
+    };
   }
 
-  return buildContentDiff({
-    changeType: params.changeType,
-    content: params.text.text,
-    path: params.path
-  });
+  if (params.text.source === "diff") {
+    return { diff: params.text.text };
+  }
+
+  return {
+    diff: buildContentDiff({
+      changeType: params.changeType,
+      content: params.text.text,
+      path: params.path
+    })
+  };
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
 }
 
 function formatCommandLabel(command: string | undefined): string {
@@ -2956,7 +3054,7 @@ function summarizeActivityItems(
           changeText !== undefined
             ? summarizeFileChangeText({ changeType, text: changeText })
             : undefined;
-        const diff =
+        const diffPayload =
           changeText !== undefined
             ? buildFileChangeDiff({
                 changeType,
@@ -2975,13 +3073,19 @@ function summarizeActivityItems(
           }`,
           path: changePath,
           status: itemStatus,
-          ...(diff !== undefined && diffSummary
+          ...(diffPayload !== undefined && diffSummary
             ? {
                 fileDiff: {
                   kind: changeType,
-                  diff,
+                  diff: diffPayload.diff,
                   additions: diffSummary.additions,
-                  removals: diffSummary.removals
+                  removals: diffSummary.removals,
+                  ...(diffPayload.omittedReason
+                    ? { omittedReason: diffPayload.omittedReason }
+                    : {}),
+                  ...(diffPayload.originalLength !== undefined
+                    ? { originalLength: diffPayload.originalLength }
+                    : {})
                 }
               }
             : {})
@@ -4421,8 +4525,9 @@ function buildThreadResumePayloads(params: {
   reasoningEffort?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-}): CodexThreadResumeParams[] {
-  const base: CodexThreadResumeParams = {
+  dynamicTools?: CodexDynamicToolSpec[];
+}): CodexThreadResumePayload[] {
+  const base: CodexThreadResumePayload = {
     threadId: params.threadId,
     persistExtendedHistory: false,
   };
@@ -4460,6 +4565,16 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
+  }
+
+  if (params.dynamicTools?.length) {
+    return [
+      {
+        ...base,
+        dynamicTools: params.dynamicTools,
+      },
+      base,
+    ];
   }
 
   return [base];
@@ -4514,7 +4629,17 @@ function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
     };
   }
 
-  return input;
+  if (input.type === "image") {
+    return {
+      type: "image",
+      url: input.url,
+    };
+  }
+
+  return {
+    type: "localImage",
+    path: input.path,
+  };
 }
 
 function buildTurnStartPayload(params: {
@@ -5499,6 +5624,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -5525,6 +5651,7 @@ export class CodexAppServerClient {
           reasoningEffort: params.reasoningEffort,
           fastMode: params.fastMode,
           codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+          dynamicTools: params.dynamicTools,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       }).catch((error: unknown) => {

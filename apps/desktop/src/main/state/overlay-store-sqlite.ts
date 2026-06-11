@@ -20,6 +20,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
@@ -42,6 +43,83 @@ export type DirectoryGitStatusCacheEntry = {
   fetchedAt: number;
   gitStatus?: NavigationDirectoryGitStatus;
 };
+
+export type PrStatusCacheEntry = {
+  prKey: string;
+  provider: string;
+  fetchedAt: number;
+  pr: PrSummary;
+};
+
+export type PrLookupCacheEntry = {
+  lookupKey: string;
+  provider: string;
+  branch: string;
+  directoryPaths: string[];
+  fetchedAt: number;
+  prs: PrSummary[];
+};
+
+function normalizePullRequestProvider(provider: string | undefined): string {
+  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER;
+}
+
+function normalizePrSummary(pr: PrSummary): PrSummary {
+  const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
+  return {
+    ...pr,
+    provider: normalizePullRequestProvider(pr.provider),
+    state: checkState,
+    checkState,
+    lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
+    reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
+    mergeState: pr.mergeState ?? "unknown",
+  };
+}
+
+function normalizePrCheckState(
+  state: string | undefined,
+): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycleState"] {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
+
+function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
+  return state === "draft" ? "draft" : "ready_for_review";
+}
+
+function getPrStatusCacheKey(pr: PrSummary): string {
+  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+}
+
+function getPrLookupCacheKey(entry: {
+  provider: string;
+  branch: string;
+  directoryPaths: string[];
+}): string {
+  return JSON.stringify({
+    lookupVersion: 2,
+    provider: normalizePullRequestProvider(entry.provider),
+    branch: entry.branch.trim(),
+    directoryPaths: [...new Set(entry.directoryPaths.map((path) => path.trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right)),
+  });
+}
 
 function parseDirectoryGitStatusCachePayload(
   payload: string | null,
@@ -671,12 +749,142 @@ export class SqliteOverlayStore {
     };
     const nextState: ThreadOverlayState = {
       ...current,
-      prs: params.prs,
+      prs: params.prs.map(normalizePrSummary),
       prsFetchedAt: params.fetchedAt ?? Date.now(),
       prsRefreshKey: params.refreshKey,
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT pr_key, provider, fetched_at, payload
+         FROM pr_status_cache`,
+      )
+      .all() as Array<{
+        pr_key: string;
+        provider: string | null;
+        fetched_at: number;
+        payload: string;
+      }>;
+
+    const entries: Record<string, PrStatusCacheEntry> = {};
+    for (const row of rows) {
+      try {
+        const provider = normalizePullRequestProvider(row.provider ?? undefined);
+        const pr = normalizePrSummary({
+          ...(JSON.parse(row.payload) as PrSummary),
+          provider,
+        });
+        const prKey = getPrStatusCacheKey(pr);
+        entries[prKey] = {
+          prKey,
+          provider,
+          fetchedAt: row.fetched_at,
+          pr,
+        };
+      } catch {
+        // Ignore malformed cache rows. A future refresh rewrites the row.
+      }
+    }
+    return entries;
+  }
+
+  async writePrStatusCacheEntries(entries: PrStatusCacheEntry[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const insert = this.stateDb.raw.prepare(
+      `INSERT OR REPLACE INTO pr_status_cache(
+         pr_key,
+         provider,
+         org,
+         repo,
+         number,
+         fetched_at,
+         payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const write = this.stateDb.raw.transaction(() => {
+      for (const entry of entries) {
+        insert.run(
+          entry.prKey,
+          normalizePullRequestProvider(entry.provider),
+          entry.pr.org,
+          entry.pr.repo,
+          entry.pr.number,
+          entry.fetchedAt,
+          JSON.stringify(normalizePrSummary(entry.pr)),
+        );
+      }
+    });
+    write();
+  }
+
+  async readPrLookupCache(): Promise<Record<string, PrLookupCacheEntry>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT lookup_key, provider, branch, directory_paths, fetched_at, payload
+         FROM pr_lookup_cache`,
+      )
+      .all() as Array<{
+        lookup_key: string;
+        provider: string | null;
+        branch: string;
+        directory_paths: string;
+        fetched_at: number;
+        payload: string;
+      }>;
+
+    const entries: Record<string, PrLookupCacheEntry> = {};
+    for (const row of rows) {
+      try {
+        const provider = normalizePullRequestProvider(row.provider ?? undefined);
+        const directoryPaths = JSON.parse(row.directory_paths) as string[];
+        const lookupKey = getPrLookupCacheKey({
+          provider,
+          branch: row.branch,
+          directoryPaths,
+        });
+        entries[lookupKey] = {
+          lookupKey,
+          provider,
+          branch: row.branch,
+          directoryPaths,
+          fetchedAt: row.fetched_at,
+          prs: (JSON.parse(row.payload) as PrSummary[]).map((pr) =>
+            normalizePrSummary({ ...pr, provider: pr.provider ?? provider }),
+          ),
+        };
+      } catch {
+        // Ignore malformed cache rows. A future refresh rewrites the row.
+      }
+    }
+    return entries;
+  }
+
+  async writePrLookupCacheEntry(entry: PrLookupCacheEntry): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO pr_lookup_cache(
+           lookup_key,
+           provider,
+           branch,
+           directory_paths,
+           fetched_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.lookupKey,
+        normalizePullRequestProvider(entry.provider),
+        entry.branch,
+        JSON.stringify(entry.directoryPaths),
+        entry.fetchedAt,
+        JSON.stringify(entry.prs.map(normalizePrSummary)),
+      );
   }
 
   async getThreadOverlayStates(params: {
@@ -1300,6 +1508,10 @@ export type OverlayStoreLike = Pick<
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
+  | "readPrStatusCache"
+  | "writePrStatusCacheEntries"
+  | "readPrLookupCache"
+  | "writePrLookupCacheEntry"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"

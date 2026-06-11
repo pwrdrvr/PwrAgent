@@ -1,16 +1,18 @@
 import { protocol } from "electron";
 import type {
+  AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
 } from "@pwragent/shared";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolvePwragentRoot } from "./profile";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
@@ -25,14 +27,47 @@ const IMAGE_MIME_TYPES = new Map<string, string>([
   [".webp", "image/webp"],
 ]);
 
+const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
+  ["image/avif", "avif"],
+  ["image/bmp", "bmp"],
+  ["image/gif", "gif"],
+  ["image/jpeg", "jpg"],
+  ["image/jpg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+]);
+
 export type TranscriptImageProtocolOptions = {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
 };
 
+export type TranscriptImageMaterializerDependencies = {
+  resolveRoot: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => string;
+  mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
+  writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
+};
+
 export type TranscriptImageFileResolution =
   | { ok: true; path: string; mimeType: string }
   | { ok: false; status: number; message: string };
+
+const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
+  resolveRoot: ({ backend, threadId }) =>
+    resolveActiveProfilePath(
+      path.join(
+        "state",
+        "thread-images",
+        encodePathSegment(backend),
+        encodePathSegment(threadId),
+      ),
+    ),
+  mkdir,
+  writeFile,
+};
 
 export function toTranscriptImageProtocolUrl(src: string): string {
   return `pwragent-image://file/${encodeURIComponent(src)}`;
@@ -51,6 +86,41 @@ export function rewriteTranscriptImageUrlsForRenderer(
   };
 }
 
+export async function materializeTranscriptImageUrlsForRenderer(
+  response: AppServerReadThreadResponse,
+  dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
+): Promise<AppServerReadThreadResponse> {
+  const deps = { ...defaultMaterializerDependencies, ...dependencies };
+  const materializedFileWrites = new Map<string, Promise<void>>();
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: await Promise.all(
+        response.replay.entries.map((entry) =>
+          materializeTranscriptEntryImageUrls(
+            entry,
+            response,
+            deps,
+            materializedFileWrites,
+          ),
+        ),
+      ),
+      messages: await Promise.all(
+        response.replay.messages.map((message) =>
+          materializeTranscriptMessageImageUrls(
+            message,
+            response,
+            deps,
+            materializedFileWrites,
+          ),
+        ),
+      ),
+    },
+  };
+}
+
 export function registerTranscriptImageProtocolScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
@@ -62,6 +132,98 @@ export function registerTranscriptImageProtocolScheme(): void {
       },
     },
   ]);
+}
+
+async function materializeTranscriptEntryImageUrls(
+  entry: AppServerThreadEntry,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+): Promise<AppServerThreadEntry> {
+  if (entry.type !== "message") {
+    return entry;
+  }
+
+  return (await materializeTranscriptMessageImageUrls(
+    entry,
+    response,
+    deps,
+    materializedFileWrites,
+  )) as AppServerThreadMessageEntry;
+}
+
+async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMessage>(
+  message: T,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+): Promise<T> {
+  if (
+    !message.parts?.some(
+      (part) => part.type === "image" && isMaterializableImageUrl(part.url),
+    )
+  ) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: await Promise.all(
+      message.parts.map((part) =>
+        materializeTranscriptMessagePartImageUrl(
+          part,
+          response,
+          deps,
+          materializedFileWrites,
+        ),
+      ),
+    ),
+  };
+}
+
+async function materializeTranscriptMessagePartImageUrl(
+  part: AppServerThreadMessagePart,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+): Promise<AppServerThreadMessagePart> {
+  if (part.type !== "image") {
+    return part;
+  }
+
+  if (isFileImageUrl(part.url)) {
+    return {
+      ...part,
+      url: toTranscriptImageProtocolUrl(part.url),
+    };
+  }
+
+  const dataImage = parseSupportedImageDataUrl(part.url);
+  if (!dataImage) {
+    return part;
+  }
+
+  const root = deps.resolveRoot({
+    backend: response.backend,
+    threadId: response.threadId,
+  });
+  try {
+    await deps.mkdir(root, { recursive: true });
+    const filePath = path.join(root, `${dataImage.sha256}.${dataImage.extension}`);
+    let writePromise = materializedFileWrites.get(filePath);
+    if (!writePromise) {
+      writePromise = deps.writeFile(filePath, dataImage.buffer).then(() => undefined);
+      materializedFileWrites.set(filePath, writePromise);
+    }
+    await writePromise;
+
+    return {
+      ...part,
+      url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
+    };
+  } catch {
+    return part;
+  }
 }
 
 function rewriteTranscriptEntryImageUrls(entry: AppServerThreadEntry): AppServerThreadEntry {
@@ -100,6 +262,10 @@ function rewriteTranscriptMessagePartImageUrl(
 
 function isFileImageUrl(url: string): boolean {
   return url.startsWith("file://");
+}
+
+function isMaterializableImageUrl(url: string): boolean {
+  return isFileImageUrl(url) || url.startsWith("data:image/");
 }
 
 export function installTranscriptImageProtocol(): void {
@@ -252,4 +418,37 @@ function isPathInsideRoot(targetPath: string, rootPath: string): boolean {
 
 function mimeTypeForImagePath(filePath: string): string | undefined {
   return IMAGE_MIME_TYPES.get(path.extname(filePath).toLowerCase());
+}
+
+function parseSupportedImageDataUrl(
+  url: string,
+): { buffer: Buffer; extension: string; sha256: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
+    url,
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const mimeType = match[1]?.toLowerCase();
+  const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
+  const payload = match[2] ?? "";
+  if (!extension || payload.length % 4 === 1) {
+    return undefined;
+  }
+
+  const buffer = Buffer.from(payload, "base64");
+  if (buffer.byteLength === 0) {
+    return undefined;
+  }
+
+  return {
+    buffer,
+    extension,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function encodePathSegment(value: string): string {
+  return encodeURIComponent(value);
 }
