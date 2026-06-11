@@ -8,6 +8,7 @@ import {
   subAgentStatusLabel,
   subAgentTone,
 } from "./subagent-format";
+import { RailStatusChip } from "./RailStatusChip";
 
 type SubAgentDetailsModalProps = {
   subAgent: ThreadSubAgentSummary;
@@ -96,15 +97,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         onClick={(event) => event.stopPropagation()}
       >
         <div className="subagent-modal__head">
-          <span className="subagent-card__status-line">
-            <span
-              aria-hidden="true"
-              className={`subagent-card__dot subagent-card__dot--${tone}`}
-            />
-            <span className={`subagent-card__status subagent-card__status--${tone}`}>
-              {subAgentStatusLabel(subAgent.status)}
-            </span>
-          </span>
+          <RailStatusChip tone={tone} alert={tone === "error"}>
+            {subAgentStatusLabel(subAgent.status)}
+          </RailStatusChip>
           <button
             type="button"
             className="button button--ghost subagent-modal__close"

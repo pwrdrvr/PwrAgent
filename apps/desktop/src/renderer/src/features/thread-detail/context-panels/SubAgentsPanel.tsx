@@ -6,6 +6,7 @@ import type {
 import { useSubAgents } from "./useSubAgents";
 import { formatTimestamp } from "./context-rail-shared";
 import { subAgentStatusLabel, subAgentTone } from "./subagent-format";
+import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 
 type SubAgentsPanelProps = {
@@ -27,40 +28,36 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
             return (
-              <li key={subAgent.monitorId} className="subagent-card">
+              <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
                     title for the top row (the title pushed it off before). */}
-                <p className="subagent-card__status-line">
-                  <span
-                    aria-hidden="true"
-                    className={`subagent-card__dot subagent-card__dot--${tone}`}
-                  />
-                  <span className={`subagent-card__status subagent-card__status--${tone}`}>
+                <p className="rail-card__status-line">
+                  <RailStatusChip tone={tone} alert={tone === "error"}>
                     {subAgentStatusLabel(subAgent.status)}
-                  </span>
+                  </RailStatusChip>
                 </p>
-                <p className="subagent-card__title" title={subAgent.task}>
+                <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}
                 </p>
                 {subAgent.preferredModel ? (
-                  <p className="subagent-card__model">{subAgent.preferredModel}</p>
+                  <p className="rail-card__model">{subAgent.preferredModel}</p>
                 ) : null}
-                <p className="subagent-card__times">
-                  <span className="subagent-card__time-label">Started</span>{" "}
+                <p className="rail-card__times">
+                  <span className="rail-card__time-label">Started</span>{" "}
                   {formatTimestamp(subAgent.createdAt)}
                   {subAgent.completedAt ? (
                     <>
                       {" · "}
-                      <span className="subagent-card__time-label">Ended</span>{" "}
+                      <span className="rail-card__time-label">Ended</span>{" "}
                       {formatTimestamp(subAgent.completedAt)}
                     </>
                   ) : null}
                 </p>
                 {subAgent.lastMessage ? (
-                  <p className="subagent-card__message">{subAgent.lastMessage}</p>
+                  <p className="rail-card__message">{subAgent.lastMessage}</p>
                 ) : null}
                 {subAgent.monitorUsage?.summary ? (
-                  <p className="subagent-card__usage">
+                  <p className="rail-card__usage">
                     {subAgent.monitorId.startsWith("review:") ? "Review" : "Monitor"} usage:{" "}
                     {subAgent.monitorUsage.summary}
                   </p>

@@ -1,21 +1,21 @@
 import type { ThreadSubAgentStatus } from "@pwragent/shared";
+import type { RailChipTone } from "./RailStatusChip";
 
-export type SubAgentTone = "active" | "done" | "warn" | "idle";
-
-/** Maps a sub-agent status onto the dot/label color tone. */
-export function subAgentTone(status: ThreadSubAgentStatus): SubAgentTone {
+/** Maps a sub-agent status onto a shared status-chip tone. */
+export function subAgentTone(status: ThreadSubAgentStatus): RailChipTone {
   switch (status) {
     case "running":
       return "active";
     case "success":
-      return "done";
+      return "ok";
     case "blocked":
+      return "warning";
     case "failed":
     case "failure":
-    case "cancelled":
-      return "warn";
+      return "error";
     case "pending":
-      return "idle";
+    case "cancelled":
+      return "neutral";
   }
 }
 
