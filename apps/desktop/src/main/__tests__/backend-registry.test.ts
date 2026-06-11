@@ -9536,6 +9536,89 @@ command = "pnpm dev"
     });
   });
 
+  it("persists observed Codex model settings for later thread snapshots", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-observed-model",
+          title: "Observed model thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-observed-model": {
+          backend: "codex",
+          threadId: "thread-observed-model",
+          executionMode: "default",
+          serviceTier: "fast",
+          fastMode: true,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await codexClient.emit({
+      method: "thread/codexSettings/observed",
+      params: {
+        threadId: "thread-observed-model",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: null,
+        fastMode: false,
+      },
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-observed-model",
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "fast",
+      fastMode: true,
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/modelSettings/updated",
+        params: {
+          threadId: "thread-observed-model",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
+          serviceTier: "fast",
+          fastMode: true,
+        },
+      },
+    });
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-observed-model",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "fast",
+        fastMode: true,
+      }),
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("resumes Codex turns in the current handoff worktree cwd", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

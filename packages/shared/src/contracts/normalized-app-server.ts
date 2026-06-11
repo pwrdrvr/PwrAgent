@@ -863,6 +863,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        model?: string;
         tokenUsage: unknown;
       };
     }
