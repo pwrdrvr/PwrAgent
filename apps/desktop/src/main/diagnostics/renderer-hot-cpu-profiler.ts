@@ -92,6 +92,7 @@ export class RendererHotCpuProfiler {
   private profiling = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
+  private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
 
   constructor(options: {
@@ -466,8 +467,10 @@ export class RendererHotCpuProfiler {
         this.config.captureHeapSnapshot &&
         this.target.takeHeapSnapshot
       ) {
+        await this.drainActiveHeapSnapshotCaptures();
         await this.captureHeapSnapshot(index, "stop");
       }
+      await this.drainActiveHeapSnapshotCaptures();
       await this.onProfileWritten?.({
         capturedAt: this.now().toISOString(),
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
@@ -491,11 +494,25 @@ export class RendererHotCpuProfiler {
     } finally {
       this.activeProfileTrigger = null;
       this.activeProfileHeapSnapshots = [];
+      this.activeProfileHeapSnapshotCaptures.clear();
       this.detachDebugger();
     }
   }
 
   private async captureHeapSnapshot(index: number, phase: string): Promise<void> {
+    const capture = this.writeHeapSnapshot(index, phase);
+    if (index === this.profileCount) {
+      this.activeProfileHeapSnapshotCaptures.add(capture);
+    }
+
+    try {
+      await capture;
+    } finally {
+      this.activeProfileHeapSnapshotCaptures.delete(capture);
+    }
+  }
+
+  private async writeHeapSnapshot(index: number, phase: string): Promise<void> {
     if (!this.target.takeHeapSnapshot) {
       return;
     }
@@ -558,6 +575,12 @@ export class RendererHotCpuProfiler {
       if (this.heapSnapshotsCaptured >= this.config.heapSnapshotLimit) {
         await this.notifyHeapSnapshotLimitReached();
       }
+    }
+  }
+
+  private async drainActiveHeapSnapshotCaptures(): Promise<void> {
+    while (this.activeProfileHeapSnapshotCaptures.size > 0) {
+      await Promise.all([...this.activeProfileHeapSnapshotCaptures]);
     }
   }
 

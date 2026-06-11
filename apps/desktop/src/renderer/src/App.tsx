@@ -209,15 +209,22 @@ function DesktopAppShell(props: {
 
   useEffect(() => {
     return desktopApi?.onHotCpuProfileCaptured?.((event) => {
+      const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
+      const heapSnapshotSummary =
+        heapSnapshotCount > 0
+          ? ` ${heapSnapshotCount} heap snapshots captured.`
+          : "";
       setHotCpuProfileNotice({
         autoDismiss: false,
+        copyText: buildHotCpuProfileHandoffMessage(event),
+        detail: `Session: ${event.sessionDirectoryName}`,
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: "CPU profile captured",
         message: [
           `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
-          "Copy this notice to hand off the profile path.",
-        ].join(" "),
-        detail: buildHotCpuProfileHandoffMessage(event),
+          heapSnapshotSummary,
+          " Copy this notice to hand off the profile path.",
+        ].join(""),
       });
     });
   }, [desktopApi]);

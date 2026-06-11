@@ -576,6 +576,112 @@ describe("RendererHotCpuProfiler", () => {
     );
   });
 
+  it("waits for an in-flight heap snapshot before handing off profile artifacts", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "1000",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT: "1",
+      PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT_LIMIT: "3",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    const midSnapshot = deferred();
+    const { target, debuggerApi } = createTarget();
+    target.takeHeapSnapshot.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("-mid.")) {
+        await midSnapshot.promise;
+      }
+    });
+    const onProfileWritten = vi.fn();
+    const profiler = new RendererHotCpuProfiler({
+      config,
+      getAppMetrics: () => [createMetric(89)],
+      onProfileWritten,
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await (
+      profiler as unknown as {
+        startProfile: (options: {
+          capturedAt: string;
+          cpuPercent: number;
+          pid: number;
+        }) => Promise<void>;
+      }
+    ).startProfile({
+      capturedAt: new Date().toISOString(),
+      cpuPercent: 89,
+      pid: 1234,
+    });
+
+    const midCapture = (
+      profiler as unknown as {
+        captureHeapSnapshot: (index: number, phase: string) => Promise<void>;
+      }
+    ).captureHeapSnapshot(1, "mid");
+    await vi.waitFor(() => {
+      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    const stopProfile = (
+      profiler as unknown as { stopProfile: (reason: string) => Promise<void> }
+    ).stopProfile("duration-elapsed");
+    await vi.waitFor(() => {
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    });
+
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(2);
+    expect(onProfileWritten).not.toHaveBeenCalled();
+
+    midSnapshot.resolve();
+    await Promise.all([midCapture, stopProfile]);
+
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        heapSnapshotArtifacts: [
+          {
+            filename: "renderer-hot-0001-start.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "start"),
+            phase: "start",
+          },
+          {
+            filename: "renderer-hot-0001-mid.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "mid"),
+            phase: "mid",
+          },
+          {
+            filename: "renderer-hot-0001-stop.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "stop"),
+            phase: "stop",
+          },
+        ],
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+      }),
+    );
+  });
+
   it("does not schedule heap or duration timers after being stopped during the start heap snapshot", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
@@ -628,8 +734,12 @@ describe("RendererHotCpuProfiler", () => {
       expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
     });
 
-    await profiler.stop("settings-disabled");
+    const stopProfiler = profiler.stop("settings-disabled");
+    await vi.waitFor(() => {
+      expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    });
     startSnapshot.resolve();
+    await stopProfiler;
     await new Promise((resolve) =>
       setTimeout(resolve, config.profileDurationMs * 2),
     );
