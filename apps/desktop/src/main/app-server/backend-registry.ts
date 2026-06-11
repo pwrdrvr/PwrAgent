@@ -2982,6 +2982,10 @@ export class DesktopBackendRegistry {
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
   private readonly activeReviewSubAgents = new Map<string, ReviewSubAgentRecord>();
+  private readonly reviewSubAgentsByReviewTurn = new Map<
+    string,
+    ReviewSubAgentRecord
+  >();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
@@ -6173,14 +6177,13 @@ export class DesktopBackendRegistry {
       task: reviewTaskLabel(params.target),
       turnId: result.turnId,
     };
-    this.activeReviewSubAgents.set(
-      buildReviewSubAgentKey(
-        reviewSubAgentRecord.backend,
-        reviewSubAgentRecord.reviewThreadId,
-        reviewSubAgentRecord.turnId,
-      ),
-      reviewSubAgentRecord,
+    const reviewSubAgentKey = buildReviewSubAgentKey(
+      reviewSubAgentRecord.backend,
+      reviewSubAgentRecord.reviewThreadId,
+      reviewSubAgentRecord.turnId,
     );
+    this.activeReviewSubAgents.set(reviewSubAgentKey, reviewSubAgentRecord);
+    this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
     await this.persistReviewSubAgent(reviewSubAgentRecord);
     if (hasExplicitModelSettings(modelSettings)) {
       await this.overlayStore.setThreadModelSettings({
@@ -6261,11 +6264,9 @@ export class DesktopBackendRegistry {
       const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
       this.activeCodexTurnModes.delete(activeTurnModeKey);
       this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
-      this.clearCodexReviewInterruptMappingForTurn(result.threadId, result.turnId);
       if (requestedCodexTurnModeKey && requestedCodexTurnModeKey !== activeTurnModeKey) {
         this.activeCodexTurnModes.delete(requestedCodexTurnModeKey);
         this.activeCodexReviewTurnKeys.delete(requestedCodexTurnModeKey);
-        this.activeCodexReviewInterruptTurnIds.delete(requestedCodexTurnModeKey);
       }
     }
 
@@ -9631,9 +9632,13 @@ export class DesktopBackendRegistry {
         });
         return;
       }
+      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
         backend: event.backend,
-        threadId: notification.params.threadId,
+        parentThreadId:
+          completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+        reviewThreadId:
+          completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
         turnId: notification.params.turnId,
         usage: usageSnapshot,
       });
@@ -9668,19 +9673,20 @@ export class DesktopBackendRegistry {
 
   private async persistExistingReviewSubAgentUsage(params: {
     backend: AppServerBackendKind;
-    threadId: string;
+    parentThreadId: string;
+    reviewThreadId: string;
     turnId: string;
     usage: ThreadSubAgentSummary["monitorUsage"];
   }): Promise<boolean> {
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
-      threadId: params.threadId,
+      threadId: params.parentThreadId,
     });
     const monitorId = reviewSubAgentId(params.turnId);
     const existing = overlay?.subAgents?.find(
       (subAgent) =>
         subAgent.monitorId === monitorId ||
-        (subAgent.monitorThreadId === params.threadId &&
+        (subAgent.monitorThreadId === params.reviewThreadId &&
           subAgent.monitorTurnId === params.turnId),
     );
     if (!existing) {
@@ -9689,7 +9695,7 @@ export class DesktopBackendRegistry {
 
     await this.overlayStore.upsertThreadSubAgent({
       backend: params.backend,
-      threadId: params.threadId,
+      threadId: params.parentThreadId,
       subAgent: {
         ...existing,
         monitorUsage: params.usage,
@@ -9702,7 +9708,7 @@ export class DesktopBackendRegistry {
       notification: {
         method: "thread/subAgents/updated",
         params: {
-          threadId: params.threadId,
+          threadId: params.parentThreadId,
         },
       },
     });
@@ -9854,13 +9860,13 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<void> {
-    const key = buildReviewSubAgentKey(params.backend, params.threadId, params.turnId);
-    const record = this.activeReviewSubAgents.get(key);
-    if (!record) {
+    const activeReview = this.findActiveReviewSubAgentForTerminal(params);
+    if (!activeReview) {
       return;
     }
 
-    this.activeReviewSubAgents.delete(key);
+    this.activeReviewSubAgents.delete(activeReview.key);
+    const { record } = activeReview;
     const completedAt = params.completedAt ?? Date.now();
     if (params.method === "turn/completed") {
       await this.persistReviewSubAgent(record, {
@@ -9891,6 +9897,41 @@ export class DesktopBackendRegistry {
       status: "failed",
       updatedAt: completedAt,
     });
+  }
+
+  private findActiveReviewSubAgentForTerminal(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): { key: string; record: ReviewSubAgentRecord } | undefined {
+    const exactKey = buildReviewSubAgentKey(
+      params.backend,
+      params.threadId,
+      params.turnId,
+    );
+    const exactRecord = this.activeReviewSubAgents.get(exactKey);
+    if (exactRecord) {
+      return { key: exactKey, record: exactRecord };
+    }
+
+    if (params.backend !== "codex") {
+      return undefined;
+    }
+
+    for (const [key, record] of this.activeReviewSubAgents.entries()) {
+      if (record.backend !== params.backend || record.reviewThreadId !== params.threadId) {
+        continue;
+      }
+      const reviewTurnKey = buildActiveTurnModeKey(
+        record.reviewThreadId,
+        record.turnId,
+      );
+      if (this.activeCodexReviewInterruptTurnIds.get(reviewTurnKey) === params.turnId) {
+        return { key, record };
+      }
+    }
+
+    return undefined;
   }
 
   private recordTaskMonitorActivity(notification: AppServerNotification): void {

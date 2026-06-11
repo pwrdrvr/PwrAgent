@@ -11063,6 +11063,87 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("patches detached Codex review usage on the parent thread after completion", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-parent",
+        reviewThreadId: "thread-review",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "detached",
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-review",
+        turnId: "turn-review-1",
+        turn: {
+          id: "turn-review-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-review",
+        turnId: "turn-review-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-parent",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        monitorThreadId: "thread-review",
+        monitorTurnId: "turn-review-1",
+        outcome: "success",
+        status: "success",
+        monitorUsage: {
+          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+        },
+      });
+    const reviewOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-review",
+    });
+    expect(reviewOverlay?.subAgents).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("interrupts Codex reviews with the backend active turn id", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/interrupt", "review/start"] },
@@ -11072,12 +11153,13 @@ command = "pnpm dev"
         turnId: "turn-review-1",
       },
     });
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
 
     await registry.startReview({
@@ -11109,6 +11191,35 @@ command = "pnpm dev"
       threadId: "thread-1",
       turnId: "turn-interrupt-1",
     });
+
+    await codexClient.emit({
+      method: "turn/cancelled",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-interrupt-1",
+        turn: {
+          id: "turn-interrupt-1",
+          status: "cancelled",
+          completedAt: 1_781_178_300,
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        outcome: "cancelled",
+        status: "cancelled",
+        lastMessage: "Review cancelled.",
+        completedAt: 1_781_178_300_000,
+      });
 
     await registry.close();
   });
