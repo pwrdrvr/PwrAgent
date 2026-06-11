@@ -66,10 +66,41 @@ function normalizePullRequestProvider(provider: string | undefined): string {
 }
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
+  const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
   return {
     ...pr,
     provider: normalizePullRequestProvider(pr.provider),
+    state: checkState,
+    checkState,
+    lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
+    reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
+    mergeState: pr.mergeState ?? "unknown",
   };
+}
+
+function normalizePrCheckState(
+  state: string | undefined,
+): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycleState"] {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
+
+function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
+  return state === "draft" ? "draft" : "ready_for_review";
 }
 
 function getPrStatusCacheKey(pr: PrSummary): string {

@@ -243,8 +243,43 @@ const getAuthStatus = vi.fn(async () => ({
 }));
 const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
 
-function githubPr(pr: Omit<PrSummary, "provider">): PrSummary {
-  return { provider: "github.com", ...pr };
+function githubPr(
+  pr: Omit<PrSummary, "provider" | "checkState" | "lifecycleState" | "reviewState" | "mergeState">
+    & Partial<Pick<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">>,
+): PrSummary {
+  const checkState = pr.checkState ?? normalizeTestCheckState(pr.state);
+  return {
+    provider: "github.com",
+    ...pr,
+    state: checkState,
+    checkState,
+    lifecycleState: pr.lifecycleState ?? legacyTestLifecycleState(pr.state),
+    reviewState: pr.reviewState ?? legacyTestReviewState(pr.state),
+    mergeState: pr.mergeState ?? "unknown",
+  };
+}
+
+function normalizeTestCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyTestLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary["lifecycleState"]> {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
+
+function legacyTestReviewState(state: PrSummary["state"]): NonNullable<PrSummary["reviewState"]> {
+  return state === "draft" ? "draft" : "ready_for_review";
 }
 
 function buildThreadPrRequestKey(params: {
@@ -820,7 +855,13 @@ describe("app server ipc", () => {
       url: "https://github.com/pwrdrvr/PwrAgent/pull/430",
     });
     const refreshedPrs: PrSummary[] = [
-      { ...stalePassingPr, state: "merged" },
+      githubPr({
+        number: stalePassingPr.number,
+        org: stalePassingPr.org,
+        repo: stalePassingPr.repo,
+        state: "merged",
+        url: stalePassingPr.url,
+      }),
       mergedPr,
     ];
     getThreadOverlayState.mockResolvedValueOnce({
@@ -901,10 +942,13 @@ describe("app server ipc", () => {
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
     });
-    const passingPr: PrSummary = {
-      ...stalePr,
+    const passingPr = githubPr({
+      number: stalePr.number,
+      org: stalePr.org,
+      repo: stalePr.repo,
       state: "passing",
-    };
+      url: stalePr.url,
+    });
     const baseRequest = {
       backend: "codex",
       branch: "hot-cpu-capture-presets",
@@ -992,10 +1036,13 @@ describe("app server ipc", () => {
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
     });
-    const cachedPr: PrSummary = {
-      ...stalePr,
+    const cachedPr = githubPr({
+      number: stalePr.number,
+      org: stalePr.org,
+      repo: stalePr.repo,
       state: "passing",
-    };
+      url: stalePr.url,
+    });
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1826,10 +1873,13 @@ describe("app server ipc", () => {
       state: "pending",
       url: "https://github.com/OpenAI/codex/pull/727",
     });
-    const cachedPr: PrSummary = {
-      ...stalePr,
+    const cachedPr = githubPr({
+      number: stalePr.number,
+      org: stalePr.org,
+      repo: stalePr.repo,
       state: "passing",
-    };
+      url: stalePr.url,
+    });
     readPrStatusCache.mockResolvedValueOnce({
       "github.com/openai/codex#727": {
         provider: "github.com",

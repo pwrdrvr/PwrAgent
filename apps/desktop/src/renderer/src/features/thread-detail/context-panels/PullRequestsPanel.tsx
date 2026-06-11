@@ -32,7 +32,7 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
                   <span className="pr-panel-row__repo">{repositoryLabel(pr)}</span>
                 </span>
               </div>
-              <span className="pr-panel-row__state">{stateLabel(pr.state)}</span>
+              <span className="pr-panel-row__state">{statusLabel(pr)}</span>
             </li>
           ))}
         </ul>
@@ -53,20 +53,45 @@ function repositoryLabel(pr: PrSummary): string {
   return `${pr.provider}/${pr.org}/${pr.repo}`;
 }
 
-function stateLabel(state: PrSummary["state"]): string {
+function statusLabel(pr: PrSummary): string {
+  const parts: string[] = [];
+  if (pr.lifecycleState === "merged") {
+    parts.push("Merged");
+  } else if (pr.lifecycleState === "closed") {
+    parts.push("Closed");
+  } else if (pr.reviewState === "draft") {
+    parts.push("Draft");
+  } else {
+    parts.push("Ready for review");
+  }
+  if (pr.mergeState === "conflicting") {
+    parts.push("Merge conflict");
+  }
+  parts.push(checkStateLabel(resolveCheckState(pr)));
+  return parts.join(" · ");
+}
+
+function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
+  const state = pr.checkState ?? pr.state;
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function checkStateLabel(state: NonNullable<PrSummary["checkState"]>): string {
   switch (state) {
-    case "merged":
-      return "Merged";
     case "passing":
       return "Checks passing";
     case "failing":
       return "Checks failing";
-    case "draft":
-      return "Draft";
     case "pending":
       return "Checks pending";
-    case "closed":
-      return "Closed";
     case "unknown":
       return "Status unknown";
   }

@@ -21,32 +21,66 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-const prMerged: PrSummary = {
+const prMerged: PrSummary = pr({
   provider: "github.com",
   number: 178,
   org: "pwrdrvr",
   repo: "PwrAgent",
   state: "merged",
   url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
-};
+});
 
-const prPassing: PrSummary = {
+const prPassing: PrSummary = pr({
   provider: "github.com",
   number: 179,
   org: "pwrdrvr",
   repo: "PwrAgent",
   state: "passing",
   url: "https://github.com/pwrdrvr/PwrAgent/pull/179",
-};
+});
 
-const enterprisePrPassing: PrSummary = {
+const enterprisePrPassing: PrSummary = pr({
   provider: "ghe.pwrdrvr.test",
   number: 179,
   org: "pwrdrvr",
   repo: "PwrAgent",
   state: "passing",
   url: "https://ghe.pwrdrvr.test/pwrdrvr/PwrAgent/pull/179",
-};
+});
+
+function pr(
+  value: Omit<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">
+    & Partial<Pick<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">>,
+): PrSummary {
+  const checkState = value.checkState ?? normalizeCheckState(value.state);
+  return {
+    ...value,
+    state: checkState,
+    checkState,
+    lifecycleState: value.lifecycleState ?? legacyLifecycleState(value.state),
+    reviewState: value.reviewState ?? (value.state === "draft" ? "draft" : "ready_for_review"),
+    mergeState: value.mergeState ?? "unknown",
+  };
+}
+
+function normalizeCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function legacyLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary["lifecycleState"]> {
+  if (state === "merged" || state === "closed") {
+    return state;
+  }
+  return "open";
+}
 
 describe("SqliteOverlayStore — thread PRs", () => {
   it("starts with no prs on a thread that has never been touched", async () => {
@@ -79,12 +113,12 @@ describe("SqliteOverlayStore — thread PRs", () => {
     await store.setThreadPullRequests({
       backend: "codex",
       threadId: "thread-1",
-      prs: [{ ...prPassing, state: "pending" }],
+      prs: [pr({ ...prPassing, state: "pending", checkState: "pending" })],
     });
     await store.setThreadPullRequests({
       backend: "codex",
       threadId: "thread-1",
-      prs: [{ ...prPassing, state: "failing" }],
+      prs: [pr({ ...prPassing, state: "failing", checkState: "failing" })],
     });
 
     const overlay = await store.getThreadOverlayState({

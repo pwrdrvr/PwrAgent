@@ -4,6 +4,9 @@ import type {
   DesktopGhDiscoverySnapshot,
   GhStatus,
   PrChipState,
+  PrLifecycleState,
+  PrMergeState,
+  PrReviewState,
   PrSummary,
 } from "@pwragent/shared";
 import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
@@ -22,6 +25,8 @@ const GH_FIELDS = [
   "url",
   "state",
   "isDraft",
+  "mergeable",
+  "mergeStateStatus",
   "mergedAt",
   "headRefName",
   "headRepository",
@@ -56,6 +61,8 @@ type GhPrPayload = {
   url: string;
   state: string;
   isDraft: boolean;
+  mergeable?: string | null;
+  mergeStateStatus?: string | null;
   mergedAt: string | null;
   headRefName: string;
   headRepository: { name?: string } | null;
@@ -173,9 +180,10 @@ export class GithubPrFetcher {
    * Fetch all open PRs for the given branches in a single `gh pr list` call.
    * Caller batches by cwd (each cwd is a separate repo from gh's POV).
    *
-   * Why open-only: merged/closed PRs are terminal states. Once we've stored
-   * a `merged` chip on the overlay, we never re-fetch — so this call only
-   * needs to surface non-terminal PRs we might want to refresh.
+   * Why open-only: merged/closed PRs are terminal lifecycle states. Once we've
+   * stored a terminal lifecycle on the overlay, we never re-fetch through this
+   * open-only path — it only needs to surface non-terminal PRs we might want
+   * to refresh.
    *
    * Filter by headRefName client-side: gh's `--head` flag accepts only one
    * branch, but `--state open --json …` over the whole repo returns at most
@@ -376,13 +384,18 @@ export class GithubPrFetcher {
  * without invoking the subprocess.
  */
 export function parseGhPrPayload(row: GhPrPayload): PrSummary {
+  const checkState = deriveChipState(row);
   return {
     provider: parsePullRequestProvider(row.url),
     number: row.number,
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),
-    state: deriveChipState(row),
+    state: checkState,
+    checkState,
+    lifecycleState: deriveLifecycleState(row),
+    reviewState: deriveReviewState(row),
+    mergeState: deriveMergeState(row),
     url: row.url,
   };
 }
@@ -396,11 +409,6 @@ function parsePullRequestProvider(url: string): string {
 }
 
 export function deriveChipState(row: GhPrPayload): PrChipState {
-  if (row.state === "MERGED") return "merged";
-  if (row.state === "CLOSED") return "closed";
-  // OPEN past this point.
-  if (row.isDraft) return "draft";
-
   const checks = row.statusCheckRollup ?? [];
   if (checks.length === 0) return "unknown";
 
@@ -439,6 +447,31 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
   }
   if (pendingCount > 0) return "pending";
   return "passing";
+}
+
+export function deriveLifecycleState(row: Pick<GhPrPayload, "state">): PrLifecycleState {
+  if (row.state === "MERGED") return "merged";
+  if (row.state === "CLOSED") return "closed";
+  return "open";
+}
+
+export function deriveReviewState(row: Pick<GhPrPayload, "isDraft">): PrReviewState {
+  return row.isDraft ? "draft" : "ready_for_review";
+}
+
+export function deriveMergeState(
+  row: Pick<GhPrPayload, "mergeable" | "mergeStateStatus" | "state">,
+): PrMergeState {
+  if (deriveLifecycleState(row) !== "open") {
+    return "unknown";
+  }
+  if (row.mergeStateStatus === "DIRTY" || row.mergeable === "CONFLICTING") {
+    return "conflicting";
+  }
+  if (row.mergeStateStatus === "CLEAN" || row.mergeable === "MERGEABLE") {
+    return "mergeable";
+  }
+  return "unknown";
 }
 
 /**

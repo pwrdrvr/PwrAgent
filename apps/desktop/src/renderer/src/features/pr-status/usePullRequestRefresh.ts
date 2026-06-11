@@ -164,6 +164,10 @@ function prSummariesEqual(
       candidate.repo === pr.repo &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
+      candidate.checkState === pr.checkState &&
+      candidate.lifecycleState === pr.lifecycleState &&
+      candidate.reviewState === pr.reviewState &&
+      candidate.mergeState === pr.mergeState &&
       candidate.url === pr.url
     );
   });

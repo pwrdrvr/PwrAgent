@@ -104,7 +104,8 @@ export function ThreadRow(props: ThreadRowProps) {
   const showRepoPrefix = needsRepoPrefix(prs);
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
   const hasNonTerminalPr = prs.some(
-    (pr) => pr.state !== "merged" && pr.state !== "closed",
+    (pr) => (pr.lifecycleState ?? pr.state) !== "merged"
+      && (pr.lifecycleState ?? pr.state) !== "closed",
   );
   // Hover prefetch: 750ms intent timer — long enough that simply scrolling
   // past doesn't fire, short enough that a deliberate hover beats the

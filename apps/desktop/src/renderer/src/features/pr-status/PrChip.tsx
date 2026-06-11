@@ -19,9 +19,11 @@ export function PrChip(props: PrChipProps) {
     : `#${pr.number}`;
   const identity = `${pr.org}/${pr.repo}#${pr.number}`;
   const title = pr.title?.trim();
+  const checkState = resolveCheckState(pr);
+  const status = prStatusLabel(pr);
   const tooltip = title
-    ? `${title}\n${identity} — ${stateTooltipLabel(pr.state)}`
-    : `${identity} — ${stateTooltipLabel(pr.state)}`;
+    ? `${title}\n${identity} — ${status}`
+    : `${identity} — ${status}`;
 
   // role="button" span (not a real <button>) so the chip is legal HTML
   // inside the row's main <button>. stopPropagation prevents the row's
@@ -38,9 +40,9 @@ export function PrChip(props: PrChipProps) {
     <span
       role="button"
       tabIndex={0}
-      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${pr.state}) in browser`}
+      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
       title={tooltip}
-      className={`pr-chip pr-chip--${pr.state}`}
+      className={`pr-chip pr-chip--${checkState}`}
       onClick={handleActivate}
       onContextMenu={(event) => {
         if (!props.onOpenContextMenu) {
@@ -67,20 +69,50 @@ export function PrChip(props: PrChipProps) {
   );
 }
 
-function stateTooltipLabel(state: PrSummary["state"]): string {
+function prStatusLabel(pr: PrSummary): string {
+  const parts: string[] = [];
+  if (pr.lifecycleState === "merged") {
+    parts.push("merged");
+  } else if (pr.lifecycleState === "closed") {
+    parts.push("closed without merge");
+  } else if (pr.reviewState === "draft") {
+    parts.push("draft");
+  } else {
+    parts.push("ready for review");
+  }
+
+  if (pr.mergeState === "conflicting") {
+    parts.push("merge conflict");
+  }
+
+  parts.push(checkStateTooltipLabel(resolveCheckState(pr)));
+  return parts.join(" · ");
+}
+
+function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
+  return pr.checkState ?? normalizeLegacyCheckState(pr.state);
+}
+
+function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+  if (
+    state === "passing"
+    || state === "failing"
+    || state === "pending"
+    || state === "unknown"
+  ) {
+    return state;
+  }
+  return "unknown";
+}
+
+function checkStateTooltipLabel(state: NonNullable<PrSummary["checkState"]>): string {
   switch (state) {
-    case "merged":
-      return "merged";
     case "passing":
-      return "all checks passing";
+      return "checks passing";
     case "failing":
       return "checks failing";
-    case "draft":
-      return "draft";
     case "pending":
       return "checks pending";
-    case "closed":
-      return "closed without merge";
     case "unknown":
       return "status unknown";
   }

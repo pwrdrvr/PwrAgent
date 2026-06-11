@@ -2214,7 +2214,7 @@ describe("Sidebar", () => {
     );
 
     const prChip = screen.getByRole("button", {
-      name: "Open Giphy/GifGrabber#202 (passing) in browser",
+      name: "Open Giphy/GifGrabber#202 (ready for review · checks passing) in browser",
     });
     fireEvent.contextMenu(prChip, { clientX: 48, clientY: 64 });
     await clickElement(

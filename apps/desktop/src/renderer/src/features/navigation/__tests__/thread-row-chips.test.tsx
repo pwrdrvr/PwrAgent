@@ -352,7 +352,7 @@ describe("ThreadRow chip flow", () => {
     expect(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#123/ }))
       .toHaveAttribute(
         "title",
-        "Retain thread pull request history\npwrdrvr/PwrAgent#123 — all checks passing",
+        "Retain thread pull request history\npwrdrvr/PwrAgent#123 — ready for review · checks passing",
       );
   });
 });

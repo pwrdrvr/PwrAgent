@@ -187,24 +187,18 @@ export type MessagingThreadBindingSummary = {
   activeAt?: number;
 };
 
-/**
- * Color states map directly to GitHub PR + check status:
- *   - merged   → state === MERGED              (purple chip)
- *   - failing  → any check FAILURE/CANCELLED/TIMED_OUT/STARTUP_FAILURE (red)
- *   - passing  → all checks SUCCESS, !isDraft  (green)
- *   - draft    → isDraft on an OPEN PR         (gray)
- *   - pending  → checks still running          (yellow)
- *   - closed   → CLOSED without merge          (gray)
- *   - unknown  → no checks reported yet, or shape we don't recognize (gray)
- */
+/** Check states drive the PR chip dot color only. */
 export type PrChipState =
-  | "merged"
   | "failing"
   | "passing"
-  | "draft"
   | "pending"
-  | "closed"
   | "unknown";
+
+export type PrLegacyChipState = "merged" | "draft" | "closed";
+
+export type PrLifecycleState = "open" | "merged" | "closed";
+export type PrReviewState = "draft" | "ready_for_review";
+export type PrMergeState = "mergeable" | "conflicting" | "unknown";
 
 export const DEFAULT_PULL_REQUEST_PROVIDER = "github.com";
 export type PullRequestProvider = string;
@@ -223,7 +217,15 @@ export type PrSummary = {
   repo: string;
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
-  state: PrChipState;
+  /**
+   * Deprecated compatibility alias for `checkState`. New writers keep this
+   * check-only so review/lifecycle/mergeability never collide with checks.
+   */
+  state: PrChipState | PrLegacyChipState;
+  checkState?: PrChipState;
+  lifecycleState?: PrLifecycleState;
+  reviewState?: PrReviewState;
+  mergeState?: PrMergeState;
   url: string;
 };
 
@@ -748,8 +750,8 @@ export type RefreshThreadPullRequestsResponse = {
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**
-   * True when main short-circuited the gh fetch because at least one
-   * PR for this thread is already in a terminal state (`merged` or
+   * True when main short-circuited the gh fetch because the lookup's
+   * known PRs are already in terminal lifecycle states (`merged` or
    * `closed`). Returned PRs are the persisted overlay snapshot.
    */
   shortCircuited?: boolean;
