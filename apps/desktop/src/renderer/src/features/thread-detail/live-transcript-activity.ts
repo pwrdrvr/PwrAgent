@@ -655,12 +655,19 @@ function estimateUsageCost(params: {
 function resolvePricingServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string;
-}): "standard" | "priority" {
-  return params.fastMode === true ||
-    params.serviceTier === "fast" ||
-    params.serviceTier === "priority"
-    ? "priority"
-    : "standard";
+}): "standard" | "priority" | undefined {
+  if (params.fastMode === true) {
+    return "priority";
+  }
+
+  const serviceTier = params.serviceTier?.trim().toLowerCase();
+  if (!serviceTier || serviceTier === "default" || serviceTier === "standard") {
+    return "standard";
+  }
+  if (serviceTier === "fast" || serviceTier === "priority") {
+    return "priority";
+  }
+  return undefined;
 }
 
 function resolvePricingContext(inputTokens: number): "short" | "long" {
@@ -755,6 +762,9 @@ function formatUnpricedModelName(params: {
   return [
     params.model,
     serviceTier === "priority" ? "Fast/Priority" : undefined,
+    serviceTier === undefined && params.serviceTier
+      ? `service tier ${params.serviceTier}`
+      : undefined,
     context === "long" ? "long context" : undefined,
   ]
     .filter(Boolean)

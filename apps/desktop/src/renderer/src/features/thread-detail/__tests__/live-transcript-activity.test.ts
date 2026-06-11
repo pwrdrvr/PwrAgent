@@ -246,6 +246,26 @@ describe("buildTokenUsageActivityEntry", () => {
     );
   });
 
+  it("does not estimate unsupported service tiers as Standard", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "usage-flex-tier",
+      model: "gpt-5.5",
+      serviceTier: "flex",
+      tokenUsage: {
+        total: {
+          inputTokens: 1_000,
+          cachedInputTokens: 200,
+          outputTokens: 100,
+        },
+      },
+    });
+
+    expect(entry?.summary).toBe("Usage: 800 uncached in · 200 cached · 100 out");
+    expect(entry?.details.at(-1)?.label).toBe(
+      "Cost unavailable: no local pricing entry for gpt-5.5 service tier flex",
+    );
+  });
+
   it("reports unavailable cost without dropping token accounting", () => {
     const entry = buildTokenUsageActivityEntry({
       id: "usage-unknown",
