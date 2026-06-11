@@ -11992,7 +11992,9 @@ command = "pnpm dev"
     expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.4-mini");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");
-    expect(String(payload.parentAgentGuidance)).toContain("session/process id");
+    expect(String(payload.parentAgentGuidance)).toContain("Do not delegate an already-running parent tool session");
+    expect(String(payload.parentAgentGuidance)).toContain("exec_command/write_stdin stdin, stdout, stderr, or exit status");
+    expect(String(payload.parentAgentGuidance)).toContain("captures stdout/stderr");
     expect(String(payload.parentAgentGuidance)).toContain("about 30 seconds");
     expect(String(payload.parentAgentGuidance)).toContain("repeatable check");
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
@@ -12029,7 +12031,10 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
     expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
     expect(String(payload.prompt)).toContain("Poll/heartbeat interval: 30 seconds");
-    expect(String(payload.prompt)).toContain("local command");
+    expect(String(payload.prompt)).toContain("local build/test/script");
+    expect(String(payload.prompt)).toContain("Parent-local tool session ids are not portable");
+    expect(String(payload.prompt)).toContain("capture stdout/stderr and exit status");
+    expect(String(payload.prompt)).toContain("durable OS-level process id");
     expect(String(payload.prompt)).toContain("remote or external operation");
     expect(String(payload.prompt)).toContain("<delegated_monitoring_procedure>");
     expect(String(payload.prompt)).toContain("same polling the parent was about to do");
