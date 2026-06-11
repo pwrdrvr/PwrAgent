@@ -259,23 +259,28 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Ended")).toBeInTheDocument();
 
     // Details (renamed from the disabled History button) opens a modal with
-    // the request, final response, model, and token/pricing breakdown.
+    // the request, latest message, model, and token/pricing breakdown.
     const detailsButtons = screen.getAllByRole("button", { name: "Details" });
     expect(detailsButtons[0]).toBeEnabled();
+    detailsButtons[0]!.focus();
     fireEvent.click(detailsButtons[0]!);
     const dialog = screen.getByRole("dialog");
     const modal = within(dialog);
     expect(
       modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
     ).toBeInTheDocument();
-    expect(modal.getByText("Final response")).toBeInTheDocument();
+    expect(modal.getByText("Latest message")).toBeInTheDocument();
     expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
     expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
     expect(modal.getByText("gpt-5.4-mini")).toBeInTheDocument();
     expect(modal.getByText("1,060")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    // Focus moves into the dialog on open and returns to the opener on close.
+    const closeButton = modal.getByRole("button", { name: "Close" });
+    expect(closeButton).toHaveFocus();
+    fireEvent.click(closeButton);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(detailsButtons[0]).toHaveFocus();
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {

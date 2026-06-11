@@ -39,14 +39,20 @@ export function subAgentStatusLabel(status: ThreadSubAgentStatus): string {
 }
 
 /** Compact, locale-grouped token count (e.g. `303,488`). */
-export function formatTokenCount(value: number | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+export function formatTokenCount(value: number): string {
   return value.toLocaleString();
 }
 
-/** Two-decimal USD, e.g. `$0.047` → `$0.05` is too lossy, so keep 3 dp. */
+/**
+ * USD for a sub-agent run cost. Sub-cent runs need three decimals to be
+ * meaningful (e.g. `$0.047`), but we trim the thousandths digit when it
+ * rounds to zero so `$0.05` doesn't read as `$0.050` (and `$0` as `$0.00`).
+ * At ten cents and up, plain two-decimal cents.
+ */
 export function formatUsd(value: number): string {
-  return `$${value.toFixed(3)}`;
+  if (value >= 0.1) {
+    return `$${value.toFixed(2)}`;
+  }
+  const precise = value.toFixed(3);
+  return `$${precise.endsWith("0") ? value.toFixed(2) : precise}`;
 }

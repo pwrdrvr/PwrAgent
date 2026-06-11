@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 import { formatTimestamp } from "./context-rail-shared";
@@ -23,16 +23,54 @@ type SubAgentDetailsModalProps = {
  */
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { subAgent } = props;
+  const contentRef = useRef<HTMLDivElement>(null);
 
+  // Dialog focus management: move focus into the dialog on open, keep Tab
+  // cycling within it (so focus can't fall behind the scrim), restore focus
+  // to the opener on close, and close on Escape.
   useEffect(() => {
+    const restoreFocus = document.activeElement as HTMLElement | null;
+    const focusables = (): HTMLElement[] =>
+      Array.from(
+        contentRef.current?.querySelectorAll<HTMLElement>(
+          'button, a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => !el.hasAttribute("disabled"));
+
+    focusables()[0]?.focus();
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
         props.onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const items = focusables();
+      if (items.length === 0) {
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (!contentRef.current?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
+
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      restoreFocus?.focus?.();
     };
   }, [props.onClose]);
 
@@ -53,6 +91,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       onClick={props.onClose}
     >
       <div
+        ref={contentRef}
         className="subagent-modal__content"
         onClick={(event) => event.stopPropagation()}
       >
@@ -103,9 +142,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         </dl>
 
         <section className="subagent-modal__section">
-          <h3>Final response</h3>
+          <h3>Latest message</h3>
           <p className="subagent-modal__body">
-            {subAgent.lastMessage ?? "No response yet."}
+            {subAgent.lastMessage ?? "No messages yet."}
           </p>
         </section>
 
