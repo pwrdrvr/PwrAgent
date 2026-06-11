@@ -35,7 +35,10 @@ import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import type { PendingQuestionnaireState } from "./questionnaire";
 import type { PendingMcpInteractionState } from "./mcp-elicitation";
-import { buildTranscriptRenderItems } from "./transcript-render-items";
+import {
+  ACTIVE_WORK_GROUP_THRESHOLD_MS,
+  buildTranscriptRenderItems,
+} from "./transcript-render-items";
 
 type TranscriptViewport = {
   distanceFromBottom: number;
@@ -479,13 +482,34 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const interval = window.setInterval(() => {
+    const activeTurnStartedAt =
+      typeof props.activeTurnStartedAt === "number"
+        ? props.activeTurnStartedAt
+        : transcriptEntries.find((entry) => entry.turn?.id === props.activeTurnId)
+            ?.turn?.startedAt;
+    if (typeof activeTurnStartedAt !== "number") {
+      return undefined;
+    }
+
+    const firstEligibleAt =
+      activeTurnStartedAt + ACTIVE_WORK_GROUP_THRESHOLD_MS + 1;
+    const delayMs = Math.max(firstEligibleAt - Date.now(), 0);
+    if (delayMs === 0) {
+      setRenderNow((current) =>
+        current > activeTurnStartedAt + ACTIVE_WORK_GROUP_THRESHOLD_MS
+          ? current
+          : Date.now()
+      );
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
       setRenderNow(Date.now());
-    }, 1000);
+    }, delayMs);
     return () => {
-      window.clearInterval(interval);
+      window.clearTimeout(timeout);
     };
-  }, [props.activeTurnId]);
+  }, [props.activeTurnId, props.activeTurnStartedAt, transcriptEntries]);
 
   const toggleCommentaryGroup = useCallback((groupId: string) => {
     setExpandedCommentaryGroupIds((current) => {
@@ -848,6 +872,7 @@ export function TranscriptList(props: TranscriptListProps) {
             const body =
               item.type === "workPhaseGroup" ? (
                 <TranscriptWorkPhaseGroup
+                  activeStartedAt={item.activeStartedAt}
                   applications={props.applications}
                   collapsible={item.collapsible}
                   directoryPaths={props.directoryPaths}
