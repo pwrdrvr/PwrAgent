@@ -12078,6 +12078,7 @@ command = "pnpm dev"
     expect(String(payload.prompt)).toContain("local build/test/script");
     expect(String(payload.prompt)).toContain("Parent-local tool session ids are not portable");
     expect(String(payload.prompt)).toContain("capture stdout/stderr and exit status");
+    expect(String(payload.prompt)).toContain("capture stdout and stderr to durable files");
     expect(String(payload.prompt)).toContain("durable OS-level process id");
     expect(String(payload.prompt)).toContain("remote or external operation");
     expect(String(payload.prompt)).toContain("<delegated_monitoring_procedure>");
@@ -12169,6 +12170,70 @@ command = "pnpm dev"
       count: 0,
       threadIds: [],
     });
+
+    await registry.close();
+  });
+
+  it("rejects task monitor delegations that only reference a parent Codex exec session", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Monitor exec session 89902 until ./scripts/verify-giphy-button-swift.sh exits.",
+          monitorContext:
+            "Poll write_stdin with session_id: 89902 and collect stdout/stderr.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                "Task monitor delegations cannot use a parent-scoped write_stdin session_id as the local-command polling handle. Keep polling that already-started Codex exec session in the parent turn, or create a fresh monitor delegation with the command text, cwd, terminal criteria, and desired stdout/stderr capture-file paths so the monitor child starts the command in its own session.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(codexClient.startTurnCallCount).toBe(0);
 
     await registry.close();
   });
