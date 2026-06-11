@@ -5163,6 +5163,65 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("preserves Agent dynamic tools when continuing existing Agent Codex threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["turn/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:existing-agent-thread": {
+            backend: "codex",
+            threadId: "existing-agent-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            agent: {
+              name: "Inbox Agent",
+              instructions: "Track inbox automations.",
+            },
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "existing-agent-thread",
+      input: [{ type: "text", text: "continue" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_messaging",
+          name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
   it("reads Grok models once from the default client and reuses them", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
@@ -12234,6 +12293,57 @@ command = "pnpm dev"
     });
     expect(codexClient.lastStartThreadParams).toBeUndefined();
     expect(codexClient.startTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("allows external numeric session ids in task monitor delegations", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Poll the external build service until session_id: 89902 finishes.",
+          monitorContext:
+            "Call ./scripts/check-build-status --session_id=89902 and stop when the service reports success or failure.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      ephemeral: true,
+      model: "gpt-5.4-mini",
+    });
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
   });

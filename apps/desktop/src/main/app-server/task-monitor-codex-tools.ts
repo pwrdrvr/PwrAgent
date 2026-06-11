@@ -331,10 +331,10 @@ export function findUnsupportedCodexExecSessionReference(
   if (/\bexec(?:_command)?\s+session\s+(?:id\s+)?\d+\b/i.test(text)) {
     return "Codex exec session id";
   }
-  if (/\bsession_id\b\s*[:=]\s*\d+\b/i.test(text)) {
-    return "Codex tool session_id";
+  if (/\bexec_command\b.{0,80}\bsession_id\b\s*[:=]\s*\d+\b/is.test(text)) {
+    return "Codex exec_command session_id";
   }
-  if (/"session_id"\s*:\s*\d+\b/i.test(text)) {
+  if (/\b(?:codex|agent)\s+(?:tool\s+)?session_id\b\s*[:=]\s*\d+\b/i.test(text)) {
     return "Codex tool session_id";
   }
   return undefined;

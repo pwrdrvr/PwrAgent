@@ -5832,6 +5832,12 @@ export class DesktopBackendRegistry {
           ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+              const agentToolCatalogs = resolveAgentToolCatalogs({
+                agent: overlay?.agent,
+                automationInspectionHandler: this.automationInspectionHandler,
+                messagingHandler: this.messagingHandler,
+                threadInspectionHandler: this.threadInspectionHandler,
+              });
               const started = await client.startTurn({
                 threadId: params.threadId,
                 input,
@@ -5843,7 +5849,7 @@ export class DesktopBackendRegistry {
                 ...(overlay?.codexEnvironmentRuntime
                   ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                   : {}),
-                dynamicTools: buildCodexParentDynamicToolSpecs(),
+                dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
               });
               activeTurnMode = effectiveMode;
               return started;
