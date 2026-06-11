@@ -421,7 +421,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
   return {
     id: row.peer_id,
     label: row.label,
-    role: row.role as FederationInstanceRole,
+    role: normalizeFederationInstanceRole(row.role) ?? "client",
     status: row.status as FederationConnectionState,
     capabilities: payload.capabilities ?? [],
     protocolVersion: payload.protocolVersion,
@@ -448,10 +448,21 @@ function rowToEnrollment(row: FederationEnrollmentRow): FederationEnrollmentEntr
     usedAt: row.used_at ?? undefined,
     peerId: row.peer_id ?? undefined,
     label: payload.label,
-    role: payload.role,
+    role: normalizeFederationInstanceRole(payload.role),
     endpoint: payload.endpoint,
     gatewayInstanceId: payload.gatewayInstanceId,
   };
+}
+
+function normalizeFederationInstanceRole(
+  value: FederationInstanceRole | string | undefined,
+): FederationInstanceRole | undefined {
+  if (value === "child") {
+    return "client";
+  }
+  return value === "gateway" || value === "client" || value === "dual"
+    ? value
+    : undefined;
 }
 
 function rowToAudit(row: FederationSessionAuditRow): FederationSessionAuditEntry {

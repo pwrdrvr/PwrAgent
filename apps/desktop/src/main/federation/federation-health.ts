@@ -50,14 +50,14 @@ function roleForMode(mode: DesktopFederationMode): FederationInstanceRole {
       return "gateway";
     case "dual":
       return "dual";
-    case "child":
+    case "client":
     case "disabled":
-      return "child";
+      return "client";
   }
 }
 
 function statusForMode(mode: DesktopFederationMode): FederationHealthStatus["status"] {
-  return mode === "child" ? "connecting" : "listening";
+  return mode === "client" ? "connecting" : "listening";
 }
 
 function listenUrlForSettings(settings: DesktopSettingsSnapshot): string {

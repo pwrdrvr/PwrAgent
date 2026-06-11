@@ -29,21 +29,21 @@ describe("federation backend bridge", () => {
       now: () => 2_000,
     });
     router.registerConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       capabilities: ["thread_navigation"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
     registerFederationBackendHandlers({ router, backend });
 
     await router.routeEnvelope({
-      sourcePeerId: "child_one",
+      sourcePeerId: "client_one",
       envelope: {
         id: "request-1",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.listThreads,
         params: { backend: "codex" },
         protocolVersion: 1,
-        sourceInstanceId: "child_one",
+        sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 1_000,
       },
@@ -66,7 +66,7 @@ describe("federation backend bridge", () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
       localInstanceId: "gateway_one",
-      remoteInstanceId: "child_one",
+      remoteInstanceId: "client_one",
       sendEnvelope: (envelope) => sent.push(envelope),
       now: () => 1_000,
     });
@@ -79,7 +79,7 @@ describe("federation backend bridge", () => {
         method: FEDERATION_BACKEND_METHODS.listThreads,
         params: { backend: "codex" },
         sourceInstanceId: "gateway_one",
-        targetInstanceId: "child_one",
+        targetInstanceId: "client_one",
       },
     ]);
 
@@ -88,7 +88,7 @@ describe("federation backend bridge", () => {
       kind: "response",
       requestId: sent[0]!.id,
       protocolVersion: 1,
-      sourceInstanceId: "child_one",
+      sourceInstanceId: "client_one",
       targetInstanceId: "gateway_one",
       createdAt: 1_100,
       result: {
@@ -111,7 +111,7 @@ describe("federation backend bridge", () => {
       methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
     });
     router.registerConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       capabilities: ["thread_navigation"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
@@ -127,14 +127,14 @@ describe("federation backend bridge", () => {
 
     await expect(
       router.routeEnvelope({
-        sourcePeerId: "child_one",
+        sourcePeerId: "client_one",
         envelope: {
           id: "request-1",
           kind: "request",
           method: FEDERATION_BACKEND_METHODS.readThread,
           params: { backend: "codex", threadId: "thread-1" },
           protocolVersion: 1,
-          sourceInstanceId: "child_one",
+          sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
         },
@@ -159,7 +159,7 @@ describe("federation backend bridge", () => {
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
-      localInstanceId: "child_one",
+      localInstanceId: "client_one",
       methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
     });
     router.registerConnection({
@@ -182,7 +182,7 @@ describe("federation backend bridge", () => {
         },
         protocolVersion: 1,
         sourceInstanceId: "gateway_one",
-        targetInstanceId: "child_one",
+        targetInstanceId: "client_one",
         createdAt: 1_000,
       },
     });

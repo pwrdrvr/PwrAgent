@@ -27,7 +27,7 @@ describe("FederationStore", () => {
       peer: {
         id: "laptop_one",
         label: "Laptop",
-        role: "child",
+        role: "client",
         status: "connected",
         capabilities: ["remote_window", "federated_search"],
         protocolVersion: 1,
@@ -40,7 +40,7 @@ describe("FederationStore", () => {
     expect(store.getPeer("laptop_one")).toMatchObject({
       id: "laptop_one",
       label: "Laptop",
-      role: "child",
+      role: "client",
       status: "connected",
       capabilities: ["remote_window", "federated_search"],
       protocolVersion: 1,
@@ -70,7 +70,7 @@ describe("FederationStore", () => {
       generatedAt: 1_000,
       expiresAt: 2_000,
       label: "Travel laptop",
-      role: "child",
+      role: "client",
       endpoint: "wss://pwragent.example.com/federation",
     });
 
@@ -83,7 +83,7 @@ describe("FederationStore", () => {
       id: enrollment.id,
       status: "pending",
       label: "Travel laptop",
-      role: "child",
+      role: "client",
     });
 
     const row = stateDb.raw

@@ -44,7 +44,7 @@ describe("federation enrollment", () => {
     const message = buildFederationProofMessage({
       purpose: "enroll",
       gatewayInstanceId: "gateway_one",
-      peerInstanceId: "child_one",
+      peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
       protocolVersion: 1,
       nonce: "nonce-1",
@@ -57,9 +57,9 @@ describe("federation enrollment", () => {
       inviteToken: invite.token,
       now: 1_500,
       peer: {
-        instanceId: "child_one",
-        label: "Child",
-        role: "child",
+        instanceId: "client_one",
+        label: "Client",
+        role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities,
         protocolVersion: 1,
@@ -74,18 +74,18 @@ describe("federation enrollment", () => {
     expect(decision).toMatchObject({
       accepted: true,
       peer: {
-        id: "child_one",
-        label: "Child",
+        id: "client_one",
+        label: "Client",
         status: "connected",
         capabilities,
       },
     });
-    expect(store.getPeer("child_one")).toMatchObject({
+    expect(store.getPeer("client_one")).toMatchObject({
       pinnedPublicKeyPem: keyPair.publicKeyPem,
     });
     expect(store.getEnrollment(invite.id)).toMatchObject({
       status: "used",
-      peerId: "child_one",
+      peerId: "client_one",
     });
   });
 
@@ -101,7 +101,7 @@ describe("federation enrollment", () => {
     const message = buildFederationProofMessage({
       purpose: "enroll",
       gatewayInstanceId: "gateway_one",
-      peerInstanceId: "child_one",
+      peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
       protocolVersion: 1,
       nonce: "nonce-1",
@@ -115,9 +115,9 @@ describe("federation enrollment", () => {
         inviteToken: invite.token,
         now: 1_500,
         peer: {
-          instanceId: "child_one",
-          label: "Child",
-          role: "child",
+          instanceId: "client_one",
+          label: "Client",
+          role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
           protocolVersion: 1,
@@ -140,9 +140,9 @@ describe("federation enrollment", () => {
         inviteToken: invite.token,
         now: 1_500,
         peer: {
-          instanceId: "child_one",
-          label: "Child",
-          role: "child",
+          instanceId: "client_one",
+          label: "Client",
+          role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
           protocolVersion: 1,
@@ -164,9 +164,9 @@ describe("federation enrollment", () => {
       inviteToken: invite.token,
       now: 1_500,
       peer: {
-        instanceId: "child_one",
-        label: "Child",
-        role: "child",
+        instanceId: "client_one",
+        label: "Client",
+        role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities: ["remote_window"],
         protocolVersion: 1,
@@ -185,9 +185,9 @@ describe("federation enrollment", () => {
         inviteToken: invite.token,
         now: 1_600,
         peer: {
-          instanceId: "child_two",
-          label: "Child 2",
-          role: "child",
+          instanceId: "client_two",
+          label: "Client 2",
+          role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
           protocolVersion: 1,
@@ -209,9 +209,9 @@ describe("federation enrollment", () => {
     store.upsertPeer({
       updatedAt: 1_000,
       peer: {
-        id: "child_one",
-        label: "Child",
-        role: "child",
+        id: "client_one",
+        label: "Client",
+        role: "client",
         status: "disconnected",
         capabilities: ["remote_window"],
         protocolVersion: 1,
@@ -221,7 +221,7 @@ describe("federation enrollment", () => {
     const message = buildFederationProofMessage({
       purpose: "reconnect",
       gatewayInstanceId: "gateway_one",
-      peerInstanceId: "child_one",
+      peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
       protocolVersion: 1,
       nonce: "nonce-3",
@@ -232,7 +232,7 @@ describe("federation enrollment", () => {
       authenticateFederationReconnect({
         store,
         gatewayInstanceId: "gateway_one",
-        peerInstanceId: "child_one",
+        peerInstanceId: "client_one",
         protocolVersion: 1,
         nonce: "nonce-3",
         requestedCapabilities: ["remote_window"],
@@ -244,14 +244,14 @@ describe("federation enrollment", () => {
       }),
     ).toMatchObject({
       accepted: true,
-      peer: { id: "child_one", status: "connected" },
+      peer: { id: "client_one", status: "connected" },
     });
 
     expect(
       authenticateFederationReconnect({
         store,
         gatewayInstanceId: "gateway_one",
-        peerInstanceId: "child_one",
+        peerInstanceId: "client_one",
         protocolVersion: 1,
         nonce: "nonce-4",
         requestedCapabilities: ["gateway_relay"],

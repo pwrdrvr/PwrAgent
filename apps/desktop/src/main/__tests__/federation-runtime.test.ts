@@ -50,9 +50,9 @@ function createConnection(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
-  it("records gateway-advertised peers for child instance health and opening", () => {
+  it("records gateway-advertised peers for client instance health and opening", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
-    runtime.localInstanceId = "child_one";
+    runtime.localInstanceId = "client_one";
 
     const handled = runtime.applyPeerDirectory({
       id: "peers-1",
@@ -68,16 +68,16 @@ describe("DesktopFederationRuntime", () => {
             capabilities: ["remote_window", "gateway_relay"],
           },
           {
-            id: "child_two",
+            id: "client_two",
             label: "Laptop",
-            role: "child",
+            role: "client",
             status: "connected",
             capabilities: ["remote_window", "thread_detail"],
           },
           {
-            id: "child_one",
+            id: "client_one",
             label: "Self",
-            role: "child",
+            role: "client",
             status: "connected",
             capabilities: ["remote_window"],
           },
@@ -85,7 +85,7 @@ describe("DesktopFederationRuntime", () => {
       },
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       sourceInstanceId: "gateway_one",
-      targetInstanceId: "child_one",
+      targetInstanceId: "client_one",
       createdAt: 2_000,
     });
 
@@ -98,17 +98,17 @@ describe("DesktopFederationRuntime", () => {
         status: "connected",
       },
       {
-        id: "child_two",
+        id: "client_two",
         label: "Laptop",
-        role: "child",
+        role: "client",
         status: "connected",
       },
     ]);
   });
 
-  it("falls back to the gateway when a child targets a sibling peer", () => {
+  it("falls back to the gateway when a client targets a sibling peer", () => {
     const sentToGateway: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({ localInstanceId: "child_one" });
+    const router = new FederationRouter({ localInstanceId: "client_one" });
     router.registerConnection(
       createConnection({
         peerId: "gateway_one",
@@ -118,7 +118,7 @@ describe("DesktopFederationRuntime", () => {
     );
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.gatewayInstanceId = "gateway_one";
-    runtime.localInstanceId = "child_one";
+    runtime.localInstanceId = "client_one";
     runtime.router = router;
 
     const request: FederationProtocolEnvelope = {
@@ -127,12 +127,12 @@ describe("DesktopFederationRuntime", () => {
       method: "backend.listThreads",
       params: {},
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      sourceInstanceId: "child_one",
-      targetInstanceId: "child_two",
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
       createdAt: 2_000,
     };
 
-    runtime.sendEnvelopeToTarget("child_two", request);
+    runtime.sendEnvelopeToTarget("client_two", request);
 
     expect(sentToGateway).toEqual([request]);
   });
@@ -142,7 +142,7 @@ describe("DesktopFederationRuntime", () => {
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
-        peerId: "child_one",
+        peerId: "client_one",
         capabilities: ["remote_window"],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
@@ -186,7 +186,7 @@ describe("DesktopFederationRuntime", () => {
         },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: "gateway_one",
-        targetInstanceId: "child_one",
+        targetInstanceId: "client_one",
       },
     ]);
   });
@@ -216,18 +216,18 @@ describe("DesktopFederationRuntime", () => {
           },
         },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: "child_one",
+        sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 2_000,
       },
-      "child_one",
+      "client_one",
     );
 
     expect(handled).toBe(true);
     expect(published).toEqual([
       {
         backend: "codex",
-        federationTarget: { scope: "remote", instanceId: "child_one" },
+        federationTarget: { scope: "remote", instanceId: "client_one" },
         notification: {
           method: "item/agentMessage/delta",
           params: {
@@ -241,18 +241,18 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("relays child backend events to sibling peers through the gateway", () => {
+  it("relays client backend events to sibling peers through the gateway", () => {
     const relayedToSibling: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
-        peerId: "child_one",
+        peerId: "client_one",
         capabilities: ["remote_window"],
       }),
     );
     router.registerConnection(
       createConnection({
-        peerId: "child_two",
+        peerId: "client_two",
         capabilities: ["remote_window"],
         sendEnvelope: (envelope) => relayedToSibling.push(envelope),
       }),
@@ -279,11 +279,11 @@ describe("DesktopFederationRuntime", () => {
           },
         },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: "child_one",
+        sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 2_000,
       },
-      "child_one",
+      "client_one",
     );
 
     expect(relayedToSibling).toMatchObject([
@@ -291,8 +291,8 @@ describe("DesktopFederationRuntime", () => {
         id: "event-1",
         kind: "notification",
         method: FEDERATION_BACKEND_EVENT_METHOD,
-        sourceInstanceId: "child_one",
-        targetInstanceId: "child_two",
+        sourceInstanceId: "client_one",
+        targetInstanceId: "client_two",
         hopCount: 1,
       },
     ]);
@@ -303,13 +303,13 @@ describe("DesktopFederationRuntime", () => {
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
-        peerId: "child_one",
+        peerId: "client_one",
         sendEnvelope: (envelope) => relayed.push(envelope),
       }),
     );
     router.registerConnection(
       createConnection({
-        peerId: "child_two",
+        peerId: "client_two",
         capabilities: ["gateway_relay"],
       }),
     );
@@ -322,20 +322,20 @@ describe("DesktopFederationRuntime", () => {
         kind: "response",
         requestId: "request-1",
         protocolVersion: 1,
-        sourceInstanceId: "child_two",
-        targetInstanceId: "child_one",
+        sourceInstanceId: "client_two",
+        targetInstanceId: "client_one",
         createdAt: 2_000,
         result: { ok: true },
       },
-      "child_two",
+      "client_two",
     );
 
     expect(relayed).toMatchObject([
       {
         kind: "response",
         requestId: "request-1",
-        sourceInstanceId: "child_two",
-        targetInstanceId: "child_one",
+        sourceInstanceId: "client_two",
+        targetInstanceId: "client_one",
         hopCount: 1,
       },
     ]);
@@ -346,12 +346,12 @@ describe("DesktopFederationRuntime", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.router = router;
     const oldConnection = createConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       sendEnvelope: () => undefined,
     });
     const newSendEnvelope = () => undefined;
     const newConnection = createConnection({
-      peerId: "child_one",
+      peerId: "client_one",
       sendEnvelope: newSendEnvelope,
     });
 
@@ -359,10 +359,10 @@ describe("DesktopFederationRuntime", () => {
     runtime.registerGatewayConnection(newConnection);
     runtime.unregisterGatewayConnection(oldConnection);
 
-    expect(router.getConnection("child_one")?.sendEnvelope).toBe(newSendEnvelope);
+    expect(router.getConnection("client_one")?.sendEnvelope).toBe(newSendEnvelope);
 
     runtime.unregisterGatewayConnection(newConnection);
 
-    expect(router.getConnection("child_one")).toBeUndefined();
+    expect(router.getConnection("client_one")).toBeUndefined();
   });
 });
