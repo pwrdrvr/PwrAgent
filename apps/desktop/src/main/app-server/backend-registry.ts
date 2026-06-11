@@ -1500,6 +1500,7 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   backend: Exclude<AppServerBackendKind, AcpBackendId>;
   createdAt: number;
+  latestUsage?: TaskMonitorUsageSnapshot;
   parentThreadId: string;
   reviewThreadId: string;
   task: string;
@@ -9556,6 +9557,27 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    if (notification.params.turnId) {
+      const reviewKey = buildReviewSubAgentKey(
+        "codex",
+        notification.params.threadId,
+        notification.params.turnId,
+      );
+      const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      if (reviewRecord) {
+        const usageSnapshot = buildTaskMonitorUsageSnapshot({
+          tokenUsage: notification.params.tokenUsage,
+        });
+        if (usageSnapshot) {
+          reviewRecord.latestUsage = usageSnapshot;
+          await this.persistReviewSubAgent(reviewRecord, {
+            monitorUsage: usageSnapshot,
+          });
+        }
+        return;
+      }
+    }
+
     const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
       (record) => record.monitorThreadId === notification.params.threadId,
     );
@@ -9689,8 +9711,11 @@ export class DesktopBackendRegistry {
       ...(patch.completedAt ?? existing?.completedAt
         ? { completedAt: patch.completedAt ?? existing?.completedAt }
         : {}),
-      ...(patch.monitorUsage ?? existing?.monitorUsage
-        ? { monitorUsage: patch.monitorUsage ?? existing?.monitorUsage }
+      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+        ? {
+            monitorUsage:
+              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+          }
         : {}),
     };
 

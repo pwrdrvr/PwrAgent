@@ -10832,6 +10832,42 @@ command = "pnpm dev"
       });
 
     await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-review-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0]?.monitorUsage;
+      })
+      .toMatchObject({
+        summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+        tokenUsage: {
+          cachedInputTokens: 200,
+          inputTokens: 1_000,
+          outputTokens: 50,
+          reasoningOutputTokens: 10,
+          totalTokens: 1_060,
+          uncachedInputTokens: 800,
+        },
+      });
+
+    await codexClient.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
