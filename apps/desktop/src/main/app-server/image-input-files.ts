@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppServerTurnInputItem } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
@@ -12,8 +12,16 @@ export type ImageInputFileDependencies = {
   writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
   readdir: (dirPath: string) => Promise<string[]>;
-  stat: (filePath: string) => Promise<{ isFile: () => boolean; mtimeMs: number }>;
+  stat: (filePath: string) => Promise<{
+    isFile: () => boolean;
+    isDirectory?: () => boolean;
+    mtimeMs: number;
+  }>;
   unlink: (filePath: string) => Promise<unknown>;
+  rm: (
+    filePath: string,
+    options: { recursive?: boolean; force?: boolean },
+  ) => Promise<unknown>;
 };
 
 const defaultDependencies: ImageInputFileDependencies = {
@@ -24,6 +32,7 @@ const defaultDependencies: ImageInputFileDependencies = {
   readdir,
   stat,
   unlink,
+  rm,
 };
 
 export async function materializeLocalImageInputs(
@@ -46,10 +55,8 @@ export async function materializeLocalImageInputs(
       const root = deps.resolveRoot();
       materializedRoot = root;
       await deps.mkdir(root, { recursive: true });
-      const filePath = path.join(
-        root,
-        materializedImageFileName(item.name, dataImage),
-      );
+      const filePath = materializedImageFilePath(root, item.name, dataImage);
+      await deps.mkdir(path.dirname(filePath), { recursive: true });
       await deps.writeFile(filePath, dataImage.buffer);
       materializedFilePaths.add(filePath);
       materialized.push({
@@ -115,19 +122,19 @@ function filePathFromFileUrl(url: string): string | undefined {
   }
 }
 
-function materializedImageFileName(
+function materializedImageFilePath(
+  root: string,
   name: string | undefined,
   dataImage: { mimeType: "image/jpeg" | "image/png"; sha256: string },
 ): string {
   const extension = extensionForMimeType(dataImage.mimeType);
-  const fallback = `${dataImage.sha256}.${extension}`;
+  const fallback = path.join(root, `${dataImage.sha256}.${extension}`);
   const basename = sanitizeImageBasename(name, extension);
   if (!basename) {
     return fallback;
   }
 
-  const stem = basename.slice(0, -(extension.length + 1));
-  return `${stem}-${dataImage.sha256.slice(0, 8)}.${extension}`;
+  return path.join(root, dataImage.sha256, basename);
 }
 
 function sanitizeImageBasename(
@@ -176,17 +183,34 @@ async function cleanupOldImageInputs(
   await Promise.all(
     entries.map(async (entry) => {
       const filePath = path.join(root, entry);
-      if (excludedFilePaths.has(filePath)) {
+      if (isExcludedImageInputPath(filePath, excludedFilePaths)) {
+        return;
+      }
+      const info = await deps.stat(filePath).catch(() => undefined);
+      if (!info?.isFile() || info.mtimeMs >= cutoff) {
+        if (info?.isDirectory?.() && info.mtimeMs < cutoff) {
+          await deps
+            .rm(filePath, { recursive: true, force: true })
+            .catch(() => undefined);
+        }
         return;
       }
       if (!isSupportedImagePath(filePath)) {
         return;
       }
-      const info = await deps.stat(filePath).catch(() => undefined);
-      if (!info?.isFile() || info.mtimeMs >= cutoff) {
-        return;
-      }
       await deps.unlink(filePath).catch(() => undefined);
     }),
   );
+}
+
+function isExcludedImageInputPath(
+  filePath: string,
+  excludedFilePaths: ReadonlySet<string>,
+): boolean {
+  for (const excludedPath of excludedFilePaths) {
+    if (excludedPath === filePath || excludedPath.startsWith(`${filePath}${path.sep}`)) {
+      return true;
+    }
+  }
+  return false;
 }

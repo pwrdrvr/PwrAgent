@@ -24,7 +24,13 @@ describe("image input files", () => {
       expect(first[0]).toEqual({ type: "text", text: "Describe it" });
       expect(first[1]).toMatchObject({ type: "localImage", name: "original-paste.png" });
       const imagePath = first[1]?.type === "localImage" ? first[1].path : "";
-      expect(path.basename(imagePath)).toBe("original-paste-039058c6.png");
+      expect(imagePath).toBe(
+        path.join(
+          tempDir,
+          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+          "original-paste.png",
+        ),
+      );
       expect(second[0]).toEqual({
         type: "localImage",
         path: path.join(
