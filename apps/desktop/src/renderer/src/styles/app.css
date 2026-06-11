@@ -56,7 +56,6 @@
   --surface-overlay-subtle: color-mix(in srgb, var(--text-primary) 3%, transparent);
   --surface-overlay-faint: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
   --surface-overlay-soft: color-mix(in srgb, var(--text-primary) 4%, transparent);
-  --surface-overlay: color-mix(in srgb, var(--text-primary) 5%, transparent);
 
   /* Popover backdrops use the panel base at high alpha so they read as
      the same surface as the rest of the panel. */
@@ -82,10 +81,10 @@
   --scrim-strong: color-mix(in srgb, var(--shadow-base) 62%, transparent);
   --scrim-opaque: color-mix(in srgb, var(--shadow-base) 88%, transparent);
 
-  /* Scrollbar tones. */
+  /* Scrollbar tones — thumb + track for the native (`scrollbar-color`)
+     thin scrollbars; no hover tone since the OS handles thumb hover. */
   --scrollbar-track: color-mix(in srgb, var(--text-primary) 5%, transparent);
   --scrollbar-thumb: color-mix(in srgb, var(--text-muted) 46%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 58%, transparent);
 
   /* Text-decoration underline overlay (e.g. dotted underlines on links
      under secondary text). */
@@ -348,8 +347,28 @@
   gap: 2px;
 }
 
+/* Thin, themed scrollbars on every scroll container — sidebar,
+   transcript, settings, dropdowns, … — in BOTH overlay and classic
+   scrollbar modes. Classic mode (chunky, always-visible bars) shows up
+   when a mouse is attached, "Show scroll bars: Always" is set, or
+   transiently while another app re-evaluates the scroller style during a
+   screen capture (e.g. a PwrSnap ⌘⇧C grab); without an explicit thin
+   width those bars render fat.
+
+   This MUST use the universal selector, not `:root`. `scrollbar-color`
+   is an inherited property, but `scrollbar-width` is NOT — a `:root`
+   rule would tint every scroller yet leave its WIDTH at the chunky
+   default (only the root/viewport bar would go thin). Setting both on
+   `*` is the standard workaround so every element's scroll container
+   picks up the thin width. Per-scroller color overrides (e.g.
+   `.composer__autocomplete`) still win on specificity, and a
+   `::-webkit-scrollbar` block must NOT be added (it overrides this and
+   reintroduces the classic-mode fat bar — theme-contract.test.tsx
+   guards the sidebar lanes). */
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 html,
@@ -2239,11 +2258,19 @@ textarea,
   padding-inline: 4px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
-     a stable 10px column on the right for the scrollbar so the thumb
-     never overlays row content. The previous overlay-scrollbar
-     behavior intermittently failed to hide on macOS Chromium and
-     visually collided with titles + the per-row launchpad button. */
+  /* Reserve a stable gutter so the thin auto-hiding scrollbar never
+     shifts row content when it appears.
+
+     Style the scrollbar ONLY via `scrollbar-width` / `scrollbar-color`
+     above — do NOT add a `::-webkit-scrollbar` block here. Defining one
+     makes Chromium render a *custom, non-overlay* scrollbar whenever it
+     falls into classic-scrollbar mode (a mouse is attached, "Show scroll
+     bars: Always" is set, or transiently while another app grabs the
+     screen — e.g. a PwrSnap ⌘⇧C capture re-evaluates the scroller style).
+     In that mode the webkit `width` overrides `scrollbar-width: thin`, so
+     the bar visibly jumps fat and then snaps back. Letting
+     `scrollbar-width: thin` govern both overlay and classic modes keeps
+     it thin and stable. (theme-contract.test.tsx guards this.) */
   scrollbar-gutter: stable;
 }
 
@@ -2258,31 +2285,6 @@ textarea,
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
-}
-
-.sidebar-list--dense::-webkit-scrollbar,
-.directory-groups::-webkit-scrollbar {
-  width: 10px;
-}
-
-.sidebar-list--dense::-webkit-scrollbar-track,
-.directory-groups::-webkit-scrollbar-track {
-  background: var(--surface-overlay);
-  border-radius: 999px;
-}
-
-.sidebar-list--dense::-webkit-scrollbar-thumb,
-.directory-groups::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: var(--scrollbar-thumb);
-  background-clip: padding-box;
-}
-
-.sidebar-list--dense::-webkit-scrollbar-thumb:hover,
-.directory-groups::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: padding-box;
 }
 
 .sidebar-list--compact {
