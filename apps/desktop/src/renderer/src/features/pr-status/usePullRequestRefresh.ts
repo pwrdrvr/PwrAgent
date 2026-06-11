@@ -159,6 +159,7 @@ function prSummariesEqual(
     const candidate = right[index];
     return (
       candidate?.number === pr.number &&
+      candidate.provider === pr.provider &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
       candidate.state === pr.state &&

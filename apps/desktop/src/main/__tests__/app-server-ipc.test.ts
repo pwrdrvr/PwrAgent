@@ -1393,6 +1393,82 @@ describe("app server ipc", () => {
     });
   });
 
+  it("appends newly discovered PRs to the thread PR history", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "feat/reused-branch",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/reused-branch",
+      directoryPaths: ["/repo"],
+    });
+    const previousPr = githubPr({
+      number: 720,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/720",
+    });
+    const discoveredPr = githubPr({
+      number: 737,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/737",
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [previousPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      provider: "github.com",
+      ghAvailable: true,
+      prs: [previousPr],
+    });
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [previousPr, discoveredPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: [previousPr, discoveredPr],
+        },
+      },
+    });
+  });
+
   it("rechecks PRs when cached PRs belong to a different lookup key", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
@@ -1454,7 +1530,7 @@ describe("app server ipc", () => {
       threadId: "thread-1",
       provider: "github.com",
       ghAvailable: true,
-      prs: [],
+      prs: terminalPrs,
     });
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
@@ -1467,7 +1543,7 @@ describe("app server ipc", () => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        prs: newBranchPrs,
+        prs: [...terminalPrs, ...newBranchPrs],
         fetchedAt: expect.any(Number),
         refreshKey: requestKey,
       });

@@ -1176,6 +1176,7 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
+    const knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
     if (lookupEntry && lookupEntry.fetchedAt > 0) {
       await this.persistPullRequestLookupHit({
         backend,
@@ -1208,12 +1209,13 @@ class DesktopAppServerService {
     if (
       allExistingPrsTerminal
       && branch !== "HEAD"
+      && request.trigger !== "user"
     ) {
       return {
         backend,
         threadId: request.threadId,
         provider,
-        prs: currentLookupPrs,
+        prs: knownPrs,
         ghAvailable: true,
         shortCircuited: true,
       };
@@ -1224,7 +1226,7 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: currentLookupPrs,
+        prs: knownPrs,
         ghAvailable: true,
       };
     }
@@ -1235,14 +1237,14 @@ class DesktopAppServerService {
       requestKey,
       lookupKey,
       lookupDirectoryPaths,
-      previousPrs: currentLookupPrs,
+      previousPrs: knownPrs,
     });
 
     return {
       backend,
       threadId: request.threadId,
       provider,
-      prs: currentLookupPrs,
+      prs: knownPrs,
       ghAvailable: true,
     };
   }
@@ -1364,19 +1366,20 @@ class DesktopAppServerService {
 
     await Promise.all(
       [...subscribers.values()].map(async (subscriber) => {
+        const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
         await this.getOverlayStore().setThreadPullRequests({
           backend: subscriber.backend,
           threadId: subscriber.threadId,
-          prs: params.prs,
+          prs: nextPrs,
           fetchedAt: params.fetchedAt,
           refreshKey: subscriber.requestKey,
         });
 
-        if (!prSummariesEqual(subscriber.previousPrs, params.prs)) {
+        if (!prSummariesEqual(subscriber.previousPrs, nextPrs)) {
           await this.publishThreadPullRequestsUpdated({
             backend: subscriber.backend,
             threadId: subscriber.threadId,
-            prs: params.prs,
+            prs: nextPrs,
           });
         }
       }),
@@ -1392,9 +1395,10 @@ class DesktopAppServerService {
     prs: PrSummary[];
     fetchedAt: number;
   }): Promise<void> {
+    const nextPrs = this.mergePrHistory(params.persistedPrs, params.prs);
     if (
       params.persistedRefreshKey === params.requestKey
-      && prSummariesEqual(params.persistedPrs, params.prs)
+      && prSummariesEqual(params.persistedPrs, nextPrs)
     ) {
       return;
     }
@@ -1402,16 +1406,16 @@ class DesktopAppServerService {
     await this.getOverlayStore().setThreadPullRequests({
       backend: params.backend,
       threadId: params.request.threadId,
-      prs: params.prs,
+      prs: nextPrs,
       fetchedAt: params.fetchedAt,
       refreshKey: params.requestKey,
     });
 
-    if (!prSummariesEqual(params.persistedPrs, params.prs)) {
+    if (!prSummariesEqual(params.persistedPrs, nextPrs)) {
       await this.publishThreadPullRequestsUpdated({
         backend: params.backend,
         threadId: params.request.threadId,
-        prs: params.prs,
+        prs: nextPrs,
       });
     }
   }
@@ -1541,6 +1545,30 @@ class DesktopAppServerService {
       const normalized = normalizePrSummary(pr);
       return this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr ?? normalized;
     });
+  }
+
+  private mergePrHistory(
+    existingPrs: PrSummary[],
+    discoveredPrs: PrSummary[],
+  ): PrSummary[] {
+    const merged = this.canonicalizePrs(existingPrs);
+    const indexes = new Map<string, number>();
+    merged.forEach((pr, index) => {
+      indexes.set(getPrStatusKey(pr), index);
+    });
+
+    for (const pr of this.canonicalizePrs(discoveredPrs)) {
+      const key = getPrStatusKey(pr);
+      const existingIndex = indexes.get(key);
+      if (existingIndex === undefined) {
+        indexes.set(key, merged.length);
+        merged.push(pr);
+      } else {
+        merged[existingIndex] = pr;
+      }
+    }
+
+    return merged;
   }
 
   private seedPrStatusRegistryFromThreads(

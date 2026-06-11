@@ -26,7 +26,6 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const directories = props.thread.linkedDirectories;
   const prs = props.thread.prs ?? [];
   const branch = props.thread.gitBranch;
-  const multiRepo = new Set(prs.map((pr) => `${pr.org}/${pr.repo}`)).size > 1;
 
   return (
     <section className="context-panel__section">
@@ -90,8 +89,13 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
           <h4 className="context-subheading">Linked pull requests</h4>
           <ul className="context-list pr-panel-list">
             {prs.map((pr) => (
-              <li key={`${pr.org}/${pr.repo}#${pr.number}`} className="pr-panel-row">
-                <PrChip pr={pr} showRepoPrefix={multiRepo} onOpen={openExternalUrl} />
+              <li key={`${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`} className="pr-panel-row">
+                <div className="pr-panel-row__main">
+                  <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
+                  <span className="pr-panel-row__repo">
+                    {pr.provider}/{pr.org}/{pr.repo}
+                  </span>
+                </div>
               </li>
             ))}
           </ul>

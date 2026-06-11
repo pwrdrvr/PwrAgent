@@ -98,7 +98,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
-  /** GitHub pull requests detected for this thread's linked directories + branch. */
+  /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
   codexEnvironmentOptions?: CodexEnvironmentOption[];
@@ -857,10 +857,9 @@ export type ThreadOverlayState = {
   /** Persisted disclosure state for the parent's child section. */
   subthreadsCollapsed?: boolean;
   /**
-   * GitHub pull requests detected for this thread, persisted across
-   * restarts so chips appear instantly on relaunch and so we can
-   * short-circuit re-fetching once a PR reaches a terminal state
-   * (`merged` / `closed`).
+   * Pull requests known for this thread, persisted across restarts so chips
+   * appear instantly on relaunch. The list is append-only by PR identity for
+   * sidebar/history purposes; status refreshes replace matching entries.
    */
   prs?: PrSummary[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */
