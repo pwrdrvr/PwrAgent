@@ -3665,13 +3665,13 @@ textarea,
   overflow: hidden;
 }
 
-.thread-search-view__form {
+.thread-search__form {
   display: flex;
   gap: 10px;
   align-items: stretch;
 }
 
-.thread-search-view__field {
+.thread-search__field {
   position: relative;
   display: flex;
   flex: 1;
@@ -3679,7 +3679,7 @@ textarea,
   align-items: center;
 }
 
-.thread-search-view__field-icon {
+.thread-search__field-icon {
   position: absolute;
   left: 12px;
   display: inline-flex;
@@ -3688,11 +3688,11 @@ textarea,
   transition: color 120ms ease;
 }
 
-.thread-search-view__field:focus-within .thread-search-view__field-icon {
+.thread-search__field:focus-within .thread-search__field-icon {
   color: var(--accent);
 }
 
-.thread-search-view__field input {
+.thread-search__field input {
   width: 100%;
   min-width: 0;
   height: 40px;
@@ -3704,17 +3704,17 @@ textarea,
   font: inherit;
 }
 
-.thread-search-view__field input::placeholder {
+.thread-search__field input::placeholder {
   color: var(--text-muted);
 }
 
-.thread-search-view__field input:focus {
+.thread-search__field input:focus {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-color: transparent;
 }
 
-.thread-search-view__submit {
+.thread-search__submit {
   height: 40px;
   display: inline-flex;
   align-items: center;
@@ -3722,7 +3722,7 @@ textarea,
   white-space: nowrap;
 }
 
-.thread-search-view__error {
+.thread-search__error {
   margin: 0;
   border: 1px solid color-mix(in srgb, var(--status-error) 50%, var(--border-subtle));
   border-radius: 8px;
@@ -3732,13 +3732,13 @@ textarea,
   font-size: 13px;
 }
 
-.thread-search-view__scopes {
+.thread-search__scopes {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.thread-search-view__scopes span {
+.thread-search__scopes span {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   padding: 4px 10px;
@@ -3839,7 +3839,7 @@ textarea,
 
 .thread-search-result__meta-item--mono {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 
 .thread-search-result__meta-item--muted {

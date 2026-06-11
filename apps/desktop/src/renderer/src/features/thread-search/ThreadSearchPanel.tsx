@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactElement, type ReactNode } from "react";
 import type {
   AppServerBackendKind,
   MessagingChannelKind,
@@ -59,7 +59,7 @@ function describeMatchReason(kind: ThreadSearchMatchReasonKind | undefined): str
   return MATCH_REASON_LABELS[kind] ?? kind.replaceAll("_", " ");
 }
 
-function basename(value: string): string {
+export function basename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
   const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return cut >= 0 ? trimmed.slice(cut + 1) : trimmed;
@@ -70,7 +70,7 @@ function basename(value: string): string {
  * reads as a tangerine highlight instead of a flat gray run. React owns the
  * escaping; we only split on literal, regex-escaped tokens.
  */
-function highlightSnippet(text: string, query: string): ReactNode[] {
+export function highlightSnippet(text: string, query: string): ReactNode[] {
   const tokens = Array.from(
     new Set(
       query
@@ -85,28 +85,32 @@ function highlightSnippet(text: string, query: string): ReactNode[] {
   const escaped = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const splitter = new RegExp(`(${escaped.join("|")})`, "ig");
   const tokenSet = new Set(tokens);
-  return text.split(splitter).map((part, index) =>
-    part && tokenSet.has(part.toLowerCase()) ? (
-      <mark key={index} className="thread-search-result__mark">
-        {part}
-      </mark>
-    ) : (
-      <span key={index}>{part}</span>
-    ),
-  );
+  return text
+    .split(splitter)
+    .filter((part) => part.length > 0)
+    .map((part, index) =>
+      tokenSet.has(part.toLowerCase()) ? (
+        <mark key={index} className="thread-search-result__mark">
+          {part}
+        </mark>
+      ) : (
+        <span key={index}>{part}</span>
+      ),
+    );
 }
 
 function ThreadSearchResultRow(props: {
   result: ThreadSearchResult;
   query: string;
   onOpen: () => void;
-}): ReactNode {
+}): ReactElement {
   const { result, query } = props;
   const directory = result.linkedDirectories[0];
   // `projectKey` is often a full checkout/worktree path (Codex keys projects by
   // cwd), so collapse whatever we resolve down to its final path segment — the
-  // repo folder — and let the branch carry the distinguishing detail.
-  const rawWorkspace = result.projectKey ?? directory?.label ?? directory?.path;
+  // repo folder — and let the branch carry the distinguishing detail. `||`
+  // (not `??`) so an empty-string projectKey falls through to the directory.
+  const rawWorkspace = result.projectKey || directory?.label || directory?.path;
   const workspaceLabel = rawWorkspace ? basename(rawWorkspace) : undefined;
   const WorkspaceIcon = directory?.kind === "worktree" ? WorktreeIcon : FolderIcon;
   const titleNormalized = result.title.trim().toLowerCase();
@@ -160,7 +164,7 @@ function ThreadSearchResultRow(props: {
 function ThreadSearchEmptyState(props: {
   title: string;
   hint: string;
-}): ReactNode {
+}): ReactElement {
   return (
     <div className="thread-search-empty">
       <span className="thread-search-empty__glyph" aria-hidden>
@@ -218,9 +222,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
       />
 
       <div className="thread-search__body">
-        <form className="thread-search-view__form" onSubmit={(event) => void submit(event)}>
-          <div className="thread-search-view__field">
-            <span className="thread-search-view__field-icon" aria-hidden>
+        <form className="thread-search__form" onSubmit={(event) => void submit(event)}>
+          <div className="thread-search__field">
+            <span className="thread-search__field-icon" aria-hidden>
               <SearchIcon size={16} />
             </span>
             <input
@@ -232,7 +236,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
             />
           </div>
           <button
-            className="button button--primary thread-search-view__submit"
+            className="button button--primary thread-search__submit"
             disabled={loading || !query.trim() || searchUnavailable}
             type="submit"
           >
@@ -241,10 +245,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           </button>
         </form>
 
-        {error ? <p className="thread-search-view__error">{error}</p> : null}
+        {error ? <p className="thread-search__error">{error}</p> : null}
 
         {response?.unavailableScopes.length ? (
-          <div className="thread-search-view__scopes" aria-label="Unavailable scopes">
+          <div className="thread-search__scopes" aria-label="Unavailable scopes">
             {response.unavailableScopes.map((scope, index) => (
               <span key={`${scope.scope}:${scope.backend ?? "all"}:${index}`}>
                 {scope.backend ? `${scope.backend} ` : ""}

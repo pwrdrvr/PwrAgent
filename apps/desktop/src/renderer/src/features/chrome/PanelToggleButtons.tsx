@@ -89,7 +89,9 @@ function LayoutChip({
       aria-label={label}
       aria-pressed={disabled ? undefined : open}
       disabled={disabled}
-      title={disabled ? label : `${label}  (${chord})`}
+      // No title when disabled: `pointer-events: none` makes a native
+      // tooltip unreachable anyway; the aria-label still names it for AT.
+      title={disabled ? undefined : `${label}  (${chord})`}
       onClick={disabled ? undefined : onClick}
     >
       <LayoutGlyph kind={kind} open={open} />
