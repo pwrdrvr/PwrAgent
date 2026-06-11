@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.32 - 2026-06-11
+
+- Added a "without a directory" option for new threads so users can start work without first choosing or linking a project folder.
+- Added independent draft, conflicted, and closed pull-request chip states so thread rows can show PR status more accurately.
+- Improved the thread search panel with tighter integration and polish after the beta.31 search launch.
+- Modeled Codex reviews as subagents and refined sub-agent cards in the context rail.
+- Shared pull-request status across related threads and rendered Pull Requests as cards consistent with the Sub-Agents tab.
+- Preserved image attachment filenames through composer and transcript handling.
+- Added token usage cost breakdowns for completed turns.
+- Clarified monitor command ownership in messaging and command surfaces.
+- Fixed desktop polish issues including thin classic scrollbars and the macOS fullscreen stoplight inset.
+
 ## v1.0.0-beta.31 - 2026-06-11
 
 - Added agentic thread search with a dedicated search panel, FTS-backed thread indexing, provider adapters, navigation contracts, and renderer/main coverage so users can search across existing agent threads instead of manually scanning the sidebar.
