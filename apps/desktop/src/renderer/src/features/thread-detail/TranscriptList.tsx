@@ -482,14 +482,15 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const activeTurnStartedAt =
-      typeof props.activeTurnStartedAt === "number"
-        ? props.activeTurnStartedAt
-        : transcriptEntries.find((entry) => entry.turn?.id === props.activeTurnId)
-            ?.turn?.startedAt;
-    if (typeof activeTurnStartedAt !== "number") {
+    const activeTurnStartedAtCandidates = [
+      props.activeTurnStartedAt,
+      transcriptEntries.find((entry) => entry.turn?.id === props.activeTurnId)
+        ?.turn?.startedAt,
+    ].filter((value): value is number => typeof value === "number");
+    if (activeTurnStartedAtCandidates.length === 0) {
       return undefined;
     }
+    const activeTurnStartedAt = Math.min(...activeTurnStartedAtCandidates);
 
     const firstEligibleAt =
       activeTurnStartedAt + ACTIVE_WORK_GROUP_THRESHOLD_MS + 1;

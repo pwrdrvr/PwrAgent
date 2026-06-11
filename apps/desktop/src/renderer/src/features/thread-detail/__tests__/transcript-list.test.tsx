@@ -1207,7 +1207,7 @@ describe("TranscriptList", () => {
     expect(laterActivityIndex).toBeGreaterThan(commentaryIndex);
   });
 
-  it("waits until the active work threshold before ticking elapsed labels", () => {
+  it("waits until the earliest active work threshold before ticking elapsed labels", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const setIntervalSpy = vi.spyOn(window, "setInterval");
@@ -1221,7 +1221,7 @@ describe("TranscriptList", () => {
     render(
       <TranscriptList
         activeTurnId="turn-1"
-        activeTurnStartedAt={10_000}
+        activeTurnStartedAt={20_000}
         entries={[
           {
             type: "activity",
