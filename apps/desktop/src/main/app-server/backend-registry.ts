@@ -431,6 +431,10 @@ type BackendClient = {
     threadId: string;
     target: StartReviewRequest["target"];
     delivery?: StartReviewRequest["delivery"];
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
@@ -1298,6 +1302,31 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function buildReviewSubAgentKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId: string,
+): string {
+  return buildActiveTurnKey(backend, threadId, turnId);
+}
+
+function reviewSubAgentId(turnId: string): string {
+  return `review:${turnId}`;
+}
+
+function reviewTaskLabel(target: StartReviewRequest["target"]): string {
+  switch (target.type) {
+    case "baseBranch":
+      return `Review changes against ${target.branch}`;
+    case "commit":
+      return `Review commit ${target.sha.slice(0, 7)}`;
+    case "custom":
+      return target.instructions.trim() || "Review changes";
+    case "uncommittedChanges":
+      return "Review current changes";
+  }
+}
+
 function parseThreadTurnKeyBody(
   body: string,
 ): { threadId: string; turnId: string } | undefined {
@@ -1470,6 +1499,16 @@ type TaskMonitorDelegationRecord = {
   staleInterruptAttempted?: boolean;
   startupTimeoutSeconds: number;
   task: string;
+};
+
+type ReviewSubAgentRecord = {
+  backend: Exclude<AppServerBackendKind, AcpBackendId>;
+  createdAt: number;
+  latestUsage?: TaskMonitorUsageSnapshot;
+  parentThreadId: string;
+  reviewThreadId: string;
+  task: string;
+  turnId: string;
 };
 
 function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
@@ -1827,6 +1866,31 @@ function turnIdFromTerminalNotification(
   return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
 }
 
+function normalizeNotificationTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return value < 1_000_000_000_000 ? value * 1_000 : value;
+}
+
+function completedAtFromTerminalNotification(
+  notification: AppServerNotification,
+): number | undefined {
+  if (
+    notification.method !== "turn/completed" &&
+    notification.method !== "turn/failed" &&
+    notification.method !== "turn/cancelled"
+  ) {
+    return undefined;
+  }
+
+  return normalizeNotificationTimestamp(
+    readRecord(notification.params.turn)?.completedAt ??
+      readRecord(notification.params.turn)?.completed_at,
+  );
+}
+
 function finalTextFromTerminalNotification(
   notification: AppServerNotification,
 ): string | undefined {
@@ -2054,6 +2118,15 @@ type ModelSettings = {
   serviceTier?: string;
   fastMode?: boolean;
 };
+
+function hasExplicitModelSettings(settings: ModelSettings): boolean {
+  return (
+    settings.model !== undefined ||
+    settings.reasoningEffort !== undefined ||
+    settings.serviceTier !== undefined ||
+    settings.fastMode !== undefined
+  );
+}
 
 type CodexFastModeMismatchWarning = {
   threadId: string;
@@ -2907,6 +2980,12 @@ export class DesktopBackendRegistry {
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
+  private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
+  private readonly activeReviewSubAgents = new Map<string, ReviewSubAgentRecord>();
+  private readonly reviewSubAgentsByReviewTurn = new Map<
+    string,
+    ReviewSubAgentRecord
+  >();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
@@ -6011,6 +6090,9 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
+    const modelSettings = hasExplicitModelSettings(params)
+      ? await this.resolveModelSettings(params.backend, params)
+      : {};
 
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     try {
@@ -6043,6 +6125,7 @@ export class DesktopBackendRegistry {
           threadId: params.threadId,
           target: params.target,
           delivery: params.delivery ?? "inline",
+          ...modelSettings,
           ...(cwd ? { cwd } : {}),
           ...(overlay?.codexEnvironmentRuntime
             ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
@@ -6086,6 +6169,29 @@ export class DesktopBackendRegistry {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
     }
+    const reviewSubAgentRecord: ReviewSubAgentRecord = {
+      backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
+      createdAt: Date.now(),
+      parentThreadId: result.threadId,
+      reviewThreadId: result.reviewThreadId || result.threadId,
+      task: reviewTaskLabel(params.target),
+      turnId: result.turnId,
+    };
+    const reviewSubAgentKey = buildReviewSubAgentKey(
+      reviewSubAgentRecord.backend,
+      reviewSubAgentRecord.reviewThreadId,
+      reviewSubAgentRecord.turnId,
+    );
+    this.activeReviewSubAgents.set(reviewSubAgentKey, reviewSubAgentRecord);
+    this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
+    await this.persistReviewSubAgent(reviewSubAgentRecord);
+    if (hasExplicitModelSettings(modelSettings)) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: result.threadId,
+        ...modelSettings,
+      });
+    }
 
     return {
       backend: params.backend,
@@ -6121,18 +6227,36 @@ export class DesktopBackendRegistry {
       return params;
     }
 
+    const requestedCodexTurnModeKey =
+      params.backend === "codex"
+        ? buildActiveTurnModeKey(params.threadId, params.turnId)
+        : undefined;
+    const codexInterruptTurnId =
+      requestedCodexTurnModeKey
+        ? this.activeCodexReviewInterruptTurnIds.get(requestedCodexTurnModeKey) ??
+          params.turnId
+        : params.turnId;
+    const interruptParams =
+      params.backend === "codex" && codexInterruptTurnId !== params.turnId
+        ? { ...params, turnId: codexInterruptTurnId }
+        : params;
     const activeCodexTurnMode =
       params.backend === "codex"
         ? this.activeCodexTurnModes.get(
-            buildActiveTurnModeKey(params.threadId, params.turnId),
-          )
+            buildActiveTurnModeKey(params.threadId, codexInterruptTurnId),
+          ) ??
+          (requestedCodexTurnModeKey
+            ? this.activeCodexTurnModes.get(requestedCodexTurnModeKey)
+            : undefined)
         : undefined;
     const result =
       params.backend === "codex" && activeCodexTurnMode
-        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(params)
+        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(
+            interruptParams,
+          )
         : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, async (client) =>
-              await client.interruptTurn(params),
+              await client.interruptTurn(interruptParams),
             )
         : await this.grokClient.interruptTurn(params);
 
@@ -6140,6 +6264,10 @@ export class DesktopBackendRegistry {
       const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
       this.activeCodexTurnModes.delete(activeTurnModeKey);
       this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
+      if (requestedCodexTurnModeKey && requestedCodexTurnModeKey !== activeTurnModeKey) {
+        this.activeCodexTurnModes.delete(requestedCodexTurnModeKey);
+        this.activeCodexReviewTurnKeys.delete(requestedCodexTurnModeKey);
+      }
     }
 
     return {
@@ -6923,13 +7051,35 @@ export class DesktopBackendRegistry {
   }
 
   private threadHasActiveCodexReviewTurn(threadId: string): boolean {
+    return Boolean(this.findActiveCodexReviewTurnKey(threadId));
+  }
+
+  private findActiveCodexReviewTurnKey(threadId: string): string | undefined {
     const prefix = `${threadId}:`;
     for (const key of this.activeCodexReviewTurnKeys) {
       if (key.startsWith(prefix)) {
-        return true;
+        return key;
       }
     }
-    return false;
+    return undefined;
+  }
+
+  private clearCodexReviewInterruptMappingForTurn(
+    threadId: string,
+    turnId: string,
+  ): void {
+    const activeTurnModeKey = buildActiveTurnModeKey(threadId, turnId);
+    this.activeCodexReviewInterruptTurnIds.delete(activeTurnModeKey);
+    for (const [reviewTurnKey, interruptTurnId] of Array.from(
+      this.activeCodexReviewInterruptTurnIds.entries()
+    )) {
+      if (
+        reviewTurnKey.startsWith(`${threadId}:`) &&
+        interruptTurnId === turnId
+      ) {
+        this.activeCodexReviewInterruptTurnIds.delete(reviewTurnKey);
+      }
+    }
   }
 
   private async resolveCodexThreadExecutionModeForActiveTurn(
@@ -8176,6 +8326,10 @@ export class DesktopBackendRegistry {
           threadId: startThreadResponse.threadId,
           target: request.reviewTarget,
           delivery: "inline",
+          model: launchpad.model,
+          reasoningEffort: launchpad.reasoningEffort,
+          serviceTier: launchpad.serviceTier,
+          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         });
         turnId = reviewResponse.turnId;
       } catch (error) {
@@ -9452,8 +9606,48 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async recordTaskMonitorUsage(notification: AppServerNotification): Promise<void> {
+  private async recordTaskMonitorUsage(event: AgentEvent): Promise<void> {
+    const notification = event.notification;
     if (notification.method !== "thread/tokenUsage/updated") {
+      return;
+    }
+
+    if (notification.params.turnId) {
+      const reviewKey = buildReviewSubAgentKey(
+        event.backend,
+        notification.params.threadId,
+        notification.params.turnId,
+      );
+      const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      const usageSnapshot = buildTaskMonitorUsageSnapshot({
+        tokenUsage: notification.params.tokenUsage,
+      });
+      if (!usageSnapshot) {
+        return;
+      }
+      if (reviewRecord) {
+        reviewRecord.latestUsage = usageSnapshot;
+        await this.persistReviewSubAgent(reviewRecord, {
+          monitorUsage: usageSnapshot,
+        });
+        return;
+      }
+      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
+        backend: event.backend,
+        parentThreadId:
+          completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+        reviewThreadId:
+          completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
+        turnId: notification.params.turnId,
+        usage: usageSnapshot,
+      });
+      if (reviewUsagePersisted) {
+        return;
+      }
+    }
+
+    if (event.backend !== "codex") {
       return;
     }
 
@@ -9475,6 +9669,50 @@ export class DesktopBackendRegistry {
         monitorUsage: usageSnapshot,
       });
     }
+  }
+
+  private async persistExistingReviewSubAgentUsage(params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+    reviewThreadId: string;
+    turnId: string;
+    usage: ThreadSubAgentSummary["monitorUsage"];
+  }): Promise<boolean> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.parentThreadId,
+    });
+    const monitorId = reviewSubAgentId(params.turnId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) =>
+        subAgent.monitorId === monitorId ||
+        (subAgent.monitorThreadId === params.reviewThreadId &&
+          subAgent.monitorTurnId === params.turnId),
+    );
+    if (!existing) {
+      return false;
+    }
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.parentThreadId,
+      subAgent: {
+        ...existing,
+        monitorUsage: params.usage,
+        updatedAt: Date.now(),
+      },
+    });
+    this.invalidateThreadListCache(params.backend);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.parentThreadId,
+        },
+      },
+    });
+    return true;
   }
 
   private async persistTaskMonitorSubAgent(
@@ -9549,6 +9787,151 @@ export class DesktopBackendRegistry {
         },
       },
     });
+  }
+
+  private async persistReviewSubAgent(
+    record: ReviewSubAgentRecord,
+    patch: Partial<
+      Pick<
+        ThreadSubAgentSummary,
+        | "completedAt"
+        | "lastMessage"
+        | "monitorUsage"
+        | "outcome"
+        | "status"
+        | "updatedAt"
+      >
+    > = {},
+  ): Promise<void> {
+    const existingOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+    });
+    const monitorId = reviewSubAgentId(record.turnId);
+    const existing = existingOverlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId,
+      task: record.task,
+      status: patch.status ?? existing?.status ?? "running",
+      createdAt: record.createdAt,
+      updatedAt: patch.updatedAt ?? Date.now(),
+      monitorThreadId: record.reviewThreadId,
+      monitorTurnId: record.turnId,
+      ...(patch.lastMessage ?? existing?.lastMessage
+        ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
+        : {}),
+      ...(patch.outcome ?? existing?.outcome
+        ? { outcome: patch.outcome ?? existing?.outcome }
+        : {}),
+      ...(patch.completedAt ?? existing?.completedAt
+        ? { completedAt: patch.completedAt ?? existing?.completedAt }
+        : {}),
+      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+        ? {
+            monitorUsage:
+              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+          }
+        : {}),
+    };
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+      subAgent,
+    });
+    this.invalidateThreadListCache(record.backend);
+    await this.emit({
+      backend: record.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: record.parentThreadId,
+        },
+      },
+    });
+  }
+
+  private async completeReviewSubAgent(params: {
+    backend: AppServerBackendKind;
+    completedAt?: number;
+    method: AppServerNotification["method"];
+    threadId: string;
+    turnId: string;
+  }): Promise<void> {
+    const activeReview = this.findActiveReviewSubAgentForTerminal(params);
+    if (!activeReview) {
+      return;
+    }
+
+    this.activeReviewSubAgents.delete(activeReview.key);
+    const { record } = activeReview;
+    const completedAt = params.completedAt ?? Date.now();
+    if (params.method === "turn/completed") {
+      await this.persistReviewSubAgent(record, {
+        completedAt,
+        lastMessage: "Review completed.",
+        outcome: "success",
+        status: "success",
+        updatedAt: completedAt,
+      });
+      return;
+    }
+
+    if (params.method === "turn/cancelled") {
+      await this.persistReviewSubAgent(record, {
+        completedAt,
+        lastMessage: "Review cancelled.",
+        outcome: "cancelled",
+        status: "cancelled",
+        updatedAt: completedAt,
+      });
+      return;
+    }
+
+    await this.persistReviewSubAgent(record, {
+      completedAt,
+      lastMessage: "Review failed.",
+      outcome: "failure",
+      status: "failed",
+      updatedAt: completedAt,
+    });
+  }
+
+  private findActiveReviewSubAgentForTerminal(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): { key: string; record: ReviewSubAgentRecord } | undefined {
+    const exactKey = buildReviewSubAgentKey(
+      params.backend,
+      params.threadId,
+      params.turnId,
+    );
+    const exactRecord = this.activeReviewSubAgents.get(exactKey);
+    if (exactRecord) {
+      return { key: exactKey, record: exactRecord };
+    }
+
+    if (params.backend !== "codex") {
+      return undefined;
+    }
+
+    for (const [key, record] of this.activeReviewSubAgents.entries()) {
+      if (record.backend !== params.backend || record.reviewThreadId !== params.threadId) {
+        continue;
+      }
+      const reviewTurnKey = buildActiveTurnModeKey(
+        record.reviewThreadId,
+        record.turnId,
+      );
+      if (this.activeCodexReviewInterruptTurnIds.get(reviewTurnKey) === params.turnId) {
+        return { key, record };
+      }
+    }
+
+    return undefined;
   }
 
   private recordTaskMonitorActivity(notification: AppServerNotification): void {
@@ -12247,8 +12630,8 @@ export class DesktopBackendRegistry {
   private async emit(event: AgentEvent): Promise<void> {
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
-      await this.recordTaskMonitorUsage(event.notification);
     }
+    await this.recordTaskMonitorUsage(event);
 
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
@@ -12280,6 +12663,12 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
           turnId,
         );
+        const activeReviewTurnKey = this.findActiveCodexReviewTurnKey(
+          notification.params.threadId,
+        );
+        if (activeReviewTurnKey && activeReviewTurnKey !== key) {
+          this.activeCodexReviewInterruptTurnIds.set(activeReviewTurnKey, turnId);
+        }
         if (!this.activeCodexTurnModes.has(key)) {
           this.activeCodexTurnModes.set(
             key,
@@ -12307,6 +12696,15 @@ export class DesktopBackendRegistry {
       };
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        await this.completeReviewSubAgent({
+          backend: event.backend,
+          completedAt: completedAtFromTerminalNotification(event.notification),
+          method: event.notification.method,
+          threadId: notification.params.threadId,
+          turnId,
+        });
+      }
+      if (turnId) {
         this.activeTurnKeys.delete(
           buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
         );
@@ -12319,6 +12717,10 @@ export class DesktopBackendRegistry {
         const wasKnownActiveTurn =
           !turnId.startsWith("pending:") &&
           this.activeCodexTurnModes.has(activeTurnModeKey);
+        this.clearCodexReviewInterruptMappingForTurn(
+          notification.params.threadId,
+          turnId,
+        );
         this.activeCodexTurnModes.delete(activeTurnModeKey);
         this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
         if (wasKnownActiveTurn) {

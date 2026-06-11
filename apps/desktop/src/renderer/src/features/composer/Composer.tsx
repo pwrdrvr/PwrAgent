@@ -2986,6 +2986,14 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         target: reviewCommand.target,
         delivery: "inline",
+        ...(selectedModelOption?.id ? { model: selectedModelOption.id } : {}),
+        ...(supportsReasoning && selectedReasoningEffort
+          ? { reasoningEffort: selectedReasoningEffort }
+          : {}),
+        ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
+        ...(props.thread.source === "codex" && supportsFast
+          ? { fastMode: Boolean(currentSettings?.fastMode) }
+          : {}),
       });
       inFlightReviewSubmissionKeyRef.current = undefined;
       updateActiveTurnId(response.turnId, { review: true });

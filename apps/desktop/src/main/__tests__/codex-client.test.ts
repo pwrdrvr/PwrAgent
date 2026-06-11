@@ -828,6 +828,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/settings/update") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/start") {
       if (MockTransport.turnStartPreResponseNotification) {
         this.messageHandler(JSON.stringify(MockTransport.turnStartPreResponseNotification));
@@ -3811,6 +3822,63 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps review start history and timestamps final reviews at completion", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-history", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_781_178_065,
+            completedAt: 1_781_178_272,
+            items: [
+              {
+                type: "event_msg",
+                id: "entered-review",
+                payload: {
+                  type: "entered_review_mode",
+                  user_facing_hint: "changes against 'main'",
+                },
+              },
+              {
+                type: "exitedReviewMode",
+                id: "exited-review",
+                review: "No findings. Ready to merge.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-history",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "entered-review",
+        displayText: "Review changes against main",
+        createdAt: 1_781_178_065_000,
+      }),
+      expect.objectContaining({
+        type: "review",
+        id: "exited-review",
+        review: "No findings. Ready to merge.",
+        createdAt: 1_781_178_272_000,
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes generated in-progress activity statuses from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {
@@ -6231,6 +6299,9 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
       cwd: "/Users/example/project",
       codexEnvironmentRuntime: {
         environmentId: "env",
@@ -6260,14 +6331,28 @@ describe("CodexAppServerClient", () => {
         method: "thread/resume",
         params: expect.objectContaining({
           threadId: "thread-2",
+          model: "gpt-5.5",
+          serviceTier: "priority",
           cwd: "/Users/example/project",
           "config": {
+            fast_mode: true,
             "shell_environment_policy.set.PATH":
               "/Users/example/project/.venv/bin:/usr/bin",
             "shell_environment_policy.set.VIRTUAL_ENV":
               "/Users/example/project/.venv",
           },
         }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/settings/update",
+        params: {
+          threadId: "thread-2",
+          model: "gpt-5.5",
+          effort: "high",
+          serviceTier: "priority",
+        },
       }),
     );
     expect(requests).toContainEqual(
@@ -6280,6 +6365,28 @@ describe("CodexAppServerClient", () => {
         },
       })
     );
+
+    await client.close();
+  });
+
+  it("rejects review/start responses that omit a real turn id", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.reviewStartResult = {
+      reviewThreadId: "thread-2",
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(
+      client.startReview({
+        threadId: "thread-2",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      })
+    ).rejects.toThrow("codex app server review/start did not return turnId");
 
     await client.close();
   });
