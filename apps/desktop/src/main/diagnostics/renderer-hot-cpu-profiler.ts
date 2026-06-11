@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
-import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
+import type {
+  HotCpuProfileCapturedEvent,
+  HotCpuProfileHeapSnapshotArtifact,
+} from "../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
@@ -88,6 +91,7 @@ export class RendererHotCpuProfiler {
   private stopProfilePromise: Promise<void> | null = null;
   private profiling = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
+  private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private stopped = false;
 
   constructor(options: {
@@ -348,6 +352,7 @@ export class RendererHotCpuProfiler {
       await this.target.debugger.sendCommand("Profiler.enable");
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
+      this.activeProfileHeapSnapshots = [];
       this.activeProfileTrigger = {
         triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
         triggerCpuPercent: options.cpuPercent,
@@ -465,6 +470,7 @@ export class RendererHotCpuProfiler {
       }
       await this.onProfileWritten?.({
         capturedAt: this.now().toISOString(),
+        heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
         profilePath,
         sessionDirectory: this.session.directoryPath,
@@ -484,6 +490,7 @@ export class RendererHotCpuProfiler {
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
       this.activeProfileTrigger = null;
+      this.activeProfileHeapSnapshots = [];
       this.detachDebugger();
     }
   }
@@ -515,6 +522,13 @@ export class RendererHotCpuProfiler {
     try {
       await this.target.takeHeapSnapshot(snapshotPath);
       await this.session.registerArtifact(snapshotFilename);
+      if (index === this.profileCount) {
+        this.activeProfileHeapSnapshots.push({
+          filename: snapshotFilename,
+          path: snapshotPath,
+          phase,
+        });
+      }
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "heap-snapshot-written",

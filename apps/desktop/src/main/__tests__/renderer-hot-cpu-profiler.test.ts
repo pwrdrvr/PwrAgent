@@ -486,6 +486,7 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target } = createTarget();
     const onHeapSnapshotLimitReached = vi.fn(async () => undefined);
+    const onProfileWritten = vi.fn();
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -496,6 +497,7 @@ describe("RendererHotCpuProfiler", () => {
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       onHeapSnapshotLimitReached,
+      onProfileWritten,
       session: sessionResult.session,
       target,
       logger: {
@@ -527,6 +529,29 @@ describe("RendererHotCpuProfiler", () => {
       "renderer-hot-0001-mid.heapsnapshot",
       "renderer-hot-0001-stop.heapsnapshot",
     ]);
+    expect(onProfileWritten).toHaveBeenCalledWith(
+      expect.objectContaining({
+        heapSnapshotArtifacts: [
+          {
+            filename: "renderer-hot-0001-start.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "start"),
+            phase: "start",
+          },
+          {
+            filename: "renderer-hot-0001-mid.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "mid"),
+            phase: "mid",
+          },
+          {
+            filename: "renderer-hot-0001-stop.heapsnapshot",
+            path: sessionResult.session.createHeapSnapshotPath(1, "stop"),
+            phase: "stop",
+          },
+        ],
+        profileFilename: "renderer-hot-0001.cpuprofile",
+        profilePath: sessionResult.session.createProfilePath(1),
+      }),
+    );
 
     const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
       .trim()
