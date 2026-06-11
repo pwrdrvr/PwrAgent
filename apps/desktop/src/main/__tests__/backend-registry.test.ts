@@ -10978,6 +10978,89 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("patches Codex review sub-agent usage when usage arrives after completion", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-review-1",
+        turn: {
+          id: "turn-review-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-review-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        outcome: "success",
+        status: "success",
+        lastMessage: "Review completed.",
+        monitorUsage: {
+          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          tokenUsage: {
+            cachedInputTokens: 200,
+            inputTokens: 1_000,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+            totalTokens: 1_060,
+            uncachedInputTokens: 800,
+          },
+        },
+      });
+
+    await registry.close();
+  });
+
   it("interrupts Codex reviews with the backend active turn id", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/interrupt", "review/start"] },

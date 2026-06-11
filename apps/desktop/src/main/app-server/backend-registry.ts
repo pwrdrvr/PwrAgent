@@ -9580,30 +9580,45 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async recordTaskMonitorUsage(notification: AppServerNotification): Promise<void> {
+  private async recordTaskMonitorUsage(event: AgentEvent): Promise<void> {
+    const notification = event.notification;
     if (notification.method !== "thread/tokenUsage/updated") {
       return;
     }
 
     if (notification.params.turnId) {
       const reviewKey = buildReviewSubAgentKey(
-        "codex",
+        event.backend,
         notification.params.threadId,
         notification.params.turnId,
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
-      if (reviewRecord) {
-        const usageSnapshot = buildTaskMonitorUsageSnapshot({
-          tokenUsage: notification.params.tokenUsage,
-        });
-        if (usageSnapshot) {
-          reviewRecord.latestUsage = usageSnapshot;
-          await this.persistReviewSubAgent(reviewRecord, {
-            monitorUsage: usageSnapshot,
-          });
-        }
+      const usageSnapshot = buildTaskMonitorUsageSnapshot({
+        tokenUsage: notification.params.tokenUsage,
+      });
+      if (!usageSnapshot) {
         return;
       }
+      if (reviewRecord) {
+        reviewRecord.latestUsage = usageSnapshot;
+        await this.persistReviewSubAgent(reviewRecord, {
+          monitorUsage: usageSnapshot,
+        });
+        return;
+      }
+      const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId: notification.params.turnId,
+        usage: usageSnapshot,
+      });
+      if (reviewUsagePersisted) {
+        return;
+      }
+    }
+
+    if (event.backend !== "codex") {
+      return;
     }
 
     const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
@@ -9624,6 +9639,49 @@ export class DesktopBackendRegistry {
         monitorUsage: usageSnapshot,
       });
     }
+  }
+
+  private async persistExistingReviewSubAgentUsage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    usage: ThreadSubAgentSummary["monitorUsage"];
+  }): Promise<boolean> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const monitorId = reviewSubAgentId(params.turnId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) =>
+        subAgent.monitorId === monitorId ||
+        (subAgent.monitorThreadId === params.threadId &&
+          subAgent.monitorTurnId === params.turnId),
+    );
+    if (!existing) {
+      return false;
+    }
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent: {
+        ...existing,
+        monitorUsage: params.usage,
+        updatedAt: Date.now(),
+      },
+    });
+    this.invalidateThreadListCache(params.backend);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.threadId,
+        },
+      },
+    });
+    return true;
   }
 
   private async persistTaskMonitorSubAgent(
@@ -12505,8 +12563,8 @@ export class DesktopBackendRegistry {
   private async emit(event: AgentEvent): Promise<void> {
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
-      await this.recordTaskMonitorUsage(event.notification);
     }
+    await this.recordTaskMonitorUsage(event);
 
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
