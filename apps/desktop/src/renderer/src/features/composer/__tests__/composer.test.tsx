@@ -3076,6 +3076,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "steer.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],
@@ -8094,6 +8095,7 @@ describe("Composer", () => {
           { type: "text", text: "Describe this screenshot" },
           {
             type: "image",
+            name: "screenshot.jpeg",
             url: expect.stringMatching(/^data:image\/jpeg;base64,/),
           },
         ],
@@ -8182,6 +8184,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "diagram.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],
@@ -8636,6 +8639,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "demo.gif",
             url: expect.stringMatching(/^data:image\/gif;base64,/),
           },
         ],
@@ -8703,6 +8707,7 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
+            name: "clipboard-item.png",
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],

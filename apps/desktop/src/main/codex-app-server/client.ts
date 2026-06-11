@@ -4629,7 +4629,17 @@ function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
     };
   }
 
-  return input;
+  if (input.type === "image") {
+    return {
+      type: "image",
+      url: input.url,
+    };
+  }
+
+  return {
+    type: "localImage",
+    path: input.path,
+  };
 }
 
 function buildTurnStartPayload(params: {

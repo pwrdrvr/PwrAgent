@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppServerTurnInputItem } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
@@ -12,8 +12,16 @@ export type ImageInputFileDependencies = {
   writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
   readdir: (dirPath: string) => Promise<string[]>;
-  stat: (filePath: string) => Promise<{ isFile: () => boolean; mtimeMs: number }>;
+  stat: (filePath: string) => Promise<{
+    isFile: () => boolean;
+    isDirectory?: () => boolean;
+    mtimeMs: number;
+  }>;
   unlink: (filePath: string) => Promise<unknown>;
+  rm: (
+    filePath: string,
+    options: { recursive?: boolean; force?: boolean },
+  ) => Promise<unknown>;
 };
 
 const defaultDependencies: ImageInputFileDependencies = {
@@ -24,6 +32,7 @@ const defaultDependencies: ImageInputFileDependencies = {
   readdir,
   stat,
   unlink,
+  rm,
 };
 
 export async function materializeLocalImageInputs(
@@ -46,19 +55,25 @@ export async function materializeLocalImageInputs(
       const root = deps.resolveRoot();
       materializedRoot = root;
       await deps.mkdir(root, { recursive: true });
-      const filePath = path.join(
-        root,
-        `${dataImage.sha256}.${extensionForMimeType(dataImage.mimeType)}`,
-      );
+      const filePath = materializedImageFilePath(root, item.name, dataImage);
+      await deps.mkdir(path.dirname(filePath), { recursive: true });
       await deps.writeFile(filePath, dataImage.buffer);
       materializedFilePaths.add(filePath);
-      materialized.push({ type: "localImage", path: filePath });
+      materialized.push({
+        type: "localImage",
+        ...(item.name ? { name: item.name } : {}),
+        path: filePath,
+      });
       continue;
     }
 
     const filePath = filePathFromFileUrl(item.url);
     if (filePath && isSupportedImagePath(filePath)) {
-      materialized.push({ type: "localImage", path: filePath });
+      materialized.push({
+        type: "localImage",
+        ...(item.name ? { name: item.name } : {}),
+        path: filePath,
+      });
       continue;
     }
 
@@ -107,6 +122,48 @@ function filePathFromFileUrl(url: string): string | undefined {
   }
 }
 
+function materializedImageFilePath(
+  root: string,
+  name: string | undefined,
+  dataImage: { mimeType: "image/jpeg" | "image/png"; sha256: string },
+): string {
+  const extension = extensionForMimeType(dataImage.mimeType);
+  const fallback = path.join(root, `${dataImage.sha256}.${extension}`);
+  const basename = sanitizeImageBasename(name, extension);
+  if (!basename) {
+    return fallback;
+  }
+
+  return path.join(root, dataImage.sha256, basename);
+}
+
+function sanitizeImageBasename(
+  name: string | undefined,
+  extension: "jpg" | "png",
+): string | undefined {
+  const normalized = name
+    ?.trim()
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = path.parse(normalized);
+  const stem = (parsed.name || normalized)
+    .replace(/[^a-zA-Z0-9._ -]+/g, "-")
+    .replace(/^[.\s-]+|[.\s-]+$/g, "")
+    .slice(0, 96);
+  if (!stem) {
+    return undefined;
+  }
+
+  return `${stem}.${extension}`;
+}
+
 function extensionForMimeType(mimeType: "image/jpeg" | "image/png"): "jpg" | "png" {
   return mimeType === "image/png" ? "png" : "jpg";
 }
@@ -126,17 +183,68 @@ async function cleanupOldImageInputs(
   await Promise.all(
     entries.map(async (entry) => {
       const filePath = path.join(root, entry);
-      if (excludedFilePaths.has(filePath)) {
+      if (isExcludedImageInputPath(filePath, excludedFilePaths)) {
+        return;
+      }
+      const info = await deps.stat(filePath).catch(() => undefined);
+      if (info?.isDirectory?.()) {
+        if (
+          info.mtimeMs < cutoff &&
+          !(await containsFreshImageInput(filePath, deps, cutoff, excludedFilePaths))
+        ) {
+          await deps
+            .rm(filePath, { recursive: true, force: true })
+            .catch(() => undefined);
+        }
+        return;
+      }
+      if (!info?.isFile() || info.mtimeMs >= cutoff) {
         return;
       }
       if (!isSupportedImagePath(filePath)) {
         return;
       }
-      const info = await deps.stat(filePath).catch(() => undefined);
-      if (!info?.isFile() || info.mtimeMs >= cutoff) {
-        return;
-      }
       await deps.unlink(filePath).catch(() => undefined);
     }),
   );
+}
+
+async function containsFreshImageInput(
+  dirPath: string,
+  deps: ImageInputFileDependencies,
+  cutoff: number,
+  excludedFilePaths: ReadonlySet<string>,
+): Promise<boolean> {
+  const entries = await deps.readdir(dirPath).catch(() => undefined);
+  if (!entries) {
+    return true;
+  }
+
+  for (const entry of entries) {
+    const childPath = path.join(dirPath, entry);
+    if (isExcludedImageInputPath(childPath, excludedFilePaths)) {
+      return true;
+    }
+    if (!isSupportedImagePath(childPath)) {
+      continue;
+    }
+    const info = await deps.stat(childPath).catch(() => undefined);
+    if (info?.isFile() && info.mtimeMs >= cutoff) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isExcludedImageInputPath(
+  filePath: string,
+  excludedFilePaths: ReadonlySet<string>,
+): boolean {
+  for (const excludedPath of excludedFilePaths) {
+    if (excludedPath === filePath || excludedPath.startsWith(`${filePath}${path.sep}`)) {
+      return true;
+    }
+  }
+  return false;
 }

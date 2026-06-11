@@ -178,18 +178,20 @@ describe("RendererHotCpuProfiler", () => {
 
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
     expect(debuggerApi.detach).toHaveBeenCalled();
-    expect(onProfileWritten).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileFilename: "renderer-hot-0001.cpuprofile",
-        profilePath: sessionResult.session.createProfilePath(1),
-        sessionDirectory: sessionResult.session.directoryPath,
-        sessionDirectoryName: sessionResult.session.directoryName,
-        triggerConsecutiveSamples: 2,
-        triggerCpuPercent: 75,
-        triggerMode: "sustained",
-        triggerThresholdPercent: 50,
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(onProfileWritten).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileFilename: "renderer-hot-0001.cpuprofile",
+          profilePath: sessionResult.session.createProfilePath(1),
+          sessionDirectory: sessionResult.session.directoryPath,
+          sessionDirectoryName: sessionResult.session.directoryName,
+          triggerConsecutiveSamples: 2,
+          triggerCpuPercent: 75,
+          triggerMode: "sustained",
+          triggerThresholdPercent: 50,
+        }),
+      );
+    });
 
     const profile = JSON.parse(
       await fs.readFile(

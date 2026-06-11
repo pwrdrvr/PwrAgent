@@ -513,12 +513,18 @@ function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {
     if (type === "image") {
       return {
         type: "image",
+        ...(typeof record.name === "string" && record.name.trim()
+          ? { name: record.name.trim() }
+          : {}),
         url: asRequiredString(record.url, "image input requires url"),
       };
     }
     if (type === "localImage") {
       return {
         type: "localImage",
+        ...(typeof record.name === "string" && record.name.trim()
+          ? { name: record.name.trim() }
+          : {}),
         path: asRequiredString(record.path, "localImage input requires path"),
       };
     }
