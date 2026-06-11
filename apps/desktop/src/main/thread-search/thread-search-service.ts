@@ -58,10 +58,18 @@ export class ThreadSearchService {
     for (const thread of threads) {
       this.store.upsertThread(thread);
     }
+    this.store.pruneMissingThreads({
+      backend: listBackend,
+      includeArchived: filters.includeArchived === true,
+      retainedIdentityKeys: threads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+    });
 
     const metadataResults = this.store
       .search({
         backend: backend === "all" ? undefined : backend,
+        filters,
         includeArchived: filters.includeArchived,
         limit,
         query,
@@ -171,6 +179,7 @@ function buildContentCandidates(params: {
   const recentResults = params.store
     .search({
       backend: params.backend === "all" ? undefined : params.backend,
+      filters: params.filters,
       includeArchived: params.filters.includeArchived,
       limit: CONTENT_SEARCH_CANDIDATE_LIMIT,
     })

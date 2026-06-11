@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
-import { StateDb } from "../../state/state-db";
-import { ProviderTranscriptThreadSearchAdapter } from "../thread-search-provider-adapters";
-import { ThreadSearchService } from "../thread-search-service";
-import { ThreadSearchStore } from "../thread-search-store";
+import { StateDb } from "../state/state-db";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { ThreadSearchService } from "../thread-search/thread-search-service";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 let stateDb: StateDb;
 let tempDir: string;
@@ -53,6 +53,49 @@ describe("ThreadSearchService", () => {
     });
 
     expect(response.results.map((result) => result.threadId)).toEqual(["docs"]);
+  });
+
+  it("does not drop filtered matches behind unfiltered limit results", async () => {
+    const service = buildService([
+      threadSummary({
+        id: "pwragent",
+        projectKey: "PwrAgent",
+        title: "Branch drift in PwrAgent",
+        updatedAt: 3_000,
+      }),
+      threadSummary({
+        id: "docs",
+        projectKey: "Docs",
+        title: "Branch drift in docs",
+        updatedAt: 1_000,
+      }),
+    ]);
+
+    const response = await service.search({
+      filters: { projectKeys: ["Docs"] },
+      limit: 1,
+      query: "branch drift",
+    });
+
+    expect(response.results.map((result) => result.threadId)).toEqual(["docs"]);
+  });
+
+  it("prunes stale active projection rows after refreshing provider threads", async () => {
+    const store = new ThreadSearchStore(stateDb);
+    store.upsertThread(threadSummary({ id: "stale", title: "Stale branch drift" }));
+    const service = new ThreadSearchService(
+      store,
+      async () => [threadSummary({ id: "active", title: "Active branch drift" })],
+    );
+
+    const response = await service.search({ query: "branch drift" });
+
+    expect(response.results.map((result) => result.threadId)).toEqual(["active"]);
+    expect(
+      store
+        .search({ query: "branch drift", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["active"]);
   });
 
   it("hydrates active and archived threads when archived results are included", async () => {

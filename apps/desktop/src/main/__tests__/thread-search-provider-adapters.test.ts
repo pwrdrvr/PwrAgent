@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppServerReadThreadResponse, ThreadSearchResult } from "@pwragent/shared";
-import { ProviderTranscriptThreadSearchAdapter } from "../thread-search-provider-adapters";
+import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 
 describe("ProviderTranscriptThreadSearchAdapter", () => {
   it("searches transcript messages through the injected provider reader", async () => {

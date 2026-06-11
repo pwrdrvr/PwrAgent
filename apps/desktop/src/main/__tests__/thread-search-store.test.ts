@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
-import { StateDb } from "../../state/state-db";
-import { buildThreadSearchFtsQuery } from "../thread-search-fts-query";
-import { ThreadSearchStore } from "../thread-search-store";
+import { StateDb } from "../state/state-db";
+import { buildThreadSearchFtsQuery } from "../thread-search/thread-search-fts-query";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 let stateDb: StateDb;
 let store: ThreadSearchStore;
@@ -79,6 +79,33 @@ describe("ThreadSearchStore", () => {
     ]);
   });
 
+  it("applies structured filters before limiting projection results", () => {
+    store.upsertThread(
+      threadSummary({
+        id: "pwragent",
+        projectKey: "PwrAgent",
+        title: "Branch drift in PwrAgent",
+        updatedAt: 3_000,
+      }),
+    );
+    store.upsertThread(
+      threadSummary({
+        id: "docs",
+        projectKey: "Docs",
+        title: "Branch drift in docs",
+        updatedAt: 1_000,
+      }),
+    );
+
+    const results = store.search({
+      filters: { projectKeys: ["Docs"] },
+      limit: 1,
+      query: "branch drift",
+    });
+
+    expect(results.map((result) => result.threadId)).toEqual(["docs"]);
+  });
+
   it("excludes archived rows by default", () => {
     store.upsertThread(
       threadSummary({ id: "active", title: "Active", archivedAt: undefined }),
@@ -102,6 +129,22 @@ describe("ThreadSearchStore", () => {
     store.deleteThread({ backend: "codex", threadId: "thread-1" });
 
     expect(store.search({ query: "branch", limit: 10 })).toEqual([]);
+  });
+
+  it("prunes rows missing from a refreshed active thread list", () => {
+    store.upsertThread(threadSummary({ id: "stale", title: "Stale branch drift" }));
+    store.upsertThread(threadSummary({ id: "active", title: "Active branch drift" }));
+
+    store.pruneMissingThreads({
+      includeArchived: false,
+      retainedIdentityKeys: ["codex:active"],
+    });
+
+    expect(
+      store
+        .search({ query: "branch drift", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["active"]);
   });
 });
 
