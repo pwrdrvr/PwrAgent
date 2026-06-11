@@ -2227,14 +2227,16 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* 4px gutters on both sides hold row content clear of the scroll
-     container's `overflow: hidden` clip. The right gutter also keeps the
-     selected row's accent-border from kissing the scrollbar thumb. The
-     left gutter is what makes the focus-visible outline (2px wide at
-     2px offset → extends 4px outside the row's box) visible on the left
-     edge of the active row — without it the outline gets clipped against
-     the sidebar's left wall and the selected row reads as missing a side. */
-  padding-inline: 4px;
+  /* Asymmetric gutters. Left (4px) keeps the focus-visible outline
+     (2px wide at 2px offset → extends 4px outside the row's box) clear
+     of the sidebar's left wall — without it the outline clips and the
+     active row reads as missing a side. Right (8px) holds row content —
+     and the per-directory launchpad (+) button on directory headers —
+     well clear of the native scrollbar thumb that lives in the reserved
+     gutter, so the auto-hiding bar never visually kisses the + button
+     when it appears. (Bumped from 4px after the thumb read as crowding
+     the launchpad button.) */
+  padding-inline: 4px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
@@ -2250,9 +2252,9 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
-     rationale. */
-  padding-inline: 4px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the asymmetric
+     gutter rationale (4px left / 8px right for scrollbar clearance). */
+  padding-inline: 4px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
@@ -3337,7 +3339,15 @@ textarea,
 }
 
 .directory-row__threads {
+  /* Mirror the 8px left inset on the right so the sticky directory
+     header (which spans the full `.directory-row` width) covers a
+     selected row's accent border with the same 8px overlap on both
+     edges. Without the right inset the row's right border aligned
+     exactly with the header's right edge, so a 1px orange sliver
+     leaked through when a selected row scrolled under the pinned
+     header. */
   padding-left: 8px;
+  padding-right: 8px;
 }
 
 .directory-row__thread-divider {
