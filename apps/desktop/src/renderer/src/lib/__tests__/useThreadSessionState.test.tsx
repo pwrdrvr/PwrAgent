@@ -4005,6 +4005,71 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("prices token usage with Fast priority rates from thread settings", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          fastMode: true,
+          model: "gpt-5.5",
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              total: {
+                inputTokens: 27_697,
+                cachedInputTokens: 10_112,
+                outputTokens: 95,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    const usageEntry = result.current.entries[0];
+    expect(usageEntry?.type).toBe("activity");
+    expect(usageEntry?.type === "activity" ? usageEntry.summary : undefined).toBe(
+      "Usage: 17,585 uncached in · 10,112 cached · 95 out · $0.24 list price",
+    );
+    expect(usageEntry?.type === "activity" ? usageEntry.details.at(-1)?.label : undefined).toBe(
+      "Cost: $0.24 list price for GPT-5.5 Fast (Priority)",
+    );
+  });
+
   it("finalizes active-turn usage from cumulative token deltas", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
@@ -4214,7 +4279,7 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            model: "gpt-5.4-mini",
+            model: "gpt-5.4",
             tokenUsage: {
               last_token_usage: {
                 input_tokens: 1_217_026,
@@ -4254,7 +4319,7 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Done.",
-      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.18 list price",
+      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.58 list price",
     ]);
   });
 
