@@ -319,14 +319,13 @@
   gap: 4px;
 }
 
-/* Shrink the pin marker so it reads as a marker, not a chip. In Mission
-   Control the full "Pinned" pill is informational; in Compact, the
-   section position + a small marker carries the same signal. */
+/* Shrink the icon-only pin marker a touch in Compact so it tracks the
+   denser rows (the marker itself already replaced the old "Pinned"
+   pill — see `.thread-row__chip--pin`). */
 :root[data-density="compact"] .thread-row__chip--pin {
   height: 18px;
-  padding: 0 6px;
-  font-size: 10.5px;
-  font-weight: 600;
+  min-width: 18px;
+  padding: 0 4px;
 }
 
 /* Tighten thread-row vertical real estate. The row keeps its column
@@ -2253,7 +2252,27 @@ textarea,
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  /* Cancel the sidebar's 16px side padding so the thread lanes span
+     wall-to-wall and the reserved scrollbar gutter parks the thumb at
+     the right edge — out from under the lens-switch header, which keeps
+     its inset as a sibling above. The bleed clips cleanly at the sidebar
+     walls (`.sidebar` is `overflow: hidden`); the only intervening
+     ancestor (`.sidebar__section--fill`) is `overflow: visible`, so the
+     -16px reaches the walls instead of being clipped early. Transient
+     empty / loading / error messages that render directly here (no lane
+     wrapper) are re-inset just below. */
+  margin-inline: -16px;
   overflow: hidden;
+}
+
+/* Restore the inset for the region's non-lane children — the lanes
+   intentionally bleed to the walls, but a flush "No threads yet." or a
+   wall-to-wall error box reads as broken. Scoped with `>` so the
+   in-lane `.sidebar-empty.directory-row__empty` and the masthead error
+   (a `.sidebar` child, not a region child) are untouched. */
+.sidebar__scroll-region > .sidebar-empty,
+.sidebar__scroll-region > .sidebar-error {
+  margin-inline: 16px;
 }
 
 .context-panel h3 {
@@ -2403,7 +2422,11 @@ textarea,
 .directory-groups {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* Tightened from 8px in the Mission Control density pass. Rows are
+     borderless here, so the gap is pure separation — 4px reads as a
+     scannable index without the cards merging. Compact density drops
+     this further (see the density block). */
+  gap: 4px;
   padding: 12px 0 16px;
 }
 
@@ -2411,16 +2434,14 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* Asymmetric gutters. Left (4px) keeps the focus-visible outline
-     (2px wide at 2px offset → extends 4px outside the row's box) clear
-     of the sidebar's left wall — without it the outline clips and the
-     active row reads as missing a side. Right (8px) holds row content —
-     and the per-directory launchpad (+) button on directory headers —
-     well clear of the native scrollbar thumb that lives in the reserved
-     gutter, so the auto-hiding bar never visually kisses the + button
-     when it appears. (Bumped from 4px after the thumb read as crowding
-     the launchpad button.) */
-  padding-inline: 4px 8px;
+  /* This lane bleeds to the sidebar walls (see `.sidebar__scroll-region`),
+     so it spans edge-to-edge and its reserved scrollbar gutter parks the
+     thumb at the right wall. 8px left keeps the focus-visible outline
+     (2px @ 2px offset → 4px outside the row box) off the now-reachable
+     left wall; 8px right holds row content — and the per-directory
+     launchpad (+) button on directory headers — clear of the thumb in
+     the reserved gutter. */
+  padding-inline: 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Reserve a stable gutter so the thin auto-hiding scrollbar never
@@ -2596,7 +2617,12 @@ textarea,
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  padding: 12px 12px 12px 14px;
+  /* Tightened from `12px 12px 12px 14px` in the Mission Control density
+     pass. With the lane's 8px inline padding this leaves ~18px of text
+     inset on each side; 8px block padding + the 4px row gap give ~20px
+     text-to-text between rows. (`.thread-row__actions` top is kept in
+     step with the block padding — see that rule.) */
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -2677,11 +2703,11 @@ textarea,
      pixels into the row's top padding so its vertical midpoint matches
      the title's line midpoint. When the row is multi-line (chips
      present) the title is still the FIRST line, so the same offset
-     keeps the button anchored to it. The Compact density variant
-     overrides this `top` (see the density-compact block at the top of
-     the file) so the button stays on the title line when the row's top
-     padding shrinks from 12 → 6. */
-  top: 9px;
+     keeps the button anchored to it. Offset tracks the row's top padding
+     (`top ≈ padding-top − 3`): Mission Control rows pad 8px → 5px here;
+     the Compact density variant overrides this `top` to 3px (see the
+     density-compact block at the top of the file) for its 6px padding. */
+  top: 5px;
   right: 9px;
   z-index: 3;
   display: flex;
@@ -3117,11 +3143,18 @@ textarea,
   font-weight: 600;
 }
 
+/* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
+   tint carry the "pinned" signal without spending a word of row width;
+   the literal label lives in aria-label / title for assistive tech and
+   hover. Square-ish (min-width == height) so it reads as a marker, not a
+   text chip. */
 .thread-row__chip--pin {
+  min-width: 24px;
+  justify-content: center;
+  padding: 0 6px;
   border: 1px solid var(--accent-border);
-  background: var(--bg-panel-elevated);
+  background: var(--accent-soft);
   color: var(--accent-bright);
-  font-weight: 700;
 }
 
 .thread-row__chip--approval {
@@ -3622,6 +3655,37 @@ textarea,
 .directory-row__empty {
   margin-top: 0;
   padding-left: 8px;
+}
+
+/* "Show N more / Show less" toggle for a directory's unpinned threads
+   past the cap (DirectoriesList caps unpinned rows so a project with
+   dozens of threads doesn't push the next directory off-screen). Reads
+   as a quiet index control, not a card; left padding aligns its label
+   with the thread-row titles above it. */
+.directory-row__show-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.directory-row__show-more:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.directory-row__show-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .directory-group {
@@ -9799,7 +9863,10 @@ textarea,
 }
 
 .context-panel__section {
-  padding: 16px;
+  /* Trimmed from 16px in the density pass to match the tightened thread
+     lanes. The rail cards carry their own border + faint fill, so they
+     stay legible at the narrower gutter. */
+  padding: 12px;
   border-bottom: 1px solid var(--border-subtle);
 }
 

@@ -12,6 +12,7 @@ import {
   FolderIcon,
   MattermostIcon,
   NewThreadIcon,
+  PinIcon,
   SettingsIcon,
   SmileyIcon,
   TelegramIcon,
@@ -38,6 +39,7 @@ const ALL_ICONS = [
   ["CloseIcon", CloseIcon],
   ["ChevronLeftIcon", ChevronLeftIcon],
   ["ChevronRightIcon", ChevronRightIcon],
+  ["PinIcon", PinIcon],
 ] as const;
 
 describe("icon library", () => {
