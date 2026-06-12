@@ -69,7 +69,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_messaging_surface":
       return "Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "attach_thread_here":
-      return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it.";
+      return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
   }
 }
 
@@ -93,14 +93,22 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
-          title: { type: "string" },
+          title: {
+            type: "string",
+            description:
+              "Optional title for a newly created native messaging child topic/thread. This is not a PwrAgent thread rename.",
+          },
           placement: {
             type: "string",
             enum: ["auto", "new_child", "current_conversation"],
+            description:
+              "Where to attach the target thread. Use new_child to create a native messaging child topic/thread when supported; use current_conversation only when replacing or reusing the current conversation binding is intended.",
           },
           targetKind: {
             type: "string",
             enum: ["thread", "agent_thread"],
+            description:
+              "How PwrAgent should classify the messaging binding. This does not change the target thread's Agent metadata or title.",
           },
         },
       };

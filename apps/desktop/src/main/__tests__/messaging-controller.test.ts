@@ -273,7 +273,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("reports the current messaging location for an active Agent-thread turn", async () => {
+  it("reports the current messaging surface for an active Agent-thread turn", async () => {
     const createManagedConversation = vi.fn(async () => ({
       channel: "telegram" as const,
       outcome: "unsupported" as const,

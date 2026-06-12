@@ -85,7 +85,7 @@ export type PwrAgentMessagingLocationSummary = {
   managedConversation: PwrAgentMessagingManagedConversationSummary;
 };
 
-export type GetCurrentMessagingLocationToolArgs = Record<string, never>;
+export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;
 
 export type AttachThreadHerePlacement =
   | "auto"
@@ -111,7 +111,7 @@ export type AttachThreadHereResult = {
 };
 
 export type PwrAgentMessagingToolArgsByOperation = {
-  get_current_messaging_surface: GetCurrentMessagingLocationToolArgs;
+  get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
 };
 
