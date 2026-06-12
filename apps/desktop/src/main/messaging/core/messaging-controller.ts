@@ -1058,15 +1058,39 @@ export class MessagingController {
         now: this.now(),
         threadId: request.params.threadId,
       });
+      if (request.params.turnId) {
+        const threadStatus = await this.readBackendThreadStatus(binding);
+        if (threadStatus === "idle") {
+          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          continue;
+        }
+      }
       const pendingIntent = await this.storePendingIntent(intent, binding);
       const delivery = await this.deliver(intent, binding);
+      let deliveredPendingIntent = pendingIntent;
       if (delivery.surface) {
-        await this.options.store.upsertPendingIntent({
+        deliveredPendingIntent = {
           ...pendingIntent,
           surface: delivery.surface,
-        });
+        };
+        await this.options.store.upsertPendingIntent(deliveredPendingIntent);
       }
       if (request.params.turnId) {
+        const reconciledTurn = await this.reconcileActiveTurnFromBackendStatus(
+          binding,
+          "pending_request",
+        );
+        if (isTerminalTurnLifecycle(reconciledTurn)) {
+          await this.retireStalePendingIntent(deliveredPendingIntent);
+          await this.startNextQueuedTurn(binding);
+          continue;
+        }
+        const threadStatus = await this.readBackendThreadStatus(binding);
+        if (threadStatus === "idle") {
+          await this.retireStalePendingIntent(deliveredPendingIntent);
+          await this.reconcileIdleTurnAndStartNext(binding, "pending_request");
+          continue;
+        }
         const activeTurn: MessagingActiveTurnSummary = {
           turnId: request.params.turnId,
           status: "waiting",
@@ -1826,19 +1850,15 @@ export class MessagingController {
       return true;
     }
 
-    const activeTurn = this.getActiveTurn(binding);
+    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+      binding,
+      "turn_admission",
+    );
     if (activeTurn && ["working", "waiting"].includes(activeTurn.status)) {
       return true;
     }
 
-    if (!this.options.backend.readThreadStatus) {
-      return false;
-    }
-
-    const threadStatus = await this.options.backend.readThreadStatus({
-      backend: binding.backend,
-      threadId: binding.threadId,
-    });
+    const threadStatus = await this.readBackendThreadStatus(binding);
     return threadStatus === "active";
   }
 
@@ -1992,7 +2012,10 @@ export class MessagingController {
       return;
     }
 
-    const activeTurn = this.getActiveTurn(entry.binding);
+    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+      entry.binding,
+      "queued_turn_steer",
+    );
     if (
       !this.options.backend.steerTurn ||
       !activeTurn ||
@@ -2190,6 +2213,9 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
+        if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
+          return;
+        }
         const decision = await this.submitApprovalAction(
           pendingIntent.intent,
           action.id,
@@ -9305,16 +9331,12 @@ export class MessagingController {
     const activeTurn = this.getActiveTurn(binding);
     if (
       !activeTurn ||
-      activeTurn.status !== "working" ||
-      !this.options.backend.readThreadStatus
+      !["working", "waiting"].includes(activeTurn.status)
     ) {
       return activeTurn;
     }
 
-    const threadStatus = await this.options.backend.readThreadStatus({
-      backend: binding.backend,
-      threadId: binding.threadId,
-    });
+    const threadStatus = await this.readBackendThreadStatus(binding);
     if (threadStatus !== "idle") {
       return activeTurn;
     }
@@ -9336,6 +9358,57 @@ export class MessagingController {
       reason: `${reason}:thread_status_idle`,
     });
     return completedTurn;
+  }
+
+  private async retireApprovalCallbackIfBackendIdle(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<boolean> {
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    const turnId = pendingIntent.intent.requestContext?.turnId;
+    if (!binding || binding.revokedAt || !turnId) {
+      return false;
+    }
+
+    const threadStatus = await this.readBackendThreadStatus(binding);
+    if (threadStatus !== "idle") {
+      return false;
+    }
+
+    await this.reconcileActiveTurnFromBackendStatus(
+      binding,
+      "pending_request.submitted",
+    );
+    await this.options.store.deletePendingIntent(pendingIntent.id);
+    await this.retireApprovalIntent(pendingIntent, event, "Resolved");
+    await this.startNextQueuedTurn(binding);
+    return true;
+  }
+
+  private async reconcileIdleTurnAndStartNext(
+    binding: MessagingBindingRecord,
+    reason: string,
+  ): Promise<void> {
+    await this.reconcileActiveTurnFromBackendStatus(binding, reason);
+    await this.startNextQueuedTurn(binding);
+  }
+
+  private async retireStalePendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+  ): Promise<void> {
+    await this.options.store.deletePendingIntent(pendingIntent.id);
+    await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
+  }
+
+  private async readBackendThreadStatus(
+    binding: MessagingBindingRecord,
+  ): Promise<string | undefined> {
+    return await this.options.backend.readThreadStatus?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
   }
 
   private getActiveTurn(
