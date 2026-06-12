@@ -9,6 +9,8 @@ import type {
   AppServerPendingRequestNotification,
   BackendSummary,
   CancelThreadExecutionModeQueueRequest,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadOptions,
@@ -24,6 +26,7 @@ import type {
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
+import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared";
 import type {
   MessagingCapabilityProfile,
   MessagingSurfaceAction,
@@ -913,7 +916,6 @@ describe("MessagingController", () => {
       title: "Ready to start",
       body: expect.stringContaining("PwrAgent"),
       actions: expect.arrayContaining([
-        expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
         expect.objectContaining({ id: "browse:new:streaming" }),
@@ -923,6 +925,8 @@ describe("MessagingController", () => {
     });
     expect(readyIntent).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
+        expect.objectContaining({ id: "browse:new:workspace:local" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1247,9 +1251,18 @@ describe("MessagingController", () => {
         },
       }),
     );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:workspace:toggle",
+          label: "Start In: Local",
+        }),
+      ]),
+    });
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
-        actionId: "browse:new:workspace:worktree",
+        actionId: "browse:new:workspace:toggle",
       }),
     );
 
@@ -1257,6 +1270,10 @@ describe("MessagingController", () => {
       kind: "confirmation",
       body: expect.stringContaining("Workspace: New Worktree"),
       actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:workspace:toggle",
+          label: "Start In: New Worktree",
+        }),
         expect.objectContaining({
           id: "browse:new:base-branch",
           label: "Base: main",
@@ -1337,6 +1354,7 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1359,6 +1377,7 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1414,7 +1433,7 @@ describe("MessagingController", () => {
       }),
     );
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "browse:new:workspace:worktree" }),
+      buildCallbackEvent({ actionId: "browse:new:workspace:toggle" }),
     );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:base-branch" }),
@@ -4609,6 +4628,91 @@ describe("MessagingController", () => {
       }),
       expectMaterializeOptions(),
     );
+  });
+
+  it("hydrates project environments before rendering the new-thread ready card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgnt",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (
+        request: EnsureDirectoryLaunchpadRequest,
+      ): Promise<EnsureDirectoryLaunchpadResponse> => ({
+        defaults: navigation.launchpadDefaults,
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/repo/pwragent",
+          backend: request.preferredBackend ?? "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentId: "pwragnt",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentOptions: [
+            {
+              id: "pwragnt",
+              name: "PwrAgnt",
+              sourcePath: "/repo/pwragent/.codex/environments/pwragnt.toml",
+              setupScript: "pnpm install",
+              actions: [],
+            },
+          ],
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      }),
+    );
+    const harness = await createHarness({
+      navigation,
+      ensureDirectoryLaunchpad,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgnt",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        preferredBackend: "codex",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: PwrAgnt"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:environment",
+          label: "Environment: PwrAgnt",
+        }),
+      ]),
+    });
   });
 
   it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {
@@ -12712,6 +12816,9 @@ async function createHarness(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  ensureDirectoryLaunchpad?: NonNullable<
+    MessagingBackendBridge["ensureDirectoryLaunchpad"]
+  >;
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
@@ -12765,6 +12872,7 @@ async function createHarness(options?: {
   compactThread: ReturnType<typeof vi.fn>;
   cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
+  ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -12831,6 +12939,46 @@ async function createHarness(options?: {
   };
   const getNavigationSnapshot = vi.fn(
     async () => options?.navigation ?? buildNavigationSnapshot(),
+  );
+  const ensureDirectoryLaunchpad = vi.fn(
+    options?.ensureDirectoryLaunchpad ??
+      (async (
+        request: EnsureDirectoryLaunchpadRequest,
+      ): Promise<EnsureDirectoryLaunchpadResponse> => {
+        const snapshot = options?.navigation ?? buildNavigationSnapshot();
+        const directory = snapshot.directories.find(
+          (candidate) => candidate.key === request.directoryKey,
+        );
+        const defaults = request.preferredBackend
+          ? applyNavigationLaunchpadProviderSettingsPatch(snapshot.launchpadDefaults, {
+              backend: request.preferredBackend,
+            })
+          : snapshot.launchpadDefaults;
+        return {
+          defaults,
+          launchpad: {
+            ...(directory?.launchpad ?? {
+              directoryKey: request.directoryKey,
+              directoryKind: request.directoryKind,
+              directoryLabel: request.directoryLabel,
+              directoryPath: request.directoryPath,
+              backend: request.preferredBackend ?? defaults.backend,
+              executionMode: defaults.executionMode,
+              model: defaults.model,
+              reasoningEffort: defaults.reasoningEffort,
+              serviceTier: defaults.serviceTier,
+              fastMode: defaults.fastMode,
+              acpRuntime: defaults.acpRuntime,
+              providerSettings: defaults.providerSettings,
+              prompt: "",
+              workMode: defaults.workMode ?? "local",
+              createdAt: 1000,
+              updatedAt: 1000,
+            }),
+            ...(request.preferredBackend ? { backend: request.preferredBackend } : {}),
+          },
+        };
+      }),
   );
   const startThread = vi.fn(
     options?.startThread ??
@@ -13073,6 +13221,7 @@ async function createHarness(options?: {
   const backend: MessagingBackendBridge = {
     compactThread,
     cancelThreadExecutionModeQueue,
+    ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -13131,6 +13280,7 @@ async function createHarness(options?: {
     compactThread,
     cancelThreadExecutionModeQueue,
     delivered,
+    ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     handoffThreadWorkspace,
     interruptTurn,

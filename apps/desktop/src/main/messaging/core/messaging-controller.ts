@@ -3401,6 +3401,40 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:workspace:toggle") {
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
+      const currentWorkMode = resolveNewThreadWorkMode({
+        requestedWorkMode:
+          nextSession.workMode ??
+          directory?.launchpad?.workMode ??
+          navigation.launchpadDefaults.workMode ??
+          "local",
+        directory,
+      });
+      const nextWorkMode =
+        currentWorkMode === "worktree" || !canCreateNewThreadWorktree(directory)
+          ? "local"
+          : "worktree";
+      const branchName = nextWorkMode === "worktree"
+        ? resolveNewThreadBaseBranch(nextSession, navigation, directory)
+        : undefined;
+      await this.updateNewThreadStickySettings(nextSession, {
+        branchName,
+        workMode: nextWorkMode,
+      });
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          workMode: nextWorkMode,
+          branchName,
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
     if (actionId === "browse:new:workspace:local") {
       await this.updateNewThreadStickySettings(nextSession, {
         branchName: undefined,
@@ -3959,6 +3993,70 @@ export class MessagingController {
     );
   }
 
+  private async ensureNewThreadProjectLaunchpad(
+    session: MessagingBrowseSessionRecord,
+    navigation: NavigationSnapshot,
+    preferredBackend?: AppServerBackendKind,
+  ): Promise<{
+    directory?: NavigationDirectorySummary;
+    navigation: NavigationSnapshot;
+  }> {
+    if (!session.selectedProject || !this.options.backend.ensureDirectoryLaunchpad) {
+      return {
+        directory: session.selectedProject
+          ? directoryForProjectSelection(navigation, session.selectedProject)
+          : undefined,
+        navigation,
+      };
+    }
+
+    const directory = directoryForProjectSelection(navigation, session.selectedProject);
+    const directoryKey =
+      session.selectedProject.directoryKey ??
+      directory?.key ??
+      session.selectedProject.path ??
+      session.selectedProject.label;
+    try {
+      const response = await this.options.backend.ensureDirectoryLaunchpad({
+        directoryKey,
+        directoryKind: directory?.kind ?? "directory",
+        directoryLabel: directory?.label ?? session.selectedProject.label,
+        ...((directory?.path ?? session.selectedProject.path)
+          ? { directoryPath: directory?.path ?? session.selectedProject.path }
+          : {}),
+        ...(directory?.gitStatus?.currentBranch
+          ? { currentBranch: directory.gitStatus.currentBranch }
+          : {}),
+        ...(preferredBackend ? { preferredBackend } : {}),
+      });
+      const nextDirectories = navigation.directories.map((candidate) =>
+        candidate.key === directoryKey
+          ? {
+              ...candidate,
+              launchpad: response.launchpad,
+            }
+          : candidate,
+      );
+      const nextNavigation = {
+        ...navigation,
+        directories: nextDirectories,
+      };
+      return {
+        directory: nextDirectories.find((candidate) => candidate.key === directoryKey),
+        navigation: nextNavigation,
+      };
+    } catch (error) {
+      this.logger.debug?.("messaging new-thread launchpad ensure failed", {
+        directoryKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        directory,
+        navigation,
+      };
+    }
+  }
+
   private async resolveCallbackHandleForEvent(
     event: MessagingInboundCallbackEvent,
   ): Promise<MessagingCallbackHandleRecord | undefined> {
@@ -4067,7 +4165,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
     navigation?: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
   ): Promise<void> {
-    const snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
+    let snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
     const backendChoices = await this.loadNewThreadBackendChoices(event);
@@ -4092,9 +4190,15 @@ export class MessagingController {
       selectedBackend,
       this.now(),
     );
-    const directory = effectiveSession.selectedProject
+    const ensured = await this.ensureNewThreadProjectLaunchpad(
+      effectiveSession,
+      snapshot,
+      selectedBackend.kind,
+    );
+    snapshot = ensured.navigation;
+    const directory = ensured.directory ?? (effectiveSession.selectedProject
       ? directoryForProjectSelection(snapshot, effectiveSession.selectedProject)
-      : undefined;
+      : undefined);
     const options = newThreadOptionsForSession(
       effectiveSession,
       snapshot,
@@ -4162,23 +4266,15 @@ export class MessagingController {
               },
             ]
           : []),
-        {
-          id: "browse:new:workspace:local",
-          label: options.workMode === "local" ? "Local ✓" : "Local",
-          style: options.workMode === "local" ? "primary" : "secondary",
-          fallbackText: "local",
-        },
         ...(canCreateWorktree
           ? [
               {
-                id: "browse:new:workspace:worktree",
-                label:
-                  options.workMode === "worktree" ? "New Worktree ✓" : "New Worktree",
-                style:
-                  options.workMode === "worktree"
-                    ? "primary" as const
-                    : "secondary" as const,
-                fallbackText: "worktree",
+                id: "browse:new:workspace:toggle",
+                label: `Start In: ${
+                  options.workMode === "worktree" ? "New Worktree" : "Local"
+                }`,
+                style: "secondary" as const,
+                fallbackText: "start in",
               },
             ]
           : []),
@@ -4725,9 +4821,14 @@ export class MessagingController {
     event: MessagingInboundEvent,
     navigation: NavigationSnapshot,
   ): Promise<void> {
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
+    const ensured = await this.ensureNewThreadProjectLaunchpad(
+      session,
+      navigation,
+      session.backend ?? navigation.launchpadDefaults.backend,
+    );
+    const directory = ensured.directory ?? (session.selectedProject
+      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
+      : undefined);
     const options = directory?.launchpad?.codexEnvironmentOptions ?? [];
     const currentEnvironmentId = resolveNewThreadCodexEnvironmentId(
       session,

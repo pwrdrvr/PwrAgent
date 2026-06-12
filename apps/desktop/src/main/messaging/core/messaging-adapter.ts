@@ -8,6 +8,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
@@ -136,6 +138,9 @@ export type MessagingBackendBridge = {
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  ensureDirectoryLaunchpad?(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse>;
   materializeDirectoryLaunchpad?(
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
