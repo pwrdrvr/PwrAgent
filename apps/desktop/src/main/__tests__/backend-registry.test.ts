@@ -11223,6 +11223,102 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps Codex review usage when Codex emits a different runtime turn id", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [{ id: "gpt-5.5" }],
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "gpt-5.5",
+    });
+
+    await codexClient.emit({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-runtime-1",
+        turn: {
+          id: "turn-runtime-1",
+          status: "in_progress",
+        },
+      },
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-runtime-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 170_887,
+            cachedInputTokens: 114_048,
+            outputTokens: 117,
+          },
+        },
+      },
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-runtime-1",
+        turn: {
+          id: "turn-runtime-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        monitorTurnId: "turn-review-1",
+        outcome: "success",
+        status: "success",
+        monitorUsage: {
+          model: "gpt-5.5",
+          serviceTier: "standard",
+          summary:
+            "56,839 uncached in · 114,048 cached · 117 out · $0.35 list price",
+          cost: {
+            model: "gpt-5.5",
+            serviceTier: "standard",
+            totalUsd: 0.344729,
+          },
+        },
+      });
+
+    await registry.close();
+  });
+
   it("patches detached Codex review usage on the parent thread after completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },

@@ -9739,14 +9739,20 @@ export class DesktopBackendRegistry {
         notification.params.threadId,
         notification.params.turnId,
       );
-      const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      const activeReview = this.findActiveReviewSubAgentForTurn({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId: notification.params.turnId,
+      });
+      const reviewRecord = activeReview?.record;
       const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const persistedRecord = reviewRecord ?? completedReviewRecord;
       const notificationParams = readRecord(notification.params);
       const usageModel =
         readStringLike(notificationParams, ["model"]) ?? undefined;
       const usageSnapshot = buildReviewSubAgentUsageSnapshot({
         model: usageModel,
-        record: reviewRecord ?? completedReviewRecord,
+        record: persistedRecord,
         tokenUsage: notification.params.tokenUsage,
       });
       if (!usageSnapshot) {
@@ -9765,7 +9771,7 @@ export class DesktopBackendRegistry {
           completedReviewRecord?.parentThreadId ?? notification.params.threadId,
         reviewThreadId:
           completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
-        turnId: notification.params.turnId,
+        turnId: completedReviewRecord?.turnId ?? notification.params.turnId,
         tokenUsage: notification.params.tokenUsage,
         usageModel,
       });
@@ -10024,6 +10030,12 @@ export class DesktopBackendRegistry {
 
     this.activeReviewSubAgents.delete(activeReview.key);
     const { record } = activeReview;
+    if (params.turnId !== record.turnId) {
+      this.reviewSubAgentsByReviewTurn.set(
+        buildReviewSubAgentKey(record.backend, record.reviewThreadId, params.turnId),
+        record,
+      );
+    }
     const completedAt = params.completedAt ?? Date.now();
     const monitorUsage =
       params.tokenUsage !== undefined
@@ -10067,6 +10079,14 @@ export class DesktopBackendRegistry {
   }
 
   private findActiveReviewSubAgentForTerminal(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): { key: string; record: ReviewSubAgentRecord } | undefined {
+    return this.findActiveReviewSubAgentForTurn(params);
+  }
+
+  private findActiveReviewSubAgentForTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnId: string;
