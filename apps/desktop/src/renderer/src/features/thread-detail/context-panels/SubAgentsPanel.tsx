@@ -75,8 +75,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         </ul>
       ) : (
         <p className="context-empty">
-          No sub-agents yet. Delegated task monitors started from this thread
-          will appear here.
+          No sub-agents yet. Delegated monitors, reviews, and observed native
+          Codex sub-agents started from this thread will appear here.
         </p>
       )}
       {detailsFor ? (
