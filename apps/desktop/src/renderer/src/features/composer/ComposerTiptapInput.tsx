@@ -279,6 +279,50 @@ function parseInlineMarkdownWithMarks(
   return nodes;
 }
 
+function matchMarkdownCodeFence(line: string): RegExpMatchArray | null {
+  return line.match(/^```([A-Za-z0-9_-]*)\s*$/);
+}
+
+function matchMarkdownOrderedListItem(line: string): RegExpMatchArray | null {
+  return line.match(/^\s{0,3}(\d+)\.\s+(.+)$/);
+}
+
+function matchMarkdownBulletListItem(line: string): RegExpMatchArray | null {
+  return line.match(/^\s{0,3}[-*]\s+(.+)$/);
+}
+
+function isMarkdownBlockStart(line: string): boolean {
+  return (
+    matchMarkdownCodeFence(line) !== null ||
+    matchMarkdownOrderedListItem(line) !== null ||
+    matchMarkdownBulletListItem(line) !== null
+  );
+}
+
+function isMarkdownSectionLabelLine(line: string): boolean {
+  return /^[^\s].*:\s*$/.test(line);
+}
+
+function nextNonBlankLineIndex(lines: string[], index: number): number {
+  let cursor = index;
+  while (cursor < lines.length && (lines[cursor] ?? "").trim().length === 0) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function buildMarkdownListItem(text: string): JSONContent {
+  return {
+    type: "listItem",
+    content: [
+      {
+        type: "paragraph",
+        content: parseInlineMarkdown(text),
+      },
+    ],
+  };
+}
+
 function buildTiptapContent(
   value: string,
   skillTokens: ComposerSkillToken[],
@@ -332,7 +376,7 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
-    const codeFence = line.match(/^```([A-Za-z0-9_-]*)\s*$/);
+    const codeFence = matchMarkdownCodeFence(line);
     if (codeFence) {
       index += 1;
       const codeLines: string[] = [];
@@ -353,6 +397,62 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       continue;
     }
 
+    const orderedListItem = matchMarkdownOrderedListItem(line);
+    if (orderedListItem) {
+      const start = Number.parseInt(orderedListItem[1] ?? "1", 10);
+      const items: JSONContent[] = [];
+      while (index < lines.length) {
+        const currentLine = lines[index] ?? "";
+        const currentItem = matchMarkdownOrderedListItem(currentLine);
+        if (!currentItem) {
+          const nextIndex = nextNonBlankLineIndex(lines, index);
+          if (
+            nextIndex !== index &&
+            matchMarkdownOrderedListItem(lines[nextIndex] ?? "") !== null
+          ) {
+            index = nextIndex;
+            continue;
+          }
+          break;
+        }
+        items.push(buildMarkdownListItem(currentItem[2] ?? ""));
+        index += 1;
+      }
+      content.push({
+        type: "orderedList",
+        attrs: { start },
+        content: items,
+      });
+      continue;
+    }
+
+    const bulletListItem = matchMarkdownBulletListItem(line);
+    if (bulletListItem) {
+      const items: JSONContent[] = [];
+      while (index < lines.length) {
+        const currentLine = lines[index] ?? "";
+        const currentItem = matchMarkdownBulletListItem(currentLine);
+        if (!currentItem) {
+          const nextIndex = nextNonBlankLineIndex(lines, index);
+          if (
+            nextIndex !== index &&
+            matchMarkdownBulletListItem(lines[nextIndex] ?? "") !== null
+          ) {
+            index = nextIndex;
+            continue;
+          }
+          break;
+        }
+        items.push(buildMarkdownListItem(currentItem[1] ?? ""));
+        index += 1;
+      }
+      content.push({
+        type: "bulletList",
+        content: items,
+      });
+      continue;
+    }
+
     // Blank lines between content are paragraph separators in markdown,
     // not standalone empty paragraph nodes. Re-creating them as nodes
     // double-spaces the doc on every round-trip (n → 2n+1 blank lines).
@@ -365,10 +465,14 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
     while (
       index < lines.length &&
       (lines[index] ?? "").trim().length > 0 &&
-      !/^```([A-Za-z0-9_-]*)\s*$/.test(lines[index] ?? "")
+      !isMarkdownBlockStart(lines[index] ?? "")
     ) {
-      paragraphLines.push(lines[index] ?? "");
+      const paragraphLine = lines[index] ?? "";
+      paragraphLines.push(paragraphLine);
       index += 1;
+      if (paragraphLines.length === 1 && isMarkdownSectionLabelLine(paragraphLine)) {
+        break;
+      }
     }
     content.push({
       type: "paragraph",
@@ -744,6 +848,26 @@ function pastePlainTextIntoActiveBlock(
   }
 
   return false;
+}
+
+function pastePlainMarkdownWithFences(
+  editor: TiptapEditor,
+  event: ClipboardEvent<HTMLDivElement>,
+): boolean {
+  const text = getPlainTextFromPaste(event);
+  if (!/^```[A-Za-z0-9_-]*\s*$/m.test(text)) {
+    return false;
+  }
+
+  const markdownContent = buildMarkdownTiptapContent(text).content ?? [];
+  if (markdownContent.length === 0) {
+    return false;
+  }
+
+  event.preventDefault();
+  return editor.commands.insertContent(markdownContent, {
+    updateSelection: true,
+  });
 }
 
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
@@ -1433,6 +1557,9 @@ export const ComposerTiptapInput = forwardRef<
             return false;
           }
           return pastePlainTextIntoActiveBlock(
+            currentEditor,
+            event as unknown as ClipboardEvent<HTMLDivElement>,
+          ) || pastePlainMarkdownWithFences(
             currentEditor,
             event as unknown as ClipboardEvent<HTMLDivElement>,
           );

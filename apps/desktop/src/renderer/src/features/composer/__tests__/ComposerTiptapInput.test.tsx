@@ -48,6 +48,96 @@ function setComposerSelection(textbox: HTMLElement, index: number): void {
   ).setSelectionRange(index);
 }
 
+const copiedHandoffText = [
+  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "",
+  "Root cause:",
+  "",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "",
+  "Fix:",
+  "",
+  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "",
+  "```swift",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "    uploadButtonClicked()",
+  "}",
+  "```",
+  "",
+  "Regression test:",
+  "",
+  "Add a test that:",
+  "1. Creates several ready recordings.",
+  "2. Adds them to `GGDataStore`.",
+  "3. Opens `GGGIFCollectionWindowController`.",
+  "4. Selects multiple reel items in sequence, reusing the existing editor.",
+  "5. Finds the visible editor `UPLOAD TO GIPHY` button.",
+  "6. Sends mouseDown/mouseUp to that button.",
+  "7. Asserts `editor.window?.attachedSheet?.windowController` is `GGUploadWindowController`.",
+  "8. Asserts `representedRecording` is the currently selected recording.",
+  "",
+  "Important observation:",
+  "",
+  "The editor Upload button should only open the metadata upload sheet. It should not render or POST the GIF. The actual network upload happens later from `GGUploadWindowController.doUpload()` when clicking Upload inside that sheet.",
+  "",
+  "Related hardening from this investigation:",
+  "- Add diagnostic logs for upload button mouseUp, delegate dispatch, upload path entry, blocked early returns, and upload sheet opening.",
+  "- Make `GGUploadWindowController.close()`/window close/Cancel/Done end the attached sheet consistently.",
+  "- Clear the retained upload window controller when the sheet ends.",
+  "",
+].join("\n");
+
+const canonicalCopiedHandoffText = copiedHandoffText
+  .replace("Add a test that:\n1. Creates", "Add a test that:\n\n1. Creates")
+  .replace(
+    "Related hardening from this investigation:\n- Add",
+    "Related hardening from this investigation:\n\n- Add",
+  )
+  .trimEnd();
+
+const handoffPrefixWithoutCodeBlock = [
+  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "",
+  "Root cause:",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "",
+  "Fix:",
+  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+].join("\n");
+
+const handoffPrefixWithCodeBlock = [
+  handoffPrefixWithoutCodeBlock,
+  "",
+  "```swift",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "    uploadButtonClicked()",
+  "}",
+  "```",
+].join("\n");
+
+const canonicalHandoffPrefix = [
+  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "",
+  "Root cause:",
+  "",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "",
+  "Fix:",
+  "",
+  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+].join("\n");
+
+const canonicalHandoffPrefixWithCodeBlock = [
+  canonicalHandoffPrefix,
+  "",
+  "```swift",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "    uploadButtonClicked()",
+  "}",
+  "```",
+].join("\n");
+
 describe("ComposerTiptapInput", () => {
   it("keeps Alt+Enter inside the editor instead of routing it to the composer", async () => {
     const onKeyDown = vi.fn();
@@ -121,6 +211,91 @@ describe("ComposerTiptapInput", () => {
       );
     });
     expect(container.querySelector("a")).not.toBeInTheDocument();
+  });
+
+  it("pastes copied handoff markdown as fences and lists without extra blank lines", async () => {
+    const { container, onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? copiedHandoffText : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(canonicalCopiedHandoffText, []);
+    });
+
+    const codeBlock = container.querySelector("pre code");
+    expect(codeBlock?.textContent).toBe(
+      [
+        "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+        "    uploadButtonClicked()",
+        "}",
+      ].join("\n")
+    );
+    expect(codeBlock?.textContent).not.toContain("\n\n");
+
+    const orderedItems = [...container.querySelectorAll("ol > li")];
+    expect(orderedItems).toHaveLength(8);
+    expect(orderedItems[0]).toHaveTextContent("Creates several ready recordings.");
+    expect(orderedItems[7]).toHaveTextContent(
+      "Asserts representedRecording is the currently selected recording.",
+    );
+
+    const bulletItems = [...container.querySelectorAll("ul > li")];
+    expect(bulletItems).toHaveLength(3);
+    expect(bulletItems[0]).toHaveTextContent(
+      "Add diagnostic logs for upload button mouseUp",
+    );
+    const paragraphs = [...container.querySelectorAll(".composer-tiptap-input__editor > p")];
+    expect(
+      paragraphs.some((paragraph) =>
+        paragraph.textContent?.startsWith("1. Creates several ready recordings.")
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves paragraph separators when pasting a handoff prefix without a code block", async () => {
+    const { onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) =>
+          type === "text/plain" ? handoffPrefixWithoutCodeBlock : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(canonicalHandoffPrefix, []);
+    });
+  });
+
+  it("preserves paragraph separators when pasting a handoff prefix with a code block", async () => {
+    const { onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) =>
+          type === "text/plain" ? handoffPrefixWithCodeBlock : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(canonicalHandoffPrefixWithCodeBlock, []);
+    });
   });
 
   it("renders multi-paragraph markdown without phantom empty paragraphs", async () => {

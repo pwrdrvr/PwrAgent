@@ -183,7 +183,10 @@ test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async
     const closingParagraph = tiptapInput.locator("p", { hasText: "Let's use" }).last();
     await closingParagraph.click();
     await app.window.keyboard.press("End");
-    await app.window.keyboard.type(" ");
+    const draftAfterPaste = await tiptapInput.getAttribute("data-value");
+    if (!draftAfterPaste?.endsWith(" ")) {
+      await app.window.keyboard.type(" ");
+    }
 
     const codeBlock = tiptapInput.locator("pre", {
       hasText: "const value = 1;\nreturn value;",

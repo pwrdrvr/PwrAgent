@@ -11,6 +11,33 @@ const sanitizedReviewFindingsTable = `| # | Sev | File | Issue | Fix |
 | 4 | P2 | [InvoiceDispatcher.scala (line 87)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:87) | The no-cache path always gives pacing an empty matched-account set, which becomes an allow-without-bucket decision. Why it matters: \`billing.enforce=true\` silently has no effect for \`createWithoutCache\` and no observations are accumulated even though pacing is enabled. | Fail fast or disable enforcement when the active-account cache is unavailable, or introduce a deliberate fallback bucket if no-cache pacing is expected to work. |
 | 5 | P3 | [LedgerController.scala (line 72)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerController.scala:72) | The deterministic sampling key is customer/page scoped and has no per-opportunity component. Why it matters: repeated requests from the same customer for the same bucket in one interval all make the same allow/throttle decision, and missing/shared customer ids can turn a configured probability into all-or-nothing behavior. | Include a stable opportunity/request identifier, or at least the full targeting tuple, in the sampling key and add tests for repeated same-customer requests. |`;
 
+const malformedHandoffBody = [
+  "We reproduced and fixed the upload bug.",
+  "",
+  "Root cause:",
+  "The editor button still had a delegate and received mouseUp.",
+  "",
+  "Fix:",
+  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by",
+  "command/title as well as object identity:",
+  "",
+  "```swift",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "    uploadButtonClicked()",
+  "}",
+  "```",
+  "",
+  "Regression test:",
+  "1. Creates several ready recordings.",
+  "2. Sends mouseDown/mouseUp to the visible editor `UPLOAD TO GIPHY` button.",
+  "3. Asserts the upload sheet opens.",
+  "",
+  "Related hardening:",
+  "- Add diagnostic logs for upload button mouseUp.",
+].join("\n");
+
+const malformedHandoff = `\`\`\`text\n${malformedHandoffBody}\n\`\`\``;
+
 describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
@@ -246,6 +273,57 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("pre strong")).toBeNull();
     expect(container.querySelector("pre .skill-chip")).toBeNull();
     expect(container.querySelector("pre img")).toBeNull();
+  });
+
+  it("keeps malformed handoff messages grouped when they contain language fences", () => {
+    const { container } = render(<ThreadMarkdown text={malformedHandoff} />);
+
+    const codeBlocks = Array.from(container.querySelectorAll("pre code"));
+    expect(codeBlocks).toHaveLength(1);
+    expect(codeBlocks[0]?.textContent).toContain("```swift");
+    expect(codeBlocks[0]?.textContent).toContain("Regression test:");
+    expect(codeBlocks[0]?.textContent).toContain("Related hardening:");
+    const paragraphText = Array.from(
+      container.querySelectorAll(".transcript-message__paragraph")
+    ).map((paragraph) => paragraph.textContent ?? "");
+    expect(paragraphText.join("\n")).not.toContain("Regression test:");
+  });
+
+  it("copies repaired malformed handoff code without the outer wrapper", async () => {
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText }}
+        text={malformedHandoff}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(`${malformedHandoffBody}\n`);
+    });
+  });
+
+  it("does not collapse a valid code block followed by a separate language block", () => {
+    const markdown = [
+      "```",
+      "literal nested-looking opener:",
+      "```swift",
+      "```",
+      "",
+      "```ts",
+      "const answer = 42;",
+      "```",
+    ].join("\n");
+
+    const { container } = render(<ThreadMarkdown text={markdown} />);
+
+    const codeBlocks = Array.from(container.querySelectorAll("pre code"));
+    expect(codeBlocks).toHaveLength(2);
+    expect(codeBlocks[0]?.textContent).toContain("```swift");
+    expect(codeBlocks[1]?.textContent).toContain("const answer = 42;");
   });
 
   it("copies fenced code blocks without markdown fences", async () => {
