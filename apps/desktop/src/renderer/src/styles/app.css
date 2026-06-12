@@ -27,6 +27,10 @@
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
+  /* Foreground for content sitting on a solid `--accent` fill (the orange
+     "composing source" thread row). Near-black on the bright dark-theme
+     accent for a strong AA-passing contrast. */
+  --accent-on: #160a00;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
   --accent-shadow: color-mix(in srgb, var(--accent) 34%, transparent);
@@ -210,6 +214,8 @@
   --accent: #c45200;
   --accent-strong: #b34a00;
   --accent-bright: #d96d00;
+  /* Light foreground on the darker light-theme accent fill. */
+  --accent-on: #ffffff;
   --focus-ring: var(--accent);
 
   /* Semantic — darker bases for contrast. */
@@ -2555,6 +2561,47 @@ textarea,
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+}
+
+/* The thread card a sub-thread / new-thread composer is being created from.
+   Filled solid accent while the composer is open so the source is unmistakable;
+   foreground flips to the on-accent token and meta chips invert to readable
+   pills. Declared after `.thread-row:hover` (equal specificity) so the fill
+   survives hover. Clears automatically when the composer materializes, is
+   cancelled, or the user navigates away. */
+.thread-row.is-composer-source {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.thread-row.is-composer-source .thread-row__time,
+.thread-row.is-composer-source .thread-row__summary {
+  color: var(--accent-on);
+}
+
+.thread-row.is-composer-source .thread-row__chip {
+  border-color: transparent;
+  background: var(--accent-on);
+  color: var(--accent);
+}
+
+.thread-row.is-composer-source .thread-row__status-cookie {
+  border-color: var(--accent-on);
+  background: var(--accent-on);
+  box-shadow: none;
+}
+
+/* The thinking sweep is an accent-on-accent gradient — invisible on the solid
+   accent fill. Recolor it to the on-accent token so a source card that's still
+   working stays legible. */
+.thread-row.is-composer-source .thinking-scanner__beam {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 0%,
+    color-mix(in srgb, var(--accent-on) 95%, transparent) 48%,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 100%
+  );
 }
 
 .thread-row.thread-row--drag-image {

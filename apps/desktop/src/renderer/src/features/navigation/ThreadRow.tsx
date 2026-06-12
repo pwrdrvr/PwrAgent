@@ -32,6 +32,11 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /**
+   * Identity key of the card the open composer was spawned from. When it
+   * matches this row, the row renders as the orange "composing" source.
+   */
+  composerSourceThreadKey?: string;
   compact?: boolean;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
@@ -90,6 +95,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
   const selected =
     threadKey === props.selectedThreadKey;
+  const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
   const addReactionRef = useRef<HTMLSpanElement>(null);
@@ -183,7 +189,7 @@ export function ThreadRow(props: ThreadRowProps) {
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
-        }`}
+        }${isComposerSource ? " is-composer-source" : ""}`}
         type="button"
         onKeyDown={(event) => {
           // Reorder a pinned thread within its backend's pinned

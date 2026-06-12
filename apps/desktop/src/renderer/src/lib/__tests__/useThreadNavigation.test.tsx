@@ -1341,6 +1341,109 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("forks a child below its source and re-parents it to the group root", async () => {
+    const worktree = {
+      id: "wt",
+      label: "Repo",
+      path: "/repo",
+      worktreePath: "/wt/repo",
+      kind: "worktree" as const,
+    };
+    const rootThread = {
+      id: "thread-root",
+      title: "Root thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [worktree],
+      inbox: { inInbox: false },
+      updatedAt: 1_000,
+      createdAt: 1_000,
+      subthreadOrder: ["thread-a", "thread-b"],
+    };
+    const childA = {
+      id: "thread-a",
+      title: "Child A",
+      titleSource: "explicit" as const,
+      parentThreadId: "thread-root",
+      source: "codex" as const,
+      linkedDirectories: [worktree],
+      inbox: { inInbox: false },
+      updatedAt: 2_000,
+      createdAt: 2_000,
+    };
+    const childB = { ...childA, id: "thread-b", title: "Child B", createdAt: 3_000 };
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [rootThread, childA, childB],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const forkThread = vi.fn(
+      async (request: { parentThreadId?: string; sourceThreadId: string }) => ({
+        backend: "codex" as const,
+        sourceThreadId: request.sourceThreadId,
+        threadId: "thread-fork",
+        executionMode: "default" as const,
+        workMode: "local" as const,
+      }),
+    );
+    const updateSubthreadOrder = vi.fn(
+      async (request: {
+        backend?: string;
+        parentThreadId: string;
+        threadIds: string[];
+      }) => ({
+        backend: "codex" as const,
+        parentThreadId: request.parentThreadId,
+        threadIds: request.threadIds,
+      }),
+    );
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      forkThread,
+      updateSubthreadOrder,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-root",
+        "thread-a",
+        "thread-b",
+      ]);
+    });
+
+    const sourceChild = result.current.threads.find((thread) => thread.id === "thread-a")!;
+    await act(async () => {
+      await result.current.forkThread(sourceChild, "same-worktree");
+    });
+
+    // Forks the clicked child's content but links the new thread to the root,
+    // so it renders one level deep rather than as an unrenderable grandchild.
+    expect(forkThread).toHaveBeenCalledTimes(1);
+    expect(forkThread.mock.calls[0]![0]).toMatchObject({
+      parentThreadId: "thread-root",
+      sourceThreadId: "thread-a",
+    });
+
+    // The new thread lands directly below its source child in the root's tray.
+    expect(updateSubthreadOrder).toHaveBeenCalledTimes(1);
+    expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
+      parentThreadId: "thread-root",
+      threadIds: ["thread-a", "thread-fork", "thread-b"],
+    });
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,

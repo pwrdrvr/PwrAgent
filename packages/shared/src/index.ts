@@ -23,6 +23,7 @@ export * from "./profile-names";
 export * from "./directory-pins";
 export * from "./pending-request-response";
 export * from "./renderer-payload-boundary";
+export * from "./subthreads";
 export * from "./thread-pins";
 export * from "./thread-titles";
 export * from "./worktree-paths";

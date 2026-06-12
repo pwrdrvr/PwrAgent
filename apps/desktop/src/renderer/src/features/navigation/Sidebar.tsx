@@ -75,6 +75,8 @@ type SidebarProps = {
   threadSearchActive?: boolean;
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Identity key of the card to highlight as the open composer's source. */
+  composerSourceThreadKey?: string;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -626,16 +628,15 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
   const contextMenuIsSubthread = Boolean(contextMenu?.thread.parentThreadId);
+  // Sub-thread / fork are available from child cards too: spawning from a child
+  // re-parents the new thread to the group root (one level deep, inserted below
+  // the source), so there is no orphaned-grandchild risk to gate against.
   const contextMenuCanCreateSubthread = Boolean(
-    contextMenu &&
-      !contextMenuIsSubthread &&
-      contextMenuHasWorkspace &&
-      props.onCreateSubthread,
+    contextMenu && contextMenuHasWorkspace && props.onCreateSubthread,
   );
   const contextMenuCanFork = Boolean(
     contextMenu &&
       contextMenu.thread.source === "codex" &&
-      !contextMenuIsSubthread &&
       contextMenuHasWorkspace &&
       canForkThread(contextMenu.thread) &&
       props.onForkThread,
@@ -866,6 +867,7 @@ export function Sidebar(props: SidebarProps) {
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
@@ -892,6 +894,7 @@ export function Sidebar(props: SidebarProps) {
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                composerSourceThreadKey={props.composerSourceThreadKey}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={visibleThreads}
