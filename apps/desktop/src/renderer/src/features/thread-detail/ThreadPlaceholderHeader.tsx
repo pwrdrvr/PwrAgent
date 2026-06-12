@@ -2,6 +2,10 @@ import type { MessagingChannelKind } from "@pwragent/shared";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
+import {
+  HistoryNavButtons,
+  type HistoryNavControls,
+} from "../chrome/HistoryNavButtons";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 
 type ThreadPlaceholderLayoutControls = {
@@ -27,6 +31,11 @@ type ThreadPlaceholderHeaderProps = {
    * hidden (macOS/Linux), exactly like the real thread header.
    */
   masthead?: MastheadActionsProps;
+  /**
+   * Browser-style Back/Forward, mirroring ThreadHeader so search and the
+   * loading / empty states keep the affordance in the same spot.
+   */
+  history?: HistoryNavControls;
 };
 
 /**
@@ -52,6 +61,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
             <MastheadActions {...props.masthead} />
           </div>
         ) : null}
+        {props.history ? <HistoryNavButtons {...props.history} /> : null}
         <div className="thread-header__main">
           <div className="thread-header__eyebrow-row">
             <h2 className="thread-header__compact-title">{props.title}</h2>

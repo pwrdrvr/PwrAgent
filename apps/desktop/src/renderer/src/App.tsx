@@ -3,19 +3,23 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import type {
-  DesktopBootInfo,
-  DesktopCodexProfileModel,
-  DesktopPwrAgentProfileSummary,
+import {
+  parseThreadIdentityKey,
+  type DesktopBootInfo,
+  type DesktopCodexProfileModel,
+  type DesktopPwrAgentProfileSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
+import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
+import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import {
@@ -35,6 +39,10 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
+import {
+  useNavigationHistory,
+  type NavigationHistoryLocation,
+} from "./lib/useNavigationHistory";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -50,7 +58,10 @@ import {
 } from "../../shared/hot-cpu-profile";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
-import { ThreadSearchPanel } from "./features/thread-search/ThreadSearchPanel";
+import {
+  ThreadSearchPanel,
+  useThreadSearchPanelState,
+} from "./features/thread-search/ThreadSearchPanel";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -309,6 +320,48 @@ function DesktopAppShell(props: {
     onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
+  // Browser-style back/forward across threads and the search view. The
+  // tracked location is (mainView, selected thread); Settings, Automations,
+  // and launchpads stay untracked — they're modal-ish chrome, not places
+  // you navigate back to (see useNavigationHistory). Search query/results
+  // live up here so Back lands on a still-populated results list after
+  // opening a result unmounts the panel.
+  const threadSearchState = useThreadSearchPanelState();
+  const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
+    if (mainView === "search") {
+      return { view: "search" };
+    }
+    if (mainView === "thread" && navigation.selectedThreadKey) {
+      return { view: "thread", threadKey: navigation.selectedThreadKey };
+    }
+    return undefined;
+  }, [mainView, navigation.selectedThreadKey]);
+  const showThread = navigation.showThread;
+  const restoreHistoryLocation = useCallback(
+    (location: NavigationHistoryLocation): void => {
+      if (location.view === "search") {
+        setMainView("search");
+        return;
+      }
+      setMainView("thread");
+      const parts = parseThreadIdentityKey(location.threadKey);
+      if (parts) {
+        void showThread(parts);
+      }
+    },
+    [showThread],
+  );
+  const history = useNavigationHistory({
+    current: historyLocation,
+    restore: restoreHistoryLocation,
+  });
+  useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  const historyNav: HistoryNavControls = {
+    canGoBack: history.canGoBack,
+    canGoForward: history.canGoForward,
+    onBack: history.goBack,
+    onForward: history.goForward,
+  };
   const baseComposerDraftStore = useComposerDraftStore();
   const composerDraftStore = useDurableComposerDraftStore(
     baseComposerDraftStore,
@@ -578,6 +631,7 @@ function DesktopAppShell(props: {
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,
+    historyNav,
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
@@ -772,6 +826,8 @@ function DesktopAppShell(props: {
                 onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
               }}
               masthead={mastheadActions}
+              history={historyNav}
+              state={threadSearchState}
               onOpenResult={async (result) => {
                 setMainView("thread");
                 await navigation.showThread(result);
@@ -790,6 +846,7 @@ function DesktopAppShell(props: {
                   onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
                 }}
                 masthead={mastheadActions}
+                history={historyNav}
               />
             </section>
           ) : ThreadViewComponent ? (

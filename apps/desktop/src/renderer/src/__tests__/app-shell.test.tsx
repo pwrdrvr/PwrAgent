@@ -3029,6 +3029,236 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
+  it("walks back and forward across threads and search from the title bar", async () => {
+    const searchThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      contentMode: "available" as const,
+      fetchedAt: Date.now(),
+      filters: { backend: "all" as const, includeArchived: false },
+      query: "history",
+      results: [
+        {
+          backend: "codex" as const,
+          confidence: "high" as const,
+          identityKey: "codex:thread-1",
+          linkedDirectories: [],
+          matchReasons: [{ kind: "exact_title" as const }],
+          score: 90,
+          snippets: [
+            {
+              scope: "provider_content" as const,
+              text: "Opened from search.",
+            },
+          ],
+          source: "codex" as const,
+          threadId: "thread-1",
+          title: "First cached thread",
+        },
+      ],
+      searchedScopes: ["metadata" as const],
+      semanticMode: "disabled" as const,
+      unavailableScopes: [],
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex" as const,
+          fetchedAt: Date.now(),
+          data: [],
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-1"],
+          threads: [
+            {
+              id: "thread-1",
+              title: "First cached thread",
+              titleSource: "explicit" as const,
+              summary: "Cached first thread",
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1_000,
+            },
+            {
+              id: "thread-2",
+              title: "Second cached thread",
+              titleSource: "explicit" as const,
+              summary: "Cached second thread",
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: false,
+              },
+              updatedAt: 2_000,
+            },
+          ],
+        }),
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread: async ({
+          backend,
+          threadId,
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+        searchThreads,
+        versions: {
+          electron: "41.2.1",
+        },
+      },
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First cached thread",
+    });
+
+    // Nowhere to go yet — the auto-selected first thread is the only entry.
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+
+    await clickButton(/Second cached thread/i);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second cached thread",
+    });
+    expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+
+    // Search, then open the result (thread 1).
+    await clickButton("Search threads");
+    fireEvent.change(screen.getByRole("textbox", { name: "Search threads" }), {
+      target: { value: "history" },
+    });
+    await clickButton("Search");
+    await screen.findByText("Opened from search.");
+    await clickButton(/Opened from search/);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First cached thread",
+    });
+
+    // Back lands on search with the results still populated — no re-query.
+    await clickButton("Back");
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    expect(screen.getByText("Opened from search.")).toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledTimes(1);
+
+    // Back again: the thread we were reading before opening search.
+    await clickButton("Back");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second cached thread",
+    });
+
+    // Back to the start, where the affordance bottoms out.
+    await clickButton("Back");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First cached thread",
+    });
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Forward" })).toBeEnabled();
+
+    await clickButton("Forward");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second cached thread",
+    });
+
+    // The window-level chord (⌘[) and the mouse thumb buttons drive the
+    // same history.
+    await act(async () => {
+      fireEvent.keyDown(window, {
+        metaKey: true,
+        code: "BracketLeft",
+        key: "[",
+      });
+      await Promise.resolve();
+    });
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First cached thread",
+    });
+
+    await act(async () => {
+      fireEvent.mouseUp(window, { button: 4 });
+      await Promise.resolve();
+    });
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second cached thread",
+    });
+  });
+
   it("renames the selected thread from the sidebar actions menu", async () => {
     let threadTitle = "Build Codex client";
     const renameThread = vi.fn(

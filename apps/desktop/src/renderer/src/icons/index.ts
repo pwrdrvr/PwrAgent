@@ -1,5 +1,7 @@
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BranchIcon } from "./BranchIcon";
+export { ChevronLeftIcon } from "./ChevronLeftIcon";
+export { ChevronRightIcon } from "./ChevronRightIcon";
 export { CloseIcon } from "./CloseIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
