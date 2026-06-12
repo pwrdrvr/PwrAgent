@@ -37,6 +37,31 @@ function appendLocation(
   return [...stack, location].slice(-MAX_HISTORY_DEPTH);
 }
 
+/**
+ * Drop entries that no longer pass `isLive`, collapsing any consecutive
+ * duplicates the removals expose (A, dead, A → A). Returns the input
+ * array unchanged when nothing was pruned so effect callers can compare
+ * by identity.
+ */
+function pruneStack(
+  stack: NavigationHistoryLocation[],
+  isLive: (location: NavigationHistoryLocation) => boolean,
+): NavigationHistoryLocation[] {
+  const filtered = stack.filter(isLive);
+  if (filtered.length === stack.length) {
+    return stack;
+  }
+  const collapsed: NavigationHistoryLocation[] = [];
+  for (const location of filtered) {
+    const top = collapsed[collapsed.length - 1];
+    if (top !== undefined && sameLocation(top, location)) {
+      continue;
+    }
+    collapsed.push(location);
+  }
+  return collapsed;
+}
+
 type HistoryStacks = {
   back: NavigationHistoryLocation[];
   /**
@@ -68,6 +93,14 @@ export function useNavigationHistory(args: {
   current: NavigationHistoryLocation | undefined;
   /** Apply a previously recorded location. */
   restore: (location: NavigationHistoryLocation) => void;
+  /**
+   * Identity keys of the threads in the current navigation snapshot.
+   * When provided, history entries pointing at vanished threads (archived,
+   * backend disconnected) are pruned so Back/Forward never land on a dead
+   * thread. Pass undefined while the snapshot is empty or still loading so
+   * a transient blank list can't wipe the history.
+   */
+  liveThreadKeys?: ReadonlySet<string>;
 }): {
   canGoBack: boolean;
   canGoForward: boolean;
@@ -107,6 +140,27 @@ export function useNavigationHistory(args: {
     stacksRef.current = next;
     setStacks(next);
   }, [current]);
+
+  const liveThreadKeys = args.liveThreadKeys;
+  useEffect(() => {
+    if (liveThreadKeys === undefined) {
+      return;
+    }
+    const prev = stacksRef.current;
+    const isLive = (location: NavigationHistoryLocation): boolean =>
+      location.view !== "thread" || liveThreadKeys.has(location.threadKey);
+    const back = pruneStack(prev.back, isLive);
+    const forward = pruneStack(prev.forward, isLive);
+    if (back === prev.back && forward === prev.forward) {
+      return;
+    }
+    // The cursor mirrors the live selection and is left alone — if the
+    // selected thread itself vanishes, the shell moves the selection and
+    // the tracking effect above follows it.
+    const next: HistoryStacks = { back, cursor: prev.cursor, forward };
+    stacksRef.current = next;
+    setStacks(next);
+  }, [liveThreadKeys]);
 
   const goBack = useCallback((): void => {
     const prev = stacksRef.current;

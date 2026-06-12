@@ -11,21 +11,34 @@ function thread(threadKey: string): NavigationHistoryLocation {
 
 const SEARCH: NavigationHistoryLocation = { view: "search" };
 
+type HistoryHookProps = {
+  current: NavigationHistoryLocation | undefined;
+  liveThreadKeys?: ReadonlySet<string>;
+};
+
 /**
  * Drive the hook the way the app shell does: `restore` synchronously
  * updates the state that feeds `current` back in on the next render.
  */
 function renderHistory(initial: NavigationHistoryLocation | undefined) {
   const restore = vi.fn();
+  let props: HistoryHookProps = { current: initial };
   const hook = renderHook(
-    ({ current }: { current: NavigationHistoryLocation | undefined }) =>
-      useNavigationHistory({ current, restore }),
-    { initialProps: { current: initial } },
+    (hookProps: HistoryHookProps) =>
+      useNavigationHistory({ ...hookProps, restore }),
+    { initialProps: props },
   );
-  const navigate = (current: NavigationHistoryLocation | undefined): void => {
+  const update = (patch: Partial<HistoryHookProps>): void => {
+    props = { ...props, ...patch };
     act(() => {
-      hook.rerender({ current });
+      hook.rerender(props);
     });
+  };
+  const navigate = (current: NavigationHistoryLocation | undefined): void => {
+    update({ current });
+  };
+  const setLiveThreadKeys = (keys: ReadonlySet<string> | undefined): void => {
+    update({ liveThreadKeys: keys });
   };
   // Apply what restore asked for, like App's setMainView/showThread would.
   const settle = (): void => {
@@ -36,7 +49,7 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
       navigate(location);
     }
   };
-  return { hook, navigate, restore, settle };
+  return { hook, navigate, restore, setLiveThreadKeys, settle };
 }
 
 describe("useNavigationHistory", () => {
@@ -138,6 +151,62 @@ describe("useNavigationHistory", () => {
     act(() => hook.result.current.goBack());
     act(() => hook.result.current.goForward());
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("prunes vanished threads from both stacks so Back never lands on a dead thread", () => {
+    const { hook, navigate, restore, setLiveThreadKeys, settle } =
+      renderHistory(thread("codex:a"));
+    navigate(thread("codex:b"));
+    navigate(thread("codex:c"));
+    // Walk back so b sits in the forward stack too: back=[a], forward=[c].
+    act(() => hook.result.current.goBack());
+    settle();
+    act(() => hook.result.current.goBack());
+    settle(); // at a, forward = [b, c]
+
+    // Thread b gets archived out of the snapshot.
+    setLiveThreadKeys(new Set(["codex:a", "codex:c"]));
+
+    act(() => hook.result.current.goForward());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:c"));
+  });
+
+  it("collapses consecutive duplicates exposed by pruning", () => {
+    const { hook, navigate, restore, setLiveThreadKeys, settle } =
+      renderHistory(thread("codex:a"));
+    navigate(thread("codex:b"));
+    navigate(thread("codex:a"));
+    navigate(thread("codex:b"));
+    navigate(thread("codex:c")); // back = [a, b, a, b]
+
+    setLiveThreadKeys(new Set(["codex:a", "codex:c"])); // back → [a]
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("keeps search entries when pruning threads", () => {
+    const { hook, navigate, restore, setLiveThreadKeys, settle } =
+      renderHistory(thread("codex:a"));
+    navigate(SEARCH);
+    navigate(thread("codex:b")); // back = [a, search]
+
+    setLiveThreadKeys(new Set(["codex:b"])); // back → [search]
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(SEARCH);
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("leaves history alone while liveThreadKeys is undefined (snapshot loading)", () => {
+    const { hook, navigate, setLiveThreadKeys } = renderHistory(thread("codex:a"));
+    navigate(thread("codex:b"));
+    setLiveThreadKeys(new Set(["codex:a", "codex:b"]));
+    setLiveThreadKeys(undefined); // e.g. transient empty snapshot
+    expect(hook.result.current.canGoBack).toBe(true);
   });
 
   it("caps the back stack at 50 entries", () => {

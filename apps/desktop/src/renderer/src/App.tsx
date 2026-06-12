@@ -11,6 +11,7 @@ import {
   type PointerEvent,
 } from "react";
 import {
+  buildThreadIdentityKey,
   parseThreadIdentityKey,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
@@ -351,17 +352,35 @@ function DesktopAppShell(props: {
     },
     [showThread],
   );
+  // Undefined while the snapshot is empty/loading so a transient blank
+  // thread list can't wipe the stacks; otherwise dead threads (archived,
+  // backend disconnected) are pruned from history.
+  const liveThreadKeys = useMemo<ReadonlySet<string> | undefined>(
+    () =>
+      navigation.threads.length > 0
+        ? new Set(
+            navigation.threads.map((thread) =>
+              buildThreadIdentityKey(thread.source, thread.id),
+            ),
+          )
+        : undefined,
+    [navigation.threads],
+  );
   const history = useNavigationHistory({
     current: historyLocation,
+    liveThreadKeys,
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
-  const historyNav: HistoryNavControls = {
-    canGoBack: history.canGoBack,
-    canGoForward: history.canGoForward,
-    onBack: history.goBack,
-    onForward: history.goForward,
-  };
+  const historyNav: HistoryNavControls = useMemo(
+    () => ({
+      canGoBack: history.canGoBack,
+      canGoForward: history.canGoForward,
+      onBack: history.goBack,
+      onForward: history.goForward,
+    }),
+    [history],
+  );
   const baseComposerDraftStore = useComposerDraftStore();
   const composerDraftStore = useDurableComposerDraftStore(
     baseComposerDraftStore,

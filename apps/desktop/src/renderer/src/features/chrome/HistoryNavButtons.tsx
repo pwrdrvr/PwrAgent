@@ -23,6 +23,7 @@ export function HistoryNavButtons(props: HistoryNavControls) {
         type="button"
         className="history-nav__chip"
         aria-label="Back"
+        data-testid="history-nav-back"
         title={`Back  (${formatPrimaryAccel("[")})`}
         disabled={!props.canGoBack}
         onClick={props.onBack}
@@ -33,6 +34,7 @@ export function HistoryNavButtons(props: HistoryNavControls) {
         type="button"
         className="history-nav__chip"
         aria-label="Forward"
+        data-testid="history-nav-forward"
         title={`Forward  (${formatPrimaryAccel("]")})`}
         disabled={!props.canGoForward}
         onClick={props.onForward}
