@@ -226,11 +226,14 @@ export function ThreadRow(props: ThreadRowProps) {
           </span>
         </span>
 
-        {/* Single ordered chip flow: meta (agent/mode/dir/branch/drift)
-            → PR chips → messaging binding chips → reactions. flex-wrap
-            handles content overflow naturally; the hover-only add-
-            reaction affordance is positioned outside the flow so it
-            cannot reserve a phantom wrapped row while hidden. */}
+        {/* Single ordered chip flow: meta (provider / location / pinned /
+            branch / drift) → messaging binding chips → PR chips →
+            reactions. Pinned rides with the meta chips so it never lands
+            alone on a wrapped row; PR chips + reactions stay last so the
+            fixed-width metadata packs first and single-chip orphan rows
+            are minimized. flex-wrap handles overflow naturally; the
+            hover-only add-reaction affordance is positioned outside the
+            flow so it cannot reserve a phantom wrapped row while hidden. */}
         <span
           className="thread-row__chips"
           onMouseEnter={prs.length > 0 ? armHoverPrefetch : undefined}
@@ -243,11 +246,18 @@ export function ThreadRow(props: ThreadRowProps) {
             thread={props.thread}
           />
 
-          {props.thread.pinnedRank && !props.thread.parentThreadId ? (
-            <span className="thread-row__chip thread-row__chip--pin">
-              Pinned
-            </span>
-          ) : null}
+          {bindings.map((binding) => (
+            <BindingChip
+              key={binding.bindingId}
+              binding={binding}
+              onUnbind={
+                props.onUnbindMessagingBinding
+                  ? (target) =>
+                      void props.onUnbindMessagingBinding!(props.thread, target)
+                  : undefined
+              }
+            />
+          ))}
 
           {prs.map((pr) => (
             <PrChip
@@ -263,19 +273,6 @@ export function ThreadRow(props: ThreadRowProps) {
                         targetPr,
                         position,
                       )
-                  : undefined
-              }
-            />
-          ))}
-
-          {bindings.map((binding) => (
-            <BindingChip
-              key={binding.bindingId}
-              binding={binding}
-              onUnbind={
-                props.onUnbindMessagingBinding
-                  ? (target) =>
-                      void props.onUnbindMessagingBinding!(props.thread, target)
                   : undefined
               }
             />

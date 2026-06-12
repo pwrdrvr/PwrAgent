@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
-import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
+import { BranchIcon, FolderIcon, PinIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -19,6 +19,12 @@ export function ThreadMetaChips({
   linkedDirectoryMode = "label",
   thread,
 }: ThreadMetaChipsProps) {
+  // Hover tooltip for the icon-only pin marker — sighted users get the
+  // "Pinned" label without the old text pill; screen readers get it from
+  // the marker's role="img" + aria-label. Uses the shared viewport
+  // tooltip (not a native `title`) so it escapes the sidebar's clipped
+  // scroll region, matching the copyable branch/path chips.
+  const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const linkedDirectoryChips = includeLinkedDirectories
@@ -99,6 +105,21 @@ export function ThreadMetaChips({
       ) : null}
 
       {linkedDirectoryChips}
+
+      {thread.pinnedRank && !thread.parentThreadId ? (
+        <span
+          aria-label="Pinned"
+          role="img"
+          className="thread-row__chip thread-row__chip--pin"
+          onMouseEnter={(event) => pinTooltip.show(event.currentTarget, "Pinned")}
+          onMouseLeave={pinTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <PinIcon size={12} />
+          </span>
+        </span>
+      ) : null}
+      {pinTooltip.tooltipNode}
 
       {branchChip ? (
         <CopyableThreadChip

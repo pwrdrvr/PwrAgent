@@ -140,8 +140,21 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
   );
 }
 
+/**
+ * Cap on how many *unpinned* threads a directory renders before the
+ * rest collapse behind a "Show N more" toggle. Pinned threads are never
+ * capped — they're user-curated and finite. Without this, a directory
+ * with dozens of threads pushes every directory below it off-screen,
+ * making the Directories lens slow to scroll past active projects.
+ */
+const UNPINNED_THREAD_CAP = 10;
+
 export function DirectoriesList(props: DirectoriesListProps) {
   const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
+  // Per-directory "show all unpinned threads" toggle, keyed by directory.key.
+  const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
+    Record<string, boolean>
+  >({});
   const [dropIndicator, setDropIndicator] = useState<
     DropIndicatorState | undefined
   >(undefined);
@@ -463,6 +476,79 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const directoryUnpinnedThreads = topLevelVisibleThreads.filter(
       (thread) => !isPinnedThread(thread),
     );
+    const cappedUnpinnedThreads = directoryUnpinnedThreads.slice(
+      0,
+      UNPINNED_THREAD_CAP,
+    );
+    const overflowUnpinnedThreads =
+      directoryUnpinnedThreads.slice(UNPINNED_THREAD_CAP);
+    const hiddenUnpinnedCount = overflowUnpinnedThreads.length;
+    // Keep a selected thread visible even when it falls in the collapsed
+    // overflow — otherwise selecting it from another lens and switching to
+    // Directories would leave it hidden with no highlight. An explicit
+    // toggle still wins (`??`), so the user can deliberately collapse.
+    const selectedUnpinnedInOverflow = overflowUnpinnedThreads.some(
+      (thread) =>
+        buildThreadIdentityKey(thread.source, thread.id) ===
+        props.selectedItemKey,
+    );
+    const unpinnedExpanded =
+      unpinnedExpandedByKey[directory.key] ?? selectedUnpinnedInOverflow;
+    // Render one unpinned thread row. Shared by the always-shown capped
+    // slice and the overflow slice so the "Show more / Show less" toggle
+    // sits at a fixed pivot between them — collapsing never makes the
+    // user scroll to the bottom of an expanded directory to find it.
+    const renderUnpinnedRow = (
+      thread: NavigationThreadSummary,
+    ): ReactElement => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const subthreadCount =
+        childThreadsByParentKey.get(threadKey)?.length ?? 0;
+      return (
+        <Fragment key={`${directory.key}:${threadKey}`}>
+          <ThreadRow
+            key={`${directory.key}:${threadKey}`}
+            approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+            composerSourceThreadKey={props.composerSourceThreadKey}
+            compact
+            draggable={Boolean(props.onReorderThreadPins)}
+            includeLinkedDirectories
+            linkedDirectoryMode="kind"
+            selectedThreadKey={props.selectedItemKey}
+            subthreadCount={subthreadCount}
+            subthreadsCollapsed={thread.subthreadsCollapsed === true}
+            thinkingThreadKeys={props.thinkingThreadKeys}
+            thread={thread}
+            onToggleSubthreads={
+              subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                ? () =>
+                    void props.onSetSubthreadsCollapsed!(
+                      thread,
+                      thread.subthreadsCollapsed !== true,
+                    )
+                : undefined
+            }
+            onDragStartThread={(event) => {
+              setDraggedThreadKey(threadKey);
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", threadKey);
+            }}
+            onDragEndThread={() => {
+              setDraggedThreadKey(undefined);
+              setDropIndicator(undefined);
+              setDividerDropTarget(undefined);
+            }}
+            onOpenContextMenu={props.onOpenThreadContextMenu}
+            onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+            onPrefetchPullRequests={props.onPrefetchPullRequests}
+            onSelectThread={props.onSelectThread}
+            onSetReaction={props.onSetReaction}
+            onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+          />
+          {renderStaticSubthreads(thread)}
+        </Fragment>
+      );
+    };
 
     const dropIndicatorClass = isDirectoryDropTarget
       ? ` is-drop-target-${directoryDropIndicator!.position}`
@@ -865,55 +951,27 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-	                    {directoryUnpinnedThreads.map((thread) => {
-	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-                          const subthreadCount =
-                            childThreadsByParentKey.get(threadKey)?.length ?? 0;
-	                      return (
-                            <Fragment key={`${directory.key}:${threadKey}`}>
-	                        <ThreadRow
-	                          key={`${directory.key}:${threadKey}`}
-                          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-                          composerSourceThreadKey={props.composerSourceThreadKey}
-                          compact
-                          draggable={Boolean(props.onReorderThreadPins)}
-                          includeLinkedDirectories
-	                          linkedDirectoryMode="kind"
-	                          selectedThreadKey={props.selectedItemKey}
-                              subthreadCount={subthreadCount}
-                              subthreadsCollapsed={thread.subthreadsCollapsed === true}
-	                          thinkingThreadKeys={props.thinkingThreadKeys}
-	                          thread={thread}
-                              onToggleSubthreads={
-                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
-                                  ? () =>
-                                      void props.onSetSubthreadsCollapsed!(
-                                        thread,
-                                        thread.subthreadsCollapsed !== true,
-                                      )
-                                  : undefined
-                              }
-                          onDragStartThread={(event) => {
-                            setDraggedThreadKey(threadKey);
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", threadKey);
-                          }}
-                          onDragEndThread={() => {
-                            setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
-                          }}
-                          onOpenContextMenu={props.onOpenThreadContextMenu}
-                          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-                          onPrefetchPullRequests={props.onPrefetchPullRequests}
-                          onSelectThread={props.onSelectThread}
-                          onSetReaction={props.onSetReaction}
-	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-	                        />
-                              {renderStaticSubthreads(thread)}
-                            </Fragment>
-	                      );
-                    })}
+                    {cappedUnpinnedThreads.map(renderUnpinnedRow)}
+                    {hiddenUnpinnedCount > 0 ? (
+                      <button
+                        type="button"
+                        className="directory-row__show-more"
+                        aria-expanded={unpinnedExpanded}
+                        onClick={() =>
+                          setUnpinnedExpandedByKey((prev) => ({
+                            ...prev,
+                            [directory.key]: !unpinnedExpanded,
+                          }))
+                        }
+                      >
+                        {unpinnedExpanded
+                          ? "Show less"
+                          : `Show ${hiddenUnpinnedCount} more`}
+                      </button>
+                    ) : null}
+                    {unpinnedExpanded
+                      ? overflowUnpinnedThreads.map(renderUnpinnedRow)
+                      : null}
                   </div>
                 ) : (
                   <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>

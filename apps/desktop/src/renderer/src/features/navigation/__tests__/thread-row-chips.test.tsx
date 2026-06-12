@@ -336,7 +336,7 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("now fix/current")).not.toBeInTheDocument();
   });
 
-  it("orders chips: meta → PR → bindings → reactions", () => {
+  it("orders chips: meta → bindings → PR → reactions", () => {
     const threadWithEverything: NavigationThreadSummary = {
       ...baseThread,
       messagingBindings: [telegramBinding],
@@ -363,9 +363,11 @@ describe("ThreadRow chip flow", () => {
     const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
     const bindingIdx = indexOf(".thread-row__chip--binding, .thread-row__chip-wrap");
     const reactionIdx = indexOf(".thread-row__chip--reaction");
-    // Each chip type that's present comes after the previous one.
-    if (prIdx >= 0 && bindingIdx >= 0) expect(prIdx).toBeLessThan(bindingIdx);
-    if (bindingIdx >= 0 && reactionIdx >= 0) expect(bindingIdx).toBeLessThan(reactionIdx);
+    // Each chip type that's present comes after the previous one. Messaging
+    // bindings sit before PR chips so fixed-width metadata packs first and
+    // the variable-count PR + reaction chips trail at the end.
+    if (bindingIdx >= 0 && prIdx >= 0) expect(bindingIdx).toBeLessThan(prIdx);
+    if (prIdx >= 0 && reactionIdx >= 0) expect(prIdx).toBeLessThan(reactionIdx);
   });
 
   it("shows the PR title and status in the shared viewport tooltip", () => {
