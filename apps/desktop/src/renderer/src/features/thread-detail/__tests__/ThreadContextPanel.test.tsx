@@ -299,7 +299,9 @@ describe("ThreadContextPanel", () => {
             monitorThreadId: "thread-1",
             monitorTurnId: "turn-review-1",
             monitorUsage: {
-              summary: "800 uncached in · 200 cached · 50 out",
+              model: "gpt-5.4-mini",
+              summary:
+                "800 uncached in · 200 cached · 50 out · <$0.001 list price",
               tokenUsage: {
                 inputTokens: 1000,
                 cachedInputTokens: 200,
@@ -307,14 +309,21 @@ describe("ThreadContextPanel", () => {
                 outputTokens: 50,
                 totalTokens: 1050,
               },
+              cost: {
+                model: "gpt-5.4-mini",
+                totalUsd: 0.00084,
+              },
             },
           },
         ],
       },
     });
 
+    expect(screen.getByText("gpt-5.4-mini")).toBeInTheDocument();
     expect(
-      screen.getByText("Review usage: 800 uncached in · 200 cached · 50 out"),
+      screen.getByText(
+        "Review usage: 800 uncached in · 200 cached · 50 out · <$0.001 list price",
+      ),
     ).toBeInTheDocument();
   });
 

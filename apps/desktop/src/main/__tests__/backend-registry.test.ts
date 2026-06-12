@@ -10873,6 +10873,7 @@ command = "pnpm dev"
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [{ id: "gpt-5.4-mini", supportsReasoning: true }],
       startReviewResult: {
         threadId: "thread-1",
         reviewThreadId: "thread-1",
@@ -10893,6 +10894,7 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "gpt-5.4-mini",
     });
 
     await expect
@@ -10907,6 +10909,7 @@ command = "pnpm dev"
         monitorId: "review:turn-review-1",
         monitorThreadId: "thread-1",
         monitorTurnId: "turn-review-1",
+        preferredModel: "gpt-5.4-mini",
         task: "Review changes against main",
         status: "running",
       });
@@ -10936,7 +10939,13 @@ command = "pnpm dev"
         return overlay?.subAgents?.[0]?.monitorUsage;
       })
       .toMatchObject({
-        summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+        model: "gpt-5.4-mini",
+        summary:
+          "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+        cost: {
+          model: "gpt-5.4-mini",
+          totalUsd: 0.00084,
+        },
         tokenUsage: {
           cachedInputTokens: 200,
           inputTokens: 1_000,
@@ -10983,6 +10992,7 @@ command = "pnpm dev"
   it("patches Codex review sub-agent usage when usage arrives after completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [{ id: "gpt-5.4-mini" }],
       startReviewResult: {
         threadId: "thread-1",
         reviewThreadId: "thread-1",
@@ -11003,6 +11013,7 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      model: "gpt-5.4-mini",
     });
 
     await codexClient.emit({
@@ -11047,8 +11058,15 @@ command = "pnpm dev"
         outcome: "success",
         status: "success",
         lastMessage: "Review completed.",
+        preferredModel: "gpt-5.4-mini",
         monitorUsage: {
-          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          model: "gpt-5.4-mini",
+          summary:
+            "800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+          cost: {
+            model: "gpt-5.4-mini",
+            totalUsd: 0.00084,
+          },
           tokenUsage: {
             cachedInputTokens: 200,
             inputTokens: 1_000,

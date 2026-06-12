@@ -1506,6 +1506,8 @@ type ReviewSubAgentRecord = {
   createdAt: number;
   latestUsage?: TaskMonitorUsageSnapshot;
   parentThreadId: string;
+  preferredModel?: string;
+  preferredReasoningEffort?: string;
   reviewThreadId: string;
   task: string;
   turnId: string;
@@ -6173,6 +6175,10 @@ export class DesktopBackendRegistry {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
       parentThreadId: result.threadId,
+      ...(modelSettings.model ? { preferredModel: modelSettings.model } : {}),
+      ...(modelSettings.reasoningEffort
+        ? { preferredReasoningEffort: modelSettings.reasoningEffort }
+        : {}),
       reviewThreadId: result.reviewThreadId || result.threadId,
       task: reviewTaskLabel(params.target),
       turnId: result.turnId,
@@ -9619,7 +9625,9 @@ export class DesktopBackendRegistry {
         notification.params.turnId,
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const usageSnapshot = buildTaskMonitorUsageSnapshot({
+        model: reviewRecord?.preferredModel ?? completedReviewRecord?.preferredModel,
         tokenUsage: notification.params.tokenUsage,
       });
       if (!usageSnapshot) {
@@ -9632,7 +9640,6 @@ export class DesktopBackendRegistry {
         });
         return;
       }
-      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
         backend: event.backend,
         parentThreadId:
@@ -9817,6 +9824,15 @@ export class DesktopBackendRegistry {
       status: patch.status ?? existing?.status ?? "running",
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      ...(record.preferredModel ?? existing?.preferredModel
+        ? { preferredModel: record.preferredModel ?? existing?.preferredModel }
+        : {}),
+      ...(record.preferredReasoningEffort ?? existing?.preferredReasoningEffort
+        ? {
+            preferredReasoningEffort:
+              record.preferredReasoningEffort ?? existing?.preferredReasoningEffort,
+          }
+        : {}),
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
       ...(patch.lastMessage ?? existing?.lastMessage

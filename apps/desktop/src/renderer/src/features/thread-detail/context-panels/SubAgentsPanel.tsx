@@ -27,6 +27,10 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         <ul className="context-list context-list--cards">
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
+            const model =
+              subAgent.preferredModel ??
+              subAgent.monitorUsage?.model ??
+              subAgent.monitorUsage?.cost?.model;
             return (
               <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
@@ -39,8 +43,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}
                 </p>
-                {subAgent.preferredModel ? (
-                  <p className="rail-card__model">{subAgent.preferredModel}</p>
+                {model ? (
+                  <p className="rail-card__model">{model}</p>
                 ) : null}
                 <p className="rail-card__times">
                   <span className="rail-card__time-label">Started</span>{" "}
