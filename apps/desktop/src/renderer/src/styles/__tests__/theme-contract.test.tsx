@@ -760,6 +760,30 @@ describe("Tangerine Terminal theme contract", () => {
     expect(preCodeRule).not.toContain("white-space: pre;");
   });
 
+  it("wraps unbroken plain-text runs in transcript paragraphs and lists instead of overflowing the chat column", () => {
+    // A monitor-subagent report pasted a pnpm progress separator — an
+    // 80-char unbroken `++++…` run — into a user message. The run lands
+    // as plain text in `<p class="transcript-message__paragraph">`
+    // (remark-breaks keeps the surrounding log lines in one paragraph),
+    // and an unbroken run has no soft break opportunities. Unlike the
+    // inline-code chip and fenced-pre paths locked above, the paragraph
+    // and list rules declare no overflow-wrap, so the run renders at its
+    // intrinsic width, escapes the .transcript-message card edge, and
+    // forces a horizontal scrollbar on the entire transcript.
+    //
+    // Lock `overflow-wrap: anywhere;` on both plain-text containers
+    // (the property inherits, so `<li>` children of __list pick it up).
+    // It is deliberately NOT placed on a shared ancestor like
+    // .transcript-message__text: inherited overflow-wrap reaches table
+    // cells too, where `anywhere` changes min-content sizing and would
+    // defeat the wide-table horizontal scroll affordance.
+    const paragraphRule = extractRuleBody(css, ".transcript-message__paragraph");
+    expect(paragraphRule).toContain("overflow-wrap: anywhere;");
+
+    const listRule = extractRuleBody(css, ".transcript-message__list");
+    expect(listRule).toContain("overflow-wrap: anywhere;");
+  });
+
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
     const preRule = extractRuleBody(css, ".transcript-message__pre");
     expect(preRule).toContain("max-height:");
