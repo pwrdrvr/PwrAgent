@@ -105,8 +105,10 @@ import {
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
+  type MutateThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+  type ThreadMutationAppliedChange,
   type ThreadInspectionSummary,
   type ThreadSearchFilters,
   type ThreadSearchResult,
@@ -12511,11 +12513,139 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (request.operation === "mutate_thread") {
+      return await this.handleMutateThreadInspectionRequest(request.args);
+    }
+
     return {
       ok: false,
       error: {
         code: "unsupported_operation",
         message: "Unsupported PwrAgent thread inspection operation.",
+      },
+    };
+  }
+
+  private async handleMutateThreadInspectionRequest(
+    args: MutateThreadToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const dryRun = args.dryRun === true;
+    const changes: ThreadMutationAppliedChange[] = [];
+
+    if (Object.hasOwn(args, "title")) {
+      if (typeof args.title !== "string" || !args.title.trim()) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "title must be a non-empty string when provided.",
+          },
+        };
+      }
+      const title = args.title.trim();
+      if (!dryRun) {
+        await this.renameThread({
+          backend: args.backend,
+          threadId,
+          name: title,
+        });
+      }
+      changes.push({
+        field: "title",
+        status: dryRun ? "would_apply" : "applied",
+        to: title,
+      });
+    }
+
+    const modelSettings = readThreadMutationModelSettings(args);
+    if (modelSettings.error) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: modelSettings.error,
+        },
+      };
+    }
+    if (modelSettings.value) {
+      if (!dryRun) {
+        await this.setThreadModelSettings({
+          backend: args.backend,
+          threadId,
+          ...modelSettings.value,
+        });
+      }
+      changes.push({
+        field: "model_settings",
+        status: dryRun ? "would_apply" : "applied",
+        to: modelSettings.value,
+      });
+    }
+
+    if (Object.hasOwn(args, "executionMode")) {
+      if (!isThreadMutationExecutionMode(args.executionMode)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "executionMode must be default or full-access when provided.",
+          },
+        };
+      }
+      if (!dryRun) {
+        await this.setThreadExecutionMode({
+          backend: args.backend,
+          threadId,
+          executionMode: args.executionMode,
+        });
+      }
+      changes.push({
+        field: "execution_mode",
+        status: dryRun ? "would_apply" : "applied",
+        to: args.executionMode,
+      });
+    }
+
+    if (changes.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, or executionMode.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        mutation: {
+          backend: args.backend,
+          threadId,
+          dryRun,
+          changes,
+        },
       },
     };
   }
@@ -13295,6 +13425,53 @@ function readThreadInspectionBackend(
   return typeof value === "string" && isAppServerBackendKind(value)
     ? value
     : undefined;
+}
+
+function isThreadMutationExecutionMode(
+  value: unknown,
+): value is ThreadExecutionMode {
+  return value === "default" || value === "full-access";
+}
+
+function readThreadMutationModelSettings(
+  args: MutateThreadToolArgs,
+):
+  | {
+      value: Omit<SetThreadModelSettingsRequest, "backend" | "threadId">;
+      error?: never;
+    }
+  | { value?: never; error: string }
+  | { value?: undefined; error?: undefined } {
+  const settings: Omit<SetThreadModelSettingsRequest, "backend" | "threadId"> = {};
+  const stringFields = [
+    ["model", "model"],
+    ["serviceTier", "serviceTier"],
+    ["reasoningEffort", "reasoningEffort"],
+  ] as const;
+
+  for (const [inputField, outputField] of stringFields) {
+    if (!Object.hasOwn(args, inputField)) {
+      continue;
+    }
+    const value = args[inputField];
+    if (typeof value !== "string" || !value.trim()) {
+      return {
+        error: `${inputField} must be a non-empty string when provided.`,
+      };
+    }
+    settings[outputField] = value.trim();
+  }
+
+  if (Object.hasOwn(args, "fastMode")) {
+    if (typeof args.fastMode !== "boolean") {
+      return {
+        error: "fastMode must be a boolean when provided.",
+      };
+    }
+    settings.fastMode = args.fastMode;
+  }
+
+  return Object.keys(settings).length > 0 ? { value: settings } : {};
 }
 
 function clampInteger(

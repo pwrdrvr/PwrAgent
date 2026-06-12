@@ -5212,6 +5212,10 @@ script = "echo setup"
           name: "get_thread_status",
         }),
         expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "mutate_thread",
+        }),
+        expect.objectContaining({
           namespace: "pwragent_messaging",
           name: "get_current_messaging_surface",
         }),
@@ -12807,6 +12811,199 @@ command = "pnpm dev"
       codexClient.listThreadsCalls
         .map((call) => call.params?.archived)
     ).toEqual([false]);
+
+    await registry.close();
+  });
+
+  it("mutates PwrAgent thread settings from active Agent turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          fastMode: true,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.any(String),
+        },
+      ],
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      mutation: {
+        backend: "codex",
+        threadId: "target-thread",
+        dryRun: false,
+        changes: [
+          {
+            field: "title",
+            status: "applied",
+            to: "Pizza Agent",
+          },
+          {
+            field: "model_settings",
+            status: "applied",
+            to: {
+              model: "gpt-5.5",
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "target-thread",
+      name: "Pizza Agent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("dry-runs thread mutations without applying them", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          executionMode: "full-access",
+          dryRun: true,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      mutation: {
+        backend: "codex",
+        threadId: "target-thread",
+        dryRun: true,
+        changes: [
+          {
+            field: "title",
+            status: "would_apply",
+            to: "Pizza Agent",
+          },
+          {
+            field: "execution_mode",
+            status: "would_apply",
+            to: "full-access",
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "default",
+    });
 
     await registry.close();
   });
