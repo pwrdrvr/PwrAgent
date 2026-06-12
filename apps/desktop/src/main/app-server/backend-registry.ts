@@ -6090,12 +6090,12 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
-    const modelSettings = hasExplicitModelSettings(params)
-      ? await this.resolveReviewModelSettings(params.backend, params)
-      : {};
-
+    let modelSettings: ModelSettings = {};
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     try {
+      modelSettings = hasExplicitModelSettings(params)
+        ? await this.resolveReviewModelSettings(params.backend, params)
+        : {};
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }

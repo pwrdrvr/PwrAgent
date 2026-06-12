@@ -10,6 +10,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  BackendModelOption,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { ReplayClient } from "./replay-client";
@@ -126,6 +127,7 @@ type ReplayRuntimeClient = {
     cwd?: string;
     cwds?: string[];
   }): Promise<AppServerListSkillsResponse["data"]>;
+  listModels?(): Promise<BackendModelOption[]>;
   onNotification(
     listener: (notification: AppServerNotification) => void | Promise<void>
   ): () => void;
@@ -321,6 +323,9 @@ function createUnavailableReplayClient(
       throw new Error(message);
     },
     listSkills: async () => {
+      throw new Error(message);
+    },
+    listModels: async () => {
       throw new Error(message);
     },
     onNotification: () => () => undefined,

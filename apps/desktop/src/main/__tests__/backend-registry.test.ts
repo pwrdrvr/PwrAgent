@@ -10791,7 +10791,7 @@ command = "pnpm dev"
 
   it("rejects Codex reviews with a selected model that is not in the discovered model list", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["review/start"] },
+      initializeResult: { methods: ["turn/start", "review/start"] },
       models: [
         {
           id: "gpt-5.5",
@@ -10823,6 +10823,17 @@ command = "pnpm dev"
       "Selected review model is not available for codex: gpt-5.3-codex",
     );
     expect(codexClient.lastStartReviewParams).toBeUndefined();
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Continue after rejected review" }],
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      { type: "text", text: "Continue after rejected review" },
+    ]);
 
     await registry.close();
   });
