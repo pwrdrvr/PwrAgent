@@ -241,7 +241,9 @@ test.describe("Onboarding wizard", () => {
       await continueBtn.click({ force: true });
       await expect(flash).toHaveCount(1);
 
-      await app.window.getByRole("button", { name: /Back/i }).click();
+      // Anchored like the other call sites: the loose /Back/i also matches
+      // the title-bar history Back button in the shell behind the wizard.
+      await app.window.getByRole("button", { name: /^← Back/i }).click();
       // Back lands on the shared Codex login step (login already deferred,
       // so its Continue is live); Continue returns to messaging-safety.
       await app.window.getByRole("button", { name: /^Continue/i }).click();

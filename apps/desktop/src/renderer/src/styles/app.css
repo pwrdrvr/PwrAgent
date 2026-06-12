@@ -975,6 +975,59 @@ textarea,
   pointer-events: none;
 }
 
+/* Browser-style Back/Forward pair at the leading edge of the thread/search
+   title bars. Mirrors the .panel-toggle chip treatment (size, muted resting
+   color, hover row tint, inert disabled state) so the header chrome reads
+   as one family. */
+.history-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* Same drag-region carve-out as .panel-toggle: the thread header drags the
+   window, so every pixel of these buttons must stay clickable. */
+.history-nav,
+.history-nav * {
+  -webkit-app-region: no-drag;
+}
+
+.history-nav__chip {
+  display: inline-flex;
+  width: 28px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+
+.history-nav__chip:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-active);
+}
+
+.history-nav__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.history-nav__chip:disabled {
+  opacity: 0.32;
+  cursor: default;
+  pointer-events: none;
+}
+
 .thread-header__main {
   display: flex;
   flex-direction: column;

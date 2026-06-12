@@ -55,6 +55,7 @@ import {
   DEFAULT_CONTEXT_TAB,
   type ContextTabId,
 } from "./context-panels/context-tab";
+import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
@@ -891,6 +892,12 @@ export type ThreadViewProps = {
    * thread header when the sidebar is hidden (macOS/Linux).
    */
   mastheadActions?: MastheadActionsProps;
+  /**
+   * Browser-style Back/Forward across threads + search, rendered at the
+   * leading edge of the thread header (and the empty-state placeholder).
+   * Owned by App's useNavigationHistory.
+   */
+  historyNav?: HistoryNavControls;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -1909,6 +1916,7 @@ export function ThreadView(props: ThreadViewProps) {
             onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
           }}
           masthead={props.mastheadActions}
+          history={props.historyNav}
         />
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -2192,6 +2200,7 @@ export function ThreadView(props: ThreadViewProps) {
           onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
         }}
         masthead={props.mastheadActions}
+        history={props.historyNav}
       />
 
       <div

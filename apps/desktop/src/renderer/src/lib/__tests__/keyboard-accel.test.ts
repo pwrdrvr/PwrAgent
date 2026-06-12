@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   formatPrimaryAccel,
   isAccelLetter,
+  matchHistoryNavChord,
   matchLayoutChord,
 } from "../keyboard-accel";
 
@@ -121,5 +122,82 @@ describe("matchLayoutChord", () => {
       value: document.createElement("input"),
     });
     expect(matchLayoutChord(event)).toBe(null);
+  });
+});
+
+describe("matchHistoryNavChord", () => {
+  const keydown = (init: KeyboardEventInit): KeyboardEvent =>
+    new KeyboardEvent("keydown", init);
+  const inEditable = (event: KeyboardEvent): KeyboardEvent => {
+    Object.defineProperty(event, "target", {
+      value: document.createElement("input"),
+    });
+    return event;
+  };
+
+  it("classifies ⌘[ / ⌃[ as back and ⌘] / ⌃] as forward", () => {
+    expect(
+      matchHistoryNavChord(
+        keydown({ metaKey: true, code: "BracketLeft", key: "[" }),
+      ),
+    ).toBe("back");
+    expect(
+      matchHistoryNavChord(
+        keydown({ ctrlKey: true, code: "BracketRight", key: "]" }),
+      ),
+    ).toBe("forward");
+  });
+
+  it("matches the physical bracket key on layouts where it types another glyph", () => {
+    expect(
+      matchHistoryNavChord(
+        keydown({ metaKey: true, code: "BracketLeft", key: "ü" }),
+      ),
+    ).toBe("back");
+  });
+
+  it("keeps the bracket chords live inside editable fields (like a browser)", () => {
+    expect(
+      matchHistoryNavChord(
+        inEditable(keydown({ metaKey: true, code: "BracketLeft", key: "[" })),
+      ),
+    ).toBe("back");
+  });
+
+  it("classifies plain Alt+arrows as back/forward", () => {
+    expect(
+      matchHistoryNavChord(keydown({ altKey: true, key: "ArrowLeft" })),
+    ).toBe("back");
+    expect(
+      matchHistoryNavChord(keydown({ altKey: true, key: "ArrowRight" })),
+    ).toBe("forward");
+  });
+
+  it("suppresses Alt+arrows while editing (word-wise caret movement)", () => {
+    expect(
+      matchHistoryNavChord(
+        inEditable(keydown({ altKey: true, key: "ArrowLeft" })),
+      ),
+    ).toBe(null);
+  });
+
+  it("returns null for shifted, modifier-less, or unrelated chords", () => {
+    expect(
+      matchHistoryNavChord(keydown({ code: "BracketLeft", key: "[" })),
+    ).toBe(null);
+    expect(
+      matchHistoryNavChord(
+        keydown({ metaKey: true, shiftKey: true, code: "BracketLeft", key: "{" }),
+      ),
+    ).toBe(null);
+    expect(
+      matchHistoryNavChord(
+        keydown({ metaKey: true, altKey: true, code: "BracketLeft", key: "[" }),
+      ),
+    ).toBe(null);
+    expect(matchHistoryNavChord(keydown({ key: "ArrowLeft" }))).toBe(null);
+    expect(
+      matchHistoryNavChord(keydown({ metaKey: true, code: "KeyB", key: "b" })),
+    ).toBe(null);
   });
 });
