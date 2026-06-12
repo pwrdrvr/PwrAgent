@@ -6197,11 +6197,8 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
-    const modelSettings = hasExplicitModelSettings(params)
-      ? await this.resolveModelSettings(params.backend, params)
-      : {};
-
     let result: { threadId: string; reviewThreadId: string; turnId: string };
+    let modelSettings: ModelSettings = {};
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -6213,6 +6210,16 @@ export class DesktopBackendRegistry {
               threadId: params.threadId,
             })
           : undefined;
+      const requestedModelSettings: ModelSettings = {
+        ...params,
+        model: params.model ?? overlay?.model,
+        serviceTier: params.serviceTier ?? overlay?.serviceTier,
+        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
+      };
+      modelSettings = hasExplicitModelSettings(requestedModelSettings)
+        ? await this.resolveModelSettings(params.backend, requestedModelSettings)
+        : {};
       const cwd =
         params.backend === "codex"
           ? await this.resolveThreadEnvironmentCwd(
@@ -9733,19 +9740,33 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    if (notification.params.turnId) {
-      const reviewKey = buildReviewSubAgentKey(
-        event.backend,
-        notification.params.threadId,
-        notification.params.turnId,
-      );
-      const activeReview = this.findActiveReviewSubAgentForTurn({
-        backend: event.backend,
-        threadId: notification.params.threadId,
-        turnId: notification.params.turnId,
-      });
+    const usageTurnId =
+      typeof notification.params.turnId === "string"
+        ? notification.params.turnId
+        : undefined;
+    const activeReview = usageTurnId
+      ? this.findActiveReviewSubAgentForTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId: usageTurnId,
+        })
+      : this.findActiveReviewSubAgentForThread({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+        });
+
+    if (usageTurnId || activeReview) {
+      const reviewKey = usageTurnId
+        ? buildReviewSubAgentKey(
+            event.backend,
+            notification.params.threadId,
+            usageTurnId,
+          )
+        : undefined;
       const reviewRecord = activeReview?.record;
-      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const completedReviewRecord = reviewKey
+        ? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+        : undefined;
       const persistedRecord = reviewRecord ?? completedReviewRecord;
       const notificationParams = readRecord(notification.params);
       const usageModel =
@@ -9765,13 +9786,17 @@ export class DesktopBackendRegistry {
         });
         return;
       }
+      const persistedTurnId = completedReviewRecord?.turnId ?? usageTurnId;
+      if (!persistedTurnId) {
+        return;
+      }
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
         backend: event.backend,
         parentThreadId:
           completedReviewRecord?.parentThreadId ?? notification.params.threadId,
         reviewThreadId:
           completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
-        turnId: completedReviewRecord?.turnId ?? notification.params.turnId,
+        turnId: persistedTurnId,
         tokenUsage: notification.params.tokenUsage,
         usageModel,
       });
@@ -10119,6 +10144,23 @@ export class DesktopBackendRegistry {
     }
 
     return undefined;
+  }
+
+  private findActiveReviewSubAgentForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): { key: string; record: ReviewSubAgentRecord } | undefined {
+    let match: { key: string; record: ReviewSubAgentRecord } | undefined;
+    for (const [key, record] of this.activeReviewSubAgents.entries()) {
+      if (record.backend !== params.backend || record.reviewThreadId !== params.threadId) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = { key, record };
+    }
+    return match;
   }
 
   private recordTaskMonitorActivity(notification: AppServerNotification): void {

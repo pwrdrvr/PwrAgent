@@ -11223,6 +11223,170 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("records Codex review usage when usage updates omit a turn id", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [{ id: "gpt-5.5" }],
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "gpt-5.5",
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 170_887,
+            cachedInputTokens: 114_048,
+            outputTokens: 117,
+          },
+        },
+      },
+    } as AppServerNotification);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-review-1",
+        turn: {
+          id: "turn-review-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        outcome: "success",
+        status: "success",
+        monitorUsage: {
+          model: "gpt-5.5",
+          serviceTier: "standard",
+          summary:
+            "56,839 uncached in · 114,048 cached · 117 out · $0.35 list price",
+        },
+      });
+
+    await registry.close();
+  });
+
+  it("uses inherited Codex Fast settings when pricing review sub-agent usage", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [{ id: "gpt-5.4-mini", supportsFast: true }],
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.4-mini",
+          fastMode: true,
+          serviceTier: "priority",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      model: "gpt-5.4-mini",
+      fastMode: true,
+      serviceTier: "priority",
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+          },
+        },
+      },
+    } as AppServerNotification);
+
+    await expect
+      .poll(async () => {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        return overlay?.subAgents?.[0];
+      })
+      .toMatchObject({
+        monitorId: "review:turn-review-1",
+        preferredFastMode: true,
+        preferredModel: "gpt-5.4-mini",
+        preferredServiceTier: "priority",
+        monitorUsage: {
+          fastMode: true,
+          model: "gpt-5.4-mini",
+          serviceTier: "priority",
+          summary: "800 uncached in · 200 cached · 50 out · $0.002 list price",
+          cost: {
+            model: "gpt-5.4-mini",
+            serviceTier: "priority",
+            totalUsd: 0.00168,
+          },
+        },
+      });
+
+    await registry.close();
+  });
+
   it("keeps Codex review usage when Codex emits a different runtime turn id", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
@@ -17655,10 +17819,12 @@ command = "pnpm dev"
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       });
-      expect(codexClient.lastStartReviewParams).toEqual({
+      expect(codexClient.lastStartReviewParams).toMatchObject({
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
       });
       const overlay = await overlayStore.getThreadOverlayState({
         backend: "codex",
