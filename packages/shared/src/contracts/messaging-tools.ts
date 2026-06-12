@@ -11,7 +11,7 @@ import type {
 export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
-  "get_current_location",
+  "get_current_messaging_surface",
   "attach_thread_here",
 ] as const;
 
@@ -111,7 +111,7 @@ export type AttachThreadHereResult = {
 };
 
 export type PwrAgentMessagingToolArgsByOperation = {
-  get_current_location: GetCurrentMessagingLocationToolArgs;
+  get_current_messaging_surface: GetCurrentMessagingLocationToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
 };
 

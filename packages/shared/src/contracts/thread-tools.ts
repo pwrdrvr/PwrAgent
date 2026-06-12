@@ -5,7 +5,10 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
-import type { ThreadAgentMetadata } from "./navigation";
+import type {
+  MessagingThreadBindingSummary,
+  ThreadAgentMetadata,
+} from "./navigation";
 import type {
   ThreadSearchContentMode,
   ThreadSearchConfidenceBand,
@@ -86,6 +89,7 @@ export type ThreadInspectionSummary = {
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
+  messagingBindings?: MessagingThreadBindingSummary[];
   snippets?: ThreadSearchSnippet[];
 };
 

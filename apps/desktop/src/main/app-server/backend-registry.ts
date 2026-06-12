@@ -5,7 +5,10 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { MessagingApprovalDecision } from "@pwragent/messaging-interface";
+import type {
+  MessagingApprovalDecision,
+  MessagingBindingRecord,
+} from "@pwragent/messaging-interface";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
@@ -101,6 +104,7 @@ import {
   type ThreadPermissionTransitionStatus,
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
+  type MessagingThreadBindingSummary,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ThreadInspectionSummary,
@@ -12550,7 +12554,15 @@ export class DesktopBackendRegistry {
           backend: result.backend,
           threadId: result.threadId,
         });
-        return toThreadInspectionSummaryFromSearchResult(result, overlay?.agent);
+        const messagingBindings = await this.getThreadInspectionMessagingBindings({
+          backend: result.backend,
+          threadId: result.threadId,
+        });
+        return toThreadInspectionSummaryFromSearchResult(
+          result,
+          overlay?.agent,
+          messagingBindings,
+        );
       }),
     );
   }
@@ -12564,9 +12576,58 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay?.agent);
+        const messagingBindings = await this.getThreadInspectionMessagingBindings({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        return toThreadInspectionSummary(thread, overlay?.agent, messagingBindings);
       }),
     );
+  }
+
+  private async getThreadInspectionMessagingBindings(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingThreadBindingSummary[] | undefined> {
+    const store = this.resolveMessagingInspectionStore();
+    if (!store) {
+      return undefined;
+    }
+    try {
+      const bindings = await store.findActiveBindingsForThread(params);
+      if (bindings.length === 0) {
+        return undefined;
+      }
+      return bindings.map(toMessagingThreadBindingSummary);
+    } catch (error) {
+      backendRegistryLog.warn("failed to resolve thread inspection messaging bindings", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return undefined;
+    }
+  }
+
+  private resolveMessagingInspectionStore(): Pick<
+    MessagingStoreLike,
+    "findActiveBindingsForThread"
+  > | undefined {
+    if (this.messagingStore === null) {
+      return undefined;
+    }
+    if (this.messagingStore) {
+      return this.messagingStore;
+    }
+
+    try {
+      return getDesktopMessagingStore();
+    } catch (error) {
+      backendRegistryLog.debug("messaging store unavailable for thread inspection", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private notificationsEnabled(): boolean {
@@ -13271,6 +13332,7 @@ function filterThreadInspectionSummaries(
 function toThreadInspectionSummary(
   thread: AppServerThreadSummary,
   agent: ThreadAgentMetadata | undefined,
+  messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
     backend: thread.source,
@@ -13287,6 +13349,7 @@ function toThreadInspectionSummary(
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,
     fastMode: thread.fastMode,
+    ...(messagingBindings?.length ? { messagingBindings } : {}),
     linkedDirectories: thread.linkedDirectories,
   };
 }
@@ -13294,6 +13357,7 @@ function toThreadInspectionSummary(
 function toThreadInspectionSummaryFromSearchResult(
   result: ThreadSearchResult,
   agent: ThreadAgentMetadata | undefined,
+  messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
     backend: result.backend,
@@ -13307,6 +13371,7 @@ function toThreadInspectionSummaryFromSearchResult(
     agent,
     model: result.model,
     linkedDirectories: result.linkedDirectories,
+    ...(messagingBindings?.length ? { messagingBindings } : {}),
     score: result.score,
     confidence: result.confidence,
     matchReasons: result.matchReasons,
@@ -13429,6 +13494,25 @@ function toThreadInspectionSearchSummary(
     ...(thread.matchReasons?.length
       ? { matchReasons: thread.matchReasons.slice(0, 6) }
       : {}),
+    ...(thread.messagingBindings?.length
+      ? {
+          messagingBindings: thread.messagingBindings.slice(0, 5).map((binding) => ({
+            bindingId: binding.bindingId,
+            platform: binding.platform,
+            ...(binding.conversationKind
+              ? { conversationKind: binding.conversationKind }
+              : {}),
+            ...(binding.conversationTitle
+              ? { conversationTitle: binding.conversationTitle }
+              : {}),
+            ...(binding.parentTitle ? { parentTitle: binding.parentTitle } : {}),
+            ...(binding.ancestorTitle
+              ? { ancestorTitle: binding.ancestorTitle }
+              : {}),
+            ...(binding.activeAt !== undefined ? { activeAt: binding.activeAt } : {}),
+          })),
+        }
+      : {}),
     ...(thread.snippets?.length
       ? {
           snippets: thread.snippets.slice(0, 3).map((snippet) => ({
@@ -13446,6 +13530,21 @@ function toThreadInspectionSearchSummary(
       path: directory.path,
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
     })),
+  };
+}
+
+function toMessagingThreadBindingSummary(
+  binding: MessagingBindingRecord,
+): MessagingThreadBindingSummary {
+  const conversation = binding.channel.conversation;
+  return {
+    bindingId: binding.id,
+    platform: binding.channel.channel,
+    conversationKind: conversation.kind,
+    conversationTitle: conversation.title,
+    parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
+    activeAt: binding.updatedAt,
   };
 }
 

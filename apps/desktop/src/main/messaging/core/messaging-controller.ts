@@ -628,7 +628,7 @@ export class MessagingController {
     request: PwrAgentMessagingRequest,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
-      case "get_current_location": {
+      case "get_current_messaging_surface": {
         const origin = await this.resolveAgentMessagingOrigin(request.context);
         if (!origin.ok) {
           return origin;

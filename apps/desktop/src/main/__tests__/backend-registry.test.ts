@@ -1207,8 +1207,13 @@ function createMessagingArchiveCleanupStoreMock(options?: {
   bindings?: Array<{
     backend?: "codex" | "grok";
     channel?: "telegram" | "discord";
+    conversationKind?: MessagingBindingRecord["channel"]["conversation"]["kind"];
+    conversationTitle?: string;
     id: string;
+    parentTitle?: string;
+    targetKind?: MessagingBindingRecord["targetKind"];
     threadId: string;
+    updatedAt?: number;
   }>;
   pendingIntentIds?: string[];
 }) {
@@ -1224,14 +1229,16 @@ function createMessagingArchiveCleanupStoreMock(options?: {
         channel: {
           channel: binding.channel ?? "telegram",
           conversation: {
-            kind: "dm",
+            kind: binding.conversationKind ?? "dm",
             id: `${binding.id}:conversation`,
-            title: `${binding.id} conversation`,
+            title: binding.conversationTitle ?? `${binding.id} conversation`,
+            parentTitle: binding.parentTitle,
           },
         },
         authorizedActorIds: [`${binding.id}:actor`],
         createdAt: 1,
-        updatedAt: 1,
+        targetKind: binding.targetKind,
+        updatedAt: binding.updatedAt ?? 1,
       },
     ]),
   );
@@ -5206,7 +5213,7 @@ script = "echo setup"
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
-          name: "get_current_location",
+          name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -7199,7 +7206,7 @@ script = "pnpm install"
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
-          name: "get_current_location",
+          name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -12244,6 +12251,21 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-telegram-jambalayah",
+            backend: "codex",
+            channel: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jambalayah",
+            parentTitle: "PwrAgent Mini Dev Group",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+            updatedAt: 2_500,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock({
         overlays: {
           "codex:thread-1": {
@@ -12311,6 +12333,16 @@ command = "pnpm dev"
           agent: {
             name: "Inbox Agent",
           },
+          messagingBindings: [
+            {
+              bindingId: "binding-telegram-jambalayah",
+              platform: "telegram",
+              conversationKind: "topic",
+              conversationTitle: "Jambalayah",
+              parentTitle: "PwrAgent Mini Dev Group",
+              activeAt: 2_500,
+            },
+          ],
         },
       ],
       totalCount: 1,
@@ -12389,6 +12421,20 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-discord-branch-drift",
+            backend: "codex",
+            channel: "discord",
+            conversationKind: "thread",
+            conversationTitle: "branch drift screenshots",
+            parentTitle: "dev",
+            threadId: "thread-1",
+            updatedAt: 4_000,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock(),
       threadSearchService: { search } as unknown as ThreadSearchService,
     });
@@ -12462,6 +12508,16 @@ command = "pnpm dev"
           threadId: "thread-1",
           title: "Branch drift dialog screenshots",
           confidence: "medium",
+          messagingBindings: [
+            {
+              bindingId: "binding-discord-branch-drift",
+              platform: "discord",
+              conversationKind: "thread",
+              conversationTitle: "branch drift screenshots",
+              parentTitle: "dev",
+              activeAt: 4_000,
+            },
+          ],
           snippets: [
             {
               scope: "provider_content",
@@ -12681,6 +12737,21 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-telegram-active",
+            backend: "codex",
+            channel: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jeeves",
+            parentTitle: "PwrAgent Mini Dev Group",
+            targetKind: "agent_thread",
+            threadId: "active-thread",
+            updatedAt: 3_000,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock(),
     });
     await registry.publishLocalEvent({
@@ -12720,6 +12791,16 @@ command = "pnpm dev"
         threadId: "active-thread",
         title: "Jeeves",
         status: "idle",
+        messagingBindings: [
+          {
+            bindingId: "binding-telegram-active",
+            platform: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jeeves",
+            parentTitle: "PwrAgent Mini Dev Group",
+            activeAt: 3_000,
+          },
+        ],
       },
     });
     expect(

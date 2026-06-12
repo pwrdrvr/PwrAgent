@@ -317,7 +317,7 @@ describe("MessagingController", () => {
 
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
-        operation: "get_current_location",
+        operation: "get_current_messaging_surface",
         context: {
           backend: "codex",
           threadId: "thread-1",
@@ -411,7 +411,7 @@ describe("MessagingController", () => {
     expect(harness.startTurn).toHaveBeenCalledTimes(2);
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
-        operation: "get_current_location",
+        operation: "get_current_messaging_surface",
         context: {
           backend: "codex",
           threadId: "thread-1",
