@@ -22,6 +22,7 @@ import type {
   BackendAccountSummary,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
+  BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
@@ -703,6 +704,14 @@ async function waitForDetachedActionRunToExit(
   }, true);
 }
 
+const TEST_TASK_MONITOR_MODELS: BackendModelOption[] = [
+  {
+    id: "gpt-5.4-mini",
+    label: "GPT-5.4-Mini",
+    supportsReasoning: true,
+  },
+];
+
 class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -770,6 +779,10 @@ class MockBackendClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
+    model?: string;
+    serviceTier?: string | null;
+    reasoningEffort?: string;
+    fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   };
@@ -1640,11 +1653,6 @@ describe("DesktopBackendRegistry", () => {
             {
               id: "gpt-5.4-mini",
               label: "GPT-5.4-Mini",
-              supportsReasoning: true,
-            },
-            {
-              id: "gpt-5.3-codex",
-              label: "GPT-5.3-Codex",
               supportsReasoning: true,
             },
             {
@@ -6420,8 +6428,8 @@ script = "echo setup"
         initializeResult: { methods: ["thread/start"] },
         models: [
           {
-            id: "gpt-5.3-codex",
-            label: "GPT-5.3 Codex",
+            id: "gpt-5.4",
+            label: "GPT-5.4",
             supportsFast: true,
             supportsReasoning: true,
           },
@@ -6435,13 +6443,13 @@ script = "echo setup"
           backend: "codex",
           executionMode: "full-access",
           workMode: "local",
-          model: "gpt-5.3-codex",
+          model: "gpt-5.4",
           reasoningEffort: "high",
           fastMode: true,
           providerSettings: {
             codex: {
               executionMode: "full-access",
-              model: "gpt-5.3-codex",
+              model: "gpt-5.4",
               reasoningEffort: "high",
               fastMode: true,
             },
@@ -6485,14 +6493,14 @@ script = "echo setup"
       backend: "codex",
       executionMode: "full-access",
       fastMode: true,
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       reasoningEffort: "high",
     });
     expect(codex.launchpad).toMatchObject({
       backend: "codex",
       executionMode: "full-access",
       fastMode: true,
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       reasoningEffort: "high",
     });
 
@@ -7002,6 +7010,14 @@ script = "pnpm install"
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
         methods: ["thread/start", "review/start"],
       },
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
@@ -10705,6 +10721,15 @@ command = "pnpm dev"
   it("passes persisted Codex environment hydration when starting reviews", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["review/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
     });
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "env",
@@ -10760,6 +10785,44 @@ command = "pnpm dev"
       serviceTier: "priority",
       fastMode: true,
     });
+
+    await registry.close();
+  });
+
+  it("rejects Codex reviews with a selected model that is not in the discovered model list", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["review/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+      }),
+    ).rejects.toThrow(
+      "Selected review model is not available for codex: gpt-5.3-codex",
+    );
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
 
     await registry.close();
   });
@@ -12574,6 +12637,7 @@ command = "pnpm dev"
   it("creates task monitor delegations for active Codex turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -12688,6 +12752,7 @@ command = "pnpm dev"
   it("tracks managed task monitor turns as in-progress quit work", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -12771,6 +12836,7 @@ command = "pnpm dev"
   it("rejects task monitor delegations that only reference a parent Codex exec session", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -12835,6 +12901,7 @@ command = "pnpm dev"
   it("allows external numeric session ids in task monitor delegations", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -12886,6 +12953,7 @@ command = "pnpm dev"
   it("inherits Codex environment runtime and Full Access for managed task monitors", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
@@ -13033,6 +13101,7 @@ command = "pnpm dev"
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const overlayStore = createOverlayStoreMock();
@@ -13362,6 +13431,7 @@ command = "pnpm dev"
   it("recovers an ended monitor turn once before synthesizing fallback completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -13536,6 +13606,7 @@ command = "pnpm dev"
   it("interrupts stale active monitors before fallback completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
     const registry = new DesktopBackendRegistry({
@@ -13708,6 +13779,7 @@ command = "pnpm dev"
   it("rejects task monitor updates from a different monitor thread after binding", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread-1" },
     });
     const registry = new DesktopBackendRegistry({
