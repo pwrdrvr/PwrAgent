@@ -1506,8 +1506,10 @@ type ReviewSubAgentRecord = {
   createdAt: number;
   latestUsage?: TaskMonitorUsageSnapshot;
   parentThreadId: string;
+  preferredFastMode?: boolean;
   preferredModel?: string;
   preferredReasoningEffort?: string;
+  preferredServiceTier?: string;
   reviewThreadId: string;
   task: string;
   turnId: string;
@@ -1626,6 +1628,7 @@ type TaskMonitorPricingCatalogEntry = {
   inputUsdPerMillion: number;
   model: string;
   outputUsdPerMillion: number;
+  serviceTier: "standard" | "priority";
 };
 
 const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = [
@@ -1634,23 +1637,49 @@ const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = 
     inputUsdPerMillion: 5,
     cachedInputUsdPerMillion: 0.5,
     outputUsdPerMillion: 30,
+    serviceTier: "standard",
+  },
+  {
+    model: "gpt-5.5",
+    inputUsdPerMillion: 12.5,
+    cachedInputUsdPerMillion: 1.25,
+    outputUsdPerMillion: 75,
+    serviceTier: "priority",
   },
   {
     model: "gpt-5.4",
     inputUsdPerMillion: 2.5,
     cachedInputUsdPerMillion: 0.25,
     outputUsdPerMillion: 15,
+    serviceTier: "standard",
+  },
+  {
+    model: "gpt-5.4",
+    inputUsdPerMillion: 5,
+    cachedInputUsdPerMillion: 0.5,
+    outputUsdPerMillion: 30,
+    serviceTier: "priority",
   },
   {
     model: "gpt-5.4-mini",
     inputUsdPerMillion: 0.75,
     cachedInputUsdPerMillion: 0.075,
     outputUsdPerMillion: 4.5,
+    serviceTier: "standard",
+  },
+  {
+    model: "gpt-5.4-mini",
+    inputUsdPerMillion: 1.5,
+    cachedInputUsdPerMillion: 0.15,
+    outputUsdPerMillion: 9,
+    serviceTier: "priority",
   },
 ];
 
 function buildTaskMonitorUsageSnapshot(params: {
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   tokenUsage: unknown;
 }): TaskMonitorUsageSnapshot | undefined {
   const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
@@ -1669,8 +1698,10 @@ function buildTaskMonitorUsageSnapshot(params: {
   );
   const cost = estimateTaskMonitorUsageCost({
     cachedInputTokens,
+    fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
 
@@ -1689,7 +1720,9 @@ function buildTaskMonitorUsageSnapshot(params: {
 
   return {
     ...(cost ? { cost } : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
     summary,
     tokenUsage: {
       cachedInputTokens,
@@ -1700,6 +1733,27 @@ function buildTaskMonitorUsageSnapshot(params: {
       uncachedInputTokens,
     },
   };
+}
+
+function buildReviewSubAgentUsageSnapshot(params: {
+  existing?: ThreadSubAgentSummary;
+  model?: string;
+  record?: ReviewSubAgentRecord;
+  tokenUsage: unknown;
+}): TaskMonitorUsageSnapshot | undefined {
+  const fastMode = params.record?.preferredFastMode ?? params.existing?.preferredFastMode;
+  const serviceTier =
+    params.record?.preferredServiceTier ?? params.existing?.preferredServiceTier;
+  const model =
+    params.record?.preferredModel ??
+    params.existing?.preferredModel ??
+    params.model;
+  return buildTaskMonitorUsageSnapshot({
+    fastMode,
+    model: serviceTier !== undefined || fastMode !== undefined ? model : undefined,
+    serviceTier,
+    tokenUsage: params.tokenUsage,
+  });
 }
 
 function normalizeTaskMonitorTokenUsage(
@@ -1787,16 +1841,27 @@ function readTaskMonitorNumber(
 
 function estimateTaskMonitorUsageCost(params: {
   cachedInputTokens: number;
+  fastMode?: boolean;
   model?: string;
   outputTokens: number;
+  serviceTier?: string;
   uncachedInputTokens: number;
-}): { model: string; totalUsd: number } | undefined {
+}): { model: string; serviceTier: string; totalUsd: number } | undefined {
   const model = params.model?.trim();
   if (!model) {
     return undefined;
   }
+  const serviceTier = resolveTaskMonitorPricingServiceTier({
+    fastMode: params.fastMode,
+    serviceTier: params.serviceTier,
+  });
+  if (!serviceTier) {
+    return undefined;
+  }
   const entry = TASK_MONITOR_PRICING_CATALOG.find(
-    (candidate) => candidate.model === model,
+    (candidate) =>
+      candidate.model === model &&
+      candidate.serviceTier === serviceTier,
   );
   if (!entry) {
     return undefined;
@@ -1805,7 +1870,25 @@ function estimateTaskMonitorUsageCost(params: {
     (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
     (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
     (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
-  return { model, totalUsd };
+  return { model, serviceTier, totalUsd };
+}
+
+function resolveTaskMonitorPricingServiceTier(params: {
+  fastMode?: boolean;
+  serviceTier?: string;
+}): "standard" | "priority" | undefined {
+  if (params.fastMode === true) {
+    return "priority";
+  }
+
+  const serviceTier = params.serviceTier?.trim().toLowerCase();
+  if (!serviceTier || serviceTier === "default" || serviceTier === "standard") {
+    return "standard";
+  }
+  if (serviceTier === "fast" || serviceTier === "priority") {
+    return "priority";
+  }
+  return undefined;
 }
 
 function formatTaskMonitorTokenCount(value: number): string {
@@ -1890,6 +1973,28 @@ function completedAtFromTerminalNotification(
   return normalizeNotificationTimestamp(
     readRecord(notification.params.turn)?.completedAt ??
       readRecord(notification.params.turn)?.completed_at,
+  );
+}
+
+function tokenUsageFromTerminalNotification(
+  notification: AppServerNotification,
+): unknown {
+  if (
+    notification.method !== "turn/completed" &&
+    notification.method !== "turn/failed" &&
+    notification.method !== "turn/cancelled"
+  ) {
+    return undefined;
+  }
+
+  const params = readRecord(notification.params);
+  const turn = readRecord(params?.turn);
+  return (
+    params?.tokenUsage ??
+    params?.token_usage ??
+    turn?.tokenUsage ??
+    turn?.token_usage ??
+    turn?.usage
   );
 }
 
@@ -6171,13 +6276,23 @@ export class DesktopBackendRegistry {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
     }
+    const preferredServiceTier = resolveTaskMonitorPricingServiceTier({
+      fastMode: modelSettings.fastMode,
+      serviceTier: modelSettings.serviceTier,
+    });
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
       parentThreadId: result.threadId,
+      ...(modelSettings.fastMode !== undefined
+        ? { preferredFastMode: modelSettings.fastMode }
+        : {}),
       ...(modelSettings.model ? { preferredModel: modelSettings.model } : {}),
       ...(modelSettings.reasoningEffort
         ? { preferredReasoningEffort: modelSettings.reasoningEffort }
+        : {}),
+      ...(preferredServiceTier
+        ? { preferredServiceTier }
         : {}),
       reviewThreadId: result.reviewThreadId || result.threadId,
       task: reviewTaskLabel(params.target),
@@ -9626,8 +9741,12 @@ export class DesktopBackendRegistry {
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
       const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
-      const usageSnapshot = buildTaskMonitorUsageSnapshot({
-        model: reviewRecord?.preferredModel ?? completedReviewRecord?.preferredModel,
+      const notificationParams = readRecord(notification.params);
+      const usageModel =
+        readStringLike(notificationParams, ["model"]) ?? undefined;
+      const usageSnapshot = buildReviewSubAgentUsageSnapshot({
+        model: usageModel,
+        record: reviewRecord ?? completedReviewRecord,
         tokenUsage: notification.params.tokenUsage,
       });
       if (!usageSnapshot) {
@@ -9647,7 +9766,8 @@ export class DesktopBackendRegistry {
         reviewThreadId:
           completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
         turnId: notification.params.turnId,
-        usage: usageSnapshot,
+        tokenUsage: notification.params.tokenUsage,
+        usageModel,
       });
       if (reviewUsagePersisted) {
         return;
@@ -9683,7 +9803,8 @@ export class DesktopBackendRegistry {
     parentThreadId: string;
     reviewThreadId: string;
     turnId: string;
-    usage: ThreadSubAgentSummary["monitorUsage"];
+    tokenUsage: unknown;
+    usageModel?: string;
   }): Promise<boolean> {
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
@@ -9699,13 +9820,21 @@ export class DesktopBackendRegistry {
     if (!existing) {
       return false;
     }
+    const usage = buildReviewSubAgentUsageSnapshot({
+      existing,
+      model: params.usageModel,
+      tokenUsage: params.tokenUsage,
+    });
+    if (!usage) {
+      return false;
+    }
 
     await this.overlayStore.upsertThreadSubAgent({
       backend: params.backend,
       threadId: params.parentThreadId,
       subAgent: {
         ...existing,
-        monitorUsage: params.usage,
+        monitorUsage: usage,
         updatedAt: Date.now(),
       },
     });
@@ -9824,6 +9953,11 @@ export class DesktopBackendRegistry {
       status: patch.status ?? existing?.status ?? "running",
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      ...(record.preferredFastMode !== undefined
+        ? { preferredFastMode: record.preferredFastMode }
+        : existing?.preferredFastMode !== undefined
+          ? { preferredFastMode: existing.preferredFastMode }
+          : {}),
       ...(record.preferredModel ?? existing?.preferredModel
         ? { preferredModel: record.preferredModel ?? existing?.preferredModel }
         : {}),
@@ -9831,6 +9965,12 @@ export class DesktopBackendRegistry {
         ? {
             preferredReasoningEffort:
               record.preferredReasoningEffort ?? existing?.preferredReasoningEffort,
+          }
+        : {}),
+      ...(record.preferredServiceTier ?? existing?.preferredServiceTier
+        ? {
+            preferredServiceTier:
+              record.preferredServiceTier ?? existing?.preferredServiceTier,
           }
         : {}),
       monitorThreadId: record.reviewThreadId,
@@ -9874,6 +10014,7 @@ export class DesktopBackendRegistry {
     completedAt?: number;
     method: AppServerNotification["method"];
     threadId: string;
+    tokenUsage?: unknown;
     turnId: string;
   }): Promise<void> {
     const activeReview = this.findActiveReviewSubAgentForTerminal(params);
@@ -9884,10 +10025,18 @@ export class DesktopBackendRegistry {
     this.activeReviewSubAgents.delete(activeReview.key);
     const { record } = activeReview;
     const completedAt = params.completedAt ?? Date.now();
+    const monitorUsage =
+      params.tokenUsage !== undefined
+        ? buildReviewSubAgentUsageSnapshot({
+            record,
+            tokenUsage: params.tokenUsage,
+          })
+        : undefined;
     if (params.method === "turn/completed") {
       await this.persistReviewSubAgent(record, {
         completedAt,
         lastMessage: "Review completed.",
+        ...(monitorUsage ? { monitorUsage } : {}),
         outcome: "success",
         status: "success",
         updatedAt: completedAt,
@@ -9899,6 +10048,7 @@ export class DesktopBackendRegistry {
       await this.persistReviewSubAgent(record, {
         completedAt,
         lastMessage: "Review cancelled.",
+        ...(monitorUsage ? { monitorUsage } : {}),
         outcome: "cancelled",
         status: "cancelled",
         updatedAt: completedAt,
@@ -9909,6 +10059,7 @@ export class DesktopBackendRegistry {
     await this.persistReviewSubAgent(record, {
       completedAt,
       lastMessage: "Review failed.",
+      ...(monitorUsage ? { monitorUsage } : {}),
       outcome: "failure",
       status: "failed",
       updatedAt: completedAt,
@@ -12717,6 +12868,7 @@ export class DesktopBackendRegistry {
           completedAt: completedAtFromTerminalNotification(event.notification),
           method: event.notification.method,
           threadId: notification.params.threadId,
+          tokenUsage: tokenUsageFromTerminalNotification(event.notification),
           turnId,
         });
       }

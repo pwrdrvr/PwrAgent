@@ -140,6 +140,8 @@ export type ThreadSubAgentSummary = {
   updatedAt: number;
   preferredModel?: string;
   preferredReasoningEffort?: string;
+  preferredServiceTier?: string;
+  preferredFastMode?: boolean;
   monitorThreadId?: ThreadIdentifier;
   monitorTurnId?: ThreadIdentifier;
   lastMessage?: string;

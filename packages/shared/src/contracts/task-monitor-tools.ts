@@ -51,9 +51,12 @@ export type CompleteMonitoringToolArgs = {
 export type TaskMonitorUsageSnapshot = {
   cost?: {
     model: string;
+    serviceTier?: string;
     totalUsd: number;
   };
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   summary: string;
   tokenUsage: {
     cachedInputTokens?: number;
