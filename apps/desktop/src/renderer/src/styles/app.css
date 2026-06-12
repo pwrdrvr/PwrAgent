@@ -7703,6 +7703,7 @@ textarea,
 
 .transcript-message__paragraph {
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__heading {
@@ -7746,6 +7747,7 @@ textarea,
 .transcript-message__list {
   margin: 0;
   padding-left: 20px;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__list li + li {
