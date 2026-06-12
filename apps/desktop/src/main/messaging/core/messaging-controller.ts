@@ -5207,7 +5207,7 @@ export class MessagingController {
           )
         : undefined;
     } finally {
-      environmentSetupReporter?.stop();
+      await environmentSetupReporter?.stop();
     }
     const started = materialized ?? (await this.options.backend.startThread!({
       backend: selectedBackend.kind,
@@ -5304,24 +5304,33 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): {
     record: (setupEvent: CodexEnvironmentSetupProgressEvent) => void;
-    stop: () => void;
+    stop: () => Promise<void>;
   } {
     let latestEvent: CodexEnvironmentSetupProgressEvent | undefined;
     let interval: ReturnType<typeof setInterval> | undefined;
+    let deliveryQueue: Promise<void> = Promise.resolve();
     let stopped = false;
 
     const deliverProgress = (setupEvent: CodexEnvironmentSetupProgressEvent) => {
-      void this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("environment-setup-progress"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Environment setup running",
-          body: buildMessagingEnvironmentSetupProgressBody(setupEvent),
-        }),
-        undefined,
-        event,
-      );
+      deliveryQueue = deliveryQueue.then(async () => {
+        try {
+          await this.deliver(
+            buildConfirmationIntent({
+              id: this.newIntentId("environment-setup-progress"),
+              capabilityProfile: this.capabilityProfile,
+              createdAt: this.now(),
+              title: "Environment setup running",
+              body: buildMessagingEnvironmentSetupProgressBody(setupEvent),
+            }),
+            undefined,
+            event,
+          );
+        } catch (error) {
+          this.logger.debug?.("messaging environment setup progress deliver failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
     };
 
     const ensureInterval = () => {
@@ -5352,12 +5361,13 @@ export class MessagingController {
         }
         ensureInterval();
       },
-      stop: () => {
+      stop: async () => {
         stopped = true;
         if (interval) {
           clearInterval(interval);
           interval = undefined;
         }
+        await deliveryQueue;
       },
     };
   }
