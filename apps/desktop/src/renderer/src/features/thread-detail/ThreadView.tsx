@@ -2249,6 +2249,7 @@ export function ThreadView(props: ThreadViewProps) {
               messagingBindingTransitions={
                 selectedThread!.messagingBindingTransitionLog
               }
+              turnFailures={selectedThread!.turnFailureLog}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
               applications={props.applications}

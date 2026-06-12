@@ -85,6 +85,13 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * transcript after the navigation snapshot refreshes.
    */
   messagingBindingTransitionLog?: ThreadMessagingBindingTransition[];
+  /**
+   * Per-thread turn-failure audit log. Persisted via the overlay store,
+   * capped at `MAX_TURN_FAILURE_LOG_ENTRIES`. Materialized into durable
+   * `turn-failed:<turnId>` transcript entries so a failed turn stays
+   * visible across reconciliation and restart.
+   */
+  turnFailureLog?: ThreadTurnFailure[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -904,6 +911,13 @@ export type ThreadOverlayState = {
    * entries for channel bind/unbind actions.
    */
   messagingBindingTransitionLog?: ThreadMessagingBindingTransition[];
+  /**
+   * Per-thread turn-failure audit log. Persisted to the overlay store,
+   * capped at `MAX_TURN_FAILURE_LOG_ENTRIES` (oldest-first eviction).
+   * Each entry records a backend `turn/failed` outcome and is rendered as
+   * a synthetic `turn-failed:<turnId>` transcript activity entry.
+   */
+  turnFailureLog?: ThreadTurnFailure[];
 };
 
 /**
@@ -979,6 +993,40 @@ export type ThreadMessagingBindingTransition = {
   parentTitle?: string;
   ancestorTitle?: string;
   /** Epoch ms. */
+  occurredAt: number;
+};
+
+/**
+ * Maximum number of turn-failure entries retained per thread in the
+ * audit log. Older entries are evicted oldest-first when the cap is
+ * exceeded. Kept separate from the permission/messaging audit streams
+ * so each rolls independently.
+ */
+export const MAX_TURN_FAILURE_LOG_ENTRIES = 100;
+
+/**
+ * One entry in the per-thread turn-failure audit log. Persisted via the
+ * overlay store and materialized by the renderer into a durable
+ * `turn-failed:<turnId>` transcript activity entry at the moment the
+ * turn failed. This is how a backend `turn/failed` outcome survives both
+ * `readThread` reconciliation and app restart — Codex does not persist a
+ * failure marker in its own transcript, so we keep our own.
+ */
+export type ThreadTurnFailure = {
+  /** Stable id, used as a React key + dedupe handle. */
+  id: string;
+  /**
+   * The failed turn's id. The renderer derives the synthetic transcript
+   * entry id (`turn-failed:<turnId>`) from this, which also lets it dedupe
+   * against backends (e.g. ACP) that already emit their own failure entry.
+   */
+  turnId: string;
+  /** Human-readable failure reason surfaced from the backend event. */
+  error: string;
+  /**
+   * Epoch ms when the failure was observed. Preserved verbatim as the
+   * transcript entry timestamp so the warning lands where it happened.
+   */
   occurredAt: number;
 };
 

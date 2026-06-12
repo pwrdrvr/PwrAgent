@@ -67,7 +67,28 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       this.messageHandler(line);
     });
 
-    child.stderr.on("data", () => undefined);
+    // Codex app-server diagnostics — transport fallbacks (e.g. dropping
+    // from WebSocket to HTTPS), retries, and upstream errors — are written
+    // to stderr, NOT the JSON-RPC stdout stream, so they never reach the
+    // transcript or the `agentEvent` log. We used to discard stderr
+    // entirely, which made those outages impossible to diagnose after the
+    // fact. Line-buffer it and mirror each non-empty line into the
+    // codex-transport log. Logged at info (captured without debug
+    // collection) since severity isn't parseable from raw passthrough;
+    // length-capped so a pathological line can't bloat the log file.
+    const stderrReader = readline.createInterface({ input: child.stderr });
+    stderrReader.on("line", (line: string) => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) {
+        return;
+      }
+      codexTransportLog.info("app-server stderr", {
+        line:
+          trimmed.length > 4000
+            ? `${trimmed.slice(0, 4000)}…[truncated]`
+            : trimmed,
+      });
+    });
     child.on("error", (error: Error) => {
       this.closeHandler(error);
     });

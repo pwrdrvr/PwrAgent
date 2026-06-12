@@ -668,6 +668,39 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    appendTurnFailure: async ({
+      backend,
+      threadId,
+      failure,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      failure: import("@pwragent/shared").ThreadTurnFailure;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (
+        (current.turnFailureLog ?? []).some(
+          (entry) => entry.turnId === failure.turnId,
+        )
+      ) {
+        return current;
+      }
+      const nextLog = [...(current.turnFailureLog ?? []), failure];
+      const trimmed =
+        nextLog.length > 100 ? nextLog.slice(nextLog.length - 100) : nextLog;
+      const next = {
+        ...current,
+        turnFailureLog: trimmed,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as OverlayStoreLike;
 }
 
@@ -1714,6 +1747,48 @@ describe("DesktopBackendRegistry", () => {
       projectPath: "/Users/huntharo/github/PwrAgnt",
       configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
     });
+
+    await registry.close();
+  });
+
+  it("records a turn/failed outcome to the thread overlay turnFailureLog", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend: "codex",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-fail",
+          turnId: "turn-xyz",
+          turn: {
+            id: "turn-xyz",
+            status: "failed",
+            completedAt: 1_700_000_000_000,
+            error: { message: "stream disconnected before completion" },
+          },
+        },
+      },
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-fail",
+    });
+    expect(overlay?.turnFailureLog).toHaveLength(1);
+    expect(overlay?.turnFailureLog?.[0]).toMatchObject({
+      turnId: "turn-xyz",
+      error: "stream disconnected before completion",
+    });
+    expect(typeof overlay?.turnFailureLog?.[0]?.occurredAt).toBe("number");
+    expect(typeof overlay?.turnFailureLog?.[0]?.id).toBe("string");
 
     await registry.close();
   });

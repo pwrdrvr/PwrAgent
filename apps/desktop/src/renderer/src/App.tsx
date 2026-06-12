@@ -196,6 +196,12 @@ function DesktopAppShell(props: {
   const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
   const [hotCpuProfileNotice, setHotCpuProfileNotice] =
     useState<AppNoticeToastNotice>();
+  // Sticky (manual-dismiss) notice for backend turn failures and system
+  // errors. These used to vanish silently — the turn just stopped thinking
+  // with nothing to show for it. The toast stays until dismissed so a
+  // mid-outage failure can't slip past unnoticed.
+  const [backendErrorNotice, setBackendErrorNotice] =
+    useState<AppNoticeToastNotice>();
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -226,6 +232,61 @@ function DesktopAppShell(props: {
           " Copy this notice to hand off the profile path.",
         ].join(""),
       });
+    });
+  }, [desktopApi]);
+
+  // Surface backend turn failures + system errors as a durable toast. The
+  // matching transcript entry (rendered from the thread overlay's
+  // turnFailureLog) is the in-context record; this toast is the global
+  // "something just broke" signal that has to be acknowledged.
+  useEffect(() => {
+    return desktopApi?.onAgentEvent?.((event) => {
+      // Params are cast explicitly: the AppServerNotification union is too
+      // wide for the discriminant to narrow `params` reliably here.
+      if (event.notification.method === "turn/failed") {
+        const params = event.notification.params as {
+          turnId?: string;
+          turn?: { error?: { message?: unknown } };
+        };
+        const rawMessage = params.turn?.error?.message;
+        const errorMessage =
+          typeof rawMessage === "string" && rawMessage.trim()
+            ? rawMessage
+            : "The agent turn failed.";
+        setBackendErrorNotice({
+          autoDismiss: false,
+          id: `turn-failed:${event.backend}:${params.turnId ?? "unknown"}`,
+          title: "Turn failed",
+          message: errorMessage,
+          detail: "The agent stopped this turn before it completed.",
+          copyText: errorMessage,
+        });
+        return;
+      }
+      if (event.notification.method === "thread/status/changed") {
+        const params = event.notification.params as {
+          threadId?: string;
+          status?: { type?: string };
+        };
+        if (params.status?.type !== "systemError") {
+          return;
+        }
+        setBackendErrorNotice((current) =>
+          // A turn/failed for the same outage carries the real error and
+          // fires alongside this status change — don't clobber its richer
+          // message with the generic one.
+          current && current.id.startsWith("turn-failed:")
+            ? current
+            : {
+                autoDismiss: false,
+                id: `system-error:${event.backend}:${params.threadId ?? "unknown"}`,
+                title: "Agent backend error",
+                message:
+                  "The agent backend reported a system error. The active turn may have stopped.",
+              },
+        );
+        return;
+      }
     });
   }, [desktopApi]);
   const revealSelectedThreadInList = useCallback(() => {
@@ -912,6 +973,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={hotCpuProfileNotice}
             onDismiss={() => setHotCpuProfileNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={backendErrorNotice}
+            onDismiss={() => setBackendErrorNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>

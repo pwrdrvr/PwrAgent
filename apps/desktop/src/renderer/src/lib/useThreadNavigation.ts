@@ -2589,6 +2589,15 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "turn/failed") {
+        // The backend registry appended a durable turn-failure entry to the
+        // thread overlay before broadcasting this event. Refresh so the
+        // navigation snapshot carries `turnFailureLog` into the transcript;
+        // without it the failure would never surface as a durable entry.
+        scheduleRefresh();
+        return;
+      }
+
       if (
         method === "thread/automations/updated" ||
         method === "automation/run/updated" ||

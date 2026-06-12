@@ -17,6 +17,7 @@ import type {
   ThreadOverlayState,
   ThreadPermissionTransition,
   ThreadSubAgentSummary,
+  ThreadTurnFailure,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
@@ -25,6 +26,7 @@ import {
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
+  MAX_TURN_FAILURE_LOG_ENTRIES,
   buildThreadIdentityKey,
   applyNavigationLaunchpadProviderSettingsPatch,
   parseThreadIdentityKey,
@@ -226,6 +228,7 @@ export class SqliteOverlayStore {
           permissionTransitionLog: current?.permissionTransitionLog,
           messagingBindingTransitionLog:
             current?.messagingBindingTransitionLog,
+          turnFailureLog: current?.turnFailureLog,
         });
       }
     }
@@ -1002,6 +1005,41 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async appendTurnFailure(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    failure: ThreadTurnFailure;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    // Dedupe by turnId: a turn fails once, but `turn/failed` can be
+    // re-observed (reconnect / replay). Keep the first-seen entry so the
+    // transcript marker's timestamp stays anchored to where it happened.
+    if (
+      (current.turnFailureLog ?? []).some(
+        (entry) => entry.turnId === params.failure.turnId,
+      )
+    ) {
+      return current;
+    }
+    const nextLog = [...(current.turnFailureLog ?? []), params.failure];
+    const trimmed =
+      nextLog.length > MAX_TURN_FAILURE_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_TURN_FAILURE_LOG_ENTRIES)
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      turnFailureLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -1520,6 +1558,7 @@ export type OverlayStoreLike = Pick<
   | "retainThreadBranchDrift"
   | "appendPermissionTransition"
   | "appendMessagingBindingTransition"
+  | "appendTurnFailure"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getNavigationBrowseMode"
