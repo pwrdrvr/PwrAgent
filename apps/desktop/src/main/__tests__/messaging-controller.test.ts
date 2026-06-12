@@ -5377,7 +5377,7 @@ describe("MessagingController", () => {
           {
             id: "dev-env",
             name: "Dev Environment",
-            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
             setupScript: "pnpm install",
             actions: [],
           },
@@ -5430,7 +5430,7 @@ describe("MessagingController", () => {
             setupExitCode: 1,
             setupDurationMs: 2500,
             actions: [],
-            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
           },
           codexEnvironmentStartupFailure: {
             message: "install failed",
@@ -5455,7 +5455,7 @@ describe("MessagingController", () => {
             setupExitCode: 1,
             setupDurationMs: 2500,
             actions: [],
-            sourcePath: "/repo/pwragent/.codex/env/dev.toml",
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
           },
           codexEnvironmentStartupFailure: {
             message: "install failed",

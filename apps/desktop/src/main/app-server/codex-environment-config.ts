@@ -35,70 +35,53 @@ export async function listCodexEnvironmentOptions(
     return [];
   }
 
+  const environmentsDir = path.join(
+    directoryPath.trim(),
+    ".codex",
+    "environments",
+  );
+  let entries: string[];
+  try {
+    const directoryStat = await stat(environmentsDir);
+    if (!directoryStat.isDirectory()) {
+      return [];
+    }
+    entries = await readdir(environmentsDir);
+  } catch (error) {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode === "ENOENT" || errorCode === "ENOTDIR") {
+      return [];
+    }
+    throw error;
+  }
+
   const options: CodexEnvironmentOption[] = [];
-  const codexDir = path.join(directoryPath.trim(), ".codex");
-  const sourceRoots = [
-    path.join(codexDir, "env"),
-    path.join(codexDir, "environments"),
-  ];
-  for (const sourceRoot of sourceRoots) {
-    let rootStat;
-    try {
-      rootStat = await stat(sourceRoot);
-    } catch (error) {
-      const errorCode = (error as NodeJS.ErrnoException).code;
-      if (errorCode === "ENOENT" || errorCode === "ENOTDIR") {
-        continue;
-      }
-      throw error;
-    }
-
-    if (rootStat.isFile()) {
-      await appendCodexEnvironmentOption(options, sourceRoot, "env");
-      continue;
-    }
-    if (!rootStat.isDirectory()) {
+  for (const entry of entries.sort((a, b) => a.localeCompare(b))) {
+    if (!entry.endsWith(".toml")) {
       continue;
     }
 
-    const entries = await readdir(sourceRoot);
-    for (const entry of entries.sort((a, b) => a.localeCompare(b))) {
-      if (!entry.endsWith(".toml")) {
-        continue;
-      }
-
-      const sourcePath = path.join(sourceRoot, entry);
-      const fileStat = await stat(sourcePath);
-      if (!fileStat.isFile()) {
-        continue;
-      }
-      await appendCodexEnvironmentOption(
-        options,
-        sourcePath,
-        path.basename(entry, ".toml"),
-      );
+    const sourcePath = path.join(environmentsDir, entry);
+    const fileStat = await stat(sourcePath);
+    if (!fileStat.isFile()) {
+      continue;
     }
+
+    const source = await readFile(sourcePath, "utf8");
+    const parsed = parseCodexEnvironmentToml(source, sourcePath);
+    const fallbackId = path.basename(entry, ".toml");
+    const fallbackName = titleizeEnvironmentId(fallbackId);
+    options.push({
+      id: makeUniqueEnvironmentId(fallbackId, options),
+      name: parsed.name?.trim() || fallbackName,
+      sourcePath,
+      setupScript: normalizeScript(parsed.setup?.script),
+      cleanupScript: normalizeScript(parsed.cleanup?.script),
+      actions: normalizeActions(parsed.actions),
+    });
   }
 
   return options;
-}
-
-async function appendCodexEnvironmentOption(
-  options: CodexEnvironmentOption[],
-  sourcePath: string,
-  fallbackId: string,
-): Promise<void> {
-  const source = await readFile(sourcePath, "utf8");
-  const parsed = parseCodexEnvironmentToml(source, sourcePath);
-  const fallbackName = titleizeEnvironmentId(fallbackId);
-  options.push({
-    id: makeUniqueEnvironmentId(fallbackId, options),
-    name: parsed.name?.trim() || fallbackName,
-    sourcePath,
-    setupScript: normalizeScript(parsed.setup?.script),
-    cleanupScript: normalizeScript(parsed.cleanup?.script),
-    actions: normalizeActions(parsed.actions),
-  });
 }
 
 export function withCodexEnvironmentOptions(
