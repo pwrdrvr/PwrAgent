@@ -8671,6 +8671,33 @@ textarea,
   gap: 2px;
 }
 
+.edited-file-groups__show-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.edited-file-groups__show-more:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.edited-file-groups__show-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .edited-file-groups__group-toggle {
   display: flex;
   align-items: center;
@@ -9877,6 +9904,16 @@ textarea,
   align-items: baseline;
   gap: 8px;
   padding: 5px 12px;
+}
+
+/* Compact diff (docked edits rail): size the line-number gutters to their
+   content instead of two fixed 44px columns, and trim the gap/padding, so the
+   narrow rail spends its width on code rather than empty gutter — text stops
+   wrapping mid-token. The wide main-transcript diff keeps its fixed columns. */
+.transcript-diff--compact .transcript-diff__row {
+  grid-template-columns: max-content max-content 12px minmax(0, 1fr);
+  gap: 6px;
+  padding: 4px 10px;
 }
 
 .transcript-diff__row--added {

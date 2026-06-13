@@ -183,6 +183,42 @@ const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =
 );
 const readDirectoryGitStatusCache = vi.fn(async () => ({}));
 const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
+const readThreadGitWorkingStateCache = vi.fn(async () => ({}));
+const writeThreadGitWorkingStateCacheEntry = vi.fn(async () => undefined);
+type WorkingStateEntry = {
+  worktreePath: string;
+  gitWorkingState?: {
+    dirtyFiles: number;
+    dirtyAdditions: number;
+    dirtyDeletions: number;
+    untrackedFiles: number;
+    unpushedCommits: number;
+  };
+};
+const readWorktreeWorkingStateEntries = vi.fn(
+  (worktreePaths: string[]): AsyncGenerator<WorkingStateEntry> =>
+    (async function* () {
+      for (const worktreePath of worktreePaths) {
+        yield { worktreePath } satisfies WorkingStateEntry;
+      }
+    })(),
+);
+const invalidateWorktreeWorkingState = vi.fn((_worktreePath?: string) => undefined);
+const registryEventListeners: Array<(event: unknown) => void> = [];
+const onEvent = vi.fn((listener: (event: unknown) => void) => {
+  registryEventListeners.push(listener);
+  return () => {
+    const index = registryEventListeners.indexOf(listener);
+    if (index >= 0) {
+      registryEventListeners.splice(index, 1);
+    }
+  };
+});
+function emitRegistryEvent(event: unknown): void {
+  for (const listener of [...registryEventListeners]) {
+    listener(event);
+  }
+}
 const publishLocalEvent = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
@@ -339,6 +375,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writePrLookupCacheEntry,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
+    readThreadGitWorkingStateCache,
+    writeThreadGitWorkingStateCacheEntry,
   }),
 }));
 
@@ -355,6 +393,9 @@ vi.mock("../app-server/backend-registry", () => ({
     readThread,
     readDirectoryStatuses,
     readDirectoryStatusEntries,
+    readWorktreeWorkingStateEntries,
+    invalidateWorktreeWorkingState,
+    onEvent,
     publishLocalEvent,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
@@ -391,6 +432,13 @@ describe("app server ipc", () => {
     readDirectoryGitStatusCache.mockClear();
     readDirectoryGitStatusCache.mockResolvedValue({});
     writeDirectoryGitStatusCacheEntry.mockClear();
+    readThreadGitWorkingStateCache.mockClear();
+    readThreadGitWorkingStateCache.mockResolvedValue({});
+    writeThreadGitWorkingStateCacheEntry.mockClear();
+    readWorktreeWorkingStateEntries.mockClear();
+    invalidateWorktreeWorkingState.mockClear();
+    onEvent.mockClear();
+    registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
@@ -2246,7 +2294,10 @@ describe("app server ipc", () => {
         directoryKey: "directory:/repo/app",
         directoryPath: "/repo/app",
         directoryUpdatedAt: 2000,
-        fetchedAt: Date.now(),
+        // Fresh for the 5-minute automatic-refresh window, but older than
+        // the short force-coalesce window so the explicit refresh below
+        // still overrides freshness and schedules a probe.
+        fetchedAt: Date.now() - 10_000,
         gitStatus: directoryGitStatus,
       },
     });
@@ -2271,6 +2322,184 @@ describe("app server ipc", () => {
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);
+  });
+
+  it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+      NAVIGATION_SNAPSHOT_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    // Stale seed so the snapshot's automatic refresh probes once and writes a
+    // now-fresh cache entry (populates `lastDirectoriesByKey` too).
+    readDirectoryGitStatusCache.mockResolvedValueOnce({
+      "directory:/repo/app": {
+        directoryKey: "directory:/repo/app",
+        directoryPath: "/repo/app",
+        directoryUpdatedAt: 2000,
+        fetchedAt: Date.now() - 60 * 60 * 1000,
+        gitStatus: directoryGitStatus,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(readDirectoryStatusEntries).toHaveBeenCalled();
+    });
+    const callsAfterSnapshot = readDirectoryStatusEntries.mock.calls.length;
+
+    // The probe just completed, so back-to-back forced re-enqueues land
+    // inside the coalesce window and are skipped — the "747, 747, 747"
+    // tail collapses to nothing.
+    const first = await handlers.get(
+      NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+    )?.({}, { directoryKeys: ["directory:/repo/app"] });
+    const second = await handlers.get(
+      NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+    )?.({}, { directoryKeys: ["directory:/repo/app"] });
+
+    expect(first).toEqual({ scheduledCount: 0 });
+    expect(second).toEqual({ scheduledCount: 0 });
+    // No probe beyond the snapshot's ran.
+    expect(readDirectoryStatusEntries.mock.calls.length).toBe(callsAfterSnapshot);
+  });
+
+  it("publishes a working-state chip update when a snapshot probe lands", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+      },
+    ] as never);
+    const gitWorkingState = {
+      dirtyFiles: 3,
+      dirtyAdditions: 10,
+      dirtyDeletions: 2,
+      untrackedFiles: 1,
+      unpushedCommits: 4,
+    };
+    readWorktreeWorkingStateEntries.mockImplementationOnce(() =>
+      (async function* () {
+        yield { worktreePath: "/repo/wt", gitWorkingState };
+      })(),
+    );
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ worktreePath: "/repo/wt", gitWorkingState }),
+      );
+    });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadGitWorkingState/updated",
+        params: expect.objectContaining({
+          worktreePath: "/repo/wt",
+          gitWorkingState,
+        }),
+      },
+    });
+  });
+
+  it("refreshes a thread's working state after the agent finishes a turn", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    expect(invalidateWorktreeWorkingState).toHaveBeenCalledWith("/repo/wt");
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries.mock.calls.length).toBe(
+        callsAfterSnapshot + 1,
+      );
+    });
+    expect(readWorktreeWorkingStateEntries.mock.calls.at(-1)?.[0]).toEqual([
+      "/repo/wt",
+    ]);
+  });
+
+  it("ignores a completed non-git command for working-state refresh", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+    invalidateWorktreeWorkingState.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          item: { id: "i1", type: "command", command: "npm run build" },
+        },
+      },
+    });
+
+    expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
+    expect(readWorktreeWorkingStateEntries.mock.calls.length).toBe(
+      callsAfterSnapshot,
+    );
   });
 
   it("caps automatic startup directory git status refreshes", async () => {

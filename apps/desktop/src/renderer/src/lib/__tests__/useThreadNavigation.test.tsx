@@ -846,6 +846,103 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("applies streamed thread working-state updates without refreshing the snapshot", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          projectKey: "/repo/wt",
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.id).toBe("thread-1");
+    });
+    expect(result.current.threads[0]?.gitWorkingState).toBeUndefined();
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "navigation/threadGitWorkingState/updated",
+            params: {
+              worktreePath: "/repo/wt",
+              gitWorkingState: {
+                dirtyFiles: 3,
+                dirtyAdditions: 12,
+                dirtyDeletions: 4,
+                untrackedFiles: 1,
+                unpushedCommits: 2,
+              },
+              fetchedAt: Date.now(),
+            },
+          },
+        });
+      }
+    });
+
+    // Patched in place — no extra snapshot fetch.
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(result.current.threads[0]?.gitWorkingState).toMatchObject({
+      dirtyFiles: 3,
+      unpushedCommits: 2,
+    });
+
+    // A clean probe (null) clears the chips.
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "navigation/threadGitWorkingState/updated",
+            params: {
+              worktreePath: "/repo/wt",
+              gitWorkingState: null,
+              fetchedAt: Date.now(),
+            },
+          },
+        });
+      }
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(result.current.threads[0]?.gitWorkingState).toBeUndefined();
+  });
+
   it("does not move selection to another thread when refresh temporarily drops the selected thread", async () => {
     const listeners = new Set<(event: any) => void>();
     let includeSelectedThread = true;

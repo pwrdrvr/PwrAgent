@@ -26,8 +26,15 @@ const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
  * groups the user can flip between per-turn rounds and the flattened
  * per-file view; a single group renders as a plain file list.
  */
+/**
+ * Turn-groups shown in the "By turn" view before the rest collapse behind a
+ * "Show N more" toggle. Mirrors the directory list's overflow affordance.
+ */
+const VISIBLE_TURN_GROUPS = 3;
+
 export function EditedFileGroupList(props: EditedFileGroupListProps) {
   const [view, setView] = useState<EditedFileGroupView>("turns");
+  const [showAllTurns, setShowAllTurns] = useState(false);
 
   if (props.groups.length === 0) {
     return null;
@@ -67,13 +74,33 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
       </div>
 
       {view === "turns" ? (
-        props.groups.map((group, index) => (
-          <EditedFileGroupSection
-            key={group.key}
-            group={group}
-            defaultExpanded={index === 0}
-          />
-        ))
+        (() => {
+          const visibleGroups = showAllTurns
+            ? props.groups
+            : props.groups.slice(0, VISIBLE_TURN_GROUPS);
+          const hiddenCount = props.groups.length - visibleGroups.length;
+          return (
+            <>
+              {visibleGroups.map((group, index) => (
+                <EditedFileGroupSection
+                  key={group.key}
+                  group={group}
+                  defaultExpanded={index === 0}
+                />
+              ))}
+              {props.groups.length > VISIBLE_TURN_GROUPS ? (
+                <button
+                  type="button"
+                  className="edited-file-groups__show-more"
+                  aria-expanded={showAllTurns}
+                  onClick={() => setShowAllTurns((current) => !current)}
+                >
+                  {showAllTurns ? "Show less" : `Show ${hiddenCount} more`}
+                </button>
+              ) : null}
+            </>
+          );
+        })()
       ) : (
         <EditedFileList details={flattenEditedFileGroups(props.groups)} />
       )}

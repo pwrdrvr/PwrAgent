@@ -5,6 +5,7 @@ import type {
   AppServerThreadEntry,
 } from "@pwragent/shared";
 import {
+  MAX_RETAINED_TURN_GROUPS,
   collectEditedFileGroups,
   commandLooksLikeGitCommit,
   flattenEditedFileGroups,
@@ -287,6 +288,26 @@ describe("collectEditedFileGroups", () => {
       ],
     });
     expect(groups).toHaveLength(0);
+  });
+
+  it("caps retained turn-groups at MAX_RETAINED_TURN_GROUPS, keeping the newest", () => {
+    const turnCount = MAX_RETAINED_TURN_GROUPS + 2;
+    const groups = collectEditedFileGroups({
+      entries: Array.from({ length: turnCount }, (_, index) =>
+        activityEntry({
+          id: `a${index + 1}`,
+          turnId: `turn-${index + 1}`,
+          details: [fileDiffDetail({ path: `src/file-${index + 1}.ts` })],
+        }),
+      ),
+    });
+
+    expect(groups).toHaveLength(MAX_RETAINED_TURN_GROUPS);
+    // Newest-first: the most recent turn leads, the two oldest dropped off.
+    expect(groups[0].key).toBe(`turn-${turnCount}`);
+    expect(groups.at(-1)?.key).toBe("turn-3");
+    expect(groups.some((group) => group.key === "turn-1")).toBe(false);
+    expect(groups.some((group) => group.key === "turn-2")).toBe(false);
   });
 });
 

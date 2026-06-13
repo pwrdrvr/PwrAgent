@@ -218,6 +218,8 @@ import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
 import type { DirectoryGitStatusEntry } from "./git-directory-service";
+import { GitWorkingStateService } from "./git-working-state-service";
+import type { WorktreeWorkingStateEntry } from "./git-working-state-service";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
@@ -2932,6 +2934,7 @@ export class DesktopBackendRegistry {
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
+  private readonly gitWorkingStateService: GitWorkingStateService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpBackend: AcpBackendAdapter;
@@ -3114,6 +3117,7 @@ export class DesktopBackendRegistry {
     grokClient?: BackendClient;
     overlayStore?: OverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
+    gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
@@ -3229,6 +3233,9 @@ export class DesktopBackendRegistry {
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
+    this.gitWorkingStateService =
+      options?.gitWorkingStateService ??
+      new GitWorkingStateService({ gitEnv: codexEnv });
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
@@ -5192,6 +5199,16 @@ export class DesktopBackendRegistry {
     directories: NavigationDirectorySummary[],
   ): AsyncIterable<DirectoryGitStatusEntry> {
     return this.gitDirectoryService.readDirectoryStatusEntries(directories);
+  }
+
+  readWorktreeWorkingStateEntries(
+    worktreePaths: string[],
+  ): AsyncIterable<WorktreeWorkingStateEntry> {
+    return this.gitWorkingStateService.readWorkingStateEntries(worktreePaths);
+  }
+
+  invalidateWorktreeWorkingState(worktreePath?: string): void {
+    this.gitWorkingStateService.invalidate(worktreePath);
   }
 
   async readThread(
