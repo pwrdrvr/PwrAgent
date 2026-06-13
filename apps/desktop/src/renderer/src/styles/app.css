@@ -2961,6 +2961,17 @@ textarea,
   content: none;
 }
 
+/* A card with sub-threads carries the expand/collapse toggle in its left
+   gutter (`.thread-row__subthread-toggle`, top: 13px / 18px tall → bottom
+   at 31px, left: 8px). The selection accent bar (`::before`, top: 8px,
+   left: 5px) otherwise starts level with the toggle and the two cluster
+   against the card border. Drop the bar's start below the toggle so it
+   still telegraphs selection down the card's left edge without running
+   into the chevron. */
+.thread-row-shell.has-subthreads .thread-row.is-selected::before {
+  top: 34px;
+}
+
 .thread-row__header {
   display: flex;
   align-items: baseline;
