@@ -8583,6 +8583,10 @@ textarea,
   padding: 4px 6px;
   border: 0;
   border-radius: 4px;
+  /* Dense secondary surface: match the group-header summary (12px) instead
+     of inheriting the 16px body font, which read as huge next to the
+     in-transcript file rows. */
+  font-size: 12px;
   /* `--bg-panel` (not `--bg-panel-elevated`) so the row sits visually
      INSIDE the rail card (which uses `--bg-panel-elevated`) instead
      of blending flush with it. Required to be opaque for the sticky
@@ -8611,18 +8615,9 @@ textarea,
   white-space: nowrap;
 }
 
-.live-work-rail__file-stats {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-feature-settings: "tnum" 1;
-  font-size: 11px;
-  font-weight: 600;
-}
-
 /* Shared +A/-R stat: + (green) then - (red), no comma — consistent with the
-   thread-row dirty chip. `--chip` adds the pill treatment for the group
-   header; bare it sits inline in the per-file rows. */
+   thread-row dirty chip. Rendered as a `--chip` pill in both the group
+   header and the per-file rows so their right edges line up. */
 .diff-stat {
   display: inline-flex;
   align-items: baseline;
@@ -8646,14 +8641,6 @@ textarea,
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-panel-elevated);
-}
-
-.live-work-rail__file-stat--added {
-  color: var(--success-text);
-}
-
-.live-work-rail__file-stat--removed {
-  color: var(--danger-text);
 }
 
 .live-work-rail__file-diff {
@@ -8859,12 +8846,6 @@ textarea,
 .edit-commit-badge__sha-value {
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
-}
-
-.edit-commit-badge__sha-action {
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .edit-commit-badge__push {
