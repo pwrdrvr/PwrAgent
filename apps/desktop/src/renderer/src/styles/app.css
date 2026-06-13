@@ -8620,6 +8620,34 @@ textarea,
   font-weight: 600;
 }
 
+/* Shared +A/-R stat: + (green) then - (red), no comma — consistent with the
+   thread-row dirty chip. `--chip` adds the pill treatment for the group
+   header; bare it sits inline in the per-file rows. */
+.diff-stat {
+  display: inline-flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-stat__added {
+  color: var(--success-text);
+}
+
+.diff-stat__removed {
+  color: var(--danger-text);
+}
+
+.diff-stat--chip {
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+}
+
 .live-work-rail__file-stat--added {
   color: var(--success-text);
 }

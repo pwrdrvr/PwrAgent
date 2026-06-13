@@ -95,7 +95,11 @@ describe("collectEditedFileGroups", () => {
     expect(groups[1].details).toHaveLength(1);
     expect(groups[1].details[0].fileDiff?.additions).toBe(5);
     expect(groups[1].details[0].fileDiff?.removals).toBe(1);
-    expect(groups[1].summary).toBe("Edited 1 file, +5, -1");
+    // Summary is count-only; +/- live on the group's additions/removals
+    // (rendered via the shared DiffStat chip).
+    expect(groups[1].summary).toBe("Edited 1 file");
+    expect(groups[1].additions).toBe(5);
+    expect(groups[1].removals).toBe(1);
   });
 
   it("prefers a turn's live cumulative diff entry over its per-edit entries", () => {

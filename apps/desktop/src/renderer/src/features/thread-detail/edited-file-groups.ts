@@ -4,7 +4,10 @@ import type {
   AppServerThreadEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
-import { formatChangedFileSummary } from "./live-transcript-activity";
+import {
+  formatChangedFileCount,
+  formatChangedFileSummary,
+} from "./live-transcript-activity";
 
 /**
  * Upper bound on accumulated turn-groups kept by `collectEditedFileGroups`.
@@ -29,7 +32,7 @@ export type EditedFileGroup = {
   turn?: AppServerThreadTurnMetadata;
   /** Per-file details; every detail carries a `fileDiff`. */
   details: AppServerThreadActivityDetail[];
-  /** "Edited N files, +A, -R" for this group. */
+  /** "Edited N files" — file count only; +/- render via `DiffStat`. */
   summary: string;
   additions: number;
   removals: number;
@@ -217,12 +220,10 @@ export function collectEditedFileGroups(params: {
       key: bucket.key,
       turn: bucket.turn,
       details,
-      summary: formatChangedFileSummary({
-        count: details.length,
-        prefix: "Edited",
-        additions,
-        removals,
-      }),
+      // Count only — the +/- stats render via the shared colored DiffStat
+      // chip in the header (consistent with the thread-row dirty chip),
+      // not as plain comma-separated text.
+      summary: formatChangedFileCount({ count: details.length, prefix: "Edited" }),
       additions,
       removals,
       live: bucket.live,

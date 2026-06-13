@@ -4,6 +4,7 @@ import type {
   EditGroupCommitState,
 } from "@pwragent/shared";
 import { TranscriptDiff } from "./TranscriptDiff";
+import { DiffStat } from "./DiffStat";
 import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
 import {
   flattenEditedFileGroups,
@@ -145,6 +146,11 @@ function EditedFileGroupSection(props: {
           <span className="edited-file-groups__group-summary">
             {props.group.summary}
           </span>
+          <DiffStat
+            additions={props.group.additions}
+            removals={props.group.removals}
+            className="diff-stat--chip"
+          />
         </button>
         <div className="edited-file-groups__group-meta">
           {props.group.live ? (
@@ -201,14 +207,7 @@ export function EditedFileRow(props: {
         <span className="live-work-rail__file-path" title={props.detail.path}>
           {props.detail.label}
         </span>
-        <span className="live-work-rail__file-stats" aria-label="File diff summary">
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--removed">
-            -{removals.toLocaleString()}
-          </span>
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--added">
-            +{additions.toLocaleString()}
-          </span>
-        </span>
+        <DiffStat additions={additions} removals={removals} />
       </button>
       {/* Diff container stays in the DOM (with `hidden`) so the
           row's `aria-controls={diffId}` always resolves. The
