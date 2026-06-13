@@ -458,6 +458,7 @@ describe("App", () => {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
         activeContextTab: { value: "info", source: "default" },
+        editedFilesDock: { value: "above", source: "default" },
       },
       messaging: {
         enabled: { value: true, source: "default" },

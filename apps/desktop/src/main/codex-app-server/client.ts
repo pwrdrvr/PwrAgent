@@ -5446,6 +5446,9 @@ export class CodexAppServerClient {
             gitBranch: thread.gitBranch,
             linkedDirectories: enrichment.linkedDirectories,
             observedGitBranch: enrichment.observedGitBranch,
+            ...(enrichment.gitWorkingState
+              ? { gitWorkingState: enrichment.gitWorkingState }
+              : {}),
             source: "codex" as const,
           },
         };

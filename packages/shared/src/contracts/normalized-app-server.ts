@@ -245,6 +245,26 @@ export type AppServerAcpSessionRuntimeState = {
   updatedAt?: number;
 };
 
+/**
+ * Snapshot of local git working-tree state for a thread's working
+ * directory: uncommitted change totals plus commits that exist on no
+ * remote ref. Computed by the thread directory enricher alongside
+ * `observedGitBranch`; absent when the directory is not a git checkout
+ * or the probe failed.
+ */
+export type ThreadGitWorkingState = {
+  /** Files with staged or unstaged modifications vs HEAD. */
+  dirtyFiles: number;
+  /** Added lines across staged + unstaged changes vs HEAD. */
+  dirtyAdditions: number;
+  /** Removed lines across staged + unstaged changes vs HEAD. */
+  dirtyDeletions: number;
+  /** Untracked files. */
+  untrackedFiles: number;
+  /** Local commits not present on any remote ref (0 when no remotes). */
+  unpushedCommits: number;
+};
+
 export type AppServerThreadSummary = {
   id: ThreadIdentifier;
   title: string;
@@ -258,6 +278,7 @@ export type AppServerThreadSummary = {
   gitBranch?: string;
   gitOriginUrl?: string;
   observedGitBranch?: string;
+  gitWorkingState?: ThreadGitWorkingState;
   source: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
   model?: string;

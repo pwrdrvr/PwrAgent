@@ -6,6 +6,7 @@ import type {
 } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { LiveWorkRail } from "../LiveWorkRail";
+import { collectEditedFileGroups } from "../edited-file-groups";
 
 function buildEditedFilesEntry(): AppServerThreadActivityEntry {
   return {
@@ -43,6 +44,12 @@ function buildEditedFilesEntry(): AppServerThreadActivityEntry {
   };
 }
 
+function buildEditedFileGroups() {
+  return collectEditedFileGroups({
+    entries: [buildEditedFilesEntry()],
+  });
+}
+
 function buildChangedFilesEntry(): AppServerThreadActivityEntry {
   return {
     type: "activity",
@@ -76,53 +83,44 @@ function buildPlanEntry(): AppServerThreadPlanEntry {
 
 describe("LiveWorkRail", () => {
   it("renders nothing when there's no live or pinned content", () => {
-    const { container } = render(
-      <LiveWorkRail dock="above" pinned={false} onDockChange={() => undefined} />,
-    );
+    const { container } = render(<LiveWorkRail pinned={false} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("treats an editedFilesEntry as absent when none of its details carry a fileDiff", () => {
+  it("renders nothing when an entry's details carry no fileDiff (accumulator filters it)", () => {
     // Defensive: a malformed entry with summary "Edited 1 file" but
     // empty/non-diff details would otherwise produce a rail title
     // claiming work-was-done while the body had nothing to render
-    // below it. The rail title and the section body share the same
-    // gating so they can't disagree (#510 follow-up).
-    const editedFilesEntryWithoutDiffs: AppServerThreadActivityEntry = {
-      type: "activity",
-      id: "live-diff-empty",
-      summary: "Edited 1 file",
-      createdAt: 1_000,
-      details: [
+    // below it. The gating lives in collectEditedFileGroups so the
+    // rail title and body can't disagree (#510 follow-up).
+    const groups = collectEditedFileGroups({
+      entries: [
         {
-          id: "detail-non-diff",
-          kind: "write",
-          label: "Update mystery.ts",
-          path: "/repo/mystery.ts",
+          type: "activity",
+          id: "live-diff-empty",
+          summary: "Edited 1 file",
+          createdAt: 1_000,
+          details: [
+            {
+              id: "detail-non-diff",
+              kind: "write",
+              label: "Update mystery.ts",
+              path: "/repo/mystery.ts",
+            },
+          ],
         },
       ],
-    };
+    });
+    expect(groups).toHaveLength(0);
     const { container } = render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        editedFilesEntry={editedFilesEntryWithoutDiffs}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={false} editedFileGroups={groups} />,
     );
-    // No content → rail returns null entirely (just like the "no
-    // entries" empty-state case).
     expect(container).toBeEmptyDOMElement();
   });
 
   it("uses the section summary as the rail title when not pinned", () => {
     render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
     );
     expect(
       screen.getByRole("complementary", { name: "Edited 2 files, +5, -2" }),
@@ -134,12 +132,7 @@ describe("LiveWorkRail", () => {
 
   it("suffixes the aria label with (last turn) when pinned but keeps the same summary text in the visible title", () => {
     render(
-      <LiveWorkRail
-        dock="above"
-        pinned={true}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={true} editedFileGroups={buildEditedFileGroups()} />,
     );
     expect(
       screen.getByRole("complementary", {
@@ -151,12 +144,10 @@ describe("LiveWorkRail", () => {
   it("joins multiple section summaries in the rail title with a midline dot", () => {
     render(
       <LiveWorkRail
-        dock="above"
         pinned={false}
         planEntry={buildPlanEntry()}
-        editedFilesEntry={buildEditedFilesEntry()}
+        editedFileGroups={buildEditedFileGroups()}
         changedFilesEntry={buildChangedFilesEntry()}
-        onDockChange={() => undefined}
       />,
     );
     expect(
@@ -168,12 +159,7 @@ describe("LiveWorkRail", () => {
 
   it("expands a file's diff in place when its row is clicked", () => {
     render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
     );
     // Section heading is gone — the rail title carries the summary
     // (see "uses the section summary as the rail title" above).
@@ -192,12 +178,7 @@ describe("LiveWorkRail", () => {
 
   it("renders the Changed Files section as a static list (no diff expand, no section heading)", () => {
     render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        changedFilesEntry={buildChangedFilesEntry()}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={false} changedFilesEntry={buildChangedFilesEntry()} />,
     );
     // Section heading was redundant with the rail title, dropped.
     expect(
@@ -216,25 +197,13 @@ describe("LiveWorkRail", () => {
   });
 
   it("renders the plan section by delegating to TranscriptPlan", () => {
-    render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        planEntry={buildPlanEntry()}
-        onDockChange={() => undefined}
-      />,
-    );
+    render(<LiveWorkRail pinned={false} planEntry={buildPlanEntry()} />);
     expect(screen.getByText("1 out of 3 tasks completed")).toBeInTheDocument();
   });
 
   it("toggles the whole rail collapsed and expanded from the title button", () => {
     render(
-      <LiveWorkRail
-        dock="above"
-        pinned={false}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={() => undefined}
-      />,
+      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
     );
     const collapseButton = screen.getByRole("button", {
       name: /Edited 2 files, \+5, -2/,
@@ -262,43 +231,41 @@ describe("LiveWorkRail", () => {
     ).toBeVisible();
   });
 
-  it("flips the dock via the dock-toggle button", () => {
-    const onDockChange = vi.fn();
+  it("moves edited files to the sidebar Edits panel via the header button", () => {
+    const onMove = vi.fn();
     render(
       <LiveWorkRail
-        dock="above"
         pinned={false}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={onDockChange}
+        editedFileGroups={buildEditedFileGroups()}
+        onMoveEditedFilesToSidebar={onMove}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Dock to sidebar" }));
-    expect(onDockChange).toHaveBeenCalledWith("sidebar");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Move edited files to the sidebar Edits panel",
+      }),
+    );
+    expect(onMove).toHaveBeenCalledTimes(1);
   });
 
-  it("offers the reverse dock label when already in sidebar mode", () => {
-    const onDockChange = vi.fn();
+  it("hides the sidebar button when no move handler is provided (edits docked to sidebar)", () => {
     render(
-      <LiveWorkRail
-        dock="sidebar"
-        pinned={false}
-        editedFilesEntry={buildEditedFilesEntry()}
-        onDockChange={onDockChange}
-      />,
+      <LiveWorkRail pinned={false} changedFilesEntry={buildChangedFilesEntry()} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Dock above composer" }));
-    expect(onDockChange).toHaveBeenCalledWith("above");
+    expect(
+      screen.queryByRole("button", {
+        name: "Move edited files to the sidebar Edits panel",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders all three sections together with the joined rail title and per-section bodies", () => {
     render(
       <LiveWorkRail
-        dock="above"
         pinned={false}
         planEntry={buildPlanEntry()}
-        editedFilesEntry={buildEditedFilesEntry()}
+        editedFileGroups={buildEditedFileGroups()}
         changedFilesEntry={buildChangedFilesEntry()}
-        onDockChange={() => undefined}
       />,
     );
     expect(

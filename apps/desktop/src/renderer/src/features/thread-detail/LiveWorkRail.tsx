@@ -1,15 +1,16 @@
 import { useId, useState } from "react";
 import type {
-  AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadPlanEntry,
   DesktopApplicationsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptPlan } from "./TranscriptPlan";
-
-export type LiveWorkRailDock = "above" | "sidebar";
+import { EditedFileGroupList } from "./EditedFileGroupList";
+import {
+  summarizeEditedFileGroups,
+  type EditedFileGroup,
+} from "./edited-file-groups";
 
 export type LiveWorkRailProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -20,12 +21,13 @@ export type LiveWorkRailProps = {
    */
   changedFilesEntry?: AppServerThreadActivityEntry;
   desktopApi?: DesktopApi;
-  dock: LiveWorkRailDock;
   /**
-   * Cumulative turn diff from `turn/diff/updated`. Renders in the
-   * Edited Files section with per-file inline diff expansion.
+   * Accumulated edited-file groups (newest first) from
+   * `collectEditedFileGroups`: the live turn's cumulative diff plus
+   * every prior uncommitted turn's edits. Omitted entirely when the
+   * user docks edited files to the context-rail Edits panel.
    */
-  editedFilesEntry?: AppServerThreadActivityEntry;
+  editedFileGroups?: EditedFileGroup[];
   /**
    * `true` when the rail is showing snapshots from a completed turn
    * (pinned until the next turn starts). `false` while the live turn
@@ -33,23 +35,20 @@ export type LiveWorkRailProps = {
    */
   pinned: boolean;
   planEntry?: AppServerThreadPlanEntry;
-  onDockChange: (dock: LiveWorkRailDock) => void;
+  /**
+   * Moves the edited-files list into the context-rail Edits panel
+   * (and stops rendering it here). Present only while edited files
+   * are docked above the composer.
+   */
+  onMoveEditedFilesToSidebar?: () => void;
 };
 
 export function LiveWorkRail(props: LiveWorkRailProps) {
-  // Treat an editedFilesEntry as absent if none of its details carry a
-  // fileDiff — otherwise the rail title would claim "Edited N files,
-  // +A, -R" while the body had nothing to render below it (the gap
-  // would land on the user as "rail says something happened but the
-  // list is empty"). Same logic applied uniformly to title + body.
-  const editedFilesEntry =
-    props.editedFilesEntry &&
-    props.editedFilesEntry.details.some((detail) => detail.fileDiff)
-      ? props.editedFilesEntry
-      : undefined;
+  const editedFileGroups = props.editedFileGroups ?? [];
+  const editedSummary = summarizeEditedFileGroups(editedFileGroups);
 
   const hasContent = Boolean(
-    props.planEntry || editedFilesEntry || props.changedFilesEntry,
+    props.planEntry || editedSummary || props.changedFilesEntry,
   );
   const [collapsed, setCollapsed] = useState(false);
   const bodyId = useId();
@@ -66,18 +65,14 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
   // inside the section.
   const sectionLabels: string[] = [];
   if (props.planEntry) sectionLabels.push("Plan");
-  if (editedFilesEntry) sectionLabels.push(editedFilesEntry.summary);
+  if (editedSummary) sectionLabels.push(editedSummary);
   if (props.changedFilesEntry) sectionLabels.push(props.changedFilesEntry.summary);
   const railTitle = sectionLabels.join(" · ");
   const railAriaLabel = props.pinned ? `${railTitle} (last turn)` : railTitle;
 
-  const dockToggleLabel =
-    props.dock === "above" ? "Dock to sidebar" : "Dock above composer";
-  const nextDock: LiveWorkRailDock = props.dock === "above" ? "sidebar" : "above";
-
   return (
     <aside
-      className={`live-work-rail live-work-rail--dock-${props.dock}${
+      className={`live-work-rail${
         props.pinned ? " live-work-rail--pinned" : ""
       }${collapsed ? " live-work-rail--collapsed" : ""}`}
       role="complementary"
@@ -94,15 +89,17 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           <span className="live-work-rail__chevron" aria-hidden="true" />
           <span className="live-work-rail__title">{railTitle}</span>
         </button>
-        <button
-          type="button"
-          className="live-work-rail__dock-toggle"
-          onClick={() => props.onDockChange(nextDock)}
-          aria-label={dockToggleLabel}
-          title={dockToggleLabel}
-        >
-          {props.dock === "above" ? "Sidebar" : "Above"}
-        </button>
+        {editedSummary && props.onMoveEditedFilesToSidebar ? (
+          <button
+            type="button"
+            className="live-work-rail__dock-toggle"
+            onClick={props.onMoveEditedFilesToSidebar}
+            aria-label="Move edited files to the sidebar Edits panel"
+            title="Move edited files to the sidebar Edits panel"
+          >
+            Sidebar
+          </button>
+        ) : null}
       </header>
 
       {/* Body stays mounted across collapse toggles so the
@@ -118,8 +115,10 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           />
         ) : null}
 
-        {editedFilesEntry ? (
-          <EditedFilesSection entry={editedFilesEntry} />
+        {editedSummary ? (
+          <section className="live-work-rail__section live-work-rail__section--edited">
+            <EditedFileGroupList groups={editedFileGroups} />
+          </section>
         ) : null}
 
         {props.changedFilesEntry ? (
@@ -127,75 +126,6 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
         ) : null}
       </div>
     </aside>
-  );
-}
-
-function EditedFilesSection(props: {
-  entry: AppServerThreadActivityEntry;
-}) {
-  const filesWithDiffs = props.entry.details.filter(
-    (detail) => detail.fileDiff,
-  );
-  if (filesWithDiffs.length === 0) {
-    return null;
-  }
-
-  // The cumulative summary (e.g. "Edited 2 files, +5, -2") lives in
-  // the rail-level title now (#510). No `aria-label` on the inner
-  // section — adding one would duplicate the rail-level landmark
-  // text in screen-reader landmark navigation.
-  return (
-    <section className="live-work-rail__section live-work-rail__section--edited">
-      <ul className="live-work-rail__file-list">
-        {filesWithDiffs.map((detail) => (
-          <li key={detail.id} className="live-work-rail__file-row">
-            <EditedFileRow detail={detail} />
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function EditedFileRow(props: {
-  detail: AppServerThreadActivityDetail;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const diffId = useId();
-  const additions = props.detail.fileDiff?.additions ?? 0;
-  const removals = props.detail.fileDiff?.removals ?? 0;
-
-  return (
-    <>
-      <button
-        type="button"
-        className="live-work-rail__file-toggle"
-        aria-controls={diffId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="live-work-rail__chevron" aria-hidden="true" />
-        <span className="live-work-rail__file-path" title={props.detail.path}>
-          {props.detail.label}
-        </span>
-        <span className="live-work-rail__file-stats" aria-label="File diff summary">
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--removed">
-            -{removals.toLocaleString()}
-          </span>
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--added">
-            +{additions.toLocaleString()}
-          </span>
-        </span>
-      </button>
-      {/* Diff container stays in the DOM (with `hidden`) so the
-          row's `aria-controls={diffId}` always resolves. The
-          potentially-heavy TranscriptDiff itself is still
-          conditionally mounted to keep the render cost in line
-          with what the user actually opens. */}
-      <div id={diffId} className="live-work-rail__file-diff" hidden={!expanded}>
-        {expanded ? <TranscriptDiff detail={props.detail} compact /> : null}
-      </div>
-    </>
   );
 }
 
@@ -221,4 +151,3 @@ function ChangedFilesSection(props: {
     </section>
   );
 }
-

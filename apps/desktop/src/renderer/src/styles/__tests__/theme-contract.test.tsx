@@ -350,13 +350,15 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("keeps the above-docked live work rail inset to match the chat column", () => {
+  it("keeps the live work rail inset to match the chat column", () => {
     // The bar carries 16px side margins, so its width must leave room for
     // them (`100% - 32px`). A bare `100%` plus the margins overflows once the
     // chat column is narrower than --chat-column-max (sidebar + context rail
     // both open), ramming the bar flush against both edges while the
-    // composer/transcript stay inset.
-    const rule = extractRuleBody(css, ".live-work-rail--dock-above");
+    // composer/transcript stay inset. (The old in-transcript "sidebar" dock
+    // is gone — edited files dock to the context-rail Edits panel — so the
+    // inset contract now lives on the base .live-work-rail rule.)
+    const rule = extractRuleBody(css, ".live-work-rail");
     expect(rule).toContain("width: min(100% - 32px, var(--chat-column-max));");
     expect(rule).toContain("margin: 0 16px 8px;");
   });

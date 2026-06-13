@@ -53,15 +53,18 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import {
   DEFAULT_CONTEXT_TAB,
+  DEFAULT_EDITED_FILES_DOCK,
   type ContextTabId,
+  type EditedFilesDock,
 } from "./context-panels/context-tab";
+import { collectEditedFileGroups } from "./edited-file-groups";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
-import { LiveWorkRail, type LiveWorkRailDock } from "./LiveWorkRail";
+import { LiveWorkRail } from "./LiveWorkRail";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -885,6 +888,14 @@ export type ThreadViewProps = {
   onContextRailPinnedChange?: (pinned: boolean) => void;
   activeContextTab?: ContextTabId;
   onActiveContextTabChange?: (tab: ContextTabId) => void;
+  /**
+   * Where the accumulated edited-files list renders: above the
+   * composer (default) or only in the context-rail Edits panel. A
+   * window preference like the context-rail tab — owned and persisted
+   * by App.
+   */
+  editedFilesDock?: EditedFilesDock;
+  onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
   sidebarHidden?: boolean;
   onToggleSidebar?: () => void;
   /**
@@ -996,18 +1007,17 @@ export function ThreadView(props: ThreadViewProps) {
     useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
-  // Snapshots of the two rail-owned live entries at turn/completed
-  // time. The LiveWorkRail uses these to keep showing what the last
-  // turn produced even after the live state has cleared, until the
-  // next turn starts. `pendingProtocolActivityEntry` (MCP status /
+  // Snapshot of the rail-owned live plan entry at turn/completed time.
+  // The LiveWorkRail uses it to keep showing the last turn's plan even
+  // after the live state has cleared, until the next turn starts.
+  // Edited files no longer need a snapshot — turn/completed defers the
+  // cumulative diff entry into the transcript, where
+  // `collectEditedFileGroups` accumulates it (and survives reloads via
+  // the persisted replay). `pendingProtocolActivityEntry` (MCP status /
   // warnings) is not snapshotted because it doesn't belong in the
   // rail; the dupe-fix that clears it on turn/completed still applies.
-  const [lastCompletedActivityEntry, setLastCompletedActivityEntry] =
-    useState<AppServerThreadActivityEntry>();
   const [lastCompletedPlanEntry, setLastCompletedPlanEntry] =
     useState<AppServerThreadPlanEntry>();
-  const [liveWorkRailDock, setLiveWorkRailDock] =
-    useState<LiveWorkRailDock>("above");
   // Refs mirror the pending state so the turn/completed handler can read
   // the latest values to snapshot, then clear via setState without
   // racing or queuing extra micro-renders.
@@ -1043,9 +1053,11 @@ export function ThreadView(props: ThreadViewProps) {
   // user controls it explicitly).
   const contextRailPinned = props.contextRailPinned ?? false;
   const activeContextTab = props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
+  const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
   const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
   const onActiveContextTabChange = props.onActiveContextTabChange ?? noop;
+  const onEditedFilesDockChange = props.onEditedFilesDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
 
   useEffect(() => {
@@ -1053,7 +1065,6 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingProtocolActivityEntry(undefined);
     setPendingUsageActivityEntry(undefined);
     setPendingPlanEntry(undefined);
-    setLastCompletedActivityEntry(undefined);
     setLastCompletedPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
@@ -1092,7 +1103,6 @@ export function ThreadView(props: ThreadViewProps) {
     const previous = lastSeenActiveTurnIdRef.current;
     lastSeenActiveTurnIdRef.current = props.activeTurnId;
     if (props.activeTurnId && props.activeTurnId !== previous) {
-      setLastCompletedActivityEntry(undefined);
       setLastCompletedPlanEntry(undefined);
     }
   }, [props.activeTurnId]);
@@ -1505,6 +1515,35 @@ export function ThreadView(props: ThreadViewProps) {
       ? pendingActivityEntry
       : undefined;
 
+  // Accumulated edited files: persisted replay entries + deferred live
+  // entries grouped per turn, cleared past a committed turn once the
+  // next turn starts. Rehydrates on thread load because the replay
+  // already carries per-file diffs and command exit codes.
+  const editedFileGroups = useMemo(
+    () =>
+      collectEditedFileGroups({
+        entries: props.transcriptEntries,
+        activeTurnId: props.activeTurnId,
+        livePendingEntry: pendingRailActivityEntry,
+      }),
+    [props.transcriptEntries, props.activeTurnId, pendingRailActivityEntry],
+  );
+
+  const moveEditedFilesToSidebar = useCallback(() => {
+    onEditedFilesDockChange("sidebar");
+    onActiveContextTabChange("edits");
+    // Reveal the destination: an unpinned rail would leave the moved
+    // list invisible, which reads as "my edits vanished".
+    if (!contextRailPinned) {
+      onContextRailPinnedChange(true);
+    }
+  }, [
+    contextRailPinned,
+    onActiveContextTabChange,
+    onContextRailPinnedChange,
+    onEditedFilesDockChange,
+  ]);
+
   useEffect(() => {
     if (!pendingActivityEntry) {
       return;
@@ -1628,7 +1667,6 @@ export function ThreadView(props: ThreadViewProps) {
           const completedActivity = completeEntryTurn(pendingActivityEntryRef.current);
           if (completedActivity) {
             deferLiveTranscriptEntry(completedActivity);
-            setLastCompletedActivityEntry(completedActivity);
           }
           setPendingActivityEntry(undefined);
 
@@ -2309,24 +2347,23 @@ export function ThreadView(props: ThreadViewProps) {
             ) : null}
           </section>
 
-          {liveWorkRailDock === "above" ? (
-            <LiveWorkRail
-              applications={props.applications}
-              changedFilesEntry={liveWorkRailChangedFilesEntry}
-              desktopApi={props.desktopApi}
-              dock="above"
-              editedFilesEntry={
-                pendingRailActivityEntry ??
-                (props.activeTurnId ? undefined : lastCompletedActivityEntry)
-              }
-              pinned={!props.activeTurnId}
-              planEntry={
-                pendingPlanEntry ??
-                (props.activeTurnId ? undefined : lastCompletedPlanEntry)
-              }
-              onDockChange={setLiveWorkRailDock}
-            />
-          ) : null}
+          <LiveWorkRail
+            applications={props.applications}
+            changedFilesEntry={liveWorkRailChangedFilesEntry}
+            desktopApi={props.desktopApi}
+            editedFileGroups={
+              editedFilesDock === "above" ? editedFileGroups : undefined
+            }
+            pinned={!props.activeTurnId}
+            planEntry={
+              pendingPlanEntry ??
+              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+            }
+            onMoveEditedFilesToSidebar={
+              editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
+            }
+          />
+
 
           <Composer
             activeTurnId={props.activeTurnId}
@@ -2383,30 +2420,14 @@ export function ThreadView(props: ThreadViewProps) {
           />
         </div>
 
-        {liveWorkRailDock === "sidebar" ? (
-          <LiveWorkRail
-            applications={props.applications}
-            changedFilesEntry={liveWorkRailChangedFilesEntry}
-            desktopApi={props.desktopApi}
-            dock="sidebar"
-            editedFilesEntry={
-              pendingRailActivityEntry ??
-              (props.activeTurnId ? undefined : lastCompletedActivityEntry)
-            }
-            pinned={!props.activeTurnId}
-            planEntry={
-              pendingPlanEntry ??
-              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
-            }
-            onDockChange={setLiveWorkRailDock}
-          />
-        ) : null}
-
         <ThreadContextPanel
           activeTab={activeContextTab}
           backendError={props.backendError}
           backends={props.backends}
           desktopApi={props.desktopApi}
+          editedFileGroups={editedFileGroups}
+          editedFilesDock={editedFilesDock}
+          onEditedFilesDockChange={onEditedFilesDockChange}
           onActiveTabChange={onActiveContextTabChange}
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}

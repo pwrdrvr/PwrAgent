@@ -2150,7 +2150,14 @@ describe("ThreadView", () => {
       />
     );
 
-    expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(1);
+    // Replay caught up: the pending live entry clears (no dupe), but the
+    // rail keeps rendering the persisted entry's edits — accumulated
+    // edited files rehydrate from the replay instead of vanishing. Two
+    // matches: the transcript work-group row and the rail title button.
+    expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(2);
+    expect(
+      screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
+    ).toBeInTheDocument();
   });
 
   it("renders Codex warning notifications inline", async () => {
@@ -4068,7 +4075,7 @@ describe("ThreadView", () => {
     }
   });
 
-  it("clears the pinned rail when a new turn starts (issue #495)", async () => {
+  it("keeps the prior turn's uncommitted edits in the rail when a new turn starts", async () => {
     let agentEventHandler:
       | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
       | undefined;
@@ -4176,12 +4183,16 @@ describe("ThreadView", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start turn 2" }));
     });
 
-    // Snapshot cleared. The rail's Edited Files section (which carried
-    // turn 1's summary in the title) is gone until turn 2 produces its
-    // own diff. Other sections may still render with their own
-    // content, but no "Edited 1 file" text should be on screen.
+    // Turn 1's edits were not committed, so they stay in the rail when
+    // turn 2 starts — edits accumulate across turns until a successful
+    // `git commit` lands (the turn AFTER the commit clears them; see
+    // edited-file-groups.test.ts for the commit-boundary cases). The
+    // "(last turn)" pinned suffix drops because a turn is active again.
     expect(
-      screen.queryByRole("complementary", { name: /Edited 1 file/ }),
+      screen.getByRole("complementary", { name: /Edited 1 file/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: /\(last turn\)/i }),
     ).not.toBeInTheDocument();
   });
 });

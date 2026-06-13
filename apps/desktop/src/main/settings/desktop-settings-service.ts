@@ -496,6 +496,10 @@ export class DesktopSettingsService {
           value: config.ui?.activeContextTab ?? "info",
           source: config.ui?.activeContextTab === undefined ? "default" : "config",
         },
+        editedFilesDock: {
+          value: config.ui?.editedFilesDock ?? "above",
+          source: config.ui?.editedFilesDock === undefined ? "default" : "config",
+        },
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),

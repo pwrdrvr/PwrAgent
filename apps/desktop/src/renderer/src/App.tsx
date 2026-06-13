@@ -30,8 +30,11 @@ import {
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import {
   DEFAULT_CONTEXT_TAB,
+  DEFAULT_EDITED_FILES_DOCK,
   isContextTabId,
+  isEditedFilesDock,
   type ContextTabId,
+  type EditedFilesDock,
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
@@ -171,6 +174,9 @@ function DesktopAppShell(props: {
   const [contextRailPinned, setContextRailPinned] = useState(false);
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
+  const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
+    DEFAULT_EDITED_FILES_DOCK,
+  );
   const [mainView, setMainView] = useState<
     "thread" | "settings" | "automations" | "search"
   >("thread");
@@ -286,6 +292,13 @@ function DesktopAppShell(props: {
     },
     [writeConfig],
   );
+  const setEditedFilesDockPersisted = useCallback(
+    (dock: EditedFilesDock) => {
+      setEditedFilesDock(dock);
+      void writeConfig({ ui: { editedFilesDock: dock } });
+    },
+    [writeConfig],
+  );
 
   // Adopt the persisted layout prefs once the settings snapshot arrives.
   // Guarded so later snapshot refreshes never clobber an in-session toggle.
@@ -300,6 +313,10 @@ function DesktopAppShell(props: {
     setContextRailPinned(uiPrefs.contextRailPinned.value);
     if (isContextTabId(uiPrefs.activeContextTab.value)) {
       setActiveContextTab(uiPrefs.activeContextTab.value);
+    }
+    const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
+    if (isEditedFilesDock(editedFilesDockPref)) {
+      setEditedFilesDock(editedFilesDockPref);
     }
   }, [uiPrefs]);
 
@@ -647,6 +664,8 @@ function DesktopAppShell(props: {
     onContextRailPinnedChange: setContextRailPinnedPersisted,
     activeContextTab,
     onActiveContextTabChange: setActiveContextTabPersisted,
+    editedFilesDock,
+    onEditedFilesDockChange: setEditedFilesDockPersisted,
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,

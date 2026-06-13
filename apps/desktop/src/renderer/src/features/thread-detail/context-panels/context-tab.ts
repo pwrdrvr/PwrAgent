@@ -5,6 +5,7 @@
  */
 export type ContextTabId =
   | "info"
+  | "edits"
   | "subagents"
   | "automations"
   | "prs"
@@ -13,6 +14,7 @@ export type ContextTabId =
 
 export const CONTEXT_TAB_IDS: ContextTabId[] = [
   "info",
+  "edits",
   "subagents",
   "automations",
   "prs",
@@ -27,4 +29,18 @@ export function isContextTabId(value: unknown): value is ContextTabId {
     typeof value === "string" &&
     (CONTEXT_TAB_IDS as string[]).includes(value)
   );
+}
+
+/**
+ * Where the accumulated edited-files list renders: above the composer
+ * (default LiveWorkRail placement) or only in the context-rail Edits
+ * panel. Persisted to `config.toml` `[ui] edited_files_dock`; lives
+ * here for the same dependency-light reason as `ContextTabId`.
+ */
+export type EditedFilesDock = "above" | "sidebar";
+
+export const DEFAULT_EDITED_FILES_DOCK: EditedFilesDock = "above";
+
+export function isEditedFilesDock(value: unknown): value is EditedFilesDock {
+  return value === "above" || value === "sidebar";
 }
