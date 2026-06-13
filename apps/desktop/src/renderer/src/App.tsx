@@ -20,6 +20,7 @@ import {
 import { Sidebar } from "./features/navigation/Sidebar";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
+import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
@@ -372,6 +373,11 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  // ⌘⇧F / ⌃⇧F opens the global thread search screen. ⌘F (in-thread find /
+  // thread-list quick search) is wired onto this same owner further below.
+  useFindHotkeys({
+    onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
+  });
   const historyNav: HistoryNavControls = useMemo(
     () => ({
       canGoBack: history.canGoBack,

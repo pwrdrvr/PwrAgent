@@ -39,6 +39,7 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import {
   formatRateLimitLine,
   selectVisibleRateLimits,
@@ -724,6 +725,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
             ariaLabel="Search threads"
+            tooltipText={`Search threads  (${formatPrimaryAccel("F", { shift: true })})`}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
             onClick={props.onOpenThreadSearch}
@@ -1478,9 +1480,12 @@ function MastheadActionButton(props: {
   children: ReactNode;
   className: string;
   disabled?: boolean;
+  /** Tooltip text; defaults to ariaLabel. Use to append a shortcut hint. */
+  tooltipText?: string;
   onClick?: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipLabel = props.tooltipText ?? props.ariaLabel;
 
   return (
     <>
@@ -1495,8 +1500,8 @@ function MastheadActionButton(props: {
           tooltip.hide();
           props.onClick?.();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
         onMouseLeave={tooltip.hide}
       >
         {props.children}

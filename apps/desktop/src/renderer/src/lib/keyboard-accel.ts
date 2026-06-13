@@ -118,24 +118,52 @@ export function matchHistoryNavChord(
 }
 
 /**
+ * Classify a keydown as a find/search chord, or `null`:
+ *   ⌘F / ⌃F   → "find"   (context find — in-thread find when a thread is open,
+ *                          or the thread-list quick-search when the sidebar is
+ *                          focused; the caller resolves which from focus)
+ *   ⌘⇧F / ⌃⇧F → "search" (open the global thread search screen)
+ *
+ * Unlike {@link matchLayoutChord}, find stays live inside editable fields —
+ * ⌘F is a universal "find" gesture that should fire even while the caret is in
+ * the composer or another input. ⌥ is excluded so it never collides with an
+ * Option chord.
+ */
+export function matchFindChord(event: KeyboardEvent): "find" | "search" | null {
+  if (!isPrimaryAccel(event)) {
+    return null;
+  }
+  if (event.altKey) {
+    return null;
+  }
+  if (!isAccelLetter(event, "f")) {
+    return null;
+  }
+  return event.shiftKey ? "search" : "find";
+}
+
+/**
  * Render the display label for a primary-accelerator chord, adjusted for
- * the current platform: ⌘/⌥ glyphs on macOS, "Ctrl"/"Alt" words joined
- * with "+" on Windows/Linux. This is presentation only — {@link
+ * the current platform: ⌘/⌥/⇧ glyphs on macOS, "Ctrl"/"Alt"/"Shift" words
+ * joined with "+" on Windows/Linux. This is presentation only — {@link
  * isPrimaryAccel} accepts either Cmd or Ctrl at runtime, so the binding
  * works regardless of which label we show. Falls back to the Windows/Linux
  * form when the platform is unknown (the desktop bridge is unavailable).
  */
 export function formatPrimaryAccel(
   key: string,
-  options: { alt?: boolean } = {},
+  options: { alt?: boolean; shift?: boolean } = {},
 ): string {
   const isMac = getDesktopApi()?.platform === "darwin";
   if (isMac) {
-    return `⌘${options.alt ? "⌥" : ""}${key}`;
+    return `⌘${options.alt ? "⌥" : ""}${options.shift ? "⇧" : ""}${key}`;
   }
   const parts = ["Ctrl"];
   if (options.alt) {
     parts.push("Alt");
+  }
+  if (options.shift) {
+    parts.push("Shift");
   }
   parts.push(key);
   return parts.join("+");
