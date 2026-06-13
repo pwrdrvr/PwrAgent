@@ -5205,12 +5205,18 @@ export class DesktopBackendRegistry {
 
     const replay =
       backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await client.readThread({
-              threadId: request.threadId,
-              before: request.before,
-              limit: request.limit,
-            }),
+        ? await this.withCodexThreadClient(
+            request.threadId,
+            async (client) =>
+              await client.readThread({
+                threadId: request.threadId,
+                before: request.before,
+                limit: request.limit,
+              }),
+            // Reads are execution-mode-agnostic; skip the routing diagnostic so
+            // content search (one readThread per thread) doesn't spew it.
+            undefined,
+            false,
           )
         : await this.grokClient.readThread({
             threadId: request.threadId,
@@ -10051,6 +10057,12 @@ export class DesktopBackendRegistry {
     threadId: string,
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
     requestedMode?: ThreadExecutionMode,
+    // Whether to emit the routing diagnostic. Reads (readThread) are
+    // execution-mode-agnostic and get called once per thread by content
+    // search, so they opt out — otherwise a single thread search spews one
+    // routing line per thread. Turn/execution paths keep it on (the #203
+    // security cross-check in messaging-controller relies on it).
+    logRouting = true,
   ): Promise<T> {
     // Single-client passthrough. The mode passed to the operation is no
     // longer a routing decision — it's documentation for callers that
@@ -10075,12 +10087,14 @@ export class DesktopBackendRegistry {
         source = "default-fallback";
       }
     }
-    backendRegistryLog.debug("codex thread client routing", {
-      threadId,
-      requestedMode,
-      resolvedMode: mode,
-      source,
-    });
+    if (logRouting) {
+      backendRegistryLog.debug("codex thread client routing", {
+        threadId,
+        requestedMode,
+        resolvedMode: mode,
+        source,
+      });
+    }
     return await operation(this.codexClient, mode);
   }
 
