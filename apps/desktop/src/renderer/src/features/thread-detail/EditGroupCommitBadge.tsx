@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import type { EditGroupCommitState } from "@pwragent/shared";
-import { copyText } from "../../lib/copy-text";
+import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
@@ -43,30 +42,18 @@ export function EditGroupCommitBadge(props: { state?: EditGroupCommitState }) {
 }
 
 /**
- * Copyable commit-SHA chip — same affordance as the thread-row path chips:
- * a chip showing the short SHA, a viewport tooltip with the full SHA + "Click
- * to copy to clipboard", and click/Enter to copy. No inline "Copy" label.
+ * Copyable commit-SHA chip. Matches the context rail's own copy affordance
+ * (`context-rail-shared`): a viewport tooltip with the full SHA + "Click to
+ * copy to clipboard", and click/Enter to copy — copies silently, no "Copied"
+ * flip (the thread-row chips flip; the context rail, where this lives, does
+ * not — match the surface).
  */
 function CommitShaChip(props: { sha: string; shortSha: string }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const [copied, setCopied] = useState(false);
-  const tooltipText = copied
-    ? "Copied"
-    : `${props.sha}\nClick to copy to clipboard`;
+  const tooltipText = formatCopyTooltip(props.sha);
 
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timeoutId = window.setTimeout(() => setCopied(false), 1200);
-    return () => window.clearTimeout(timeoutId);
-  }, [copied]);
-
-  const copy = (target: HTMLElement): void => {
-    void copyText(props.sha).then(() => {
-      setCopied(true);
-      tooltip.show(target, "Copied");
-    });
+  const copy = (): void => {
+    void copyText(props.sha);
   };
 
   return (
@@ -80,7 +67,7 @@ function CommitShaChip(props: { sha: string; shortSha: string }) {
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          copy(event.currentTarget);
+          copy();
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onKeyDown={(event) => {
@@ -89,7 +76,7 @@ function CommitShaChip(props: { sha: string; shortSha: string }) {
           }
           event.preventDefault();
           event.stopPropagation();
-          copy(event.currentTarget);
+          copy();
         }}
         onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onMouseLeave={tooltip.hide}
