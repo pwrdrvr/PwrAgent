@@ -3,37 +3,18 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadTurnMetadata,
-  ThreadGitWorkingState,
 } from "@pwragent/shared";
 import { formatChangedFileSummary } from "./live-transcript-activity";
 
 /**
  * Upper bound on accumulated turn-groups kept by `collectEditedFileGroups`.
- * Groups normally clear on commit / a clean worktree, but a long stretch of
+ * Groups normally clear once a `git commit` lands, but a long stretch of
  * uncommitted turns would otherwise grow without bound — and each group
  * stacks its files' diff text, so the per-render cost grows with it. Keep the
  * newest N; older uncommitted turns drop off the rail (the summary totals then
  * reflect the retained set). Matches the directory list's `UNPINNED_THREAD_CAP`.
  */
 export const MAX_RETAINED_TURN_GROUPS = 10;
-
-/**
- * True when the live working-state probe reports a clean working tree — no
- * uncommitted modifications and no untracked files. Used to retire
- * accumulated edited-file groups whose uncommitted edits have left the tree
- * by some path the agent's own command history can't see (a terminal/IDE
- * commit, a discard, an external checkout). Returns false when the signal is
- * absent, so a thread with no probe yet keeps its groups.
- */
-export function worktreeReportsCleanTree(
-  gitWorkingState: ThreadGitWorkingState | undefined,
-): boolean {
-  return (
-    gitWorkingState !== undefined &&
-    gitWorkingState.dirtyFiles === 0 &&
-    gitWorkingState.untrackedFiles === 0
-  );
-}
 
 /**
  * One accumulated set of file edits, normally a single turn's worth.
@@ -145,15 +126,6 @@ function mergeFileDiffDetail(
  *   stays on screen until the next turn starts).
  * - `livePendingEntry` (the in-flight turn's cumulative diff) renders
  *   as the newest group while a turn is streaming.
- * - `gitWorkingState` retires every accumulated group when the thread's
- *   worktree reports a clean tree (no dirty + no untracked files) AND the
- *   thread is idle (no active turn / live entry) AND no in-agent commit was
- *   detected. This catches the case the command-history scan can't: the
- *   uncommitted edits the rail was tracking were committed in a terminal/IDE,
- *   discarded, or checked out away. It is gated on idle to avoid retiring on
- *   a stale clean signal mid-edit, and on the absence of an in-agent commit
- *   so a freshly committed group still follows the "stays until the next
- *   turn" lifecycle above.
  *
  * Returns groups newest-first, capped at `MAX_RETAINED_TURN_GROUPS`.
  */
@@ -161,7 +133,6 @@ export function collectEditedFileGroups(params: {
   entries: readonly AppServerThreadEntry[];
   activeTurnId?: string;
   livePendingEntry?: AppServerThreadActivityEntry;
-  gitWorkingState?: ThreadGitWorkingState;
 }): EditedFileGroup[] {
   const turnOrder: string[] = [];
   const orderIndexByKey = new Map<string, number>();
@@ -304,20 +275,6 @@ export function collectEditedFileGroups(params: {
       committed: bucket.committed,
       live: bucket.live,
     });
-  }
-
-  // Retire everything when the worktree is clean and the thread is idle, and
-  // the in-agent commit scan didn't already account for the edits. The dirty
-  // edits the rail accumulated are gone (committed out-of-band, discarded, or
-  // checked out away), and the live push behind `gitWorkingState` makes this
-  // safe to trust — it refreshes on turn/command completion rather than
-  // lagging a snapshot. The idle + no-in-agent-commit guards keep it from
-  // firing mid-edit on a stale signal or stepping on the "committed group
-  // stays until the next turn" lifecycle.
-  const idle = !params.activeTurnId && !params.livePendingEntry;
-  const hasInAgentCommit = groups.some((group) => group.committed);
-  if (idle && !hasInAgentCommit && worktreeReportsCleanTree(params.gitWorkingState)) {
-    return [];
   }
 
   // Newest-first, then bound retention so an uncommitted thread can't grow the

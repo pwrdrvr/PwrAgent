@@ -1531,14 +1531,8 @@ export function ThreadView(props: ThreadViewProps) {
         entries: props.transcriptEntries,
         activeTurnId: props.activeTurnId,
         livePendingEntry: pendingRailActivityEntry,
-        gitWorkingState: selectedThread?.gitWorkingState,
       }),
-    [
-      props.transcriptEntries,
-      props.activeTurnId,
-      pendingRailActivityEntry,
-      selectedThread?.gitWorkingState,
-    ],
+    [props.transcriptEntries, props.activeTurnId, pendingRailActivityEntry],
   );
 
   const moveEditedFilesToSidebar = useCallback(() => {
