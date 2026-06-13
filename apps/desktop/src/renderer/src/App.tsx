@@ -13,6 +13,7 @@ import type {
   DesktopBootInfo,
   DesktopCodexProfileModel,
   DesktopPwrAgentProfileSummary,
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
@@ -44,6 +45,7 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
 import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
@@ -202,6 +204,11 @@ function DesktopAppShell(props: {
   // mid-outage failure can't slip past unnoticed.
   const [backendErrorNotice, setBackendErrorNotice] =
     useState<AppNoticeToastNotice>();
+  // Latest thread list, mirrored into a ref so the backend-error toast
+  // subscription can resolve a thread's title without re-subscribing on
+  // every navigation change. Kept fresh by an effect below, once
+  // `navigation` is defined.
+  const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -238,13 +245,32 @@ function DesktopAppShell(props: {
   // Surface backend turn failures + system errors as a durable toast. The
   // matching transcript entry (rendered from the thread overlay's
   // turnFailureLog) is the in-context record; this toast is the global
-  // "something just broke" signal that has to be acknowledged.
+  // "something just broke" signal that has to be acknowledged. Notices are
+  // keyed by thread so a failure on one thread can't suppress a signal from
+  // another (see resolveBackendErrorNotice).
   useEffect(() => {
+    const labelForThread = (backend: string, threadId?: string): string => {
+      const match = threadId
+        ? backendErrorThreadsRef.current.find(
+            (thread) => thread.source === backend && thread.id === threadId,
+          )
+        : undefined;
+      const title = match?.title?.trim();
+      if (title) {
+        return title;
+      }
+      return backend === "codex"
+        ? "Codex thread"
+        : backend === "grok"
+          ? "Grok thread"
+          : `${backend} thread`;
+    };
     return desktopApi?.onAgentEvent?.((event) => {
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {
         const params = event.notification.params as {
+          threadId?: string;
           turnId?: string;
           turn?: { error?: { message?: unknown } };
         };
@@ -253,14 +279,19 @@ function DesktopAppShell(props: {
           typeof rawMessage === "string" && rawMessage.trim()
             ? rawMessage
             : "The agent turn failed.";
-        setBackendErrorNotice({
-          autoDismiss: false,
-          id: `turn-failed:${event.backend}:${params.turnId ?? "unknown"}`,
-          title: "Turn failed",
-          message: errorMessage,
-          detail: "The agent stopped this turn before it completed.",
-          copyText: errorMessage,
-        });
+        setBackendErrorNotice((current) =>
+          resolveBackendErrorNotice(
+            {
+              kind: "turn-failed",
+              backend: event.backend,
+              threadId: params.threadId ?? "unknown",
+              turnId: params.turnId ?? "unknown",
+              errorMessage,
+              threadLabel: labelForThread(event.backend, params.threadId),
+            },
+            current,
+          ),
+        );
         return;
       }
       if (event.notification.method === "thread/status/changed") {
@@ -272,18 +303,15 @@ function DesktopAppShell(props: {
           return;
         }
         setBackendErrorNotice((current) =>
-          // A turn/failed for the same outage carries the real error and
-          // fires alongside this status change — don't clobber its richer
-          // message with the generic one.
-          current && current.id.startsWith("turn-failed:")
-            ? current
-            : {
-                autoDismiss: false,
-                id: `system-error:${event.backend}:${params.threadId ?? "unknown"}`,
-                title: "Agent backend error",
-                message:
-                  "The agent backend reported a system error. The active turn may have stopped.",
-              },
+          resolveBackendErrorNotice(
+            {
+              kind: "system-error",
+              backend: event.backend,
+              threadId: params.threadId ?? "unknown",
+              threadLabel: labelForThread(event.backend, params.threadId),
+            },
+            current,
+          ),
         );
         return;
       }
@@ -362,6 +390,11 @@ function DesktopAppShell(props: {
     enabled: normalAppEnabled,
     threadViewVisible: mainView === "thread",
   });
+  // Keep the backend-error toast's thread lookup fresh without making the
+  // toast subscription depend on (and re-subscribe to) the thread list.
+  useEffect(() => {
+    backendErrorThreadsRef.current = navigation.threads;
+  }, [navigation.threads]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
   });

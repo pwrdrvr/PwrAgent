@@ -12813,14 +12813,19 @@ export class DesktopBackendRegistry {
         );
       }
     }
-    if (event.notification.method === "turn/failed") {
+    if (
+      event.notification.method === "turn/failed" &&
+      !isAcpBackendId(event.backend)
+    ) {
       // Persist a durable failure marker BEFORE the renderer fan-out below
       // so the next navigation-snapshot refresh carries it. Dedupe lives in
-      // the overlay store (by turnId). Recorded for every backend; backends
-      // that emit their own `turn-failed:` transcript entry (e.g. ACP) are
-      // de-duplicated at render time. Params are cast explicitly here,
-      // matching the surrounding terminal-notification handlers — the
-      // `AppServerNotification` union is too wide for reliable narrowing.
+      // the overlay store (by turnId). ACP backends are skipped: their
+      // session normalizer already persists a `turn-failed:` transcript
+      // entry that readThread returns, so recording here would just be
+      // redundant overlay state (the renderer would de-dupe it anyway).
+      // Params are cast explicitly here, matching the surrounding terminal-
+      // notification handlers — the `AppServerNotification` union is too
+      // wide for reliable narrowing.
       const failureParams = event.notification.params as {
         threadId: string;
         turnId: string;

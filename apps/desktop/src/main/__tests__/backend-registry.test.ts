@@ -1793,6 +1793,40 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does NOT record a turn failure for ACP backends (they persist their own entry)", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const appendTurnFailureSpy = vi.spyOn(overlayStore, "appendTurnFailure");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend: "acp:kimi",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-acp",
+          turnId: "turn-acp",
+          turn: {
+            id: "turn-acp",
+            status: "failed",
+            error: { message: "acp boom" },
+          },
+        },
+      },
+    });
+
+    // ACP already persists its own `turn-failed:` transcript entry, so the
+    // registry must not also write one to the overlay.
+    expect(appendTurnFailureSpy).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("buffers the latest Codex config warning until the project is trusted", async () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({

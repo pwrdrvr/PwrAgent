@@ -12,6 +12,15 @@ import {
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 
+// Codex app-server stderr is normally sparse — PwrAgent does not set
+// RUST_LOG, so the app-server emits warnings/errors only — but guard
+// against a pathological flood drowning the log file: mirror at most
+// STDERR_LOG_MAX_LINES_PER_WINDOW lines per rolling window and summarize
+// how many were dropped.
+const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
+const STDERR_LOG_WINDOW_MS = 10_000;
+const STDERR_LOG_MAX_LINE_LENGTH = 4000;
+
 export type StdioJsonRpcTransportOptions = {
   command: string;
   args?: string[];
@@ -77,15 +86,35 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     // collection) since severity isn't parseable from raw passthrough;
     // length-capped so a pathological line can't bloat the log file.
     const stderrReader = readline.createInterface({ input: child.stderr });
+    let stderrWindowStartedAt = Date.now();
+    let stderrLinesThisWindow = 0;
+    let stderrSuppressedThisWindow = 0;
     stderrReader.on("line", (line: string) => {
       const trimmed = line.trim();
       if (trimmed.length === 0) {
         return;
       }
+      const now = Date.now();
+      if (now - stderrWindowStartedAt > STDERR_LOG_WINDOW_MS) {
+        if (stderrSuppressedThisWindow > 0) {
+          codexTransportLog.warn("app-server stderr rate-limited", {
+            suppressedLines: stderrSuppressedThisWindow,
+            windowMs: STDERR_LOG_WINDOW_MS,
+          });
+        }
+        stderrWindowStartedAt = now;
+        stderrLinesThisWindow = 0;
+        stderrSuppressedThisWindow = 0;
+      }
+      stderrLinesThisWindow += 1;
+      if (stderrLinesThisWindow > STDERR_LOG_MAX_LINES_PER_WINDOW) {
+        stderrSuppressedThisWindow += 1;
+        return;
+      }
       codexTransportLog.info("app-server stderr", {
         line:
-          trimmed.length > 4000
-            ? `${trimmed.slice(0, 4000)}…[truncated]`
+          trimmed.length > STDERR_LOG_MAX_LINE_LENGTH
+            ? `${trimmed.slice(0, STDERR_LOG_MAX_LINE_LENGTH)}…[truncated]`
             : trimmed,
       });
     });
