@@ -5502,6 +5502,44 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("reuses navigation Codex thread lists for branch drift in the refresh window", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-codex",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+    });
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "branch-drift",
+    });
+
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(codexClient.lastListThreadsParams).toMatchObject({
+      enrichDirectories: false,
+    });
+    expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
+      callerReason: "navigation-snapshot",
+    });
+
+    await registry.close();
+  });
+
   it("keeps cheap navigation lists separate from directory-enriched thread lists", async () => {
     const codexClient = new MockBackendClient({
       threads: [
