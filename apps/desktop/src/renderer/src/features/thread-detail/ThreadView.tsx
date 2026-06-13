@@ -57,6 +57,7 @@ import {
 } from "./context-panels/context-tab";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
+import { ThreadFindBar } from "./ThreadFindBar";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -898,6 +899,9 @@ export type ThreadViewProps = {
    * Owned by App's useNavigationHistory.
    */
   historyNav?: HistoryNavControls;
+  /** In-thread find bar (⌘F): open state + close callback, owned by App. */
+  findOpen?: boolean;
+  onFindOpenChange?: (open: boolean) => void;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -1047,6 +1051,8 @@ export function ThreadView(props: ThreadViewProps) {
   const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
   const onActiveContextTabChange = props.onActiveContextTabChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
+  // Transcript element the in-thread find bar (⌘F) searches + highlights.
+  const transcriptPanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
@@ -2255,7 +2261,19 @@ export function ThreadView(props: ThreadViewProps) {
             />
           ) : null}
 
-          <section className="transcript-panel" aria-label="Transcript">
+          {props.findOpen ? (
+            <ThreadFindBar
+              containerRef={transcriptPanelRef}
+              refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${props.transcriptEntries.length}`}
+              onClose={() => props.onFindOpenChange?.(false)}
+            />
+          ) : null}
+
+          <section
+            className="transcript-panel"
+            aria-label="Transcript"
+            ref={transcriptPanelRef}
+          >
             <TranscriptList
               entries={props.transcriptEntries}
               permissionTransitions={selectedThread!.permissionTransitionLog}

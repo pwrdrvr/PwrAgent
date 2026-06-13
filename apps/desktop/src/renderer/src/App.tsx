@@ -175,6 +175,9 @@ function DesktopAppShell(props: {
   const [mainView, setMainView] = useState<
     "thread" | "settings" | "automations" | "search"
   >("thread");
+  // In-thread find bar (⌘F) visibility, owned here so the find chord and the
+  // bar's own Escape share one source of truth.
+  const [threadFindOpen, setThreadFindOpen] = useState(false);
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -377,7 +380,23 @@ function DesktopAppShell(props: {
   // thread-list quick search) is wired onto this same owner further below.
   useFindHotkeys({
     onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
+    onFind: () => {
+      // The thread-list quick search (below) claims ⌘F while the sidebar is
+      // focused; anywhere else ⌘F finds within the open thread.
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".sidebar")) {
+        return;
+      }
+      if (mainView === "thread") {
+        setThreadFindOpen(true);
+      }
+    },
   });
+  // The in-thread find bar is per-thread chrome: drop it when the operator
+  // leaves the thread view or switches to a different thread.
+  useEffect(() => {
+    setThreadFindOpen(false);
+  }, [mainView, navigation.selectedThreadKey]);
   const historyNav: HistoryNavControls = useMemo(
     () => ({
       canGoBack: history.canGoBack,
@@ -657,6 +676,8 @@ function DesktopAppShell(props: {
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,
     historyNav,
+    findOpen: threadFindOpen,
+    onFindOpenChange: setThreadFindOpen,
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
