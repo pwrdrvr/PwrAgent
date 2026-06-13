@@ -8583,10 +8583,6 @@ textarea,
   padding: 4px 6px;
   border: 0;
   border-radius: 4px;
-  /* Dense secondary surface: match the group-header summary (12px) instead
-     of inheriting the 16px body font, which read as huge next to the
-     in-transcript file rows. */
-  font-size: 12px;
   /* `--bg-panel` (not `--bg-panel-elevated`) so the row sits visually
      INSIDE the rail card (which uses `--bg-panel-elevated`) instead
      of blending flush with it. Required to be opaque for the sticky
@@ -8595,6 +8591,11 @@ textarea,
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
+  /* Dense secondary surface: match the group-header summary (12px) instead
+     of inheriting the 16px body font, which read as huge next to the
+     in-transcript file rows. MUST come after `font: inherit` — the shorthand
+     resets font-size, so a longhand before it is silently overridden. */
+  font-size: 12px;
   text-align: left;
   /* Stay reachable while scrolling through an expanded file's diff
      (#510). Sticky stacking is handled by the browser: when the next
