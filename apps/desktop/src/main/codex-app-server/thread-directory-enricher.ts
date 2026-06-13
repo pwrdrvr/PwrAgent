@@ -2,7 +2,10 @@ import { execFile as execFileCallback } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { LinkedDirectorySummary } from "@pwragent/shared";
+import type {
+  LinkedDirectorySummary,
+  ThreadGitWorkingState,
+} from "@pwragent/shared";
 import { isToolManagedWorktreePath } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 
@@ -22,6 +25,7 @@ function toDirectoryId(value: string): string {
 export type ThreadDirectoryEnrichment = {
   linkedDirectories: LinkedDirectorySummary[];
   observedGitBranch?: string;
+  gitWorkingState?: ThreadGitWorkingState;
 };
 
 type CachedEnrichment = {
@@ -45,6 +49,87 @@ async function runGit(projectKey: string, args: string[]): Promise<string> {
     env: process.env,
   });
   return result.stdout.trim();
+}
+
+// `--no-optional-locks` keeps these background probes from taking the
+// index lock out from under an agent running its own git commands in
+// the same worktree.
+async function runGitNoLocks(projectKey: string, args: string[]): Promise<string> {
+  const result = await execFile(
+    "git",
+    ["--no-optional-locks", "-C", projectKey, ...args],
+    { env: process.env },
+  );
+  return result.stdout.trim();
+}
+
+function parseNumstat(output: string): {
+  files: number;
+  additions: number;
+  deletions: number;
+} {
+  let files = 0;
+  let additions = 0;
+  let deletions = 0;
+  for (const line of output.split("\n")) {
+    const match = line.match(/^(\d+|-)\t(\d+|-)\t/);
+    if (!match) {
+      continue;
+    }
+    files += 1;
+    if (match[1] !== "-") {
+      additions += Number(match[1]);
+    }
+    if (match[2] !== "-") {
+      deletions += Number(match[2]);
+    }
+  }
+  return { files, additions, deletions };
+}
+
+async function readGitWorkingState(
+  currentPath: string,
+): Promise<ThreadGitWorkingState | undefined> {
+  const [numstatOutput, statusOutput, remotesOutput] = await Promise.all([
+    // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
+    // (fresh repo with no commits) — treated as "no tracked changes".
+    runGitNoLocks(currentPath, ["diff", "--numstat", "HEAD"]).catch(
+      () => undefined,
+    ),
+    runGitNoLocks(currentPath, ["status", "--porcelain"]).catch(() => undefined),
+    runGitNoLocks(currentPath, ["remote"]).catch(() => undefined),
+  ]);
+  if (numstatOutput === undefined && statusOutput === undefined) {
+    return undefined;
+  }
+
+  const numstat = parseNumstat(numstatOutput ?? "");
+  const untrackedFiles = (statusOutput ?? "")
+    .split("\n")
+    .filter((line) => line.startsWith("??")).length;
+
+  // "Unpushed" means reachable from HEAD but on no remote ref. With no
+  // remotes configured, every commit would count — meaningless for a
+  // local-only repo, so report 0 instead.
+  let unpushedCommits = 0;
+  if (remotesOutput?.trim()) {
+    const count = await runGitNoLocks(currentPath, [
+      "rev-list",
+      "--count",
+      "HEAD",
+      "--not",
+      "--remotes",
+    ]).catch(() => undefined);
+    unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
+  }
+
+  return {
+    dirtyFiles: numstat.files,
+    dirtyAdditions: numstat.additions,
+    dirtyDeletions: numstat.deletions,
+    untrackedFiles,
+    unpushedCommits,
+  };
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -206,12 +291,14 @@ async function loadThreadDirectoryEnrichment(
   }
 
   try {
-    const [repoRoot, worktreeList, observedGitBranch, gitMetadata] = await Promise.all([
-      runGit(currentPath, ["rev-parse", "--show-toplevel"]),
-      runGit(currentPath, ["worktree", "list", "--porcelain"]),
-      runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined),
-      readGitMetadataEvidence(currentPath),
-    ]);
+    const [repoRoot, worktreeList, observedGitBranch, gitMetadata, gitWorkingState] =
+      await Promise.all([
+        runGit(currentPath, ["rev-parse", "--show-toplevel"]),
+        runGit(currentPath, ["worktree", "list", "--porcelain"]),
+        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined),
+        readGitMetadataEvidence(currentPath),
+        readGitWorkingState(currentPath).catch(() => undefined),
+      ]);
     const worktreePaths = parseGitWorktrees(worktreeList);
     const primaryPath = path.resolve(worktreePaths[0] || repoRoot);
     const currentWorktreePath =
@@ -249,6 +336,7 @@ async function loadThreadDirectoryEnrichment(
         },
       ],
       observedGitBranch: observedGitBranch?.trim() || undefined,
+      ...(gitWorkingState ? { gitWorkingState } : {}),
     };
   } catch (error) {
     const gitMetadataFallback = await buildLinkedDirectoryFromGitMetadata(currentPath);

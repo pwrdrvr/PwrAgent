@@ -3471,6 +3471,26 @@ textarea,
   color: var(--text-secondary);
 }
 
+/* Local git working-state markers: uncommitted line counts (dirty tree)
+   and commits that exist on no remote. Quiet elevated-panel pills — the
+   colored +/- stats carry the signal, the chip chrome stays neutral. */
+.thread-row__chip--dirty,
+.thread-row__chip--unpushed {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-row__chip-stat--added {
+  color: var(--success-text);
+}
+
+.thread-row__chip-stat--removed {
+  color: var(--danger-text);
+}
+
 .thread-row__chip--mono,
 .context-grid__mono {
   font-family: "IBM Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
@@ -8346,10 +8366,11 @@ textarea,
   color: inherit;
 }
 
-/* LiveWorkRail (issue #495) — sticky cumulative view of the active or
-   most-recently-completed turn's edited files + plan. Two dock modes:
-   "above" flows in the primary column between the transcript and the
-   composer; "sidebar" mounts as a third column at the layout level. */
+/* LiveWorkRail (issue #495) — sticky cumulative view of the active
+   turn's edited files + plan, flowing in the primary column between
+   the transcript and the composer. The old in-transcript "sidebar"
+   dock is gone: edited files dock to the context-rail Edits panel
+   instead (`ui.edited_files_dock`). */
 .live-work-rail {
   display: flex;
   flex-direction: column;
@@ -8359,9 +8380,6 @@ textarea,
   background: var(--bg-panel-elevated);
   color: var(--text-primary);
   font-size: 13px;
-}
-
-.live-work-rail--dock-above {
   /* Cap at the same width as the composer + transcript reading
      column (--chat-column-max) so the rail lines up visually with
      the composer's input. Issue #495 follow-up.
@@ -8378,14 +8396,6 @@ textarea,
      internally so a 50-file refactor doesn't push the composer off
      screen. */
   max-height: min(38vh, 360px);
-}
-
-.live-work-rail--dock-sidebar {
-  width: 320px;
-  flex: 0 0 320px;
-  margin: 12px 12px 12px 0;
-  border-radius: 8px;
-  max-height: none;
 }
 
 .live-work-rail--pinned {
@@ -8600,6 +8610,126 @@ textarea,
 
 .live-work-rail__file-diff {
   padding: 6px 6px 10px 18px;
+}
+
+/* Accumulated edited-file groups — one collapsible section per turn,
+   newest first, shared between the LiveWorkRail and the context-rail
+   Edits panel. File rows reuse the live-work-rail row primitives. */
+.edited-file-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edited-file-groups__view-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.edited-file-groups__view-btn {
+  padding: 2px 8px;
+  border: 0;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.edited-file-groups__view-btn.is-active {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.edited-file-groups__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.edited-file-groups__group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.edited-file-groups__group-toggle:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.edited-file-groups__group-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.edited-file-groups__group-tag {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success-text);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edited-file-groups__group-tag--live {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.edited-file-groups__group-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Context-rail Edits panel: section header carries the dock toggle so
+   "Only show here" / "Show above composer" sits next to the title. */
+.edits-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.edits-panel__dock-toggle {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.edits-panel__dock-toggle:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 .transcript-activity {

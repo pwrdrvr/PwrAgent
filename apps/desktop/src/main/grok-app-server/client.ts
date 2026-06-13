@@ -911,6 +911,9 @@ export class GrokAppServerClient {
           ...(enrichment.observedGitBranch
             ? { observedGitBranch: enrichment.observedGitBranch }
             : {}),
+          ...(enrichment.gitWorkingState
+            ? { gitWorkingState: enrichment.gitWorkingState }
+            : {}),
           source: "grok" as const,
         };
       })

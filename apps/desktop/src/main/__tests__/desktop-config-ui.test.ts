@@ -6,12 +6,12 @@ import {
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
 // Regression: the `[ui]` window-layout section (sidebar hidden, context-rail
-// pinned, active tab) must survive the read path. `pruneEmptyConfig`
-// reconstructs the config section-by-section, so a newly added section that
-// it doesn't copy is silently dropped — which made persisted layout prefs
-// never restore on relaunch.
+// pinned, active tab, edited-files dock) must survive the read path.
+// `pruneEmptyConfig` reconstructs the config section-by-section, so a newly
+// added section that it doesn't copy is silently dropped — which made
+// persisted layout prefs never restore on relaunch.
 describe("desktop config [ui] section", () => {
-  it("reads [ui] booleans + string into config.ui", () => {
+  it("reads [ui] booleans + strings into config.ui", () => {
     const src = [
       "[general.appearance]",
       'theme = "light"',
@@ -20,6 +20,7 @@ describe("desktop config [ui] section", () => {
       "context_rail_pinned = true",
       "sidebar_hidden = true",
       'active_context_tab = "providers"',
+      'edited_files_dock = "sidebar"',
       "",
     ].join("\n");
 
@@ -29,6 +30,7 @@ describe("desktop config [ui] section", () => {
       contextRailPinned: true,
       sidebarHidden: true,
       activeContextTab: "providers",
+      editedFilesDock: "sidebar",
     });
   });
 
@@ -43,6 +45,7 @@ describe("desktop config [ui] section", () => {
         sidebarHidden: true,
         contextRailPinned: true,
         activeContextTab: "providers",
+        editedFilesDock: "sidebar",
       },
     });
     const written = applyTomlEdits("", edits);
@@ -52,25 +55,34 @@ describe("desktop config [ui] section", () => {
       sidebarHidden: true,
       contextRailPinned: true,
       activeContextTab: "providers",
+      editedFilesDock: "sidebar",
     });
   });
 
-  it("deletes default-valued [ui] keys on write (off/info are absent on disk)", () => {
+  it("deletes default-valued [ui] keys on write (off/info/above are absent on disk)", () => {
     const existing = [
       "[ui]",
       "sidebar_hidden = true",
       "context_rail_pinned = true",
       'active_context_tab = "providers"',
+      'edited_files_dock = "sidebar"',
       "",
     ].join("\n");
     const edits = desktopSettingsPatchToEdits(
-      { ui: { sidebarHidden: false, contextRailPinned: false, activeContextTab: "info" } },
+      {
+        ui: {
+          sidebarHidden: false,
+          contextRailPinned: false,
+          activeContextTab: "info",
+          editedFilesDock: "above",
+        },
+      },
       parseTomlTables(existing, "test.toml"),
     );
     const written = applyTomlEdits(existing, edits);
     const config = parseDesktopSettingsToml(written, "test.toml");
 
-    // All three reverted to defaults → the section carries no values.
+    // All four reverted to defaults → the section carries no values.
     expect(config.ui).toBeUndefined();
   });
 });

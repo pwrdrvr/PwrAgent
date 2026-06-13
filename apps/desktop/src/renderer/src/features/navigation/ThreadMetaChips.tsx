@@ -25,8 +25,37 @@ export function ThreadMetaChips({
   // tooltip (not a native `title`) so it escapes the sidebar's clipped
   // scroll region, matching the copyable branch/path chips.
   const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
+  const gitWorking = thread.gitWorkingState;
+  const hasTrackedDirt = Boolean(
+    gitWorking &&
+      (gitWorking.dirtyFiles > 0 ||
+        gitWorking.dirtyAdditions > 0 ||
+        gitWorking.dirtyDeletions > 0),
+  );
+  const hasUntracked = Boolean(gitWorking && gitWorking.untrackedFiles > 0);
+  const dirtyTooltip = gitWorking
+    ? [
+        hasTrackedDirt
+          ? `Uncommitted changes: ${gitWorking.dirtyFiles} file${
+              gitWorking.dirtyFiles === 1 ? "" : "s"
+            }, +${gitWorking.dirtyAdditions.toLocaleString()}, -${gitWorking.dirtyDeletions.toLocaleString()}`
+          : undefined,
+        hasUntracked
+          ? `${gitWorking.untrackedFiles} untracked file${
+              gitWorking.untrackedFiles === 1 ? "" : "s"
+            }`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+  const unpushedCount = gitWorking?.unpushedCommits ?? 0;
+  const unpushedTooltip = `${unpushedCount} commit${
+    unpushedCount === 1 ? "" : "s"
+  } not pushed to a remote`;
   const linkedDirectoryChips = includeLinkedDirectories
     ? thread.linkedDirectories.length > 0
       ? linkedDirectoryMode === "kind"
@@ -152,6 +181,48 @@ export function ThreadMetaChips({
           now {thread.observedGitBranch}
         </CopyableThreadChip>
       ) : null}
+
+      {hasTrackedDirt || hasUntracked ? (
+        <span
+          aria-label={dirtyTooltip.replace(/\n/g, "; ")}
+          role="img"
+          className="thread-row__chip thread-row__chip--dirty thread-row__chip--mono"
+          onMouseEnter={(event) =>
+            gitStateTooltip.show(event.currentTarget, dirtyTooltip)
+          }
+          onMouseLeave={gitStateTooltip.hide}
+        >
+          {hasTrackedDirt ? (
+            <>
+              <span className="thread-row__chip-stat thread-row__chip-stat--added">
+                +{gitWorking!.dirtyAdditions.toLocaleString()}
+              </span>
+              <span className="thread-row__chip-stat thread-row__chip-stat--removed">
+                -{gitWorking!.dirtyDeletions.toLocaleString()}
+              </span>
+            </>
+          ) : (
+            <span className="thread-row__chip-stat">
+              {gitWorking!.untrackedFiles} new
+            </span>
+          )}
+        </span>
+      ) : null}
+
+      {unpushedCount > 0 ? (
+        <span
+          aria-label={unpushedTooltip}
+          role="img"
+          className="thread-row__chip thread-row__chip--unpushed thread-row__chip--mono"
+          onMouseEnter={(event) =>
+            gitStateTooltip.show(event.currentTarget, unpushedTooltip)
+          }
+          onMouseLeave={gitStateTooltip.hide}
+        >
+          ↑{unpushedCount.toLocaleString()}
+        </span>
+      ) : null}
+      {gitStateTooltip.tooltipNode}
     </>
   );
 }

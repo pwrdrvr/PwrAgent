@@ -6,6 +6,7 @@ export { CloseIcon } from "./CloseIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
+export { EditsIcon } from "./EditsIcon";
 export { FeishuIcon } from "./FeishuIcon";
 export { FileCodeIcon } from "./FileCodeIcon";
 export { FolderIcon } from "./FolderIcon";

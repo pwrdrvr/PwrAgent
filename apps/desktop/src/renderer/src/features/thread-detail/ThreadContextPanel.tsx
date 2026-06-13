@@ -15,6 +15,7 @@ import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
+  EditsIcon,
   InfoIcon,
   ProjectsIcon,
   PullRequestIcon,
@@ -29,12 +30,19 @@ import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
+import { EditsPanel } from "./context-panels/EditsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
-import type { ContextTabId } from "./context-panels/context-tab";
+import type {
+  ContextTabId,
+  EditedFilesDock,
+} from "./context-panels/context-tab";
+import type { EditedFileGroup } from "./edited-file-groups";
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
+
+const noop = (): void => {};
 
 type ContextTab = {
   id: ContextTabId;
@@ -46,6 +54,7 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
+  { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
@@ -83,6 +92,10 @@ type ThreadContextPanelProps = {
   ) => Promise<void>;
   activeTab: ContextTabId;
   onActiveTabChange: (tab: ContextTabId) => void;
+  /** Accumulated edited-file groups for the Edits tab (newest first). */
+  editedFileGroups?: EditedFileGroup[];
+  editedFilesDock?: EditedFilesDock;
+  onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
@@ -576,6 +589,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onRestoreWorktree={props.onRestoreWorktree}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
+          />
+        );
+      case "edits":
+        return (
+          <EditsPanel
+            groups={props.editedFileGroups ?? []}
+            dock={props.editedFilesDock ?? "above"}
+            onDockChange={props.onEditedFilesDockChange ?? noop}
           />
         );
       case "subagents":

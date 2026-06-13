@@ -13,6 +13,7 @@ import type { ComponentProps } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
+import { collectEditedFileGroups } from "../edited-file-groups";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -101,7 +102,15 @@ const baseBackend: BackendSummary = {
 type PanelOverrides = Partial<
   Pick<
     ComponentProps<typeof ThreadContextPanel>,
-    "activeTab" | "backends" | "desktopApi" | "pinned" | "thread" | "onRefreshNavigation"
+    | "activeTab"
+    | "backends"
+    | "desktopApi"
+    | "pinned"
+    | "thread"
+    | "onRefreshNavigation"
+    | "editedFileGroups"
+    | "editedFilesDock"
+    | "onEditedFilesDockChange"
   >
 >;
 
@@ -322,14 +331,14 @@ describe("ThreadContextPanel", () => {
     renderPanel({ pinned: true });
 
     const info = screen.getByRole("tab", { name: "Thread info" });
-    const subAgents = screen.getByRole("tab", { name: "Sub-agents" });
+    const edits = screen.getByRole("tab", { name: "Edits" });
     info.focus();
     expect(document.activeElement).toBe(info);
 
     fireEvent.keyDown(info, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(subAgents);
+    expect(document.activeElement).toBe(edits);
 
-    fireEvent.keyDown(subAgents, { key: "ArrowUp" });
+    fireEvent.keyDown(edits, { key: "ArrowUp" });
     expect(document.activeElement).toBe(info);
 
     fireEvent.keyDown(info, { key: "End" });
@@ -608,5 +617,58 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+  });
+
+  it("renders the Edits tab empty state when no edits accumulated", () => {
+    renderPanel({ activeTab: "edits", pinned: true });
+
+    expect(
+      screen.getByText(/No uncommitted file edits yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders accumulated edit groups on the Edits tab and toggles the dock", () => {
+    const groups = collectEditedFileGroups({
+      entries: [
+        {
+          type: "activity",
+          id: "live-diff-turn-1",
+          summary: "Edited 1 file, +2, -0",
+          details: [
+            {
+              id: "detail-1",
+              kind: "write",
+              label: "Update a.ts",
+              path: "/repo/src/a.ts",
+              fileDiff: {
+                kind: "update",
+                additions: 2,
+                removals: 0,
+                diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,0 +1,2 @@\n+x\n+y\n",
+              },
+            },
+          ],
+          turn: { id: "turn-1" },
+        },
+      ],
+    });
+    const onEditedFilesDockChange = vi.fn();
+    renderPanel({
+      activeTab: "edits",
+      pinned: true,
+      editedFileGroups: groups,
+      editedFilesDock: "sidebar",
+      onEditedFilesDockChange,
+    });
+
+    expect(screen.getByRole("heading", { level: 3, name: "Edits" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Update a\.ts/ }),
+    ).toBeInTheDocument();
+
+    // Docked to the sidebar → the toggle offers to restore the
+    // above-composer copy.
+    fireEvent.click(screen.getByRole("button", { name: "Show above composer" }));
+    expect(onEditedFilesDockChange).toHaveBeenCalledWith("above");
   });
 });

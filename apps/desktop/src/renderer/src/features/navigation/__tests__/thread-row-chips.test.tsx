@@ -435,4 +435,74 @@ describe("ThreadRow chip flow", () => {
     );
     expect(screen.getByRole("tooltip")).not.toHaveTextContent("status unknown");
   });
+
+  it("renders dirty-tree line counts and unpushed-commit chips from gitWorkingState", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitWorkingState: {
+          dirtyFiles: 2,
+          dirtyAdditions: 112,
+          dirtyDeletions: 3,
+          untrackedFiles: 1,
+          unpushedCommits: 4,
+        },
+      },
+    });
+
+    const dirtyChip = container.querySelector(".thread-row__chip--dirty");
+    expect(dirtyChip).not.toBeNull();
+    expect(dirtyChip).toHaveTextContent("+112");
+    expect(dirtyChip).toHaveTextContent("-3");
+    expect(dirtyChip).toHaveAttribute(
+      "aria-label",
+      "Uncommitted changes: 2 files, +112, -3; 1 untracked file",
+    );
+
+    const unpushedChip = container.querySelector(".thread-row__chip--unpushed");
+    expect(unpushedChip).not.toBeNull();
+    expect(unpushedChip).toHaveTextContent("↑4");
+    expect(unpushedChip).toHaveAttribute(
+      "aria-label",
+      "4 commits not pushed to a remote",
+    );
+  });
+
+  it("renders an untracked-only dirty chip without +/- stats", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 3,
+          unpushedCommits: 0,
+        },
+      },
+    });
+
+    const dirtyChip = container.querySelector(".thread-row__chip--dirty");
+    expect(dirtyChip).toHaveTextContent("3 new");
+    expect(container.querySelector(".thread-row__chip-stat--added")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
+  });
+
+  it("renders no git working-state chips when the tree is clean and pushed", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 0,
+        },
+      },
+    });
+
+    expect(container.querySelector(".thread-row__chip--dirty")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
+  });
 });
