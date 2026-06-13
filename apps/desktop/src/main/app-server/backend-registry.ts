@@ -899,12 +899,6 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     supportsSteering: true,
   },
   {
-    id: "gpt-5.3-codex",
-    label: "GPT-5.3-Codex",
-    supportsReasoning: true,
-    supportsSteering: true,
-  },
-  {
     id: "gpt-5.2",
     label: "GPT-5.2",
     supportsReasoning: true,
@@ -2055,10 +2049,16 @@ function dedupeModelOptions(
 function buildLaunchpadOptions(
   backend: AppServerBackendKind,
   models: BackendModelOption[],
+  options: { allowFallbackModels?: boolean } = {},
 ): BackendLaunchpadOptions | undefined {
+  const allowFallbackModels = options.allowFallbackModels ?? true;
   const normalizedModels = dedupeModelOptions(
     backend,
-    models.length > 0 ? models : getBackendFallbackModels(backend),
+    models.length > 0
+      ? models
+      : allowFallbackModels
+        ? getBackendFallbackModels(backend)
+        : [],
   );
   if (normalizedModels.length === 0) {
     return undefined;
@@ -6097,12 +6097,12 @@ export class DesktopBackendRegistry {
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
-    const modelSettings = hasExplicitModelSettings(params)
-      ? await this.resolveModelSettings(params.backend, params)
-      : {};
-
+    let modelSettings: ModelSettings = {};
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     try {
+      modelSettings = hasExplicitModelSettings(params)
+        ? await this.resolveReviewModelSettings(params.backend, params)
+        : {};
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
@@ -8440,6 +8440,37 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
+  }
+
+  private async resolveReviewModelSettings(
+    backend: AppServerBackendKind,
+    settings: ModelSettings,
+  ): Promise<ModelSettings> {
+    if (isAcpBackendId(backend)) {
+      return await this.resolveModelSettings(backend, settings, "review-start");
+    }
+
+    const models =
+      backend === "codex"
+        ? await this.readCodexDefaultModelsOnce("review-start")
+        : await this.readGrokDefaultModelsOnce("review-start");
+    const launchpadOptions = buildLaunchpadOptions(backend, models, {
+      allowFallbackModels: false,
+    });
+    const availableModels = launchpadOptions?.models ?? [];
+    if (
+      settings.model !== undefined &&
+      !availableModels.some((model) => model.id === settings.model)
+    ) {
+      const available = availableModels.map((model) => model.id).join(", ");
+      throw new Error(
+        available
+          ? `Selected review model is not available for ${backend}: ${settings.model}. Available models: ${available}`
+          : `Selected review model is not available for ${backend}: ${settings.model}. Model discovery returned no available models.`,
+      );
+    }
+
+    return resolveModelSettingsFromOptions(backend, launchpadOptions, settings);
   }
 
   private async resolveLaunchpadBackend(
@@ -11420,7 +11451,10 @@ export class DesktopBackendRegistry {
     const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
       params.preferredReasoningEffort,
     );
-    const options = await this.getBackendLaunchpadOptions("codex", "task-monitor");
+    const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
+    const options = buildLaunchpadOptions("codex", discoveredModels, {
+      allowFallbackModels: false,
+    });
     const models = options?.models ?? [];
     const selectedModel =
       models.find((model) => model.id === requestedModel) ??
@@ -11429,7 +11463,13 @@ export class DesktopBackendRegistry {
       models.find((model) => model.current) ??
       models.find((model) => model.supportsReasoning) ??
       models[0];
-    const preferredModel = selectedModel?.id ?? DEFAULT_TASK_MONITOR_MODEL;
+    if (!selectedModel) {
+      throw new Error(
+        "No available Codex models were discovered for task monitor delegation.",
+      );
+    }
+
+    const preferredModel = selectedModel.id;
     const reasoningEfforts = options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
     const preferredReasoningEffort = reasoningEfforts.includes(
       requestedReasoningEffort,

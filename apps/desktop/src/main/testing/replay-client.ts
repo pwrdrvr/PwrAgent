@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   AppServerCollaborationModeRequest,
   AppServerListSkillsResponse,
   AppServerNotification,
@@ -8,6 +9,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  BackendModelOption,
 } from "@pwragent/shared";
 import { ReplayController } from "./replay-controller";
 import {
@@ -26,6 +28,81 @@ type InitializeResult = {
   };
   methods?: string[];
 };
+
+const REPLAY_CODEX_MODELS: BackendModelOption[] = [
+  {
+    id: "gpt-5.5",
+    label: "GPT-5.5",
+    current: true,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-5.4",
+    label: "GPT-5.4",
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-5.4-mini",
+    label: "GPT-5.4-Mini",
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-5.2",
+    label: "GPT-5.2",
+    supportsReasoning: true,
+    supportsSteering: true,
+  },
+];
+
+const REPLAY_GROK_MODELS: BackendModelOption[] = [
+  {
+    id: "grok-4.20-reasoning",
+    label: "Grok 4.20 Reasoning",
+    current: true,
+    supportsReasoning: false,
+    supportsSteering: false,
+  },
+  {
+    id: "grok-4.20-non-reasoning",
+    label: "Grok 4.20 Non-Reasoning",
+    supportsReasoning: false,
+    supportsSteering: false,
+  },
+  {
+    id: "grok-4-1-fast-reasoning",
+    label: "Grok 4.1 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+    supportsSteering: false,
+  },
+  {
+    id: "grok-4-1-fast-non-reasoning",
+    label: "Grok 4.1 Fast Non-Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+    supportsSteering: false,
+  },
+  {
+    id: "grok-4-fast-reasoning",
+    label: "Grok 4 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+    supportsSteering: false,
+  },
+  {
+    id: "grok-4-fast-non-reasoning",
+    label: "Grok 4 Fast Non-Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+    supportsSteering: false,
+  },
+];
 
 export class ReplayClient {
   private readonly notificationListeners = new Set<
@@ -64,10 +141,13 @@ export class ReplayClient {
     turnId: string;
   }> = [];
 
-  constructor(private readonly controller: ReplayController) {}
+  constructor(
+    private readonly controller: ReplayController,
+    private readonly backend: AppServerBackendKind,
+  ) {}
 
   static fromFixture(fixture: ReplayFixture): ReplayClient {
-    return new ReplayClient(new ReplayController(fixture));
+    return new ReplayClient(new ReplayController(fixture), fixture.metadata.backend);
   }
 
   async close(): Promise<void> {
@@ -95,6 +175,11 @@ export class ReplayClient {
   }): Promise<AppServerListSkillsResponse["data"]> {
     await this.ensureInitialized();
     return asSkillList(this.controller.consumeResponse("skills/list").result);
+  }
+
+  async listModels(): Promise<BackendModelOption[]> {
+    await this.ensureInitialized();
+    return this.backend === "grok" ? REPLAY_GROK_MODELS : REPLAY_CODEX_MODELS;
   }
 
   onNotification(
