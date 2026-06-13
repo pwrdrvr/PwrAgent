@@ -8,6 +8,16 @@ import type {
 import { formatChangedFileSummary } from "./live-transcript-activity";
 
 /**
+ * Upper bound on accumulated turn-groups kept by `collectEditedFileGroups`.
+ * Groups normally clear on commit / a clean worktree, but a long stretch of
+ * uncommitted turns would otherwise grow without bound — and each group
+ * stacks its files' diff text, so the per-render cost grows with it. Keep the
+ * newest N; older uncommitted turns drop off the rail (the summary totals then
+ * reflect the retained set). Matches the directory list's `UNPINNED_THREAD_CAP`.
+ */
+export const MAX_RETAINED_TURN_GROUPS = 10;
+
+/**
  * True when the live working-state probe reports a clean working tree — no
  * uncommitted modifications and no untracked files. Used to retire
  * accumulated edited-file groups whose uncommitted edits have left the tree
@@ -145,7 +155,7 @@ function mergeFileDiffDetail(
  *   so a freshly committed group still follows the "stays until the next
  *   turn" lifecycle above.
  *
- * Returns groups newest-first.
+ * Returns groups newest-first, capped at `MAX_RETAINED_TURN_GROUPS`.
  */
 export function collectEditedFileGroups(params: {
   entries: readonly AppServerThreadEntry[];
@@ -310,7 +320,10 @@ export function collectEditedFileGroups(params: {
     return [];
   }
 
-  return groups.reverse();
+  // Newest-first, then bound retention so an uncommitted thread can't grow the
+  // rail (and its stacked diffs) without limit. The live/active turn sorts
+  // newest, so it is always kept.
+  return groups.reverse().slice(0, MAX_RETAINED_TURN_GROUPS);
 }
 
 /**

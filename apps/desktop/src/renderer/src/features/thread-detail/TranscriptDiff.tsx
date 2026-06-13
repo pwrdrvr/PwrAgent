@@ -106,7 +106,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   const hiddenSummary = !isZoomedIn ? formatHiddenSummary(defaultView) : null;
 
   return (
-    <div className="transcript-diff">
+    <div className={`transcript-diff${props.compact ? " transcript-diff--compact" : ""}`}>
       {props.detail.path && !props.compact ? (
         <p className="transcript-diff__path" title={props.detail.path}>
           {props.detail.path}
