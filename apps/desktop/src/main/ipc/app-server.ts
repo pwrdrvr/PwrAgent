@@ -7,6 +7,7 @@ import type {
   PrLookupCacheEntry,
   PrStatusCacheEntry,
   SqliteOverlayStore,
+  WorktreeGitWorkingStateCacheEntry,
 } from "../state/overlay-store-sqlite";
 import {
   sanitizeRendererPayload,
@@ -48,6 +49,7 @@ import {
   type MarkThreadSeenResponse,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
+  type NavigationThreadGitWorkingStateUpdatedNotification,
   type NavigationSnapshot,
   type AutomationThreadSummary,
   type PrSummary,
@@ -83,6 +85,7 @@ import {
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
+  type ThreadGitWorkingState,
   type ThreadOverlayState,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -161,11 +164,27 @@ const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
 const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
 const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
+// Collapse rapid forced directory-git-status re-enqueues for the same key
+// (e.g. flipping between two threads in the same repo) that land within a
+// few seconds of the previous probe completing. Concurrent same-key
+// requests already coalesce via `pendingDirectoryGitStatusKeys`; this
+// closes the sequential post-completion gap so "747, 732, 747, 747, 732,
+// 747" collapses to "747, 732".
+const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
+const STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
+// Per-worktree working state changes as the agent edits/commits, but each
+// such turn pushes a fresh probe, so the background freshness window only
+// needs to catch out-of-band changes (terminal/IDE edits) on the next
+// snapshot. Shorter than the per-repo directory status TTL.
+const WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS = 30_000;
 
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
-    "readDirectoryGitStatusCache" | "writeDirectoryGitStatusCacheEntry"
+    | "readDirectoryGitStatusCache"
+    | "writeDirectoryGitStatusCacheEntry"
+    | "readThreadGitWorkingStateCache"
+    | "writeThreadGitWorkingStateCacheEntry"
   >;
 const appServerLog = getMainLogger("pwragent:app-server");
 
@@ -529,6 +548,21 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
+  private readonly workingStateByWorktree = new Map<
+    string,
+    WorktreeGitWorkingStateCacheEntry
+  >();
+  private workingStateCacheLoaded = false;
+  private automaticWorktreeWorkingStateRefreshesStarted = 0;
+  private readonly pendingWorktreeWorkingStateRefreshes = new Map<
+    string,
+    Promise<void>
+  >();
+  private readonly pendingWorktreeWorkingStateKeys = new Set<string>();
+  // Maps a thread identity (`backend:threadId`) to its working directory so
+  // a turn/command-completion event can refresh the right worktree's chips
+  // without re-reading the navigation snapshot. Populated on every snapshot.
+  private readonly worktreePathByThreadKey = new Map<string, string>();
   private threadSearchService: ThreadSearchService | null = null;
   private threadMigrationService: ThreadMigrationService | null = null;
   // Parent of the most recently picked directory, used as the "Add directory"
@@ -880,13 +914,66 @@ class DesktopAppServerService {
       requestKey: getNavigationSnapshotRequestKey(request),
     });
 
+    await this.loadThreadGitWorkingStateCache();
+    this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
+    const threadsWithWorkingState = canonicalSnapshot.threads.map((thread) =>
+      this.applyCachedWorktreeWorkingState(thread),
+    );
+    this.startWorktreeWorkingStateRefresh({
+      automatic: true,
+      worktreePaths: this.collectThreadWorktreePaths(canonicalSnapshot.threads),
+    });
+
     return {
       ...snapshot,
-      threads: canonicalSnapshot.threads,
+      threads: threadsWithWorkingState,
       directories,
       unchanged:
         snapshot.unchanged && directoriesUnchanged && !canonicalSnapshot.changed,
     };
+  }
+
+  private collectThreadWorktreePaths(
+    threads: NavigationSnapshot["threads"],
+  ): string[] {
+    const paths = new Set<string>();
+    for (const thread of threads) {
+      const worktreePath = thread.projectKey?.trim();
+      if (worktreePath) {
+        paths.add(worktreePath);
+      }
+    }
+    return [...paths];
+  }
+
+  private rememberThreadWorktreePaths(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const worktreePath = thread.projectKey?.trim();
+      if (worktreePath) {
+        this.worktreePathByThreadKey.set(threadKey, worktreePath);
+      } else {
+        this.worktreePathByThreadKey.delete(threadKey);
+      }
+    }
+  }
+
+  private applyCachedWorktreeWorkingState(
+    thread: NavigationSnapshot["threads"][number],
+  ): NavigationSnapshot["threads"][number] {
+    const worktreePath = thread.projectKey?.trim();
+    const cached = worktreePath
+      ? this.workingStateByWorktree.get(worktreePath)
+      : undefined;
+    // Threads arrive without working state (the enricher no longer computes
+    // it), so hydration only ever adds the cached value. A worktree the cache
+    // doesn't know about yet shows no chips until the background probe lands.
+    if (cached?.gitWorkingState && thread.gitWorkingState !== cached.gitWorkingState) {
+      return { ...thread, gitWorkingState: cached.gitWorkingState };
+    }
+    return thread;
   }
 
   async refreshDirectoryGitStatusesForKeys(
@@ -986,10 +1073,20 @@ class DesktopAppServerService {
       if (!directory.path?.trim()) {
         return false;
       }
-      if (params.force) {
-        return true;
-      }
       const cached = this.directoryGitStatusByKey.get(directory.key);
+      if (params.force) {
+        // Forced refreshes bypass the normal freshness gate, but still
+        // collapse a burst of same-key re-enqueues that land within a few
+        // seconds of the previous probe completing (e.g. rapidly flipping
+        // between two threads in the same repo). In-flight requests already
+        // coalesce via `pendingDirectoryGitStatusKeys`; this closes the
+        // sequential post-completion gap.
+        return (
+          !cached ||
+          Date.now() - cached.fetchedAt >=
+            DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS
+        );
+      }
       if (!cached) {
         return true;
       }
@@ -1119,6 +1216,210 @@ class DesktopAppServerService {
       backend: "codex",
       notification,
     } as unknown as AgentEvent);
+  }
+
+  private async loadThreadGitWorkingStateCache(): Promise<void> {
+    if (this.workingStateCacheLoaded) {
+      return;
+    }
+    this.workingStateCacheLoaded = true;
+
+    const entries = await this.getOverlayStore().readThreadGitWorkingStateCache();
+    for (const entry of Object.values(entries)) {
+      this.workingStateByWorktree.set(entry.worktreePath, entry);
+    }
+  }
+
+  /**
+   * Schedule a background per-worktree working-state probe. Mirrors
+   * `startDirectoryGitStatusRefresh`: concurrent same-key requests coalesce
+   * through `pendingWorktreeWorkingStateKeys`, automatic refreshes obey a
+   * startup budget + cache freshness, and `force` (event-driven invalidation)
+   * bypasses freshness. Returns the number of worktrees scheduled.
+   */
+  private startWorktreeWorkingStateRefresh(params: {
+    automatic: boolean;
+    worktreePaths: string[];
+    force?: boolean;
+  }): number {
+    const worktreePaths = this.selectWorktreeWorkingStateRefreshCandidates(
+      params,
+    ).filter((worktreePath) => !this.pendingWorktreeWorkingStateKeys.has(worktreePath));
+    if (worktreePaths.length === 0) {
+      return 0;
+    }
+
+    const refreshKey = JSON.stringify({
+      worktreePaths,
+      force: params.force === true,
+    });
+    if (this.pendingWorktreeWorkingStateRefreshes.has(refreshKey)) {
+      return 0;
+    }
+
+    if (params.automatic) {
+      this.automaticWorktreeWorkingStateRefreshesStarted += worktreePaths.length;
+    }
+    for (const worktreePath of worktreePaths) {
+      this.pendingWorktreeWorkingStateKeys.add(worktreePath);
+    }
+
+    const promise = this.refreshWorktreeWorkingStates(worktreePaths)
+      .catch((error) => {
+        logDebug("worktreeWorkingStateRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        for (const worktreePath of worktreePaths) {
+          this.pendingWorktreeWorkingStateKeys.delete(worktreePath);
+        }
+        if (this.pendingWorktreeWorkingStateRefreshes.get(refreshKey) === promise) {
+          this.pendingWorktreeWorkingStateRefreshes.delete(refreshKey);
+        }
+      });
+    this.pendingWorktreeWorkingStateRefreshes.set(refreshKey, promise);
+    return worktreePaths.length;
+  }
+
+  private selectWorktreeWorkingStateRefreshCandidates(params: {
+    automatic: boolean;
+    worktreePaths: string[];
+    force?: boolean;
+  }): string[] {
+    const candidates = [
+      ...new Set(params.worktreePaths.map((p) => p.trim()).filter(Boolean)),
+    ].filter((worktreePath) => {
+      if (params.force) {
+        return true;
+      }
+      const cached = this.workingStateByWorktree.get(worktreePath);
+      if (!cached) {
+        return true;
+      }
+      return !isFreshWorktreeWorkingStateCacheEntry(cached);
+    });
+
+    if (!params.automatic) {
+      return candidates;
+    }
+
+    const remaining =
+      STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT -
+      this.automaticWorktreeWorkingStateRefreshesStarted;
+    if (remaining <= 0) {
+      return [];
+    }
+    return candidates.slice(0, remaining);
+  }
+
+  private async refreshWorktreeWorkingStates(
+    worktreePaths: string[],
+  ): Promise<void> {
+    const refreshable = worktreePaths.map((p) => p.trim()).filter(Boolean);
+    if (refreshable.length === 0) {
+      return;
+    }
+
+    for await (const entry of getDesktopBackendRegistry().readWorktreeWorkingStateEntries(
+      refreshable,
+    )) {
+      await this.writeWorktreeWorkingStateEntry({
+        worktreePath: entry.worktreePath,
+        fetchedAt: Date.now(),
+        gitWorkingState: entry.gitWorkingState,
+      });
+    }
+  }
+
+  private async writeWorktreeWorkingStateEntry(params: {
+    worktreePath: string;
+    fetchedAt: number;
+    gitWorkingState?: ThreadGitWorkingState;
+  }): Promise<void> {
+    const previous = this.workingStateByWorktree.get(params.worktreePath);
+    const cacheEntry: WorktreeGitWorkingStateCacheEntry = {
+      worktreePath: params.worktreePath,
+      fetchedAt: params.fetchedAt,
+      ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
+    };
+    this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
+    await this.getOverlayStore().writeThreadGitWorkingStateCacheEntry(cacheEntry);
+
+    // Skip the push when the probed value is identical to what clients
+    // already hold — avoids a snapshot patch + re-render on every idle
+    // background refresh that found nothing changed.
+    if (
+      JSON.stringify(previous?.gitWorkingState ?? null) ===
+      JSON.stringify(params.gitWorkingState ?? null)
+    ) {
+      return;
+    }
+
+    const notification: NavigationThreadGitWorkingStateUpdatedNotification = {
+      method: "navigation/threadGitWorkingState/updated",
+      params: {
+        worktreePath: params.worktreePath,
+        gitWorkingState: params.gitWorkingState ?? null,
+        fetchedAt: params.fetchedAt,
+      },
+    };
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification,
+    } as unknown as AgentEvent);
+  }
+
+  /**
+   * React to turn/command-completion events by refreshing the affected
+   * thread's working-state chips, so a commit/edit made by the agent updates
+   * the dirty/unpushed chips without waiting for the next snapshot re-fetch.
+   * Filters out our own published notifications (and the directory-status
+   * sibling) to avoid a publish→listen loop.
+   */
+  handleAgentEventForWorkingState(event: AgentEvent): void {
+    const method = event.notification.method as string;
+    if (
+      method !== "turn/completed" &&
+      method !== "turn/failed" &&
+      method !== "turn/cancelled" &&
+      method !== "item/completed"
+    ) {
+      return;
+    }
+
+    const params = event.notification.params as {
+      threadId?: string;
+      item?: { command?: string };
+    };
+    const threadId = params.threadId?.trim();
+    if (!threadId) {
+      return;
+    }
+
+    // A command item only matters here when it mutated git state; a turn
+    // ending always warrants a re-probe (it may have committed/edited).
+    if (method === "item/completed") {
+      const command = params.item?.command;
+      if (!command || !commandLooksLikeGitMutation(command)) {
+        return;
+      }
+    }
+
+    const threadKey = buildThreadIdentityKey(event.backend, threadId);
+    const worktreePath = this.worktreePathByThreadKey.get(threadKey);
+    if (!worktreePath) {
+      return;
+    }
+
+    getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+    void this.loadThreadGitWorkingStateCache().then(() => {
+      this.startWorktreeWorkingStateRefresh({
+        automatic: false,
+        worktreePaths: [worktreePath],
+        force: true,
+      });
+    });
   }
 
   async markThreadSeen(
@@ -2151,6 +2452,12 @@ class DesktopAppServerService {
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;
     this.lastDirectoriesByKey.clear();
+    this.pendingWorktreeWorkingStateRefreshes.clear();
+    this.pendingWorktreeWorkingStateKeys.clear();
+    this.workingStateByWorktree.clear();
+    this.workingStateCacheLoaded = false;
+    this.automaticWorktreeWorkingStateRefreshesStarted = 0;
+    this.worktreePathByThreadKey.clear();
     await this.threadMigrationService?.dispose();
     this.threadMigrationService = null;
     await disposeDesktopBackendRegistry();
@@ -2193,9 +2500,39 @@ function isFreshDirectoryGitStatusCacheEntry(
   return Date.now() - entry.fetchedAt < DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS;
 }
 
+function isFreshWorktreeWorkingStateCacheEntry(
+  entry: WorktreeGitWorkingStateCacheEntry,
+): boolean {
+  return Date.now() - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
+}
+
+/**
+ * True when a command string runs a git subcommand that can change the
+ * working tree, the index, or local commits (and therefore the
+ * dirty/unpushed chips). Mirrors the option-skipping shape of the
+ * edited-file-groups commit matcher so `git -C <path> commit` still
+ * matches, while a command that merely mentions "commit" later does not.
+ */
+function commandLooksLikeGitMutation(command: string): boolean {
+  return GIT_MUTATION_COMMAND.test(command);
+}
+
+const GIT_MUTATION_COMMAND =
+  /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
+
 const appServerService = new DesktopAppServerService();
 
+let unsubscribeWorkingStateEvents: (() => void) | undefined;
+
 export function registerAppServerIpcHandlers(): void {
+  // Refresh a thread's working-state chips when the agent finishes a turn
+  // or a git-mutating command in its worktree. Re-registering tears the
+  // previous subscription down first so repeated calls don't stack listeners.
+  unsubscribeWorkingStateEvents?.();
+  unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
+    appServerService.handleAgentEventForWorkingState(event);
+  });
+
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -2585,6 +2922,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
+  unsubscribeWorkingStateEvents?.();
+  unsubscribeWorkingStateEvents = undefined;
   await appServerService.close();
 }
 

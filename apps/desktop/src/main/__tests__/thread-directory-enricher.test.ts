@@ -61,29 +61,6 @@ describe("createThreadDirectoryEnricher", () => {
           });
           return;
         }
-        // Git working-state probes (all run with --no-optional-locks).
-        if (args.includes("--numstat")) {
-          callback(null, {
-            stdout: "3\t1\tapps/desktop/src/file.ts\n-\t-\tassets/logo.png\n",
-            stderr: "",
-          });
-          return;
-        }
-        if (args.includes("status")) {
-          callback(null, {
-            stdout: " M apps/desktop/src/file.ts\n?? scratch/new-file.txt\n",
-            stderr: "",
-          });
-          return;
-        }
-        if (args.includes("rev-list")) {
-          callback(null, { stdout: "2\n", stderr: "" });
-          return;
-        }
-        if (args[args.length - 1] === "remote") {
-          callback(null, { stdout: "origin\n", stderr: "" });
-          return;
-        }
 
         callback(new Error(`Unexpected git invocation: ${args.join(" ")}`));
       },
@@ -120,22 +97,14 @@ describe("createThreadDirectoryEnricher", () => {
         },
       ],
       observedGitBranch: "feature-one",
-      gitWorkingState: {
-        // Binary numstat lines ("-\t-") count as a dirty file with no
-        // line totals.
-        dirtyFiles: 2,
-        dirtyAdditions: 3,
-        dirtyDeletions: 1,
-        untrackedFiles: 1,
-        unpushedCommits: 2,
-      },
     });
     expect(second).toEqual(first);
     expect(accessMock).toHaveBeenCalledTimes(3);
     expect(readFileMock).toHaveBeenCalledTimes(1);
-    // 3 directory-resolution calls + 4 working-state probes (numstat,
-    // status, remote, rev-list). The cached second lookup adds none.
-    expect(execFileMock).toHaveBeenCalledTimes(7);
+    // 3 directory-resolution calls (show-toplevel, worktree list,
+    // abbrev-ref). Working-state probing moved off the enricher onto the
+    // GitWorkingStateService. The cached second lookup adds none.
+    expect(execFileMock).toHaveBeenCalledTimes(3);
   });
 
   it("recovers the home repo from a worktree .git file when git worktree list fails", async () => {

@@ -11,6 +11,7 @@ import type {
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
   ThreadExecutionMode,
+  ThreadGitWorkingState,
   ThreadIdentifier,
   WorktreeSnapshotSummary,
 } from "./normalized-app-server";
@@ -494,6 +495,28 @@ export type NavigationDirectoryGitStatusUpdatedNotification = {
   params: {
     directoryKey: string;
     gitStatus: NavigationDirectoryGitStatus | null;
+    fetchedAt: number;
+  };
+};
+
+/**
+ * Live update for a thread's per-worktree git working state (the
+ * dirty/unpushed thread-row chips). Keyed by the thread's working
+ * directory (`projectKey` — the worktree path for worktree threads,
+ * the checkout path for local threads), so every thread that shares
+ * that working directory refreshes together. Published by the main
+ * process whenever the background working-state probe lands a fresh
+ * result or invalidates a worktree after a git-mutating turn, so chips
+ * update without waiting for the next navigation snapshot re-fetch.
+ * Mirrors `navigation/directoryGitStatus/updated` for the per-repo
+ * directory status row.
+ */
+export type NavigationThreadGitWorkingStateUpdatedNotification = {
+  method: "navigation/threadGitWorkingState/updated";
+  params: {
+    /** Thread working directory the state was probed for. */
+    worktreePath: string;
+    gitWorkingState: ThreadGitWorkingState | null;
     fetchedAt: number;
   };
 };

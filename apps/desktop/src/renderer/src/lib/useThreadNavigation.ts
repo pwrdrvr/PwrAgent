@@ -14,6 +14,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
   PrSummary,
   ThreadAgentMetadata,
@@ -543,6 +544,13 @@ function threadSummariesEqual(
     left.updatedAt === right.updatedAt &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
+    // Working state is probed on its own cadence (background refresh +
+    // post-turn invalidation), independent of `updatedAt` — like PRs and
+    // messaging bindings below. Without this check the reconciler would
+    // reuse the previous thread reference and the dirty/unpushed chips
+    // would stay stale until some other field changed.
+    JSON.stringify(left.gitWorkingState ?? null) ===
+      JSON.stringify(right.gitWorkingState ?? null) &&
     left.executionMode === right.executionMode &&
     left.queuedExecutionMode === right.queuedExecutionMode &&
     left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
@@ -666,6 +674,37 @@ function applyDirectoryGitStatusUpdate(
   });
 
   return changed ? { ...snapshot, directories } : snapshot;
+}
+
+function applyThreadGitWorkingStateUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: NavigationThreadGitWorkingStateUpdatedNotification["params"],
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.projectKey !== params.worktreePath) {
+      return thread;
+    }
+    if (
+      JSON.stringify(thread.gitWorkingState ?? null) ===
+      JSON.stringify(params.gitWorkingState)
+    ) {
+      return thread;
+    }
+
+    changed = true;
+    if (params.gitWorkingState) {
+      return { ...thread, gitWorkingState: params.gitWorkingState };
+    }
+    const { gitWorkingState: _removed, ...rest } = thread;
+    return rest;
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function updateThreadReactionsInSnapshot(
@@ -2349,6 +2388,16 @@ export function useThreadNavigation(
         setState((current) => ({
           ...current,
           response: applyDirectoryGitStatusUpdate(current.response, params),
+        }));
+        return;
+      }
+
+      if (method === "navigation/threadGitWorkingState/updated") {
+        const params = event.notification
+          .params as NavigationThreadGitWorkingStateUpdatedNotification["params"];
+        setState((current) => ({
+          ...current,
+          response: applyThreadGitWorkingStateUpdate(current.response, params),
         }));
         return;
       }

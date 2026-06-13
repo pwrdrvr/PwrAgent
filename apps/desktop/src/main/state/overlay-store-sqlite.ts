@@ -13,6 +13,7 @@ import type {
   NavigationSnapshot,
   PrSummary,
   ThreadExecutionMode,
+  ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
@@ -44,6 +45,12 @@ export type DirectoryGitStatusCacheEntry = {
   directoryUpdatedAt?: number;
   fetchedAt: number;
   gitStatus?: NavigationDirectoryGitStatus;
+};
+
+export type WorktreeGitWorkingStateCacheEntry = {
+  worktreePath: string;
+  fetchedAt: number;
+  gitWorkingState?: ThreadGitWorkingState;
 };
 
 export type PrStatusCacheEntry = {
@@ -132,6 +139,20 @@ function parseDirectoryGitStatusCachePayload(
 
   try {
     return JSON.parse(payload) as NavigationDirectoryGitStatus;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseThreadGitWorkingStatePayload(
+  payload: string | null,
+): ThreadGitWorkingState | undefined {
+  if (!payload) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(payload) as ThreadGitWorkingState;
   } catch {
     return undefined;
   }
@@ -1323,6 +1344,51 @@ export class SqliteOverlayStore {
         entry.directoryUpdatedAt ?? null,
         entry.fetchedAt,
         entry.gitStatus ? JSON.stringify(entry.gitStatus) : null,
+      );
+  }
+
+  async readThreadGitWorkingStateCache(): Promise<
+    Record<string, WorktreeGitWorkingStateCacheEntry>
+  > {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT worktree_path, fetched_at, payload
+         FROM thread_git_working_state`,
+      )
+      .all() as Array<{
+        worktree_path: string;
+        fetched_at: number;
+        payload: string | null;
+      }>;
+
+    return Object.fromEntries(
+      rows.map((row) => {
+        const gitWorkingState = parseThreadGitWorkingStatePayload(row.payload);
+        const entry: WorktreeGitWorkingStateCacheEntry = {
+          worktreePath: row.worktree_path,
+          fetchedAt: row.fetched_at,
+          ...(gitWorkingState ? { gitWorkingState } : {}),
+        };
+        return [entry.worktreePath, entry];
+      }),
+    );
+  }
+
+  async writeThreadGitWorkingStateCacheEntry(
+    entry: WorktreeGitWorkingStateCacheEntry,
+  ): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO thread_git_working_state(
+           worktree_path,
+           fetched_at,
+           payload
+         ) VALUES (?, ?, ?)`,
+      )
+      .run(
+        entry.worktreePath,
+        entry.fetchedAt,
+        entry.gitWorkingState ? JSON.stringify(entry.gitWorkingState) : null,
       );
   }
 

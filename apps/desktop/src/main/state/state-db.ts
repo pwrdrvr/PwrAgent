@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 15;
+export const CURRENT_STATE_DB_USER_VERSION = 16;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -204,6 +204,19 @@ CREATE TABLE IF NOT EXISTS directory_overlay (
   directory_key TEXT PRIMARY KEY,
   payload       TEXT NOT NULL
 );
+`;
+
+// Per-worktree git working-state cache (the dirty/unpushed thread-row
+// chips), keyed by a thread's working directory path. Sibling of
+// `directory_git_status`, which caches per-repo branch/sync state.
+const THREAD_GIT_WORKING_STATE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_git_working_state (
+  worktree_path TEXT PRIMARY KEY,
+  fetched_at    INTEGER NOT NULL,
+  payload       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_git_working_state_fetched
+  ON thread_git_working_state(fetched_at DESC);
 `;
 
 const COMPOSER_DRAFT_RECOVERY_SCHEMA = `
@@ -598,6 +611,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 15) {
       db.transaction(() => {
         ensurePullRequestProviderColumns(db);
+        db.pragma("user_version = 15");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 16) {
+      db.transaction(() => {
+        db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -739,6 +758,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
   db.transaction(() => {
     db.exec(SCHEMA_V4);
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
+    db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
     db.exec(DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
