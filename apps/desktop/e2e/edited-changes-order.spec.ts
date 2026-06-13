@@ -26,9 +26,14 @@ test("expanded edited changes stay in transcript order", async () => {
       })
     ).toBeVisible();
 
-    const activityToggle = app.window.getByRole("button", { name: /Edited 1 file/i });
+    // Scope to the transcript region: the accumulated edited files also
+    // render in the LiveWorkRail above the composer (rehydrated from the
+    // replay), so a page-wide "Edited 1 file" / file-row locator resolves
+    // to two elements and trips Playwright strict mode.
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const activityToggle = transcript.getByRole("button", { name: /Edited 1 file/i });
     await activityToggle.click();
-    await app.window.getByRole("button", { name: /Update TranscriptList.tsx/i }).click();
+    await transcript.getByRole("button", { name: /Update TranscriptList.tsx/i }).click();
     await expect(app.window.getByText("const b = 2;")).toBeVisible();
     await expect(app.window.getByText("const c = 3;")).toBeVisible();
     await expect(app.window.getByText("2 unmodified lines skipped")).toHaveCount(0);

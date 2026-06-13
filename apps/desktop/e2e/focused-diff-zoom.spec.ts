@@ -23,9 +23,12 @@ test("eligible diffs fall back to deterministic zoomed-out context", async () =>
       })
     ).toBeVisible();
 
-    const activityToggle = app.window.getByRole("button", { name: /Edited 1 file/i });
+    // Scope to the transcript region — the rehydrated LiveWorkRail also
+    // lists the edited file, so page-wide locators hit strict mode.
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const activityToggle = transcript.getByRole("button", { name: /Edited 1 file/i });
     await activityToggle.click();
-    await app.window.getByRole("button", { name: /Update example.ts/i }).click();
+    await transcript.getByRole("button", { name: /Update example.ts/i }).click();
 
     await expect(app.window.getByText("7 lines skipped")).toBeVisible();
     await expect(app.window.getByRole("button", { name: "Zoom in" })).toBeVisible();
@@ -64,8 +67,10 @@ test("focused diff overrides can hide low-signal hunks end-to-end", async () => 
       })
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: /Edited 1 file/i }).click();
-    await app.window.getByRole("button", { name: /Update example.ts/i }).click();
+    // Same transcript scoping as above — the rail duplicates these names.
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await transcript.getByRole("button", { name: /Edited 1 file/i }).click();
+    await transcript.getByRole("button", { name: /Update example.ts/i }).click();
 
     await expect(app.window.getByText("1 hunk hidden, 6 lines skipped")).toBeVisible();
     await expect(app.window.getByText("// refreshed comment")).toHaveCount(0);
