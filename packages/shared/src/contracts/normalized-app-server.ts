@@ -379,6 +379,13 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  tokenUsage?: {
+    cachedInputTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningOutputTokens?: number;
+    totalTokens?: number;
+  };
   turn?: AppServerThreadTurnMetadata;
 };
 

@@ -2630,6 +2630,44 @@ function mergeImmutableUsageActivities(params: {
   };
 }
 
+function isReplayTokenUsageActivity(
+  entry: AppServerThreadEntry,
+): entry is AppServerThreadActivityEntry {
+  return (
+    isUsageActivityEntry(entry) &&
+    entry.tokenUsage !== undefined &&
+    usageActivityScope(entry) !== "monitor"
+  );
+}
+
+function findReviewReplayUsageActivity(params: {
+  completedAt?: number;
+  createdAt: number;
+  replay: AppServerThreadReplay;
+  turnId?: string;
+}): AppServerThreadActivityEntry | undefined {
+  const usageActivities = params.replay.entries.filter(isReplayTokenUsageActivity);
+  if (params.turnId) {
+    const exact = usageActivities.findLast(
+      (entry) => entry.turn?.id === params.turnId,
+    );
+    if (exact) {
+      return exact;
+    }
+  }
+
+  const latestAllowed = (params.completedAt ?? Date.now()) + 10_000;
+  const earliestAllowed = params.createdAt - 10_000;
+  return usageActivities
+    .filter(
+      (entry) =>
+        typeof entry.createdAt === "number" &&
+        entry.createdAt >= earliestAllowed &&
+        entry.createdAt <= latestAllowed,
+    )
+    .at(-1);
+}
+
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
   const text = input
     .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
@@ -5345,6 +5383,13 @@ export class DesktopBackendRegistry {
           replay: replayWithEnvironment,
           activities: overlay?.immutableUsageActivities,
         });
+    if (!request.before) {
+      await this.backfillReviewSubAgentUsageFromReplay({
+        backend,
+        replay: replayWithEnvironment,
+        threadId: request.threadId,
+      });
+    }
 
     return {
       backend,
@@ -9880,6 +9925,66 @@ export class DesktopBackendRegistry {
       },
     });
     return true;
+  }
+
+  private async backfillReviewSubAgentUsageFromReplay(params: {
+    backend: AppServerBackendKind;
+    replay: AppServerThreadReplay;
+    threadId: string;
+  }): Promise<void> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const reviewSubAgents = overlay?.subAgents?.filter(
+      (subAgent) =>
+        subAgent.monitorId.startsWith("review:") &&
+        !subAgent.monitorUsage &&
+        (subAgent.status === "success" ||
+          subAgent.status === "failed" ||
+          subAgent.status === "cancelled"),
+    );
+    if (!reviewSubAgents?.length) {
+      return;
+    }
+
+    for (const subAgent of reviewSubAgents) {
+      const usageActivity = findReviewReplayUsageActivity({
+        completedAt: subAgent.completedAt,
+        createdAt: subAgent.createdAt,
+        replay: params.replay,
+        turnId: subAgent.monitorTurnId,
+      });
+      if (!usageActivity?.tokenUsage) {
+        continue;
+      }
+      const usage = buildReviewSubAgentUsageSnapshot({
+        existing: subAgent,
+        tokenUsage: usageActivity.tokenUsage,
+      });
+      if (!usage) {
+        continue;
+      }
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: params.backend,
+        threadId: params.threadId,
+        subAgent: {
+          ...subAgent,
+          monitorUsage: usage,
+          updatedAt: Date.now(),
+        },
+      });
+      this.invalidateThreadListCache(params.backend);
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/subAgents/updated",
+          params: {
+            threadId: params.threadId,
+          },
+        },
+      });
+    }
   }
 
   private async persistTaskMonitorSubAgent(

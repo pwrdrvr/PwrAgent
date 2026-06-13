@@ -3291,6 +3291,13 @@ describe("CodexAppServerClient", () => {
         id: "live-token-usage-1780246301079",
         summary: "Latest request usage: 17,263 uncached in · 4,480 cached · 148 out",
         status: "completed",
+        tokenUsage: {
+          cachedInputTokens: 4_480,
+          inputTokens: 21_743,
+          outputTokens: 148,
+          reasoningOutputTokens: 0,
+          totalTokens: 21_891,
+        },
       },
     ]);
 

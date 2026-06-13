@@ -2738,6 +2738,17 @@ function summarizeTokenUsageActivity(
         status: "completed",
       },
     ],
+    tokenUsage: {
+      ...(tokens.cachedInputTokens !== undefined
+        ? { cachedInputTokens: tokens.cachedInputTokens }
+        : {}),
+      ...(tokens.inputTokens !== undefined ? { inputTokens: tokens.inputTokens } : {}),
+      ...(tokens.outputTokens !== undefined ? { outputTokens: tokens.outputTokens } : {}),
+      ...(tokens.reasoningOutputTokens !== undefined
+        ? { reasoningOutputTokens: tokens.reasoningOutputTokens }
+        : {}),
+      ...(tokens.totalTokens !== undefined ? { totalTokens: tokens.totalTokens } : {}),
+    },
     ...(turn ? { turn } : {}),
   };
 }
