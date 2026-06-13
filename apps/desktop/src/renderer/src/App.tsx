@@ -853,6 +853,7 @@ function DesktopAppShell(props: {
               masthead={mastheadActions}
               history={historyNav}
               state={threadSearchState}
+              threads={navigation.threads}
               onOpenResult={async (result) => {
                 setMainView("thread");
                 await navigation.showThread(result);
