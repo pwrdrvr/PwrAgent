@@ -4195,4 +4195,97 @@ describe("ThreadView", () => {
       screen.queryByRole("complementary", { name: /\(last turn\)/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("retains a failed turn's edits in the rail instead of dropping them", async () => {
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
+      | undefined;
+    const liveDiff = [
+      "diff --git a/src/example.ts b/src/example.ts",
+      "--- a/src/example.ts",
+      "+++ b/src/example.ts",
+      "@@ -1,1 +1,2 @@",
+      " existing line",
+      "+added before the failure",
+    ].join("\n");
+
+    function Harness() {
+      const [entries, setEntries] = useState<any[]>([]);
+      return (
+        <ThreadView
+          activeTurnId="turn-1"
+          activeTurnStartedAt={1_000}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{
+            onAgentEvent: (callback) => {
+              agentEventHandler = callback as typeof agentEventHandler;
+              return () => undefined;
+            },
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          selectedThread={{
+            id: "thread-fail",
+            title: "Failure lifecycle",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+          skills={[]}
+          transcriptEntries={entries}
+          clearPendingRequest={() => undefined}
+          onLiveTranscriptEntry={(entry) => {
+            setEntries((current) => [...current, entry]);
+          }}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/diff/updated",
+          params: { threadId: "thread-fail", turnId: "turn-1", diff: liveDiff },
+        },
+      });
+    });
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "thread-fail",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "failed",
+              error: { message: "boom" },
+            },
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The failed turn made a real edit before stopping; it is deferred
+    // into the transcript so the accumulated Edited Files groups keep it
+    // rather than dropping it until a replay refresh re-fetches it.
+    expect(
+      screen.getByRole("complementary", { name: /Edited 1 file/ }),
+    ).toBeInTheDocument();
+  });
 });

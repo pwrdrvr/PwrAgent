@@ -107,9 +107,13 @@ function EditedFileGroupSection(props: {
       >
         <span className="live-work-rail__chevron" aria-hidden="true" />
         <span className="edited-file-groups__group-summary">
-          {props.group.live ? "This turn · " : ""}
           {props.group.summary}
         </span>
+        {props.group.live ? (
+          <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
+            This turn
+          </span>
+        ) : null}
         {props.group.committed ? (
           <span className="edited-file-groups__group-tag">Committed</span>
         ) : null}

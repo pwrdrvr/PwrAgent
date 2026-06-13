@@ -1627,6 +1627,17 @@ export function ThreadView(props: ThreadViewProps) {
         event.notification.method === "turn/failed" ||
         event.notification.method === "turn/cancelled"
       ) {
+        // A failed/cancelled turn still made real file edits before it
+        // stopped (turn/diff/updated only carries actual changes). Defer
+        // the pending diff entry into the transcript — same path as
+        // turn/completed — so the accumulated Edited Files groups retain
+        // that turn's work instead of dropping it until a replay refresh
+        // happens to re-fetch it. Protocol/usage entries are status/cost,
+        // not edits, so they're still cleared.
+        const interruptedActivity = pendingActivityEntryRef.current;
+        if (interruptedActivity && activityHasFileDiff(interruptedActivity)) {
+          deferLiveTranscriptEntry(interruptedActivity);
+        }
         setPendingActivityEntry(undefined);
         setPendingProtocolActivityEntry(undefined);
         setPendingUsageActivityEntry(undefined);

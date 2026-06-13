@@ -298,11 +298,22 @@ export function summarizeEditedFileGroups(
   if (groups.length === 0) {
     return undefined;
   }
-  const flattened = flattenEditedFileGroups(groups);
-  const additions = groups.reduce((total, group) => total + group.additions, 0);
-  const removals = groups.reduce((total, group) => total + group.removals, 0);
+  // Count unique files via a key Set rather than `flattenEditedFileGroups`
+  // — the title only needs the file count + totals, and flattening would
+  // concatenate every group's diff text on each render (this runs in the
+  // LiveWorkRail body on every turn/diff/updated delta).
+  const fileKeys = new Set<string>();
+  let additions = 0;
+  let removals = 0;
+  for (const group of groups) {
+    additions += group.additions;
+    removals += group.removals;
+    for (const detail of group.details) {
+      fileKeys.add(detail.path ?? detail.id);
+    }
+  }
   const summary = formatChangedFileSummary({
-    count: flattened.length,
+    count: fileKeys.size,
     prefix: "Edited",
     additions,
     removals,

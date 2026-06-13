@@ -42,6 +42,8 @@ const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
+const noop = (): void => {};
+
 type ContextTab = {
   id: ContextTabId;
   label: string;
@@ -594,7 +596,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <EditsPanel
             groups={props.editedFileGroups ?? []}
             dock={props.editedFilesDock ?? "above"}
-            onDockChange={props.onEditedFilesDockChange ?? (() => {})}
+            onDockChange={props.onEditedFilesDockChange ?? noop}
           />
         );
       case "subagents":
