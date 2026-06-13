@@ -7,7 +7,7 @@ import type {
 import {
   MAX_RETAINED_TURN_GROUPS,
   collectEditedFileGroups,
-  commandLooksLikeGitCommit,
+  editGroupPaths,
   flattenEditedFileGroups,
   summarizeEditedFileGroups,
 } from "../edited-file-groups";
@@ -50,46 +50,21 @@ function activityEntry(params: {
   };
 }
 
-function commitDetail(params?: {
-  command?: string;
-  exitCode?: number;
-  status?: "completed" | "failed";
-}): AppServerThreadActivityDetail {
-  detailCounter += 1;
-  return {
-    id: `commit-${detailCounter}`,
-    kind: "command",
-    label: "git commit",
-    status: params?.status ?? "completed",
-    command: {
-      displayCommand: params?.command ?? 'git commit -m "checkpoint"',
-      ...(params?.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
-    },
-  };
-}
-
-function messageEntry(turnId: string): AppServerThreadEntry {
-  return {
-    type: "message",
-    id: `message-${turnId}`,
-    role: "assistant",
-    text: "done",
-    turn: { id: turnId },
-  };
-}
-
-describe("commandLooksLikeGitCommit", () => {
-  it.each([
-    ['git commit -m "fix"', true],
-    ["git add -A && git commit -m fix", true],
-    ["git -C /repo commit --amend", true],
-    ["git -c user.name=x commit", true],
-    ["git log --oneline", false],
-    ["echo commit", false],
-    ["git status", false],
-    ["pnpm test && git push", false],
-  ])("%s → %s", (command, expected) => {
-    expect(commandLooksLikeGitCommit(command)).toBe(expected);
+describe("editGroupPaths", () => {
+  it("collects the group's distinct edited file paths", () => {
+    const [group] = collectEditedFileGroups({
+      entries: [
+        activityEntry({
+          id: "a1",
+          turnId: "turn-1",
+          details: [
+            fileDiffDetail({ path: "src/a.ts" }),
+            fileDiffDetail({ path: "src/b.ts" }),
+          ],
+        }),
+      ],
+    });
+    expect(editGroupPaths(group).sort()).toEqual(["src/a.ts", "src/b.ts"]);
   });
 });
 
@@ -143,7 +118,10 @@ describe("collectEditedFileGroups", () => {
     expect(groups[0].additions).toBe(4);
   });
 
-  it("clears groups up to and including a committed turn once a later turn exists", () => {
+  it("accumulates every turn's edits and never clears them on its own", () => {
+    // Commit/push lifecycle is resolved against the live worktree
+    // (resolveEditCommitStates), not by clearing groups here — so all turns
+    // stay viewable regardless of any git commands in the transcript.
     const groups = collectEditedFileGroups({
       entries: [
         activityEntry({
@@ -154,7 +132,7 @@ describe("collectEditedFileGroups", () => {
         activityEntry({
           id: "a2",
           turnId: "turn-2",
-          details: [fileDiffDetail({ path: "src/b.ts" }), commitDetail()],
+          details: [fileDiffDetail({ path: "src/b.ts" })],
         }),
         activityEntry({
           id: "a3",
@@ -164,86 +142,11 @@ describe("collectEditedFileGroups", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    expect(groups[0].key).toBe("turn-3");
-  });
-
-  it("keeps committed groups visible while the commit turn is still the last turn", () => {
-    const groups = collectEditedFileGroups({
-      entries: [
-        activityEntry({
-          id: "a1",
-          turnId: "turn-1",
-          details: [fileDiffDetail({ path: "src/a.ts" })],
-        }),
-        activityEntry({
-          id: "a2",
-          turnId: "turn-2",
-          details: [fileDiffDetail({ path: "src/b.ts" }), commitDetail()],
-        }),
-      ],
-    });
-
-    expect(groups).toHaveLength(2);
-    expect(groups[0].key).toBe("turn-2");
-    expect(groups[0].committed).toBe(true);
-    expect(groups[1].key).toBe("turn-1");
-  });
-
-  it("treats a message-only later turn as 'next turn started' for clearing", () => {
-    const groups = collectEditedFileGroups({
-      entries: [
-        activityEntry({
-          id: "a1",
-          turnId: "turn-1",
-          details: [fileDiffDetail({ path: "src/a.ts" }), commitDetail()],
-        }),
-        messageEntry("turn-2"),
-      ],
-    });
-
-    expect(groups).toHaveLength(0);
-  });
-
-  it("treats an active turn id as 'next turn started' for clearing", () => {
-    const entries = [
-      activityEntry({
-        id: "a1",
-        turnId: "turn-1",
-        details: [fileDiffDetail({ path: "src/a.ts" }), commitDetail()],
-      }),
-    ];
-
-    expect(collectEditedFileGroups({ entries })).toHaveLength(1);
-    expect(
-      collectEditedFileGroups({ entries, activeTurnId: "turn-2" }),
-    ).toHaveLength(0);
-    // The commit turn itself being active must NOT clear its own group.
-    expect(
-      collectEditedFileGroups({ entries, activeTurnId: "turn-1" }),
-    ).toHaveLength(1);
-  });
-
-  it("does not clear on a failed git commit", () => {
-    const groups = collectEditedFileGroups({
-      entries: [
-        activityEntry({
-          id: "a1",
-          turnId: "turn-1",
-          details: [
-            fileDiffDetail({ path: "src/a.ts" }),
-            commitDetail({ exitCode: 1, status: "failed" }),
-          ],
-        }),
-        activityEntry({
-          id: "a2",
-          turnId: "turn-2",
-          details: [fileDiffDetail({ path: "src/b.ts" })],
-        }),
-      ],
-    });
-
-    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.key)).toEqual([
+      "turn-3",
+      "turn-2",
+      "turn-1",
+    ]);
   });
 
   it("renders the live pending cumulative diff as the newest group", () => {

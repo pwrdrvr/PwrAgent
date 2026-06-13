@@ -1,3 +1,4 @@
+import type { EditGroupCommitState } from "@pwragent/shared";
 import { EditedFileGroupList } from "../EditedFileGroupList";
 import type { EditedFileGroup } from "../edited-file-groups";
 import type { EditedFilesDock } from "./context-tab";
@@ -5,6 +6,8 @@ import type { EditedFilesDock } from "./context-tab";
 type EditsPanelProps = {
   /** Newest-first accumulated edited-file groups for the open thread. */
   groups: EditedFileGroup[];
+  /** Git commit lifecycle per group key, from `useEditCommitStates`. */
+  commitStatesByKey?: Record<string, EditGroupCommitState>;
   dock: EditedFilesDock;
   onDockChange: (dock: EditedFilesDock) => void;
 };
@@ -36,7 +39,10 @@ export function EditsPanel(props: EditsPanelProps) {
         </button>
       </div>
       {props.groups.length > 0 ? (
-        <EditedFileGroupList groups={props.groups} />
+        <EditedFileGroupList
+          groups={props.groups}
+          commitStatesByKey={props.commitStatesByKey}
+        />
       ) : (
         <p className="context-empty">
           No uncommitted file edits yet. Edits from agent turns accumulate

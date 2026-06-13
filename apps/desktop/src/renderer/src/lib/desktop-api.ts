@@ -103,6 +103,8 @@ import type {
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  ResolveEditCommitStatesRequest,
+  ResolveEditCommitStatesResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -530,6 +532,9 @@ export type DesktopApi = {
   refreshDirectoryGitStatuses?: (
     request: RefreshDirectoryGitStatusesRequest
   ) => Promise<RefreshDirectoryGitStatusesResponse>;
+  resolveEditCommitStates?: (
+    request: ResolveEditCommitStatesRequest
+  ) => Promise<ResolveEditCommitStatesResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest

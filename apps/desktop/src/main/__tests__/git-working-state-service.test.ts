@@ -133,3 +133,64 @@ describe("GitWorkingStateService", () => {
     expect(seen.get("/repo/one")).toMatchObject({ dirtyFiles: 2 });
   });
 });
+
+describe("GitWorkingStateService.resolveEditCommitStates", () => {
+  function respondCommitStates(args: string[]): string | undefined {
+    if (args.includes("diff") && args.includes("--name-only")) {
+      return "src/a.ts\n"; // a.ts still has uncommitted changes
+    }
+    if (args.includes("ls-files")) {
+      return ""; // nothing untracked
+    }
+    if (args.includes("log")) {
+      const paths = args.slice(args.indexOf("--") + 1);
+      if (paths.some((p) => p.endsWith("/src/b.ts"))) return `${"b".repeat(40)}\n`;
+      if (paths.some((p) => p.endsWith("/src/c.ts"))) return `${"c".repeat(40)}\n`;
+      return "";
+    }
+    if (args.includes("rev-list")) {
+      const sha = args[args.indexOf("rev-list") + 2];
+      // c-commit is local-only (rev-list returns it); b-commit is pushed (empty).
+      return sha?.startsWith("c") ? sha : "";
+    }
+    return undefined;
+  }
+
+  it("classifies groups as uncommitted vs committed with sha + push state", async () => {
+    const { runGit, calls } = fakeGit(respondCommitStates);
+    const service = new GitWorkingStateService({ runGit });
+
+    const states = await service.resolveEditCommitStates("/repo/wt", [
+      { key: "g-a", paths: ["/repo/wt/src/a.ts"] },
+      { key: "g-b", paths: ["/repo/wt/src/b.ts"] },
+      { key: "g-c", paths: ["/repo/wt/src/c.ts"] },
+    ]);
+
+    expect(states["g-a"]).toEqual({ committed: false });
+    expect(states["g-b"]).toEqual({
+      committed: true,
+      commitSha: "b".repeat(40),
+      shortSha: "bbbbbbb",
+      pushed: true,
+    });
+    expect(states["g-c"]).toEqual({
+      committed: true,
+      commitSha: "c".repeat(40),
+      shortSha: "ccccccc",
+      pushed: false,
+    });
+    // Every probe is lock-safe.
+    for (const call of calls) {
+      expect(call.args[0]).toBe("--no-optional-locks");
+    }
+  });
+
+  it("returns an empty map for no worktree or no groups", async () => {
+    const { runGit, calls } = fakeGit(respondCommitStates);
+    const service = new GitWorkingStateService({ runGit });
+
+    expect(await service.resolveEditCommitStates("", [{ key: "g", paths: ["/x"] }])).toEqual({});
+    expect(await service.resolveEditCommitStates("/repo/wt", [])).toEqual({});
+    expect(calls).toHaveLength(0);
+  });
+});

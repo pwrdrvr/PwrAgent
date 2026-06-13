@@ -8698,10 +8698,18 @@ textarea,
   outline-offset: 1px;
 }
 
+.edited-file-groups__group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .edited-file-groups__group-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
   min-width: 0;
   padding: 4px 6px;
   border: 0;
@@ -8745,6 +8753,91 @@ textarea,
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+/* Per-group git lifecycle: uncommitted → committed (with copyable SHA chip)
+   → pushed / local. Mirrors the group-tag pill scale. */
+.edit-commit-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.edit-commit-badge--uncommitted {
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  color: var(--status-warning);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__label {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__sha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.edit-commit-badge__sha:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.edit-commit-badge__sha:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.edit-commit-badge__sha-value {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.edit-commit-badge__sha-action {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__push {
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__push--pushed {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.edit-commit-badge__push--local {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
 }
 
 .edited-file-groups__group-time {

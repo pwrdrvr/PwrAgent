@@ -58,6 +58,7 @@ import {
   type EditedFilesDock,
 } from "./context-panels/context-tab";
 import { collectEditedFileGroups } from "./edited-file-groups";
+import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
@@ -1535,6 +1536,16 @@ export function ThreadView(props: ThreadViewProps) {
     [props.transcriptEntries, props.activeTurnId, pendingRailActivityEntry],
   );
 
+  // Git commit lifecycle per group, resolved against the live worktree.
+  // Re-resolves when the thread's working state shifts (a commit/push), so the
+  // per-group badges stay accurate without re-reading the transcript.
+  const editedFileCommitStates = useEditCommitStates({
+    desktopApi: props.desktopApi,
+    worktreePath: selectedThread?.projectKey,
+    groups: editedFileGroups,
+    refreshKey: JSON.stringify(selectedThread?.gitWorkingState ?? null),
+  });
+
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
     onActiveContextTabChange("edits");
@@ -2384,6 +2395,7 @@ export function ThreadView(props: ThreadViewProps) {
             editedFileGroups={
               editedFilesDock === "above" ? editedFileGroups : undefined
             }
+            editedFileCommitStates={editedFileCommitStates}
             pinned={!props.activeTurnId}
             planEntry={
               pendingPlanEntry ??
@@ -2456,6 +2468,7 @@ export function ThreadView(props: ThreadViewProps) {
           backends={props.backends}
           desktopApi={props.desktopApi}
           editedFileGroups={editedFileGroups}
+          editedFileCommitStates={editedFileCommitStates}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
           onActiveTabChange={onActiveContextTabChange}

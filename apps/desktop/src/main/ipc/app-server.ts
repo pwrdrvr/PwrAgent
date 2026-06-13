@@ -83,6 +83,8 @@ import {
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
+  type ResolveEditCommitStatesRequest,
+  type ResolveEditCommitStatesResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
@@ -124,6 +126,7 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+  NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -931,6 +934,16 @@ class DesktopAppServerService {
       unchanged:
         snapshot.unchanged && directoriesUnchanged && !canonicalSnapshot.changed,
     };
+  }
+
+  async resolveEditCommitStates(
+    request: ResolveEditCommitStatesRequest,
+  ): Promise<ResolveEditCommitStatesResponse> {
+    const states = await getDesktopBackendRegistry().resolveEditCommitStates(
+      request.worktreePath,
+      request.groups,
+    );
+    return { states };
   }
 
   private collectThreadWorktreePaths(
@@ -2830,6 +2843,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.refreshDirectoryGitStatusesForKeys(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
+    async (
+      _event,
+      request: ResolveEditCommitStatesRequest,
+    ): Promise<ResolveEditCommitStatesResponse> => {
+      return await appServerService.resolveEditCommitStates(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -2916,6 +2939,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);

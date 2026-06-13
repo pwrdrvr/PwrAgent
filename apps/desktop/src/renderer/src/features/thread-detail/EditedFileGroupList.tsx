@@ -1,6 +1,10 @@
 import { useId, useState } from "react";
-import type { AppServerThreadActivityDetail } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  EditGroupCommitState,
+} from "@pwragent/shared";
 import { TranscriptDiff } from "./TranscriptDiff";
+import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
 import {
   flattenEditedFileGroups,
   type EditedFileGroup,
@@ -11,6 +15,8 @@ export type EditedFileGroupView = "turns" | "files";
 type EditedFileGroupListProps = {
   /** Newest-first, from `collectEditedFileGroups`. */
   groups: EditedFileGroup[];
+  /** Git commit lifecycle per group key, from `useEditCommitStates`. */
+  commitStatesByKey?: Record<string, EditGroupCommitState>;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -85,6 +91,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
                 <EditedFileGroupSection
                   key={group.key}
                   group={group}
+                  commitState={props.commitStatesByKey?.[group.key]}
                   defaultExpanded={index === 0}
                 />
               ))}
@@ -117,6 +124,7 @@ function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
 
 function EditedFileGroupSection(props: {
   group: EditedFileGroup;
+  commitState?: EditGroupCommitState;
   defaultExpanded: boolean;
 }) {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
@@ -125,29 +133,30 @@ function EditedFileGroupSection(props: {
 
   return (
     <section className="edited-file-groups__group">
-      <button
-        type="button"
-        className="edited-file-groups__group-toggle"
-        aria-controls={bodyId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="live-work-rail__chevron" aria-hidden="true" />
-        <span className="edited-file-groups__group-summary">
-          {props.group.summary}
-        </span>
+      <div className="edited-file-groups__group-header">
+        <button
+          type="button"
+          className="edited-file-groups__group-toggle"
+          aria-controls={bodyId}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span className="live-work-rail__chevron" aria-hidden="true" />
+          <span className="edited-file-groups__group-summary">
+            {props.group.summary}
+          </span>
+        </button>
         {props.group.live ? (
           <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
             This turn
           </span>
-        ) : null}
-        {props.group.committed ? (
-          <span className="edited-file-groups__group-tag">Committed</span>
-        ) : null}
+        ) : (
+          <EditGroupCommitBadge state={props.commitState} />
+        )}
         {timestamp ? (
           <span className="edited-file-groups__group-time">{timestamp}</span>
         ) : null}
-      </button>
+      </div>
       <div id={bodyId} hidden={!expanded}>
         {expanded ? <EditedFileList details={props.group.details} /> : null}
       </div>

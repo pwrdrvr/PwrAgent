@@ -3,6 +3,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadPlanEntry,
   DesktopApplicationsSnapshot,
+  EditGroupCommitState,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptPlan } from "./TranscriptPlan";
@@ -28,6 +29,8 @@ export type LiveWorkRailProps = {
    * user docks edited files to the context-rail Edits panel.
    */
   editedFileGroups?: EditedFileGroup[];
+  /** Git commit lifecycle per group key, from `useEditCommitStates`. */
+  editedFileCommitStates?: Record<string, EditGroupCommitState>;
   /**
    * `true` when the rail is showing snapshots from a completed turn
    * (pinned until the next turn starts). `false` while the live turn
@@ -117,7 +120,10 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
 
         {editedSummary ? (
           <section className="live-work-rail__section live-work-rail__section--edited">
-            <EditedFileGroupList groups={editedFileGroups} />
+            <EditedFileGroupList
+              groups={editedFileGroups}
+              commitStatesByKey={props.editedFileCommitStates}
+            />
           </section>
         ) : null}
 

@@ -22,7 +22,6 @@ function group(n: number): EditedFileGroup {
     summary: `Edited turn ${n}`,
     additions: 1,
     removals: 0,
-    committed: false,
     live: false,
   };
 }
@@ -60,6 +59,50 @@ describe("EditedFileGroupList Show more / Show less", () => {
 
     expect(screen.getByText("Edited turn 1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+  });
+
+  it("renders the git commit badge per group from the resolved states", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(2)}
+        commitStatesByKey={{
+          "turn-2": { committed: false },
+          "turn-1": {
+            committed: true,
+            commitSha: "a".repeat(40),
+            shortSha: "aaaaaaa",
+            pushed: true,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Uncommitted")).toBeInTheDocument();
+    expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
+    expect(screen.getByText("Pushed")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Copy commit ${"a".repeat(40)}` }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a local-only badge for an unpushed commit", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(2)}
+        commitStatesByKey={{
+          "turn-1": {
+            committed: true,
+            commitSha: "f".repeat(40),
+            shortSha: "fffffff",
+            pushed: false,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Local")).toBeInTheDocument();
+    // turn-2 has no resolved state yet → no badge (avoids a wrong flash).
+    expect(screen.queryByText("Uncommitted")).not.toBeInTheDocument();
   });
 
   it("does not show the turn toggle in the All files view", () => {
