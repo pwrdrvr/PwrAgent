@@ -4008,18 +4008,18 @@ export function useThreadSessionState(params: {
             );
           }
 
-          const errorMessage =
-            typeof event.notification.params.turn.error?.message === "string" &&
-            event.notification.params.turn.error.message.trim()
-              ? event.notification.params.turn.error.message
-              : "Turn failed.";
-
+          // The failure is now surfaced durably: the backend registry
+          // records it on the thread overlay (rendered as a persistent
+          // `turn-failed:` transcript entry) and App raises a sticky toast.
+          // Do NOT set the transient `error` here — it rendered a red line
+          // that the very next `readThread` reconciliation wiped, which is
+          // exactly the "appears then vanishes" flash we're fixing.
           return {
             ...current,
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
             completionHydrationRetries: 0,
-            error: errorMessage,
+            error: undefined,
             expectOwnUpdate: false,
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion: false,

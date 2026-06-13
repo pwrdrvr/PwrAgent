@@ -97,6 +97,7 @@ import {
   type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
+  type ThreadTurnFailure,
   type ThreadAgentMetadata,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -7120,6 +7121,35 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Persist a backend `turn/failed` outcome to the thread overlay so the
+   * renderer can materialize a durable `turn-failed:<turnId>` transcript
+   * entry. Codex does not persist a failure marker in its own transcript,
+   * so without this the failure vanishes on the next `readThread`. Called
+   * from `emit()` before the renderer fan-out so the entry is present when
+   * the navigation snapshot refreshes.
+   */
+  private async appendTurnFailure(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+    failure: ThreadTurnFailure;
+  }): Promise<void> {
+    try {
+      await this.overlayStore.appendTurnFailure({
+        backend: params.backend ?? "codex",
+        threadId: params.threadId,
+        failure: params.failure,
+      });
+    } catch (error) {
+      backendRegistryLog.error("failed to append turn failure", {
+        backend: params.backend ?? "codex",
+        threadId: params.threadId,
+        turnId: params.failure.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Flush any queued permission-mode change for the given thread.
    * Called from two places:
    *  - the `emit()` listener when codex reports `thread/status/changed
@@ -12783,6 +12813,43 @@ export class DesktopBackendRegistry {
         );
       }
     }
+    if (
+      event.notification.method === "turn/failed" &&
+      !isAcpBackendId(event.backend)
+    ) {
+      // Persist a durable failure marker BEFORE the renderer fan-out below
+      // so the next navigation-snapshot refresh carries it. Dedupe lives in
+      // the overlay store (by turnId). ACP backends are skipped: their
+      // session normalizer already persists a `turn-failed:` transcript
+      // entry that readThread returns, so recording here would just be
+      // redundant overlay state (the renderer would de-dupe it anyway).
+      // Params are cast explicitly here, matching the surrounding terminal-
+      // notification handlers — the `AppServerNotification` union is too
+      // wide for reliable narrowing.
+      const failureParams = event.notification.params as {
+        threadId: string;
+        turnId: string;
+        turn?: { error?: { message?: unknown } };
+      };
+      const rawMessage = failureParams.turn?.error?.message;
+      const errorMessage =
+        typeof rawMessage === "string" && rawMessage.trim()
+          ? rawMessage
+          : "Turn failed.";
+      await this.appendTurnFailure({
+        backend: event.backend,
+        threadId: failureParams.threadId,
+        failure: {
+          id: randomUUID(),
+          turnId: failureParams.turnId,
+          error: errorMessage,
+          occurredAt:
+            completedAtFromTerminalNotification(event.notification) ??
+            Date.now(),
+        },
+      });
+    }
+
     if (
       event.backend === "codex" &&
       (event.notification.method === "turn/completed" ||

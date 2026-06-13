@@ -5647,7 +5647,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
   });
 
-  it("surfaces failed turn errors in the transcript state", async () => {
+  it("clears thinking state on a failed turn without stashing a transient error", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
@@ -5728,7 +5728,12 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
-    expect(result.current.error).toBe("Provider completed the turn without assistant text.");
+    // The failure is no longer stashed in transient session.error — that
+    // line flashed then got wiped by the next readThread reconciliation.
+    // It's now surfaced durably via the overlay turnFailureLog (rendered as
+    // a `turn-failed:` transcript entry) and a sticky toast, so this hook
+    // intentionally leaves `error` unset on turn/failed.
+    expect(result.current.error).toBeUndefined();
   });
 
   it("surfaces command execution approval requests from app-server events", async () => {

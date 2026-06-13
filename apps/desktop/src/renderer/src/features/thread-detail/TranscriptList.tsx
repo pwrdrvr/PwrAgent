@@ -19,10 +19,12 @@ import type {
   DesktopApplicationsSnapshot,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
+  ThreadTurnFailure,
 } from "@pwragent/shared";
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
+import { injectTurnFailures } from "./turn-failure-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
@@ -73,6 +75,7 @@ type TranscriptListProps = {
   pagination?: AppServerThreadReplayPagination;
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
+  turnFailures?: ThreadTurnFailure[];
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
   threadId?: string;
@@ -431,12 +434,15 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectAutomationCards(
-      injectMessagingBindingTransitions(
-        injectPermissionTransitions(entries, props.permissionTransitions),
-        props.messagingBindingTransitions,
+    return injectTurnFailures(
+      injectAutomationCards(
+        injectMessagingBindingTransitions(
+          injectPermissionTransitions(entries, props.permissionTransitions),
+          props.messagingBindingTransitions,
+        ),
+        automationCards,
       ),
-      automationCards,
+      props.turnFailures,
     );
   }, [
     automationCards,
@@ -448,6 +454,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingPlanEntry,
     props.messagingBindingTransitions,
     props.permissionTransitions,
+    props.turnFailures,
   ]);
   const transcriptRenderItems = useMemo(
     () =>
