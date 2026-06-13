@@ -14642,19 +14642,22 @@ export class DesktopBackendRegistry {
       });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
-        // now. Fire-and-forget; failures are logged + retried inside
+        // now. Fire-and-forget so terminal turn fan-out does not block on
+        // permission prompts; startTurn/startReview also await any in-flight
+        // flush before launching the next Codex request.
+        // Failures are logged + retried inside
         // flushQueuedExecutionModeIfPresent.
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
       } else if (isAcpBackendId(event.backend)) {
         if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
-          void this.flushQueuedExecutionModeIfPresent(
+          await this.flushQueuedExecutionModeIfPresent(
             notification.params.threadId,
             event.backend,
           );
         }
-        void this.flushQueuedAcpRuntimeOptionIfPresent(
+        await this.flushQueuedAcpRuntimeOptionIfPresent(
           event.backend,
           notification.params.threadId,
         );
@@ -14738,12 +14741,12 @@ export class DesktopBackendRegistry {
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
           if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
-            void this.flushQueuedExecutionModeIfPresent(
+            await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,
               event.backend,
             );
           }
-          void this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.flushQueuedAcpRuntimeOptionIfPresent(
             event.backend,
             event.notification.params.threadId,
           );
@@ -14773,7 +14776,7 @@ export class DesktopBackendRegistry {
         // on the protocol shape; we cover both for resilience). Idempotent
         // when no queue is set.
         if (!hasActiveCodexReviewTurn) {
-          void this.flushQueuedExecutionModeIfPresent(
+          await this.flushQueuedExecutionModeIfPresent(
             event.notification.params.threadId,
           );
         }
@@ -14792,6 +14795,9 @@ export class DesktopBackendRegistry {
         status: readStatusType(event.notification.params.status),
       });
     }
+
+    await this.recordTaskMonitorUsage(event);
+    await this.recordCodexNativeSubAgentActivity(event);
 
     if (event.notification.method === "serverRequest/resolved") {
       const key = buildPendingRequestKey({
