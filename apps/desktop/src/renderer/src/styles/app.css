@@ -2640,6 +2640,12 @@ textarea,
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+  /* Lift the accented card in the stacking order (rows are
+     `position: relative`) so its border is never painted over by an
+     adjacent sibling's hover background — most visible between two tight
+     sub-thread cards where the lower one's hover tint crept over the
+     selected card's bottom border. */
+  z-index: 1;
 }
 
 /* The thread card a sub-thread / new-thread composer is being created from.
@@ -2652,6 +2658,9 @@ textarea,
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-on);
+  /* Same stacking lift as `.is-selected` — keep the solid accent fill +
+     border above a neighbouring hovered row. */
+  z-index: 1;
 }
 
 .thread-row.is-composer-source .thread-row__time,
