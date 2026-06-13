@@ -753,6 +753,105 @@ textarea,
   border-right: 1px solid var(--border-subtle);
 }
 
+/* Thread-list quick-jump popup (⌘F while the sidebar is focused). Floats below
+   the masthead, over the thread list. */
+.sidebar-search {
+  position: absolute;
+  z-index: 40;
+  top: 52px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 64px);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.sidebar-search__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-search__icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.sidebar-search__input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.sidebar-search__input::placeholder {
+  color: var(--text-muted);
+}
+
+.sidebar-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.sidebar-search__result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-search__result.is-active {
+  background: var(--bg-row-active);
+}
+
+.sidebar-search__result-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-search__result-meta {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-search__empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .sidebar__resize-handle,
 .context-rail__resize-handle {
   position: absolute;

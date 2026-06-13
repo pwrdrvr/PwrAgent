@@ -178,6 +178,8 @@ function DesktopAppShell(props: {
   // In-thread find bar (⌘F) visibility, owned here so the find chord and the
   // bar's own Escape share one source of truth.
   const [threadFindOpen, setThreadFindOpen] = useState(false);
+  // Thread-list quick-jump popup (⌘F while the sidebar is focused).
+  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -385,6 +387,7 @@ function DesktopAppShell(props: {
       // focused; anywhere else ⌘F finds within the open thread.
       const active = document.activeElement as HTMLElement | null;
       if (active?.closest(".sidebar")) {
+        setSidebarSearchOpen(true);
         return;
       }
       if (mainView === "thread") {
@@ -832,6 +835,13 @@ function DesktopAppShell(props: {
           onSelectThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
+          }}
+          threadJumpOpen={sidebarSearchOpen}
+          onThreadJumpOpenChange={setSidebarSearchOpen}
+          onJumpToThread={(thread) => {
+            setMainView("thread");
+            navigation.selectThread(thread);
+            requestAnimationFrame(() => revealSelectedThreadInList());
           }}
           onArchiveThread={navigation.archiveThread}
           onRenameThread={navigation.renameThread}

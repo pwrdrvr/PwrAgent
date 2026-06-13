@@ -40,6 +40,7 @@ import {
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
   selectVisibleRateLimits,
@@ -96,6 +97,10 @@ type SidebarProps = {
   ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenThreadSearch?: () => void;
+  /** Quick-jump popup (⌘F while the sidebar is focused), owned by App. */
+  threadJumpOpen?: boolean;
+  onThreadJumpOpenChange?: (open: boolean) => void;
+  onJumpToThread?: (thread: NavigationThreadSummary) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -699,6 +704,13 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      {props.threadJumpOpen ? (
+        <SidebarSearchPopup
+          threads={props.threads}
+          onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
+          onClose={() => props.onThreadJumpOpenChange?.(false)}
+        />
+      ) : null}
       <div
         aria-label="Resize thread sidebar"
         aria-orientation="vertical"
