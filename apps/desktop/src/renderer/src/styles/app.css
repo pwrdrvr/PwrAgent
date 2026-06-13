@@ -8698,22 +8698,32 @@ textarea,
   outline-offset: 1px;
 }
 
+/* Two-row card header: the "Edited N files" summary gets its own line so
+   the commit badges can't crush it, with the badge + date on a wrapping
+   second line. Sticky so the header pins to the top of the scroll region
+   while a long diff scrolls beneath it (the opaque card background hides the
+   scrolled content). */
 .edited-file-groups__group-header {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
 }
 
 .edited-file-groups__group-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -8723,8 +8733,17 @@ textarea,
 }
 
 .edited-file-groups__group-toggle:hover {
-  background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+/* Second row: badge (left) + date (right), aligned under the summary text
+   (past the chevron). Wraps rather than truncating on a narrow rail. */
+.edited-file-groups__group-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding-left: 22px;
 }
 
 .edited-file-groups__group-summary {
@@ -8842,6 +8861,7 @@ textarea,
 
 .edited-file-groups__group-time {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
 }

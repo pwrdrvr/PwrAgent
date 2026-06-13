@@ -146,16 +146,18 @@ function EditedFileGroupSection(props: {
             {props.group.summary}
           </span>
         </button>
-        {props.group.live ? (
-          <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
-            This turn
-          </span>
-        ) : (
-          <EditGroupCommitBadge state={props.commitState} />
-        )}
-        {timestamp ? (
-          <span className="edited-file-groups__group-time">{timestamp}</span>
-        ) : null}
+        <div className="edited-file-groups__group-meta">
+          {props.group.live ? (
+            <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
+              This turn
+            </span>
+          ) : (
+            <EditGroupCommitBadge state={props.commitState} />
+          )}
+          {timestamp ? (
+            <span className="edited-file-groups__group-time">{timestamp}</span>
+          ) : null}
+        </div>
       </div>
       <div id={bodyId} hidden={!expanded}>
         {expanded ? <EditedFileList details={props.group.details} /> : null}
