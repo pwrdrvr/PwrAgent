@@ -358,6 +358,17 @@ describe("RendererHotCpuProfiler", () => {
       await vi.advanceTimersByTimeAsync(config.intervalMs);
       await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(4));
 
+      // Stop the profiler BEFORE asserting the sample file. The sampler is a
+      // self-rescheduling setTimeout loop, and `vi.waitFor` advances fake
+      // timers between retries — so a `waitFor(() => toHaveLength(4))` against
+      // a still-running loop drives the loop forward each retry, growing the
+      // file past 4 and never settling (the CI flake: "expected length 4, got
+      // 23"). `stop()` clears the interval timer and latches `stopped`, after
+      // which `scheduleNextSample` no-ops, freezing the count at the 4 samples
+      // already confirmed via getAppMetrics above. It's idempotent, so the
+      // `finally` stop below is a safe no-op.
+      await profiler.stop("test-complete");
+
       let samples: Array<Record<string, unknown>> = [];
       await vi.waitFor(async () => {
         samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
