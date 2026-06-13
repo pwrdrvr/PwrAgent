@@ -21,6 +21,7 @@ import {
   isPinnedThread,
   moveDirectoryKey,
   moveThreadKey,
+  parseThreadIdentityKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
@@ -164,6 +165,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
+  // Sub-thread (child) drag/drop state — kept SEPARATE from the
+  // pinned-thread / directory drag state above so a child reorder can
+  // never cross-wire with a pin or directory drag. Child drags carry the
+  // `application/x-pwragent-subthread` MIME (not `text/plain`), so the
+  // top-level drop handlers (which read `text/plain`) ignore them.
+  const [draggedSubthreadKey, setDraggedSubthreadKey] = useState<
+    string | undefined
+  >(undefined);
+  const [subthreadDropIndicator, setSubthreadDropIndicator] = useState<
+    DropIndicatorState | undefined
+  >(undefined);
   // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
   // the per-thread state above but tracks directory keys rather
   // than thread keys. The `directoriesPinnedDividerDropTarget`
@@ -445,20 +457,99 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (children.length === 0 || parent.subthreadsCollapsed) {
         return null;
       }
+      // The child tray is a user-ordered "pinned" section (subthreadOrder).
+      // Wire drag-to-reorder, mirroring RecentsList — see the dedicated
+      // `draggedSubthreadKey` state for why it stays isolated from the
+      // directory / pinned-thread drag.
+      const childOrderKeys = children.map((child) =>
+        buildThreadIdentityKey(child.source, child.id),
+      );
+      const reorderable =
+        children.length > 1 && Boolean(props.onUpdateSubthreadOrder);
       return (
         <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
-          {children.map((child) => (
+          {children.map((child) => {
+            const childKey = buildThreadIdentityKey(child.source, child.id);
+            const rowDropKey = `subthread:${parentKey}:${childKey}`;
+            return (
             <ThreadRow
-              key={`${directory.key}:${buildThreadIdentityKey(child.source, child.id)}`}
+              key={`${directory.key}:${childKey}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
+              draggable={reorderable}
+              dropIndicator={
+                subthreadDropIndicator?.targetKey === rowDropKey
+                  ? subthreadDropIndicator.position
+                  : undefined
+              }
               includeLinkedDirectories
               linkedDirectoryMode="kind"
               nested
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
+              onDragStartThread={(event) => {
+                setDraggedSubthreadKey(childKey);
+                event.dataTransfer.effectAllowed = "move";
+                // Subthread-only MIME — top-level drop handlers read
+                // `text/plain` and so ignore a child reorder drag.
+                event.dataTransfer.setData(
+                  "application/x-pwragent-subthread",
+                  childKey,
+                );
+              }}
+              onDragOverThread={(event) => {
+                event.preventDefault();
+                const draggedThread = draggedSubthreadKey
+                  ? threadsByKey.get(draggedSubthreadKey)
+                  : undefined;
+                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                  event.dataTransfer.dropEffect = "none";
+                  setSubthreadDropIndicator(undefined);
+                  return;
+                }
+                event.dataTransfer.dropEffect = "move";
+                setSubthreadDropIndicator({
+                  targetKey: rowDropKey,
+                  position: getDropIndicatorPosition(event),
+                });
+              }}
+              onDragLeaveThread={(event) => {
+                if (didDragLeaveCurrentTarget(event)) {
+                  setSubthreadDropIndicator(undefined);
+                }
+              }}
+              onDragEndThread={() => {
+                setDraggedSubthreadKey(undefined);
+                setSubthreadDropIndicator(undefined);
+              }}
+              onDropOnThread={(event) => {
+                event.preventDefault();
+                setDraggedSubthreadKey(undefined);
+                setSubthreadDropIndicator(undefined);
+                const draggedKey = event.dataTransfer.getData(
+                  "application/x-pwragent-subthread",
+                );
+                const draggedThread = draggedKey
+                  ? threadsByKey.get(draggedKey)
+                  : undefined;
+                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                  return;
+                }
+                const nextKeys = moveThreadKey(
+                  childOrderKeys,
+                  draggedKey,
+                  childKey,
+                  getDropIndicatorPosition(event),
+                );
+                void props.onUpdateSubthreadOrder?.(
+                  parent,
+                  nextKeys
+                    .map((key) => parseThreadIdentityKey(key)?.threadId)
+                    .filter((threadId): threadId is string => Boolean(threadId)),
+                );
+              }}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
@@ -466,7 +557,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onSetReaction={props.onSetReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
-          ))}
+            );
+          })}
         </div>
       );
     };
