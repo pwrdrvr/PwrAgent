@@ -115,6 +115,8 @@ type ComposerProps = {
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
+  /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
+  onCancelLaunchpad?: (directoryKey: string) => void;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
@@ -152,6 +154,7 @@ type ComposerProps = {
    * these through and the picker won't render.
    */
   onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
+  onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
@@ -5673,6 +5676,14 @@ export function Composer(props: ComposerProps) {
                 props.onClearPickDirectoryError?.();
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
+              onSelectNoDirectory={
+                props.onSelectNoDirectoryFromPicker
+                  ? () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onSelectNoDirectoryFromPicker?.();
+                    }
+                  : undefined
+              }
               onPickFromDisk={() => {
                 props.onClearPickDirectoryError?.();
                 props.onPickAndRegisterDirectory?.();
@@ -6101,6 +6112,18 @@ export function Composer(props: ComposerProps) {
               }}
             >
               {interrupting ? "Stopping…" : "Stop"}
+            </button>
+          ) : null}
+          {props.launchpad && props.onCancelLaunchpad ? (
+            <button
+              className="button button--ghost"
+              disabled={sending}
+              type="button"
+              onClick={() => {
+                props.onCancelLaunchpad?.(props.launchpad!.directoryKey);
+              }}
+            >
+              Cancel
             </button>
           ) : null}
           <button

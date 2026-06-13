@@ -1,5 +1,7 @@
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BranchIcon } from "./BranchIcon";
+export { ChevronLeftIcon } from "./ChevronLeftIcon";
+export { ChevronRightIcon } from "./ChevronRightIcon";
 export { CloseIcon } from "./CloseIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
@@ -11,6 +13,7 @@ export { InfoIcon } from "./InfoIcon";
 export { MattermostIcon } from "./MattermostIcon";
 export { LineIcon } from "./LineIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
+export { PinIcon } from "./PinIcon";
 export { ProjectsIcon } from "./ProjectsIcon";
 export { PullRequestIcon } from "./PullRequestIcon";
 export { ServerIcon } from "./ServerIcon";

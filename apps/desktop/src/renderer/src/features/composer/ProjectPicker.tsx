@@ -36,6 +36,11 @@ export type ProjectPickerProps = {
   picking?: boolean;
   onSelect: (directory: NavigationDirectorySummary) => void;
   onPickFromDisk: () => void;
+  /**
+   * Switch the launchpad to a directory-less ("workspace") thread. When
+   * omitted, the "Chat without a directory" row is not rendered.
+   */
+  onSelectNoDirectory?: () => void;
 };
 
 const RECENTS_LIMIT = 10;
@@ -149,6 +154,28 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               onChange={(event) => setQuery(event.target.value)}
             />
           </div>
+
+          {props.onSelectNoDirectory ? (
+            <button
+              type="button"
+              aria-pressed={isEmpty}
+              className={`project-picker__row project-picker__row--no-directory${
+                isEmpty ? " is-active" : ""
+              }`}
+              onClick={() => {
+                setOpen(false);
+                props.onSelectNoDirectory?.();
+              }}
+            >
+              <span className="project-picker__no-directory-icon" aria-hidden="true">
+                <FolderIcon size={11} />
+                <span className="project-picker__no-directory-slash" />
+              </span>
+              <span className="project-picker__no-directory-text">
+                Chat without a directory
+              </span>
+            </button>
+          ) : null}
 
           <div className="project-picker__section">Recent directories</div>
           <ul

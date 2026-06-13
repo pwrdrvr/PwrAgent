@@ -1,4 +1,10 @@
-import { useState, type FormEvent, type ReactElement, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type {
   AppServerBackendKind,
   MessagingChannelKind,
@@ -8,9 +14,32 @@ import type {
   ThreadSearchResult,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
+
+/**
+ * The query + results pair, liftable above the panel. The panel unmounts
+ * whenever the operator opens a result (mainView flips to "thread"), so
+ * App owns an instance of this state — that's what lets history Back land
+ * on a still-populated results list instead of a blank search form.
+ */
+export type ThreadSearchPanelState = {
+  query: string;
+  setQuery: (query: string) => void;
+  response: ThreadSearchResponse | undefined;
+  setResponse: (response: ThreadSearchResponse | undefined) => void;
+};
+
+export function useThreadSearchPanelState(): ThreadSearchPanelState {
+  const [query, setQuery] = useState("");
+  const [response, setResponse] = useState<ThreadSearchResponse>();
+  return useMemo(
+    () => ({ query, setQuery, response, setResponse }),
+    [query, response],
+  );
+}
 
 type ThreadSearchPanelProps = {
   desktopApi?: DesktopApi;
@@ -33,6 +62,14 @@ type ThreadSearchPanelProps = {
     onToggleRail: () => void;
   };
   masthead?: MastheadActionsProps;
+  /** Back/Forward pair for the title bar, forwarded to the header. */
+  history?: HistoryNavControls;
+  /**
+   * Lifted query/results state (see {@link useThreadSearchPanelState}).
+   * Optional so the component still renders self-contained in unit tests;
+   * App supplies it so results survive opening a result.
+   */
+  state?: ThreadSearchPanelState;
 };
 
 const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
@@ -177,8 +214,8 @@ function ThreadSearchEmptyState(props: {
 }
 
 export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
-  const [query, setQuery] = useState("");
-  const [response, setResponse] = useState<ThreadSearchResponse>();
+  const localState = useThreadSearchPanelState();
+  const { query, setQuery, response, setResponse } = props.state ?? localState;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -219,6 +256,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           props.layout ? { ...props.layout, railToggleDisabled: true } : undefined
         }
         masthead={props.masthead}
+        history={props.history}
       />
 
       <div className="thread-search__body">

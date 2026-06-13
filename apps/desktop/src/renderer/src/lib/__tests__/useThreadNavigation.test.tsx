@@ -1341,6 +1341,109 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("forks a child below its source and re-parents it to the group root", async () => {
+    const worktree = {
+      id: "wt",
+      label: "Repo",
+      path: "/repo",
+      worktreePath: "/wt/repo",
+      kind: "worktree" as const,
+    };
+    const rootThread = {
+      id: "thread-root",
+      title: "Root thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [worktree],
+      inbox: { inInbox: false },
+      updatedAt: 1_000,
+      createdAt: 1_000,
+      subthreadOrder: ["thread-a", "thread-b"],
+    };
+    const childA = {
+      id: "thread-a",
+      title: "Child A",
+      titleSource: "explicit" as const,
+      parentThreadId: "thread-root",
+      source: "codex" as const,
+      linkedDirectories: [worktree],
+      inbox: { inInbox: false },
+      updatedAt: 2_000,
+      createdAt: 2_000,
+    };
+    const childB = { ...childA, id: "thread-b", title: "Child B", createdAt: 3_000 };
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [rootThread, childA, childB],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const forkThread = vi.fn(
+      async (request: { parentThreadId?: string; sourceThreadId: string }) => ({
+        backend: "codex" as const,
+        sourceThreadId: request.sourceThreadId,
+        threadId: "thread-fork",
+        executionMode: "default" as const,
+        workMode: "local" as const,
+      }),
+    );
+    const updateSubthreadOrder = vi.fn(
+      async (request: {
+        backend?: string;
+        parentThreadId: string;
+        threadIds: string[];
+      }) => ({
+        backend: "codex" as const,
+        parentThreadId: request.parentThreadId,
+        threadIds: request.threadIds,
+      }),
+    );
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      forkThread,
+      updateSubthreadOrder,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-root",
+        "thread-a",
+        "thread-b",
+      ]);
+    });
+
+    const sourceChild = result.current.threads.find((thread) => thread.id === "thread-a")!;
+    await act(async () => {
+      await result.current.forkThread(sourceChild, "same-worktree");
+    });
+
+    // Forks the clicked child's content but links the new thread to the root,
+    // so it renders one level deep rather than as an unrenderable grandchild.
+    expect(forkThread).toHaveBeenCalledTimes(1);
+    expect(forkThread.mock.calls[0]![0]).toMatchObject({
+      parentThreadId: "thread-root",
+      sourceThreadId: "thread-a",
+    });
+
+    // The new thread lands directly below its source child in the root's tray.
+    expect(updateSubthreadOrder).toHaveBeenCalledTimes(1);
+    expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
+      parentThreadId: "thread-root",
+      threadIds: ["thread-a", "thread-fork", "thread-b"],
+    });
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,
@@ -2961,6 +3064,168 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
     expect(result.current.selectedDirectory?.key).toBe(directoryKey);
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+  });
+
+  it("forces a directory-less workspace draft even when a directory is in context", async () => {
+    const directoryKey = "directory:/Users/test/PwrAgent";
+    const workspaceKey = "workspace:/Users/test/.pwragent/projects";
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: workspaceKey,
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragent/projects",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Project thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [
+            {
+              id: "linked-dir-1",
+              label: "PwrAgent",
+              path: "/Users/test/PwrAgent",
+              kind: "local" as const,
+            },
+          ],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/test/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+        {
+          key: workspaceKey,
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    // Select a thread bound to a real directory — the default createThread()
+    // path would target that directory, and the flyout label reflects it.
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+    expect(result.current.newThreadDirectoryLabel).toBe("PwrAgent");
+
+    await act(async () => {
+      await result.current.createThread(undefined, "default", {
+        forceWorkspace: true,
+      });
+    });
+
+    // forceWorkspace must bypass the selected directory and land on workspace.
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: workspaceKey,
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/test/.pwragent/projects",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedLaunchpad?.directoryKind).toBe("workspace");
+  });
+
+  it("openWorkspaceLaunchpad synthesizes a workspace target when the snapshot has none", async () => {
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      await result.current.openWorkspaceLaunchpad();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      currentBranch: undefined,
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedItemKey).toBe("launchpad:workspace:new-thread");
   });
 
   it("reuses the selected directory launchpad context for new threads", async () => {

@@ -9,6 +9,10 @@ import { formatAccessModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
+import {
+  HistoryNavButtons,
+  type HistoryNavControls,
+} from "../chrome/HistoryNavButtons";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 
@@ -40,6 +44,12 @@ type ThreadHeaderProps = {
    * Windows keeps them in the AppTitleBar, so this is skipped there.
    */
   masthead?: MastheadActionsProps;
+  /**
+   * Browser-style Back/Forward across threads + search, rendered at the
+   * leading edge of the title bar. Optional so render-only tests don't
+   * have to thread history state; App always supplies it.
+   */
+  history?: HistoryNavControls;
 };
 
 function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
@@ -78,6 +88,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <MastheadActions {...props.masthead} />
           </div>
         ) : null}
+        {props.history ? <HistoryNavButtons {...props.history} /> : null}
         <div className="thread-header__main">
           <div className="thread-header__eyebrow-row">
             <div className="thread-header__breadcrumb">

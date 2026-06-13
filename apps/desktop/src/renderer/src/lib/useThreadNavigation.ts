@@ -25,7 +25,9 @@ import {
   buildThreadIdentityKey,
   comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
+  insertSubthreadIdAfter,
   shortenDerivedThreadTitle,
+  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
@@ -217,15 +219,21 @@ function resolveCreateThreadTargetDirectory(args: {
   directories: NavigationSnapshot["directories"];
   selectedDirectory?: NavigationDirectorySummary;
   selectedThreadKey?: string;
+  /**
+   * When true, ignore the selected directory / thread context and resolve
+   * straight to the directory-less workspace target. Drives the "New chat
+   * without a directory" affordances (New Thread flyout + project picker).
+   */
+  forceWorkspace?: boolean;
 }): {
   directoryKey: string;
   directoryKind: NavigationDirectorySummary["kind"];
   directoryLabel: string;
   directoryPath?: string;
 } {
-  const { directories, selectedDirectory, selectedThreadKey } = args;
+  const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } = args;
 
-  if (selectedDirectory?.kind === "directory") {
+  if (!forceWorkspace && selectedDirectory?.kind === "directory") {
     return {
       directoryKey: selectedDirectory.key,
       directoryKind: selectedDirectory.kind,
@@ -234,7 +242,7 @@ function resolveCreateThreadTargetDirectory(args: {
     };
   }
 
-  if (selectedThreadKey) {
+  if (!forceWorkspace && selectedThreadKey) {
     const threadDirectories = directories.filter(
       (directory) =>
         directory.kind === "directory" && directory.threadKeys.includes(selectedThreadKey)
@@ -1803,14 +1811,18 @@ export function useThreadNavigation(
   options: UseThreadNavigationOptions = {}
 ): {
   browseMode: BrowseMode;
+  /** Identity key of the card to highlight as the open composer's source. */
+  composerSourceThreadKey?: string;
   createThread: (
     backend?: AppServerBackendKind,
-    executionMode?: ThreadExecutionMode
+    executionMode?: ThreadExecutionMode,
+    options?: { forceWorkspace?: boolean }
   ) => Promise<void>;
   createSubthread: (
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
   ) => Promise<void>;
+  discardLaunchpad: (directoryKey: string) => void;
   forkThread: (
     parent: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -1840,8 +1852,14 @@ export function useThreadNavigation(
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
   ) => Promise<void>;
+  /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
+  newThreadDirectoryLabel?: string;
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
+    preferredBackend?: AppServerBackendKind
+  ) => Promise<void>;
+  /** Switch the composer to the directory-less ("workspace") launchpad. */
+  openWorkspaceLaunchpad: (
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
@@ -2025,9 +2043,11 @@ export function useThreadNavigation(
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
   const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
+  const stateRef = useRef(state);
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
+  stateRef.current = state;
 
   useEffect(() => {
     setNavigationBrowseModeRequestRef.current = setNavigationBrowseModeRequest;
@@ -2918,6 +2938,31 @@ export function useThreadNavigation(
       ?.launchpad;
   }, [directories, selectedItemKey]);
 
+  // The directory label the New Thread button would resolve to with its
+  // default (context-aware) behavior, or undefined when that resolves to the
+  // directory-less workspace. Drives the "New chat in <directory>" item in the
+  // New Thread flyout, and lets callers hide that item when there's no
+  // directory to contrast against the "without a directory" choice.
+  const newThreadDirectoryLabel = useMemo(() => {
+    const target = resolveCreateThreadTargetDirectory({
+      directories,
+      selectedDirectory,
+      selectedThreadKey,
+    });
+    return target.directoryKind === "directory" ? target.directoryLabel : undefined;
+  }, [directories, selectedDirectory, selectedThreadKey]);
+  // The thread card to render as the orange "composing" source while a
+  // sub-thread launchpad is open. Plain new-thread launchpads have no source.
+  const composerSourceThreadKey = useMemo(() => {
+    if (!selectedLaunchpad?.sourceThreadId || !selectedLaunchpad.backend) {
+      return undefined;
+    }
+    return buildThreadIdentityKey(
+      selectedLaunchpad.backend,
+      selectedLaunchpad.sourceThreadId,
+    );
+  }, [selectedLaunchpad]);
+
   useEffect(() => {
     releaseRetainedUnreadThread(selectedItemKey);
   }, [releaseRetainedUnreadThread, retainedUnreadThread, selectedItemKey]);
@@ -3090,7 +3135,8 @@ export function useThreadNavigation(
   const createThread = useCallback(
     async (
       backend?: AppServerBackendKind,
-      executionMode: ThreadExecutionMode = "default"
+      executionMode: ThreadExecutionMode = "default",
+      options?: { forceWorkspace?: boolean }
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
@@ -3108,6 +3154,7 @@ export function useThreadNavigation(
           directories,
           selectedDirectory,
           selectedThreadKey,
+          forceWorkspace: options?.forceWorkspace,
         });
         const directoryKey = targetDirectory.directoryKey;
         const response = await desktopApi.ensureDirectoryLaunchpad({
@@ -3160,12 +3207,121 @@ export function useThreadNavigation(
           directories,
           selectedDirectory,
           selectedThreadKey,
+          forceWorkspace: options?.forceWorkspace,
         });
         pendingPickedLaunchpadRef.current.delete(targetDirectory.directoryKey);
         setCreatingThread(undefined);
       }
     },
     [desktopApi, directories, refresh, selectedDirectory, selectedThreadKey]
+  );
+
+  /**
+   * The "group root" for a source card. Sub-threads and forks never nest deeper
+   * than one level: spawning from a child re-parents the new thread to that
+   * child's root so it renders as a sibling, not an (unrenderable) grandchild.
+   * Falls back to the source itself when its root is gone (archived/unlinked),
+   * since the source has then become effectively top-level.
+   */
+  const resolveGroupRoot = useCallback(
+    (source: NavigationThreadSummary): NavigationThreadSummary => {
+      if (!source.parentThreadId) {
+        return source;
+      }
+      const root = stateRef.current.response?.threads.find(
+        (thread) =>
+          thread.source === source.source &&
+          thread.id === source.parentThreadId,
+      );
+      return root ?? source;
+    },
+    [],
+  );
+
+  /**
+   * Place a freshly created child directly below the card it was spawned from.
+   * Writes the full current child order into the root's `subthreadOrder` (so the
+   * tray behaves like a pinned tray — every child explicitly ranked, born in
+   * place and staying there) with `newThreadId` inserted after `sourceThreadId`,
+   * then expands the group if it was collapsed so the new child is visible.
+   */
+  const insertSubthreadBelowSource = useCallback(
+    async (
+      backend: AppServerBackendKind,
+      rootThreadId: string,
+      sourceThreadId: string,
+      newThreadId: string,
+    ): Promise<void> => {
+      const snapshot = stateRef.current.response;
+      if (!snapshot) {
+        return;
+      }
+      const root = snapshot.threads.find(
+        (thread) => thread.source === backend && thread.id === rootThreadId,
+      );
+      const currentChildIds = sortSubthreadSummaries(
+        root ?? { subthreadOrder: undefined },
+        snapshot.threads.filter(
+          (thread) =>
+            thread.source === backend &&
+            thread.parentThreadId === rootThreadId,
+        ),
+      ).map((child) => child.id);
+      const nextOrder = insertSubthreadIdAfter(
+        currentChildIds,
+        sourceThreadId,
+        newThreadId,
+      );
+
+      setState((current) => ({
+        ...current,
+        response: updateSubthreadOrderInSnapshot(current.response, {
+          backend,
+          parentThreadId: rootThreadId,
+          threadIds: nextOrder,
+        }),
+      }));
+      // Await the persist so callers can sequence the authoritative refresh
+      // after it commits — otherwise a refresh racing ahead of this write can
+      // momentarily resurrect the pre-insert order.
+      const persistOrder = desktopApi?.updateSubthreadOrder;
+      if (persistOrder) {
+        try {
+          const result = await persistOrder({
+            backend,
+            parentThreadId: rootThreadId,
+            threadIds: nextOrder,
+          });
+          setState((current) => ({
+            ...current,
+            response: updateSubthreadOrderInSnapshot(current.response, {
+              backend: result.backend,
+              parentThreadId: result.parentThreadId,
+              threadIds: result.threadIds,
+            }),
+          }));
+        } catch {
+          await refresh(buildThreadIdentityKey(backend, rootThreadId));
+        }
+      }
+
+      if (root?.subthreadsCollapsed) {
+        setState((current) => ({
+          ...current,
+          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+            backend,
+            parentThreadId: rootThreadId,
+            collapsed: false,
+          }),
+        }));
+        void desktopApi?.setSubthreadsCollapsed?.({
+          backend,
+          parentThreadId: rootThreadId,
+          collapsed: false,
+        }).catch(() => {});
+      }
+    },
+    [desktopApi, refresh],
   );
 
   const createSubthread = useCallback(
@@ -3179,7 +3335,11 @@ export function useThreadNavigation(
       }
 
       const directory = selectThreadWorkspace(parent, mode);
+      // Key the launchpad on the clicked card so each source gets its own
+      // composer (two children of one root must not collide), but link the new
+      // thread to the group root and remember the source for in-place insertion.
       const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
+      const groupRoot = resolveGroupRoot(parent);
       setCreatingThread({
         backend: parent.source,
         executionMode: parent.executionMode ?? "default",
@@ -3195,14 +3355,15 @@ export function useThreadNavigation(
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
-          parentThreadId: parent.id,
-          parentThreadTitle: parent.title,
+          parentThreadId: groupRoot.id,
+          parentThreadTitle: groupRoot.title,
           preferredBackend: parent.source,
         });
         let launchpad: NavigationLaunchpadDraft = {
           ...response.launchpad,
-          parentThreadId: parent.id,
-          parentThreadTitle: parent.title,
+          parentThreadId: groupRoot.id,
+          parentThreadTitle: groupRoot.title,
+          sourceThreadId: parent.id,
         };
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         const patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"] = {
@@ -3212,8 +3373,8 @@ export function useThreadNavigation(
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
           ...(directory.branchName ? { branchName: directory.branchName } : {}),
-          parentThreadId: parent.id,
-          parentThreadTitle: parent.title,
+          parentThreadId: groupRoot.id,
+          parentThreadTitle: groupRoot.title,
         };
         if (desktopApi.updateDirectoryLaunchpad) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
@@ -3222,8 +3383,9 @@ export function useThreadNavigation(
           });
           launchpad = {
             ...updated.launchpad,
-            parentThreadId: parent.id,
-            parentThreadTitle: parent.title,
+            parentThreadId: groupRoot.id,
+            parentThreadTitle: groupRoot.title,
+            sourceThreadId: parent.id,
           };
           defaults = updated.defaults;
         }
@@ -3242,7 +3404,7 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [desktopApi],
+    [desktopApi, resolveGroupRoot],
   );
 
   const forkThread = useCallback(
@@ -3256,6 +3418,7 @@ export function useThreadNavigation(
       }
 
       const directory = selectThreadWorkspace(parent, mode);
+      const groupRoot = resolveGroupRoot(parent);
       const executionMode = parent.executionMode ?? "default";
       setCreatingThread({
         backend: parent.source,
@@ -3270,7 +3433,7 @@ export function useThreadNavigation(
         const response = await forkThreadRequest({
           backend: parent.source,
           sourceThreadId: parent.id,
-          parentThreadId: parent.id,
+          parentThreadId: groupRoot.id,
           executionMode,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
@@ -3311,9 +3474,17 @@ export function useThreadNavigation(
           observedGitBranch: parent.observedGitBranch,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
-          parentThreadId: parent.id,
+          parentThreadId: groupRoot.id,
         };
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        // Drop the fork directly below the card it was spawned from, and let
+        // the order write land before the refresh below reads it back.
+        await insertSubthreadBelowSource(
+          response.backend,
+          groupRoot.id,
+          parent.id,
+          response.threadId,
+        );
         setOptimisticThread(optimisticFork);
         setSelectedItemKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);
@@ -3324,7 +3495,7 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [forkThreadRequest, refresh],
+    [forkThreadRequest, insertSubthreadBelowSource, refresh, resolveGroupRoot],
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -3370,6 +3541,30 @@ export function useThreadNavigation(
       }
     },
     [desktopApi]
+  );
+
+  // Switch the composer to the directory-less "workspace" launchpad. Backs the
+  // "Chat without a directory" row in the project picker. Reuses the existing
+  // workspace pseudo-directory when the snapshot already has one, otherwise
+  // synthesizes the same key/label `resolveCreateThreadTargetDirectory` falls
+  // back to so both entry points land on the identical launchpad.
+  const openWorkspaceLaunchpad = useCallback(
+    async (preferredBackend?: AppServerBackendKind): Promise<void> => {
+      const workspaceDirectory = directories.find(
+        (directory) => directory.kind === "workspace"
+      );
+      await openDirectoryLaunchpad(
+        workspaceDirectory ?? {
+          key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+          kind: "workspace",
+          label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+        preferredBackend
+      );
+    },
+    [directories, openDirectoryLaunchpad]
   );
 
   const pickAndRegisterDirectory = useCallback(
@@ -3656,8 +3851,13 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
 
+      // The draft carries the group root (sub-threading a child re-parents to
+      // the root); prefer it over the key-parsed source so the new thread links
+      // to the root and renders one level deep.
       const materializeParentThreadId =
-        parentThreadId ?? getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+        parentThreadId ??
+        launchpad.parentThreadId ??
+        getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
       let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
       try {
         response = await desktopApi.materializeDirectoryLaunchpad({
@@ -3702,6 +3902,17 @@ export function useThreadNavigation(
         parentThreadId: materializeParentThreadId,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+      // Sub-thread launchpads drop the new child directly below their source
+      // card. Plain new-thread launchpads have no parent and skip this. Await
+      // so the order write commits before the refresh below reads it back.
+      if (materializeParentThreadId) {
+        await insertSubthreadBelowSource(
+          response.backend,
+          materializeParentThreadId,
+          launchpad.sourceThreadId ?? materializeParentThreadId,
+          response.threadId,
+        );
+      }
       setLocalLaunchpads((current) => {
         if (!current[directoryKey]) {
           return current;
@@ -3732,8 +3943,46 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, refresh]
+    [desktopApi, directories, insertSubthreadBelowSource, refresh]
   );
+
+  /**
+   * Cancel an open launchpad composer (the "Cancel" button next to "Start
+   * thread"). Drops the draft and, for a sub-thread composer, returns the
+   * selection to the source card the user invoked it from.
+   */
+  const discardLaunchpad = useCallback((directoryKey: string): void => {
+    const launchpad = stateRef.current.response?.directories.find(
+      (candidate) => candidate.key === directoryKey,
+    )?.launchpad;
+    const sourceThreadId = launchpad?.sourceThreadId;
+    const sourceBackend = launchpad?.backend;
+
+    setLocalLaunchpads((current) => {
+      if (!current[directoryKey]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[directoryKey];
+      return next;
+    });
+    setState((current) => ({
+      ...current,
+      response: current.response
+        ? applyLaunchpadReset(
+            current.response,
+            directoryKey,
+            current.response.launchpadDefaults,
+          )
+        : current.response,
+    }));
+
+    setSelectedItemKey(
+      sourceThreadId && sourceBackend
+        ? buildThreadIdentityKey(sourceBackend, sourceThreadId)
+        : undefined,
+    );
+  }, []);
 
   const archiveThread = useCallback(
     async (
@@ -4552,8 +4801,10 @@ export function useThreadNavigation(
 
   return {
     browseMode,
+    composerSourceThreadKey,
     createThread,
     createSubthread,
+    discardLaunchpad,
     forkThread,
     createThreadError,
     creatingThread,
@@ -4571,7 +4822,9 @@ export function useThreadNavigation(
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
+    newThreadDirectoryLabel,
     openDirectoryLaunchpad,
+    openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickDirectoryError,
     pickingDirectory,

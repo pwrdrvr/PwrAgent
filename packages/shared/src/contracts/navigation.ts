@@ -417,6 +417,14 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   branchName?: string;
   parentThreadId?: string;
   parentThreadTitle?: string;
+  /**
+   * The thread card this launchpad was spawned from. May differ from
+   * `parentThreadId`: forking/sub-threading a child re-parents the new thread to
+   * the group root (`parentThreadId`), but the new thread is inserted directly
+   * below this source card and the source card renders as the orange "composing"
+   * highlight. Undefined for the plain directory new-thread launchpad.
+   */
+  sourceThreadId?: string;
   codexEnvironmentId?: string;
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
   /**

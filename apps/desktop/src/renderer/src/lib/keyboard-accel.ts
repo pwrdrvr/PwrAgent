@@ -74,6 +74,50 @@ export function matchLayoutChord(
 }
 
 /**
+ * Classify a keydown as a history-navigation chord, or `null`:
+ *   ⌘[ / ⌃[   → "back"     (the universal browser binding)
+ *   ⌘] / ⌃]   → "forward"
+ *   ⌥← / Alt+← → "back"     (the Windows/Linux browser convention)
+ *   ⌥→ / Alt+→ → "forward"
+ *
+ * The bracket chords stay live inside editable fields — like a browser,
+ * ⌘[ never types anything — so navigation works while the caret sits in
+ * the composer. The Alt-arrow pair must NOT fire while editing: Option/
+ * Alt+arrow is word-wise caret movement there.
+ *
+ * Brackets match `event.code` first (layout-independent physical key)
+ * with an `event.key` fallback, mirroring {@link isAccelLetter}.
+ */
+export function matchHistoryNavChord(
+  event: KeyboardEvent,
+): "back" | "forward" | null {
+  if (isPrimaryAccel(event) && !event.altKey && !event.shiftKey) {
+    if (event.code === "BracketLeft" || event.key === "[") {
+      return "back";
+    }
+    if (event.code === "BracketRight" || event.key === "]") {
+      return "forward";
+    }
+    return null;
+  }
+  if (
+    event.altKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !isEditableTarget(event)
+  ) {
+    if (event.key === "ArrowLeft") {
+      return "back";
+    }
+    if (event.key === "ArrowRight") {
+      return "forward";
+    }
+  }
+  return null;
+}
+
+/**
  * Render the display label for a primary-accelerator chord, adjusted for
  * the current platform: ⌘/⌥ glyphs on macOS, "Ctrl"/"Alt" words joined
  * with "+" on Windows/Linux. This is presentation only — {@link

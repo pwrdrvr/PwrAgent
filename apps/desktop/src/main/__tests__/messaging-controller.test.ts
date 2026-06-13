@@ -7064,6 +7064,52 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not steer a queued follow-up into a waiting turn after the backend is idle", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    if (!queuedNotice || !("actions" in queuedNotice)) {
+      throw new Error("Queued notice was not delivered");
+    }
+    const queuedActions = Array.isArray(queuedNotice.actions)
+      ? queuedNotice.actions
+      : [];
+    const steerAction = queuedActions.find((action) =>
+      action.id.startsWith("queued-turn:steer:"),
+    );
+    expect(steerAction).toBeDefined();
+    harness.steerTurn.mockClear();
+    harness.readThreadStatus.mockResolvedValue("idle");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: steerAction!.id,
+      }),
+    );
+
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Steer unavailable",
+      body: expect.stringContaining("There is no active turn available to steer"),
+    });
+  });
+
   it("routes completed assistant output to active thread bindings", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
@@ -9056,6 +9102,125 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not resurrect waiting when a delayed approval arrives after the backend is idle", async () => {
+    const harness = await createHarness();
+    harness.startTurn
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      })
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-2",
+      });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    harness.readThreadStatus.mockResolvedValueOnce("active").mockResolvedValue("idle");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "approval",
+      }),
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "idle",
+      }),
+      expect.objectContaining({
+        kind: "approval",
+        body: expect.stringContaining("Response Received: Resolved"),
+        decisions: [],
+      }),
+    ]);
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "status",
+        status: "waiting",
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("next message"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "next message" }],
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Message queued",
+      }),
+    );
+  });
+
+  it("starts queued follow-ups when a delayed approval first observes the backend is idle", async () => {
+    const harness = await createHarness();
+    harness.startTurn
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      })
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-2",
+      });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleInboundEvent(buildTextEvent("queued follow-up"));
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    expect(queuedNotice).toMatchObject({
+      kind: "confirmation",
+      title: "Message queued",
+      body: expect.stringContaining("> queued follow-up"),
+    });
+    harness.readThreadStatus.mockResolvedValue("idle");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "queued follow-up" }],
+      }),
+    );
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        body: "Queued message sent as the next turn.",
+      }),
+    );
+  });
+
   it("submits approval callbacks through the backend bridge", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
@@ -9135,6 +9300,43 @@ describe("MessagingController", () => {
         kind: "activity",
         activity: "typing",
         state: "active",
+      }),
+    ]);
+  });
+
+  it("retires approval callbacks without submitting when the backend turn is already idle", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+    harness.delivered.length = 0;
+    harness.submitServerRequest.mockClear();
+    harness.readThreadStatus.mockResolvedValue("idle");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "idle",
+      }),
+      expect.objectContaining({
+        kind: "approval",
+        body: expect.stringContaining("Response Received: Resolved"),
+        decisions: [],
       }),
     ]);
   });

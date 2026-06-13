@@ -27,6 +27,10 @@
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
+  /* Foreground for content sitting on a solid `--accent` fill (the orange
+     "composing source" thread row). Near-black on the bright dark-theme
+     accent for a strong AA-passing contrast. */
+  --accent-on: #160a00;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
   --accent-shadow: color-mix(in srgb, var(--accent) 34%, transparent);
@@ -45,6 +49,13 @@
   --status-warning: #d99a3d;
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
+  /* Closed-without-merge PR dot. Intentionally black (not GitHub's red) —
+     product choice. Pure black reads correctly in light theme; on dark
+     surfaces it's the `--pr-dot-ring` hairline that keeps it visible. Both
+     tokens live only in this base block, so light theme inherits them and the
+     ring follows the active theme via --text-primary. */
+  --status-closed: #000000;
+  --pr-dot-ring: color-mix(in srgb, var(--text-primary) 32%, transparent);
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
 
@@ -203,6 +214,8 @@
   --accent: #c45200;
   --accent-strong: #b34a00;
   --accent-bright: #d96d00;
+  /* Light foreground on the darker light-theme accent fill. */
+  --accent-on: #ffffff;
   --focus-ring: var(--accent);
 
   /* Semantic — darker bases for contrast. */
@@ -306,14 +319,13 @@
   gap: 4px;
 }
 
-/* Shrink the pin marker so it reads as a marker, not a chip. In Mission
-   Control the full "Pinned" pill is informational; in Compact, the
-   section position + a small marker carries the same signal. */
+/* Shrink the icon-only pin marker a touch in Compact so it tracks the
+   denser rows (the marker itself already replaced the old "Pinned"
+   pill — see `.thread-row__chip--pin`). */
 :root[data-density="compact"] .thread-row__chip--pin {
   height: 18px;
-  padding: 0 6px;
-  font-size: 10.5px;
-  font-weight: 600;
+  min-width: 18px;
+  padding: 0 4px;
 }
 
 /* Tighten thread-row vertical real estate. The row keeps its column
@@ -481,6 +493,67 @@ textarea,
 .thread-header .masthead-actions,
 .thread-header .masthead-actions * {
   -webkit-app-region: no-drag;
+}
+
+/* New Thread button + hover/focus flyout. The button keeps its default
+   click action; the flyout drops down (right-aligned so it never spills off
+   the sidebar's right edge) with the explicit "in directory" / "without a
+   directory" choices. */
+.new-thread-button {
+  position: relative;
+  display: inline-flex;
+}
+
+.new-thread-menu {
+  position: absolute;
+  /* Matches the title-bar z-index; the title bar forms its own stacking
+     context, so within the masthead this reliably layers above sibling
+     content without competing with it. */
+  z-index: 40;
+  top: 100%;
+  right: 0;
+  /* Transparent top spacer keeps the hover region contiguous between the
+     button and the card, so sliding the pointer into the menu does not fire
+     pointerleave on the wrapper and close it before the cursor lands. */
+  padding-top: 6px;
+}
+
+.new-thread-menu__card {
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.new-thread-menu__item {
+  width: 100%;
+  display: block;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.new-thread-menu__item:hover,
+.new-thread-menu__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
 }
 
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
@@ -896,6 +969,59 @@ textarea,
    makes it fully inert so no hover state (its own or a broader selector's)
    can darken it on mouseover. */
 .panel-toggle__chip:disabled {
+  opacity: 0.32;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Browser-style Back/Forward pair at the leading edge of the thread/search
+   title bars. Mirrors the .panel-toggle chip treatment (size, muted resting
+   color, hover row tint, inert disabled state) so the header chrome reads
+   as one family. */
+.history-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* Same drag-region carve-out as .panel-toggle: the thread header drags the
+   window, so every pixel of these buttons must stay clickable. */
+.history-nav,
+.history-nav * {
+  -webkit-app-region: no-drag;
+}
+
+.history-nav__chip {
+  display: inline-flex;
+  width: 28px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+
+.history-nav__chip:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-active);
+}
+
+.history-nav__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.history-nav__chip:disabled {
   opacity: 0.32;
   cursor: default;
   pointer-events: none;
@@ -2126,7 +2252,27 @@ textarea,
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  /* Cancel the sidebar's 16px side padding so the thread lanes span
+     wall-to-wall and the reserved scrollbar gutter parks the thumb at
+     the right edge — out from under the lens-switch header, which keeps
+     its inset as a sibling above. The bleed clips cleanly at the sidebar
+     walls (`.sidebar` is `overflow: hidden`); the only intervening
+     ancestor (`.sidebar__section--fill`) is `overflow: visible`, so the
+     -16px reaches the walls instead of being clipped early. Transient
+     empty / loading / error messages that render directly here (no lane
+     wrapper) are re-inset just below. */
+  margin-inline: -16px;
   overflow: hidden;
+}
+
+/* Restore the inset for the region's non-lane children — the lanes
+   intentionally bleed to the walls, but a flush "No threads yet." or a
+   wall-to-wall error box reads as broken. Scoped with `>` so the
+   in-lane `.sidebar-empty.directory-row__empty` and the masthead error
+   (a `.sidebar` child, not a region child) are untouched. */
+.sidebar__scroll-region > .sidebar-empty,
+.sidebar__scroll-region > .sidebar-error {
+  margin-inline: 16px;
 }
 
 .context-panel h3 {
@@ -2276,7 +2422,11 @@ textarea,
 .directory-groups {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* Tightened from 8px in the Mission Control density pass. Rows are
+     borderless here, so the gap is pure separation — 4px reads as a
+     scannable index without the cards merging. Compact density drops
+     this further (see the density block). */
+  gap: 4px;
   padding: 12px 0 16px;
 }
 
@@ -2284,16 +2434,14 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* Asymmetric gutters. Left (4px) keeps the focus-visible outline
-     (2px wide at 2px offset → extends 4px outside the row's box) clear
-     of the sidebar's left wall — without it the outline clips and the
-     active row reads as missing a side. Right (8px) holds row content —
-     and the per-directory launchpad (+) button on directory headers —
-     well clear of the native scrollbar thumb that lives in the reserved
-     gutter, so the auto-hiding bar never visually kisses the + button
-     when it appears. (Bumped from 4px after the thumb read as crowding
-     the launchpad button.) */
-  padding-inline: 4px 8px;
+  /* This lane bleeds to the sidebar walls (see `.sidebar__scroll-region`),
+     so it spans edge-to-edge and its reserved scrollbar gutter parks the
+     thumb at the right wall. 8px left keeps the focus-visible outline
+     (2px @ 2px offset → 4px outside the row box) off the now-reachable
+     left wall; 8px right holds row content — and the per-directory
+     launchpad (+) button on directory headers — clear of the thumb in
+     the reserved gutter. */
+  padding-inline: 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Reserve a stable gutter so the thin auto-hiding scrollbar never
@@ -2469,7 +2617,12 @@ textarea,
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  padding: 12px 12px 12px 14px;
+  /* Tightened from `12px 12px 12px 14px` in the Mission Control density
+     pass. With the lane's 8px inline padding this leaves ~18px of text
+     inset on each side; 8px block padding + the 4px row gap give ~20px
+     text-to-text between rows. (`.thread-row__actions` top is kept in
+     step with the block padding — see that rule.) */
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -2487,6 +2640,47 @@ textarea,
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+}
+
+/* The thread card a sub-thread / new-thread composer is being created from.
+   Filled solid accent while the composer is open so the source is unmistakable;
+   foreground flips to the on-accent token and meta chips invert to readable
+   pills. Declared after `.thread-row:hover` (equal specificity) so the fill
+   survives hover. Clears automatically when the composer materializes, is
+   cancelled, or the user navigates away. */
+.thread-row.is-composer-source {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.thread-row.is-composer-source .thread-row__time,
+.thread-row.is-composer-source .thread-row__summary {
+  color: var(--accent-on);
+}
+
+.thread-row.is-composer-source .thread-row__chip {
+  border-color: transparent;
+  background: var(--accent-on);
+  color: var(--accent);
+}
+
+.thread-row.is-composer-source .thread-row__status-cookie {
+  border-color: var(--accent-on);
+  background: var(--accent-on);
+  box-shadow: none;
+}
+
+/* The thinking sweep is an accent-on-accent gradient — invisible on the solid
+   accent fill. Recolor it to the on-accent token so a source card that's still
+   working stays legible. */
+.thread-row.is-composer-source .thinking-scanner__beam {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 0%,
+    color-mix(in srgb, var(--accent-on) 95%, transparent) 48%,
+    color-mix(in srgb, var(--accent-on) 18%, transparent) 100%
+  );
 }
 
 .thread-row.thread-row--drag-image {
@@ -2509,11 +2703,11 @@ textarea,
      pixels into the row's top padding so its vertical midpoint matches
      the title's line midpoint. When the row is multi-line (chips
      present) the title is still the FIRST line, so the same offset
-     keeps the button anchored to it. The Compact density variant
-     overrides this `top` (see the density-compact block at the top of
-     the file) so the button stays on the title line when the row's top
-     padding shrinks from 12 → 6. */
-  top: 9px;
+     keeps the button anchored to it. Offset tracks the row's top padding
+     (`top ≈ padding-top − 3`): Mission Control rows pad 8px → 5px here;
+     the Compact density variant overrides this `top` to 3px (see the
+     density-compact block at the top of the file) for its 6px padding. */
+  top: 5px;
   right: 9px;
   z-index: 3;
   display: flex;
@@ -2949,11 +3143,18 @@ textarea,
   font-weight: 600;
 }
 
+/* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
+   tint carry the "pinned" signal without spending a word of row width;
+   the literal label lives in aria-label / title for assistive tech and
+   hover. Square-ish (min-width == height) so it reads as a marker, not a
+   text chip. */
 .thread-row__chip--pin {
+  min-width: 24px;
+  justify-content: center;
+  padding: 0 6px;
   border: 1px solid var(--accent-border);
-  background: var(--bg-panel-elevated);
+  background: var(--accent-soft);
   color: var(--accent-bright);
-  font-weight: 700;
 }
 
 .thread-row__chip--approval {
@@ -3059,6 +3260,7 @@ textarea,
 
 
 .pr-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3091,12 +3293,44 @@ textarea,
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  /* Default gray covers `unknown` and any unexpected/legacy state value. */
   background: var(--status-suspended);
   flex: 0 0 auto;
 }
 
 .pr-chip__label {
   white-space: nowrap;
+  /* The chip squishes line-height to 1, which left the monospace digits
+     sitting high in their line box so the centered dot read as resting on
+     the text baseline. A natural line box re-centers the glyphs against the
+     dot. */
+  line-height: normal;
+}
+
+/* Draft affordance: a short, round-ended gray bar centered beneath the dot +
+   number. Orthogonal to the dot color (which still shows check/merge status),
+   it reads as an extra marker, not an underline — there's a deliberate gap
+   between it and the text. */
+.pr-chip__draft-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--status-suspended);
+  pointer-events: none;
+}
+
+.pr-chip--draft .pr-chip__label {
+  /* Lift the content a hair so the bar has breathing room under the text
+     without growing the pill. */
+  transform: translateY(-1px);
+}
+
+.pr-chip--draft .pr-chip__dot {
+  transform: translateY(-1px);
 }
 
 .pr-chip--passing .pr-chip__dot {
@@ -3116,10 +3350,21 @@ textarea,
   background: var(--brand-purple);
 }
 
-.pr-chip--draft .pr-chip__dot,
-.pr-chip--closed .pr-chip__dot,
-.pr-chip--unknown .pr-chip__dot {
-  background: var(--status-suspended);
+.pr-chip--closed .pr-chip__dot {
+  /* Black, by product choice (not GitHub's red). The hairline ring keeps it
+     legible on dark surfaces where pure black would vanish into the chip. */
+  background: var(--status-closed);
+  box-shadow: 0 0 0 1px var(--pr-dot-ring);
+}
+
+/* Merge conflict outranks check status for the dot color: it blocks merge
+   regardless of CI. The doubled `.pr-chip.pr-chip--conflicting` qualifier
+   gives this (0,3,0) specificity so it beats the co-applied check-state class
+   (e.g. `pr-chip--pending pr-chip--conflicting`, 0,2,0) regardless of source
+   order — a reorder or auto-format can't silently flip it back. Only set on
+   OPEN PRs, so it never competes with the merged/closed dots. */
+.pr-chip.pr-chip--conflicting .pr-chip__dot {
+  background: var(--status-error);
 }
 
 .thread-row__chip--muted {
@@ -3410,6 +3655,37 @@ textarea,
 .directory-row__empty {
   margin-top: 0;
   padding-left: 8px;
+}
+
+/* "Show N more / Show less" toggle for a directory's unpinned threads
+   past the cap (DirectoriesList caps unpinned rows so a project with
+   dozens of threads doesn't push the next directory off-screen). Reads
+   as a quiet index control, not a card; left padding aligns its label
+   with the thread-row titles above it. */
+.directory-row__show-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.directory-row__show-more:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.directory-row__show-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .directory-group {
@@ -7544,6 +7820,7 @@ textarea,
 
 .transcript-message__paragraph {
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__heading {
@@ -7587,6 +7864,7 @@ textarea,
 .transcript-message__list {
   margin: 0;
   padding-left: 20px;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__list li + li {
@@ -9585,7 +9863,10 @@ textarea,
 }
 
 .context-panel__section {
-  padding: 16px;
+  /* Trimmed from 16px in the density pass to match the tightened thread
+     lanes. The rail cards carry their own border + faint fill, so they
+     stay legible at the narrower gutter. */
+  padding: 12px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -11634,6 +11915,48 @@ textarea,
   color: var(--danger-text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+/* "Chat without a directory" row — pinned above the recents so the
+   directory-less choice is always reachable regardless of the filtered list. */
+.project-picker__row--no-directory {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+}
+
+.project-picker__row--no-directory.is-active {
+  color: var(--accent-bright);
+}
+
+.project-picker__no-directory-icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-picker__no-directory-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* Diagonal strike across the folder glyph → "no directory". currentColor
+   follows the row text color so it tracks the hover/active accent. */
+.project-picker__no-directory-slash {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  transform: translateX(-50%) rotate(45deg);
+  background: currentColor;
+  border-radius: 1px;
 }
 
 .workspace-handoff-modal {

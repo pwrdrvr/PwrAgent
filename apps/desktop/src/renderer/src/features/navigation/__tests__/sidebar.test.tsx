@@ -275,12 +275,62 @@ describe("Sidebar", () => {
     fireEvent.click(settingsButton);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
 
+    // With no directory in context the New Thread button has no flyout, so it
+    // keeps a plain "New thread" tooltip for parity with its siblings. The
+    // tooltip/flyout live on the wrapper, so hover the wrapper, not the button.
     const newThreadButton = screen.getByRole("button", { name: "New thread" });
-    fireEvent.mouseEnter(newThreadButton);
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
     expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
-    fireEvent.mouseLeave(newThreadButton);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.mouseLeave(newThreadButton.parentElement as HTMLElement);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(newThreadButton);
+    expect(onCreateThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("reveals the New Thread flyout on hover when a directory is in context", async () => {
+    const onCreateThread = vi.fn(async () => undefined);
+    const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        newThreadDirectoryLabel="PwrAgnt"
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={onCreateThread}
+        onCreateThreadWithoutDirectory={onCreateThreadWithoutDirectory}
+        onOpenAutomations={() => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onOpenSettings={() => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const newThreadButton = screen.getByRole("button", { name: "New thread" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" });
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "New chat without a directory" })
+    );
+    expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
+    expect(onCreateThread).not.toHaveBeenCalled();
+
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" })
+    );
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 
@@ -470,6 +520,55 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Fork in Local" })).toBeNull();
+  });
+
+  it("exposes sub-thread and fork actions on a child card", () => {
+    const onCreateSubthread = vi.fn(async () => undefined);
+    const onForkThread = vi.fn(async () => undefined);
+    const forkBackends: BackendSummary[] = [
+      {
+        ...backends[0]!,
+        capabilities: { ...backends[0]!.capabilities, forkThread: true },
+      },
+    ];
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child cleanup",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+    render(
+      <Sidebar
+        backends={forkBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={onCreateSubthread}
+        onForkThread={onForkThread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // A child card now offers the same spawn actions; the parent hook
+    // re-parents the result to the group root, so the menu can stay open.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
+    );
+    expect(onCreateSubthread).toHaveBeenCalledWith(childThread, "same-worktree");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Fork into Same Worktree" }),
+    );
+    expect(onForkThread).toHaveBeenCalledWith(childThread, "same-worktree");
   });
 
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
@@ -1226,7 +1325,9 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup|Updated thread/i,
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
-    expect(rows[0]).toHaveTextContent("Pinned");
+    expect(
+      within(rows[0]).getByRole("img", { name: "Pinned" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
 
     const unpinnedRow = within(browseSection as HTMLElement).getByRole("button", {
@@ -1395,8 +1496,114 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup|Updated thread/i,
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
-    expect(rows[0]).toHaveTextContent("Pinned");
+    expect(
+      within(rows[0]).getByRole("img", { name: "Pinned" }),
+    ).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+  });
+
+  it("caps unpinned directory threads and toggles the overflow behind Show more / Show less", async () => {
+    const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
+      ...sharedThread,
+      id: `thread-cap-${index + 1}`,
+      title: `Capped thread ${index + 1}`,
+    }));
+    const directoryWithManyThreads = {
+      ...directories[0],
+      threadKeys: cappedThreads.map((thread) => `codex:${thread.id}`),
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directoryWithManyThreads]}
+        inboxThreads={cappedThreads}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-cap-1"
+        threads={cappedThreads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // 12 unpinned threads → only the first 10 render until expanded.
+    expect(
+      screen.getAllByRole("button", { name: /Capped thread \d+/ }),
+    ).toHaveLength(10);
+    expect(screen.queryByText("Capped thread 11")).not.toBeInTheDocument();
+
+    await clickElement(screen.getByRole("button", { name: "Show 2 more" }));
+
+    expect(
+      screen.getAllByRole("button", { name: /Capped thread \d+/ }),
+    ).toHaveLength(12);
+    expect(screen.getByText("Capped thread 12")).toBeInTheDocument();
+
+    // The collapse control stays at the pivot — right where "Show more"
+    // was — so it sits BEFORE the freshly revealed overflow rows and the
+    // user never scrolls to the bottom of the directory to collapse it.
+    const showLess = screen.getByRole("button", { name: "Show less" });
+    const overflowRow = screen.getByRole("button", {
+      name: /Capped thread 12/,
+    });
+    expect(
+      showLess.compareDocumentPosition(overflowRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await clickElement(screen.getByRole("button", { name: "Show less" }));
+
+    expect(
+      screen.getAllByRole("button", { name: /Capped thread \d+/ }),
+    ).toHaveLength(10);
+  });
+
+  it("auto-expands a directory's overflow when the selected thread is hidden in it", () => {
+    const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
+      ...sharedThread,
+      id: `thread-cap-${index + 1}`,
+      title: `Capped thread ${index + 1}`,
+    }));
+    const directoryWithManyThreads = {
+      ...directories[0],
+      threadKeys: cappedThreads.map((thread) => `codex:${thread.id}`),
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directoryWithManyThreads]}
+        inboxThreads={cappedThreads}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        // thread-cap-12 sits in the overflow (beyond the cap of 10).
+        selectedItemKey="codex:thread-cap-12"
+        threads={cappedThreads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The selected overflow thread renders without any click, and the
+    // toggle reflects the auto-expanded state.
+    expect(
+      screen.getAllByRole("button", { name: /Capped thread \d+/ }),
+    ).toHaveLength(12);
+    expect(screen.getByText("Capped thread 12")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show less" }),
+    ).toBeInTheDocument();
   });
 
   it("does not render a directory pin divider when no directory threads are pinned", () => {

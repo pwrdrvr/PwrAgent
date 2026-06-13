@@ -2750,6 +2750,9 @@ describe("DesktopBackendRegistry", () => {
       },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
+    await waitForCondition(() =>
+      emittedEvents.some((event) => event.notification.method === "thread/name/updated"),
+    );
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
       "turn/started",
       "thread/name/updated",

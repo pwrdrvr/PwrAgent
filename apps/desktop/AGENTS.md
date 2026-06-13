@@ -63,6 +63,19 @@ pnpm dev
 - For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
+## E2E Locator Hygiene Around Global Chrome
+
+The thread/search title bars always render the history Back/Forward
+buttons (accessible names `Back` and `Forward`), and they stay mounted
+behind overlays like the onboarding wizard. A page-wide
+`getByRole("button", { name: /Back/i })` will resolve to multiple
+elements and fail Playwright strict mode. When writing specs:
+
+- Scope to a container (`dialog.getByRole(...)`) or anchor the regex to
+  the full label (e.g. the wizard's `/^← Back/i`).
+- Target the history buttons themselves via their test ids:
+  `history-nav-back` / `history-nav-forward`.
+
 ## Inspecting Branch Drift Dialog E2E
 
 To open the replay-backed "Thread branch changed" dialog and keep Electron

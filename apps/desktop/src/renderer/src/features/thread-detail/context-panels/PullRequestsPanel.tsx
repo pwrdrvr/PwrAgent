@@ -39,7 +39,12 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
-                  <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
+                  <PrChip
+                    pr={pr}
+                    showRepoPrefix={false}
+                    onOpen={openExternalUrl}
+                    withStatusPills
+                  />
                   {lifecycle === "merged" ? (
                     <RailStatusChip tone="merged">Merged</RailStatusChip>
                   ) : null}

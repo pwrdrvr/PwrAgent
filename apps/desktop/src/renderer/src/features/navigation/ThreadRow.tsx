@@ -32,6 +32,11 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /**
+   * Identity key of the card the open composer was spawned from. When it
+   * matches this row, the row renders as the orange "composing" source.
+   */
+  composerSourceThreadKey?: string;
   compact?: boolean;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
@@ -90,6 +95,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
   const selected =
     threadKey === props.selectedThreadKey;
+  const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
   const addReactionRef = useRef<HTMLSpanElement>(null);
@@ -183,7 +189,7 @@ export function ThreadRow(props: ThreadRowProps) {
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
-        }`}
+        }${isComposerSource ? " is-composer-source" : ""}`}
         type="button"
         onKeyDown={(event) => {
           // Reorder a pinned thread within its backend's pinned
@@ -220,11 +226,14 @@ export function ThreadRow(props: ThreadRowProps) {
           </span>
         </span>
 
-        {/* Single ordered chip flow: meta (agent/mode/dir/branch/drift)
-            → PR chips → messaging binding chips → reactions. flex-wrap
-            handles content overflow naturally; the hover-only add-
-            reaction affordance is positioned outside the flow so it
-            cannot reserve a phantom wrapped row while hidden. */}
+        {/* Single ordered chip flow: meta (provider / location / pinned /
+            branch / drift) → messaging binding chips → PR chips →
+            reactions. Pinned rides with the meta chips so it never lands
+            alone on a wrapped row; PR chips + reactions stay last so the
+            fixed-width metadata packs first and single-chip orphan rows
+            are minimized. flex-wrap handles overflow naturally; the
+            hover-only add-reaction affordance is positioned outside the
+            flow so it cannot reserve a phantom wrapped row while hidden. */}
         <span
           className="thread-row__chips"
           onMouseEnter={prs.length > 0 ? armHoverPrefetch : undefined}
@@ -237,11 +246,18 @@ export function ThreadRow(props: ThreadRowProps) {
             thread={props.thread}
           />
 
-          {props.thread.pinnedRank && !props.thread.parentThreadId ? (
-            <span className="thread-row__chip thread-row__chip--pin">
-              Pinned
-            </span>
-          ) : null}
+          {bindings.map((binding) => (
+            <BindingChip
+              key={binding.bindingId}
+              binding={binding}
+              onUnbind={
+                props.onUnbindMessagingBinding
+                  ? (target) =>
+                      void props.onUnbindMessagingBinding!(props.thread, target)
+                  : undefined
+              }
+            />
+          ))}
 
           {prs.map((pr) => (
             <PrChip
@@ -257,19 +273,6 @@ export function ThreadRow(props: ThreadRowProps) {
                         targetPr,
                         position,
                       )
-                  : undefined
-              }
-            />
-          ))}
-
-          {bindings.map((binding) => (
-            <BindingChip
-              key={binding.bindingId}
-              binding={binding}
-              onUnbind={
-                props.onUnbindMessagingBinding
-                  ? (target) =>
-                      void props.onUnbindMessagingBinding!(props.thread, target)
                   : undefined
               }
             />

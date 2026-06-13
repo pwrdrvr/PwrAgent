@@ -3,20 +3,25 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import type {
-  DesktopBootInfo,
-  DesktopCodexProfileModel,
-  DesktopPwrAgentProfileSummary,
-  NavigationThreadSummary,
+import {
+  buildThreadIdentityKey,
+  parseThreadIdentityKey,
+  type DesktopBootInfo,
+  type DesktopCodexProfileModel,
+  type DesktopPwrAgentProfileSummary,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
+import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
+import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
 import {
@@ -36,6 +41,10 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
+import {
+  useNavigationHistory,
+  type NavigationHistoryLocation,
+} from "./lib/useNavigationHistory";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -52,7 +61,10 @@ import {
 } from "../../shared/hot-cpu-profile";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
-import { ThreadSearchPanel } from "./features/thread-search/ThreadSearchPanel";
+import {
+  ThreadSearchPanel,
+  useThreadSearchPanelState,
+} from "./features/thread-search/ThreadSearchPanel";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -403,6 +415,66 @@ function DesktopAppShell(props: {
     onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
+  // Browser-style back/forward across threads and the search view. The
+  // tracked location is (mainView, selected thread); Settings, Automations,
+  // and launchpads stay untracked — they're modal-ish chrome, not places
+  // you navigate back to (see useNavigationHistory). Search query/results
+  // live up here so Back lands on a still-populated results list after
+  // opening a result unmounts the panel.
+  const threadSearchState = useThreadSearchPanelState();
+  const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
+    if (mainView === "search") {
+      return { view: "search" };
+    }
+    if (mainView === "thread" && navigation.selectedThreadKey) {
+      return { view: "thread", threadKey: navigation.selectedThreadKey };
+    }
+    return undefined;
+  }, [mainView, navigation.selectedThreadKey]);
+  const showThread = navigation.showThread;
+  const restoreHistoryLocation = useCallback(
+    (location: NavigationHistoryLocation): void => {
+      if (location.view === "search") {
+        setMainView("search");
+        return;
+      }
+      setMainView("thread");
+      const parts = parseThreadIdentityKey(location.threadKey);
+      if (parts) {
+        void showThread(parts);
+      }
+    },
+    [showThread],
+  );
+  // Undefined while the snapshot is empty/loading so a transient blank
+  // thread list can't wipe the stacks; otherwise dead threads (archived,
+  // backend disconnected) are pruned from history.
+  const liveThreadKeys = useMemo<ReadonlySet<string> | undefined>(
+    () =>
+      navigation.threads.length > 0
+        ? new Set(
+            navigation.threads.map((thread) =>
+              buildThreadIdentityKey(thread.source, thread.id),
+            ),
+          )
+        : undefined,
+    [navigation.threads],
+  );
+  const history = useNavigationHistory({
+    current: historyLocation,
+    liveThreadKeys,
+    restore: restoreHistoryLocation,
+  });
+  useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  const historyNav: HistoryNavControls = useMemo(
+    () => ({
+      canGoBack: history.canGoBack,
+      canGoForward: history.canGoForward,
+      onBack: history.goBack,
+      onForward: history.goForward,
+    }),
+    [history],
+  );
   const baseComposerDraftStore = useComposerDraftStore();
   const composerDraftStore = useDurableComposerDraftStore(
     baseComposerDraftStore,
@@ -563,6 +635,7 @@ function DesktopAppShell(props: {
     settingsActive: mainView === "settings",
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
+    newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -576,6 +649,10 @@ function DesktopAppShell(props: {
     onCreateThread: async () => {
       setMainView("thread");
       await navigation.createThread();
+    },
+    onCreateThreadWithoutDirectory: async () => {
+      setMainView("thread");
+      await navigation.createThread(undefined, "default", { forceWorkspace: true });
     },
   };
   const threadViewProps = {
@@ -626,6 +703,9 @@ function DesktopAppShell(props: {
     onSelectDirectoryFromPicker: (directory) => {
       void navigation.openDirectoryLaunchpad(directory);
     },
+    onSelectNoDirectoryFromPicker: () => {
+      void navigation.openWorkspaceLaunchpad();
+    },
     onPickAndRegisterDirectory: () => {
       void navigation.pickAndRegisterDirectory();
     },
@@ -664,6 +744,7 @@ function DesktopAppShell(props: {
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,
+    historyNav,
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
@@ -673,6 +754,7 @@ function DesktopAppShell(props: {
       : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
+    onCancelLaunchpad: navigation.discardLaunchpad,
     onMaterializeLaunchpad: navigation.materializeDirectoryLaunchpad,
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
@@ -772,6 +854,7 @@ function DesktopAppShell(props: {
           launchpadError={navigation.launchpadError}
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+          composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}
@@ -779,9 +862,16 @@ function DesktopAppShell(props: {
           threadSearchActive={mainView === "search"}
           settingsActive={mainView === "settings"}
           onBrowseModeChange={navigation.setBrowseMode}
+          newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
           onCreateThread={async () => {
             setMainView("thread");
             await navigation.createThread();
+          }}
+          onCreateThreadWithoutDirectory={async () => {
+            setMainView("thread");
+            await navigation.createThread(undefined, "default", {
+              forceWorkspace: true,
+            });
           }}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");
@@ -849,6 +939,8 @@ function DesktopAppShell(props: {
                 onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
               }}
               masthead={mastheadActions}
+              history={historyNav}
+              state={threadSearchState}
               onOpenResult={async (result) => {
                 setMainView("thread");
                 await navigation.showThread(result);
@@ -867,6 +959,7 @@ function DesktopAppShell(props: {
                   onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
                 }}
                 masthead={mastheadActions}
+                history={historyNav}
               />
             </section>
           ) : ThreadViewComponent ? (
