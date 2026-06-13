@@ -115,6 +115,8 @@ import type {
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  ResolveEditCommitStatesRequest,
+  ResolveEditCommitStatesResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -300,6 +302,7 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+  NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
@@ -840,6 +843,13 @@ const desktopApi = Object.freeze({
   ): Promise<RefreshDirectoryGitStatusesResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+      request,
+    ),
+  resolveEditCommitStates: async (
+    request: ResolveEditCommitStatesRequest,
+  ): Promise<ResolveEditCommitStatesResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
       request,
     ),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>

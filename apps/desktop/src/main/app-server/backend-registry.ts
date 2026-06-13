@@ -57,6 +57,8 @@ import {
   type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
+  type EditGroupCommitInput,
+  type EditGroupCommitState,
   type LinkedDirectorySummary,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
@@ -5209,6 +5211,16 @@ export class DesktopBackendRegistry {
 
   invalidateWorktreeWorkingState(worktreePath?: string): void {
     this.gitWorkingStateService.invalidate(worktreePath);
+  }
+
+  async resolveEditCommitStates(
+    worktreePath: string,
+    groups: EditGroupCommitInput[],
+  ): Promise<Record<string, EditGroupCommitState>> {
+    return await this.gitWorkingStateService.resolveEditCommitStates(
+      worktreePath,
+      groups,
+    );
   }
 
   async readThread(

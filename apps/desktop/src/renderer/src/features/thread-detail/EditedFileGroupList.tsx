@@ -1,6 +1,11 @@
 import { useId, useState } from "react";
-import type { AppServerThreadActivityDetail } from "@pwragent/shared";
+import type {
+  AppServerThreadActivityDetail,
+  EditGroupCommitState,
+} from "@pwragent/shared";
 import { TranscriptDiff } from "./TranscriptDiff";
+import { DiffStat } from "./DiffStat";
+import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
 import {
   flattenEditedFileGroups,
   type EditedFileGroup,
@@ -11,6 +16,8 @@ export type EditedFileGroupView = "turns" | "files";
 type EditedFileGroupListProps = {
   /** Newest-first, from `collectEditedFileGroups`. */
   groups: EditedFileGroup[];
+  /** Git commit lifecycle per group key, from `useEditCommitStates`. */
+  commitStatesByKey?: Record<string, EditGroupCommitState>;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -85,6 +92,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
                 <EditedFileGroupSection
                   key={group.key}
                   group={group}
+                  commitState={props.commitStatesByKey?.[group.key]}
                   defaultExpanded={index === 0}
                 />
               ))}
@@ -117,6 +125,7 @@ function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
 
 function EditedFileGroupSection(props: {
   group: EditedFileGroup;
+  commitState?: EditGroupCommitState;
   defaultExpanded: boolean;
 }) {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
@@ -125,29 +134,37 @@ function EditedFileGroupSection(props: {
 
   return (
     <section className="edited-file-groups__group">
-      <button
-        type="button"
-        className="edited-file-groups__group-toggle"
-        aria-controls={bodyId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="live-work-rail__chevron" aria-hidden="true" />
-        <span className="edited-file-groups__group-summary">
-          {props.group.summary}
-        </span>
-        {props.group.live ? (
-          <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
-            This turn
+      <div className="edited-file-groups__group-header">
+        <button
+          type="button"
+          className="edited-file-groups__group-toggle"
+          aria-controls={bodyId}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span className="live-work-rail__chevron" aria-hidden="true" />
+          <span className="edited-file-groups__group-summary">
+            {props.group.summary}
           </span>
-        ) : null}
-        {props.group.committed ? (
-          <span className="edited-file-groups__group-tag">Committed</span>
-        ) : null}
-        {timestamp ? (
-          <span className="edited-file-groups__group-time">{timestamp}</span>
-        ) : null}
-      </button>
+          <DiffStat
+            additions={props.group.additions}
+            removals={props.group.removals}
+            className="diff-stat--chip"
+          />
+        </button>
+        <div className="edited-file-groups__group-meta">
+          {props.group.live ? (
+            <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
+              This turn
+            </span>
+          ) : (
+            <EditGroupCommitBadge state={props.commitState} />
+          )}
+          {timestamp ? (
+            <span className="edited-file-groups__group-time">{timestamp}</span>
+          ) : null}
+        </div>
+      </div>
       <div id={bodyId} hidden={!expanded}>
         {expanded ? <EditedFileList details={props.group.details} /> : null}
       </div>
@@ -190,14 +207,7 @@ export function EditedFileRow(props: {
         <span className="live-work-rail__file-path" title={props.detail.path}>
           {props.detail.label}
         </span>
-        <span className="live-work-rail__file-stats" aria-label="File diff summary">
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--removed">
-            -{removals.toLocaleString()}
-          </span>
-          <span className="live-work-rail__file-stat live-work-rail__file-stat--added">
-            +{additions.toLocaleString()}
-          </span>
-        </span>
+        <DiffStat additions={additions} removals={removals} />
       </button>
       {/* Diff container stays in the DOM (with `hidden`) so the
           row's `aria-controls={diffId}` always resolves. The

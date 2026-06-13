@@ -8620,6 +8620,34 @@ textarea,
   font-weight: 600;
 }
 
+/* Shared +A/-R stat: + (green) then - (red), no comma — consistent with the
+   thread-row dirty chip. `--chip` adds the pill treatment for the group
+   header; bare it sits inline in the per-file rows. */
+.diff-stat {
+  display: inline-flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-stat__added {
+  color: var(--success-text);
+}
+
+.diff-stat__removed {
+  color: var(--danger-text);
+}
+
+.diff-stat--chip {
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+}
+
 .live-work-rail__file-stat--added {
   color: var(--success-text);
 }
@@ -8698,14 +8726,32 @@ textarea,
   outline-offset: 1px;
 }
 
+/* Two-row card header: the "Edited N files" summary gets its own line so
+   the commit badges can't crush it, with the badge + date on a wrapping
+   second line. Sticky so the header pins to the top of the scroll region
+   while a long diff scrolls beneath it (the opaque card background hides the
+   scrolled content). */
+.edited-file-groups__group-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
 .edited-file-groups__group-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -8715,8 +8761,17 @@ textarea,
 }
 
 .edited-file-groups__group-toggle:hover {
-  background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+/* Second row: badge (left) + date (right), aligned under the summary text
+   (past the chevron). Wraps rather than truncating on a narrow rail. */
+.edited-file-groups__group-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding-left: 22px;
 }
 
 .edited-file-groups__group-summary {
@@ -8747,8 +8802,94 @@ textarea,
   color: var(--accent-bright);
 }
 
+/* Per-group git lifecycle: uncommitted → committed (with copyable SHA chip)
+   → pushed / local. Mirrors the group-tag pill scale. */
+.edit-commit-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.edit-commit-badge--uncommitted {
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  color: var(--status-warning);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__label {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__sha {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.edit-commit-badge__sha:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.edit-commit-badge__sha:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.edit-commit-badge__sha-value {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.edit-commit-badge__sha-action {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__push {
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-commit-badge__push--pushed {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.edit-commit-badge__push--local {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+}
+
 .edited-file-groups__group-time {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
 }

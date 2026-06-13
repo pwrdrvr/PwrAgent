@@ -1286,15 +1286,20 @@ export function getBasename(path: string): string {
   return segments[segments.length - 1] || path;
 }
 
+export function formatChangedFileCount(params: {
+  count: number;
+  prefix: "Changed" | "Edited";
+}): string {
+  return `${params.prefix} ${params.count} file${params.count === 1 ? "" : "s"}`;
+}
+
 export function formatChangedFileSummary(params: {
   count: number;
   prefix: "Changed" | "Edited";
   additions: number;
   removals: number;
 }): string {
-  const parts = [
-    `${params.prefix} ${params.count} file${params.count === 1 ? "" : "s"}`,
-  ];
+  const parts = [formatChangedFileCount(params)];
   if (params.additions > 0 || params.removals > 0) {
     parts.push(
       `+${params.additions.toLocaleString()}, -${params.removals.toLocaleString()}`

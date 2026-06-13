@@ -89,6 +89,8 @@ export const NAVIGATION_GET_GH_STATUS_CHANNEL =
   "navigation:get-gh-status";
 export const NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL =
   "navigation:refresh-directory-git-statuses";
+export const NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL =
+  "navigation:resolve-edit-commit-states";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =

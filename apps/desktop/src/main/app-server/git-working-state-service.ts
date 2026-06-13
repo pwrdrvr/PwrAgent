@@ -1,6 +1,15 @@
+import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import type { ThreadGitWorkingState } from "@pwragent/shared";
+import type {
+  EditGroupCommitInput,
+  EditGroupCommitState,
+  ThreadGitWorkingState,
+} from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
+
+function normalizeAbsolutePath(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
 
 type GitCommandRunner = (
   cwd: string,
@@ -205,5 +214,95 @@ export class GitWorkingStateService {
       return;
     }
     this.cache.delete(key);
+  }
+
+  /**
+   * Resolve the git commit lifecycle of a thread's edited-file groups against
+   * the live worktree. For each group: it's `committed` when none of its files
+   * still differ from HEAD or sit untracked; if committed, `git log` gives the
+   * most recent commit touching those files, and a remote-reachability check
+   * marks it pushed vs local-only. Read-only and lock-safe. Git itself
+   * normalizes the (absolute) paths, so callers don't path-match.
+   */
+  async resolveEditCommitStates(
+    worktreePath: string,
+    groups: EditGroupCommitInput[],
+  ): Promise<Record<string, EditGroupCommitState>> {
+    const cwd = worktreePath?.trim();
+    const states: Record<string, EditGroupCommitState> = {};
+    if (!cwd || groups.length === 0) {
+      return states;
+    }
+
+    const gitEnv = this.gitEnv;
+    const noLocks = (args: string[]): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], gitEnv);
+
+    // The set of files that still have working-tree changes (tracked diffs vs
+    // HEAD + untracked). Clean newline-separated relative paths — easier to
+    // parse than `status --porcelain` status codes / rename arrows.
+    const [diffOutput, untrackedOutput] = await Promise.all([
+      noLocks(["diff", "--name-only", "HEAD"]).catch(() => ""),
+      noLocks(["ls-files", "--others", "--exclude-standard"]).catch(() => ""),
+    ]);
+    const dirtyPaths = new Set<string>();
+    for (const line of `${diffOutput}\n${untrackedOutput}`.split("\n")) {
+      const relative = line.trim();
+      if (relative) {
+        dirtyPaths.add(normalizeAbsolutePath(path.resolve(cwd, relative)));
+      }
+    }
+
+    const pushedBySha = new Map<string, boolean>();
+    for (const group of groups) {
+      const paths = [
+        ...new Set(group.paths.map((value) => value.trim()).filter(Boolean)),
+      ];
+      if (paths.length === 0) {
+        states[group.key] = { committed: false };
+        continue;
+      }
+
+      const committed = paths.every(
+        (value) => !dirtyPaths.has(normalizeAbsolutePath(value)),
+      );
+      if (!committed) {
+        states[group.key] = { committed: false };
+        continue;
+      }
+
+      const sha = (
+        await noLocks(["log", "-1", "--format=%H", "--", ...paths]).catch(
+          () => "",
+        )
+      ).trim();
+      if (!sha) {
+        states[group.key] = { committed: true };
+        continue;
+      }
+
+      let pushed = pushedBySha.get(sha);
+      if (pushed === undefined) {
+        // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
+        // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no
+        // remotes configured, nothing is excluded ⇒ non-empty ⇒ local-only.
+        const localOnly = (
+          await noLocks(["rev-list", "-1", sha, "--not", "--remotes"]).catch(
+            () => "",
+          )
+        ).trim();
+        pushed = localOnly === "";
+        pushedBySha.set(sha, pushed);
+      }
+
+      states[group.key] = {
+        committed: true,
+        commitSha: sha,
+        shortSha: sha.slice(0, 7),
+        pushed,
+      };
+    }
+
+    return states;
   }
 }

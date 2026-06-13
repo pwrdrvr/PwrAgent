@@ -530,6 +530,39 @@ export type RefreshDirectoryGitStatusesResponse = {
   scheduledCount: number;
 };
 
+/**
+ * One accumulated edited-file group to resolve git commit state for. `key`
+ * is the rail's stable group key; `paths` are the absolute file paths the
+ * group edited.
+ */
+export type EditGroupCommitInput = {
+  key: string;
+  paths: string[];
+};
+
+/**
+ * Git lifecycle of an edited-file group, resolved against the live worktree
+ * (not the agent's command transcript). A group is `committed` when none of
+ * its files still have uncommitted working-tree changes; `commitSha` is the
+ * most recent commit touching those files, and `pushed` reflects whether that
+ * commit is reachable from any remote ref (omitted when it can't be told).
+ */
+export type EditGroupCommitState = {
+  committed: boolean;
+  commitSha?: string;
+  shortSha?: string;
+  pushed?: boolean;
+};
+
+export type ResolveEditCommitStatesRequest = {
+  worktreePath: string;
+  groups: EditGroupCommitInput[];
+};
+
+export type ResolveEditCommitStatesResponse = {
+  states: Record<string, EditGroupCommitState>;
+};
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 

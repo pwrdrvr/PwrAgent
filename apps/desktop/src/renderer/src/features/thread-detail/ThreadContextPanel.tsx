@@ -11,7 +11,11 @@ import {
   type PointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  BackendSummary,
+  EditGroupCommitState,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
@@ -94,6 +98,7 @@ type ThreadContextPanelProps = {
   onActiveTabChange: (tab: ContextTabId) => void;
   /** Accumulated edited-file groups for the Edits tab (newest first). */
   editedFileGroups?: EditedFileGroup[];
+  editedFileCommitStates?: Record<string, EditGroupCommitState>;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };
@@ -595,6 +600,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <EditsPanel
             groups={props.editedFileGroups ?? []}
+            commitStatesByKey={props.editedFileCommitStates}
             dock={props.editedFilesDock ?? "above"}
             onDockChange={props.onEditedFilesDockChange ?? noop}
           />
