@@ -39,6 +39,8 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
   selectVisibleRateLimits,
@@ -95,6 +97,10 @@ type SidebarProps = {
   ) => Promise<void>;
   onOpenAutomations?: () => void;
   onOpenThreadSearch?: () => void;
+  /** Quick-jump popup (⌘F while the sidebar is focused), owned by App. */
+  threadJumpOpen?: boolean;
+  onThreadJumpOpenChange?: (open: boolean) => void;
+  onJumpToThread?: (thread: NavigationThreadSummary) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -698,6 +704,13 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      {props.threadJumpOpen ? (
+        <SidebarSearchPopup
+          threads={props.threads}
+          onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
+          onClose={() => props.onThreadJumpOpenChange?.(false)}
+        />
+      ) : null}
       <div
         aria-label="Resize thread sidebar"
         aria-orientation="vertical"
@@ -724,6 +737,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
             ariaLabel="Search threads"
+            tooltipText={`Search threads  (${formatPrimaryAccel("F", { shift: true })})`}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
             onClick={props.onOpenThreadSearch}
@@ -1478,9 +1492,12 @@ function MastheadActionButton(props: {
   children: ReactNode;
   className: string;
   disabled?: boolean;
+  /** Tooltip text; defaults to ariaLabel. Use to append a shortcut hint. */
+  tooltipText?: string;
   onClick?: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipLabel = props.tooltipText ?? props.ariaLabel;
 
   return (
     <>
@@ -1495,8 +1512,8 @@ function MastheadActionButton(props: {
           tooltip.hide();
           props.onClick?.();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.ariaLabel)}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
         onMouseLeave={tooltip.hide}
       >
         {props.children}

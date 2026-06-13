@@ -8,6 +8,7 @@ import {
 import type {
   AppServerBackendKind,
   MessagingChannelKind,
+  NavigationThreadSummary,
   ThreadSearchConfidenceBand,
   ThreadSearchMatchReasonKind,
   ThreadSearchResponse,
@@ -17,6 +18,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
+import { mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
 /**
@@ -65,6 +67,12 @@ type ThreadSearchPanelProps = {
   /** Back/Forward pair for the title bar, forwarded to the header. */
   history?: HistoryNavControls;
   /**
+   * The full navigation thread list, used to resolve bare PR-number queries
+   * ("#779" / "779") against persisted overlay PRs — those aren't in the FTS
+   * index, so the matches are merged in client-side.
+   */
+  threads?: readonly NavigationThreadSummary[];
+  /**
    * Lifted query/results state (see {@link useThreadSearchPanelState}).
    * Optional so the component still renders self-contained in unit tests;
    * App supplies it so results survive opening a result.
@@ -82,6 +90,7 @@ const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
   branch_match: "Branch match",
   backend_match: "Backend match",
   model_match: "Model match",
+  pr_number_match: "PR match",
   time_filter: "Recent",
   archive_filter: "Archived",
   provider_content_match: "Message content",
@@ -230,13 +239,12 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     setLoading(true);
     setError(undefined);
     try {
-      setResponse(
-        await props.desktopApi.searchThreads({
-          contentMode: "available",
-          limit: 25,
-          query: trimmed,
-        }),
-      );
+      const result = await props.desktopApi.searchThreads({
+        contentMode: "available",
+        limit: 25,
+        query: trimmed,
+      });
+      setResponse(mergePrNumberMatches(result, trimmed, props.threads));
     } catch (searchError) {
       setError(searchError instanceof Error ? searchError.message : String(searchError));
     } finally {

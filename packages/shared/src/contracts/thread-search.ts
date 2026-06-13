@@ -55,6 +55,7 @@ export const THREAD_SEARCH_MATCH_REASON_KINDS = [
   "branch_match",
   "backend_match",
   "model_match",
+  "pr_number_match",
   "time_filter",
   "archive_filter",
   "provider_content_match",
