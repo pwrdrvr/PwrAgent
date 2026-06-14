@@ -1117,6 +1117,21 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+function measureThreadPreviewBytes(thread: RawCodexThreadSummary): number {
+  const record = asRecord(thread);
+  if (!record) {
+    return 0;
+  }
+  const preview = pickString(record, [
+    "preview",
+    "summary",
+    "snippet",
+    "firstUserMessage",
+    "first_user_message",
+  ]);
+  return preview ? Buffer.byteLength(preview) : 0;
+}
+
 function normalizeSessionOriginator(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized || undefined;
@@ -4854,8 +4869,7 @@ async function requestThreadListPages(params: {
     rawThreadCount += page.threads.length;
     maxPageThreads = Math.max(maxPageThreads, page.threads.length);
     for (const thread of page.threads) {
-      const threadPreviewBytes =
-        typeof thread.preview === "string" ? Buffer.byteLength(thread.preview) : 0;
+      const threadPreviewBytes = measureThreadPreviewBytes(thread);
       previewBytes += threadPreviewBytes;
       maxPreviewBytes = Math.max(maxPreviewBytes, threadPreviewBytes);
     }
