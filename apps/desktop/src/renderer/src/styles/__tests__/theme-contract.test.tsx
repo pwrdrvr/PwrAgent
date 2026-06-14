@@ -132,6 +132,9 @@ describe("Tangerine Terminal theme contract", () => {
       "thinking-scanner-beam-width",
       "thinking-scanner-delay",
       "thinking-scanner-travel",
+      // Edits-rail sticky-stack geometry: a local layout custom property
+      // (set + read on `.edited-file-groups`), not a theme token.
+      "edits-view-toggle-height",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

@@ -53,31 +53,33 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
 
   return (
     <div className="edited-file-groups">
-      <div
-        className="edited-file-groups__view-toggle"
-        role="group"
-        aria-label="Edited files view"
-      >
-        <button
-          type="button"
-          className={`edited-file-groups__view-btn${
-            view === "turns" ? " is-active" : ""
-          }`}
-          aria-pressed={view === "turns"}
-          onClick={() => setView("turns")}
+      <div className="edited-file-groups__view-toggle">
+        <div
+          className="edited-file-groups__view-toggle-inner"
+          role="group"
+          aria-label="Edited files view"
         >
-          By turn
-        </button>
-        <button
-          type="button"
-          className={`edited-file-groups__view-btn${
-            view === "files" ? " is-active" : ""
-          }`}
-          aria-pressed={view === "files"}
-          onClick={() => setView("files")}
-        >
-          All files
-        </button>
+          <button
+            type="button"
+            className={`edited-file-groups__view-btn${
+              view === "turns" ? " is-active" : ""
+            }`}
+            aria-pressed={view === "turns"}
+            onClick={() => setView("turns")}
+          >
+            By turn
+          </button>
+          <button
+            type="button"
+            className={`edited-file-groups__view-btn${
+              view === "files" ? " is-active" : ""
+            }`}
+            aria-pressed={view === "files"}
+            onClick={() => setView("files")}
+          >
+            All files
+          </button>
+        </div>
       </div>
 
       {view === "turns" ? (

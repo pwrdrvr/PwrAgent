@@ -20,7 +20,7 @@ type EditsPanelProps = {
  */
 export function EditsPanel(props: EditsPanelProps) {
   return (
-    <section className="context-panel__section">
+    <section className="context-panel__section context-panel__section--edits">
       <div className="edits-panel__header">
         <h3>Edits</h3>
         <button

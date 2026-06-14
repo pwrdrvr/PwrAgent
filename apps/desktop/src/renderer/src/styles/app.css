@@ -8598,11 +8598,15 @@ textarea,
   font-size: 12px;
   text-align: left;
   /* Stay reachable while scrolling through an expanded file's diff
-     (#510). Sticky stacking is handled by the browser: when the next
-     file-toggle reaches top, it pushes the previous one out.
-     z-index sits above the diff body. */
+     (#510). Pins BELOW the group header (which pins below the controls)
+     and sits at the bottom of the sticky z-index ladder, so the file row
+     scrolls behind the group header rather than over it. */
   position: sticky;
-  top: 0;
+  /* Fallbacks resolve to 0 in the single-group view (rendered without the
+     `.edited-file-groups` wrapper, so no controls/group header sit above). */
+  top: calc(
+    var(--edits-controls-bottom, 0px) + var(--edits-group-header-height, 0px)
+  );
   z-index: 1;
 }
 
@@ -8655,9 +8659,33 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Sticky-stack geometry. `--edits-sticky-base` (set on the scroll
+     container) is the height of any header pinned ABOVE the view toggle:
+     0 in the LiveWorkRail (its title sits outside the scroll), the panel
+     header's height in the context-rail Edits panel. The view toggle pins at
+     the base; the group header and file rows stack below it. The heights are
+     estimates — tune against the running app. */
+  --edits-view-toggle-height: 30px;
+  --edits-group-header-height: 52px;
+  --edits-controls-bottom: calc(
+    var(--edits-sticky-base, 0px) + var(--edits-view-toggle-height)
+  );
 }
 
+/* Full-bleed sticky bar so content scrolls behind the toggle, not past the
+   sides of the pill. */
 .edited-file-groups__view-toggle {
+  position: sticky;
+  top: var(--edits-sticky-base, 0px);
+  z-index: 3;
+  display: flex;
+  align-self: stretch;
+  width: 100%;
+  padding-block: 4px;
+  background: var(--bg-panel-elevated);
+}
+
+.edited-file-groups__view-toggle-inner {
   display: inline-flex;
   align-self: flex-start;
   gap: 0;
@@ -8725,8 +8753,13 @@ textarea,
   gap: 2px;
   min-width: 0;
   position: sticky;
-  top: 0;
-  z-index: 1;
+  /* Sticky ladder (mirrors the Directories tab): the controls pin above the
+     group header, which pins above the file rows, each in a DESCENDING
+     z-index so lower levels scroll BEHIND higher ones instead of painting
+     over them. `top` stacks below the controls via `--edits-controls-bottom`
+     (the bottom edge of the pinned view toggle), set on `.edited-file-groups`. */
+  top: var(--edits-controls-bottom, 0px);
+  z-index: 2;
   padding: 5px 6px;
   border-radius: 6px;
   background: var(--bg-panel-elevated);
@@ -8877,13 +8910,23 @@ textarea,
 }
 
 /* Context-rail Edits panel: section header carries the dock toggle so
-   "Only show here" / "Show above composer" sits next to the title. */
+   "Only show here" / "Show above composer" sits next to the title.
+   Pinned at the very top of the scroll region (z-index 4 — the top of the
+   edits sticky ladder) so the title + dock toggle stay put while a long
+   diff scrolls beneath. The 8px below the title is `padding-bottom`, not
+   `margin-bottom`, so the opaque background extends through that gap and
+   no scrolled content peeks between the header and the sticky view toggle
+   that pins just under it (at `--edits-sticky-base`). */
 .edits-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding-bottom: 8px;
+  background: var(--bg-panel-elevated);
 }
 
 .edits-panel__dock-toggle {
@@ -10373,6 +10416,18 @@ textarea,
 .context-panel__section--status {
   margin-top: auto;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* Edits panel: the sticky "Edits" header (pinned at the scroll top) is the
+   chrome that pins ABOVE the edited-file-groups view toggle, so the toggle —
+   and the group header below it — must start beneath the header's height.
+   Feed that height to the sticky ladder via `--edits-sticky-base`. Estimate
+   (14px title + 8px padding-bottom, rounded down so the toggle overlaps the
+   header's opaque padding rather than leaving a gap); tune against the app.
+   The LiveWorkRail leaves this unset (its title sits outside the scroll
+   body, so the view toggle pins at 0). */
+.context-panel__section--edits {
+  --edits-sticky-base: 26px;
 }
 
 .context-list {
