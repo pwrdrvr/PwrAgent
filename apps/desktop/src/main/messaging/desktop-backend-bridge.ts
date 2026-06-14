@@ -9,6 +9,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -147,6 +149,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
     return await this.registry.handoffThreadWorkspace(request);
+  }
+
+  async ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    return await this.registry.ensureDirectoryLaunchpad(request);
   }
 
   async materializeDirectoryLaunchpad(

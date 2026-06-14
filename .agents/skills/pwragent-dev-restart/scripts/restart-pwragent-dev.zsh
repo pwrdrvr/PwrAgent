@@ -7,9 +7,9 @@ Usage:
   restart-pwragent-dev.zsh schedule [--root PATH] [--delay SECONDS] [--log PATH] [--dry-run]
   restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run] [--detach-start]
 
-Schedules or performs a local PwrAgent dev restart. The restart stops processes
-that match the target checkout path plus the bounded parent dev-server chain,
-then starts `pnpm dev` from the target checkout.
+Schedules or performs a local PwrAgent dev-profile restart. The restart stops
+processes that match the target checkout path plus the bounded parent
+dev-server chain, then starts `pnpm dev:dev` from the target checkout.
 USAGE
 }
 
@@ -19,6 +19,12 @@ timestamp() {
 
 shell_quote() {
   printf "%q" "$1"
+}
+
+detached_session_name() {
+  local checksum
+  checksum="$(print -rn -- "$root" | cksum | awk '{print $1}')"
+  print -r -- "pwragent-dev-$checksum"
 }
 
 log_line() {
@@ -95,6 +101,7 @@ matching_pids() {
     [[ "$pid" == "$PPID" ]] && continue
     command="$(process_command "$pid")"
     [[ "$command" == *"restart-pwragent-dev.zsh"* ]] && continue
+    is_restart_excluded_process "$command" && continue
     print -r -- "$pid"
   done
 }
@@ -116,6 +123,16 @@ is_dev_chain_parent() {
   return 1
 }
 
+is_restart_excluded_process() {
+  local command="$1"
+  # Codex helper processes can include the checkout path in JSON payloads even
+  # though they are not part of the running PwrAgent dev app.
+  [[ "$command" == *"/.codex/computer-use/"* ]] && return 0
+  [[ "$command" == *"SkyComputerUseClient"* ]] && return 0
+  [[ "$command" == *"turn-ended"* ]] && return 0
+  return 1
+}
+
 candidate_pids() {
   local command parent pid
   for pid in $(matching_pids "$root"); do
@@ -125,6 +142,7 @@ candidate_pids() {
     while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
       [[ "$parent" == "$$" || "$parent" == "$PPID" ]] && break
       command="$(process_command "$parent")"
+      is_restart_excluded_process "$command" && break
       if [[ "$command" == *"$root"* ]] || is_dev_chain_parent "$command"; then
         print -r -- "$parent"
         parent="$(parent_pid "$parent")"
@@ -191,14 +209,23 @@ restart_now() {
   sleep 5
   stop_matches KILL
 
-  log_line "starting pnpm dev in $root"
+  log_line "starting pnpm dev:dev in $root"
   if [[ "$detach_start" == "true" ]]; then
-    nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev" >> "$log_path" 2>&1 &
-    log_line "started detached pnpm dev pid=$!"
+    if command -v tmux >/dev/null 2>&1; then
+      local session_name start_command
+      session_name="$(detached_session_name)"
+      start_command="pnpm dev:dev >> $(shell_quote "$log_path") 2>&1"
+      tmux has-session -t "$session_name" 2>/dev/null && tmux kill-session -t "$session_name" 2>/dev/null || true
+      tmux new-session -d -s "$session_name" -c "$root" "/bin/zsh -lc $(shell_quote "$start_command")"
+      log_line "started detached tmux session=$session_name command=pnpm dev:dev"
+    else
+      nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev" >> "$log_path" 2>&1 &
+      log_line "started detached pnpm dev:dev pid=$!"
+    fi
     return 0
   fi
 
-  exec /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev"
+  exec /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev"
 }
 
 run_main() {

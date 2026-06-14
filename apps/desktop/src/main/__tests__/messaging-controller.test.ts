@@ -9,6 +9,8 @@ import type {
   AppServerPendingRequestNotification,
   BackendSummary,
   CancelThreadExecutionModeQueueRequest,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadOptions,
@@ -24,6 +26,7 @@ import type {
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
+import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared";
 import type {
   MessagingCapabilityProfile,
   MessagingSurfaceAction,
@@ -913,7 +916,6 @@ describe("MessagingController", () => {
       title: "Ready to start",
       body: expect.stringContaining("PwrAgent"),
       actions: expect.arrayContaining([
-        expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
         expect.objectContaining({ id: "browse:new:streaming" }),
@@ -923,6 +925,8 @@ describe("MessagingController", () => {
     });
     expect(readyIntent).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
+        expect.objectContaining({ id: "browse:new:workspace:local" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1247,9 +1251,18 @@ describe("MessagingController", () => {
         },
       }),
     );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:workspace:toggle",
+          label: "Start In: Local",
+        }),
+      ]),
+    });
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
-        actionId: "browse:new:workspace:worktree",
+        actionId: "browse:new:workspace:toggle",
       }),
     );
 
@@ -1257,6 +1270,10 @@ describe("MessagingController", () => {
       kind: "confirmation",
       body: expect.stringContaining("Workspace: New Worktree"),
       actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:workspace:toggle",
+          label: "Start In: New Worktree",
+        }),
         expect.objectContaining({
           id: "browse:new:base-branch",
           label: "Base: main",
@@ -1337,6 +1354,7 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1359,6 +1377,7 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
@@ -1414,7 +1433,7 @@ describe("MessagingController", () => {
       }),
     );
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "browse:new:workspace:worktree" }),
+      buildCallbackEvent({ actionId: "browse:new:workspace:toggle" }),
     );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:base-branch" }),
@@ -4611,6 +4630,138 @@ describe("MessagingController", () => {
     );
   });
 
+  it("hydrates project environments before rendering the new-thread ready card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgnt",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (
+        request: EnsureDirectoryLaunchpadRequest,
+      ): Promise<EnsureDirectoryLaunchpadResponse> => ({
+        defaults: navigation.launchpadDefaults,
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/repo/pwragent",
+          backend: request.preferredBackend ?? "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentId: "pwragnt",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentOptions: [
+            {
+              id: "pwragnt",
+              name: "PwrAgnt",
+              sourcePath: "/repo/pwragent/.codex/environments/pwragnt.toml",
+              setupScript: "pnpm install",
+              actions: [],
+            },
+          ],
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      }),
+    );
+    const harness = await createHarness({
+      navigation,
+      ensureDirectoryLaunchpad,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgnt",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        preferredBackend: "codex",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: PwrAgnt"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:environment",
+          label: "Environment: PwrAgnt",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:environment" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Environment",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "PwrAgnt (current)",
+          value: { environmentId: "pwragnt" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "pwragnt" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: PwrAgnt"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the build"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        launchpad: expect.objectContaining({
+          codexEnvironmentId: "pwragnt",
+          codexEnvironmentExecutionTarget: "local",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0]).not.toEqual(
+      expect.objectContaining({
+        input: expect.anything(),
+      }),
+    );
+  });
+
   it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
@@ -5335,12 +5486,6 @@ describe("MessagingController", () => {
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        input: [
-          {
-            type: "text",
-            text: "Install deps and run tests",
-          },
-        ],
         launchpad: expect.objectContaining({
           codexEnvironmentId: "dev-env",
           codexEnvironmentExecutionTarget: "local",
@@ -5348,7 +5493,368 @@ describe("MessagingController", () => {
       }),
       expectMaterializeOptions(),
     );
-    expect(harness.startTurn).not.toHaveBeenCalled();
+    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    expect(materializeRequest).not.toHaveProperty("input");
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Install deps and run tests",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("continues the first messaging turn when selected environment setup fails", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentId: "dev-env",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentOptions: [
+          {
+            id: "dev-env",
+            name: "Dev Environment",
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+            setupScript: "pnpm install",
+            actions: [],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "started",
+          at: 1000,
+        });
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "failed",
+          error: "install failed",
+          output: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+          exitCode: 1,
+          durationMs: 2500,
+          at: 3500,
+        });
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local",
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed",
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup",
+            worktreeCleanupAvailable: false,
+          },
+        });
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local" as const,
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed" as const,
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup" as const,
+            worktreeCleanupAvailable: false,
+          },
+        };
+      },
+    );
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix the install"));
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        input: expect.anything(),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Environment setup running",
+        body: expect.stringContaining("Environment: Dev Environment"),
+      }),
+    );
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        title: "Environment setup failed",
+        body: expect.stringContaining(
+          "The thread was created and your first message will still be submitted.",
+        ),
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Fix the install",
+          },
+        ],
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+    });
+  });
+
+  it("drains environment setup progress before delivering final setup status", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        codexEnvironmentId: "dev-env",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentOptions: [
+          {
+            id: "dev-env",
+            name: "Dev Environment",
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+            setupScript: "pnpm install",
+            actions: [],
+          },
+        ],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    let resolveProgressStarted!: () => void;
+    let resolveProgressDelivery!: () => void;
+    const progressStarted = new Promise<void>((resolve) => {
+      resolveProgressStarted = resolve;
+    });
+    const progressDelivery = new Promise<void>((resolve) => {
+      resolveProgressDelivery = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (
+        request: MaterializeDirectoryLaunchpadRequest,
+        options?: MaterializeDirectoryLaunchpadOptions,
+      ) => {
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "started",
+          at: 1000,
+        });
+        options?.onCodexEnvironmentSetupProgress?.({
+          directoryKey: request.directoryKey,
+          environmentId: "dev-env",
+          environmentName: "Dev Environment",
+          command: "pnpm install",
+          cwd: "/repo/pwragent",
+          phase: "failed",
+          error: "install failed",
+          output: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+          exitCode: 1,
+          durationMs: 2500,
+          at: 3500,
+        });
+        await options?.onThreadMaterialized?.({
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local",
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed",
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup",
+            worktreeCleanupAvailable: false,
+          },
+        });
+        return {
+          backend: request.launchpad?.backend ?? "codex",
+          threadId: "new-thread-1",
+          executionMode: request.launchpad?.executionMode ?? "default",
+          workMode: request.launchpad?.workMode ?? "local",
+          codexEnvironmentRuntime: {
+            environmentId: "dev-env",
+            environmentName: "Dev Environment",
+            executionTarget: "local" as const,
+            cwd: "/repo/pwragent",
+            setupEnabled: true,
+            setupCommand: "pnpm install",
+            setupStatus: "failed" as const,
+            setupOutput: "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL",
+            setupExitCode: 1,
+            setupDurationMs: 2500,
+            actions: [],
+            sourcePath: "/repo/pwragent/.codex/environments/dev.toml",
+          },
+          codexEnvironmentStartupFailure: {
+            message: "install failed",
+            phase: "setup" as const,
+            worktreeCleanupAvailable: false,
+          },
+        };
+      },
+    );
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+      deliver: async (intent) => {
+        if (intent.kind === "confirmation" && intent.title === "Environment setup running") {
+          resolveProgressStarted();
+          await progressDelivery;
+        }
+        delivered.push(intent);
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    const firstPrompt = harness.controller.handleInboundEvent(
+      buildTextEvent("Fix the install"),
+    );
+    await progressStarted;
+
+    expect(delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        title: "Environment setup failed",
+      }),
+    );
+
+    resolveProgressDelivery();
+    await firstPrompt;
+
+    const progressIndex = delivered.findIndex(
+      (intent) =>
+        intent.kind === "confirmation" &&
+        intent.title === "Environment setup running",
+    );
+    const finalIndex = delivered.findIndex(
+      (intent) => intent.kind === "error" && intent.title === "Environment setup failed",
+    );
+    expect(progressIndex).toBeGreaterThanOrEqual(0);
+    expect(finalIndex).toBeGreaterThan(progressIndex);
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+      }),
+    );
   });
 
   it("clears a saved Codex environment action when switching environments", async () => {
@@ -12357,6 +12863,9 @@ async function createHarness(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  ensureDirectoryLaunchpad?: NonNullable<
+    MessagingBackendBridge["ensureDirectoryLaunchpad"]
+  >;
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
@@ -12410,6 +12919,7 @@ async function createHarness(options?: {
   compactThread: ReturnType<typeof vi.fn>;
   cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
+  ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -12476,6 +12986,46 @@ async function createHarness(options?: {
   };
   const getNavigationSnapshot = vi.fn(
     async () => options?.navigation ?? buildNavigationSnapshot(),
+  );
+  const ensureDirectoryLaunchpad = vi.fn(
+    options?.ensureDirectoryLaunchpad ??
+      (async (
+        request: EnsureDirectoryLaunchpadRequest,
+      ): Promise<EnsureDirectoryLaunchpadResponse> => {
+        const snapshot = options?.navigation ?? buildNavigationSnapshot();
+        const directory = snapshot.directories.find(
+          (candidate) => candidate.key === request.directoryKey,
+        );
+        const defaults = request.preferredBackend
+          ? applyNavigationLaunchpadProviderSettingsPatch(snapshot.launchpadDefaults, {
+              backend: request.preferredBackend,
+            })
+          : snapshot.launchpadDefaults;
+        return {
+          defaults,
+          launchpad: {
+            ...(directory?.launchpad ?? {
+              directoryKey: request.directoryKey,
+              directoryKind: request.directoryKind,
+              directoryLabel: request.directoryLabel,
+              directoryPath: request.directoryPath,
+              backend: request.preferredBackend ?? defaults.backend,
+              executionMode: defaults.executionMode,
+              model: defaults.model,
+              reasoningEffort: defaults.reasoningEffort,
+              serviceTier: defaults.serviceTier,
+              fastMode: defaults.fastMode,
+              acpRuntime: defaults.acpRuntime,
+              providerSettings: defaults.providerSettings,
+              prompt: "",
+              workMode: defaults.workMode ?? "local",
+              createdAt: 1000,
+              updatedAt: 1000,
+            }),
+            ...(request.preferredBackend ? { backend: request.preferredBackend } : {}),
+          },
+        };
+      }),
   );
   const startThread = vi.fn(
     options?.startThread ??
@@ -12718,6 +13268,7 @@ async function createHarness(options?: {
   const backend: MessagingBackendBridge = {
     compactThread,
     cancelThreadExecutionModeQueue,
+    ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -12776,6 +13327,7 @@ async function createHarness(options?: {
     compactThread,
     cancelThreadExecutionModeQueue,
     delivered,
+    ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     handoffThreadWorkspace,
     interruptTurn,
