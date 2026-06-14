@@ -263,6 +263,14 @@ const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>
 ]);
 const codexClientLog = getMainLogger("pwragent:codex-client");
 
+function logCodexClientDebug(event: string, payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+
+  codexClientLog.info(event, payload);
+}
+
 function isApprovalLikeMethod(method: string): boolean {
   return method.endsWith("/requestApproval");
 }
@@ -4823,6 +4831,13 @@ async function requestThreadListPages(params: {
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
+  const startedAt = Date.now();
+  let maxPageThreads = 0;
+  let maxPreviewBytes = 0;
+  let pageCount = 0;
+  let previewBytes = 0;
+  let rawThreadCount = 0;
+  let terminalReason: "no-next-cursor" | "repeated-cursor" | undefined;
   let cursor: string | undefined;
 
   do {
@@ -4835,9 +4850,24 @@ async function requestThreadListPages(params: {
     });
     const page = extractThreadListPage(result);
     pages.push(...page.threads);
+    pageCount += 1;
+    rawThreadCount += page.threads.length;
+    maxPageThreads = Math.max(maxPageThreads, page.threads.length);
+    for (const thread of page.threads) {
+      const threadPreviewBytes =
+        typeof thread.preview === "string" ? Buffer.byteLength(thread.preview) : 0;
+      previewBytes += threadPreviewBytes;
+      maxPreviewBytes = Math.max(maxPreviewBytes, threadPreviewBytes);
+    }
 
     const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor || seenCursors.has(nextCursor)) {
+    if (!nextCursor) {
+      terminalReason = "no-next-cursor";
+      cursor = undefined;
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      terminalReason = "repeated-cursor";
       cursor = undefined;
       break;
     }
@@ -4846,7 +4876,23 @@ async function requestThreadListPages(params: {
     cursor = nextCursor;
   } while (cursor);
 
-  return mergeThreadSummaries(pages);
+  const mergedThreads = mergeThreadSummaries(pages);
+  logCodexClientDebug("threadListPages", {
+    archived: params.archived === true,
+    callerReason: params.diagnostics?.callerReason ?? "thread-list",
+    durationMs: Date.now() - startedAt,
+    filterPresent: Boolean(params.filter?.trim()),
+    maxPageThreads,
+    maxPreviewBytes,
+    mergedThreadCount: mergedThreads.length,
+    ownerId: params.diagnostics?.ownerId,
+    pageCount,
+    previewBytes,
+    rawThreadCount,
+    terminalReason,
+  });
+
+  return mergedThreads;
 }
 
 type HelperTurnResult =
