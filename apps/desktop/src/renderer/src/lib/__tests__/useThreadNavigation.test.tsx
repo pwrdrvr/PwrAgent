@@ -4819,6 +4819,13 @@ describe("useThreadNavigation", () => {
       expect(result.current.threads).toHaveLength(3);
     });
 
+    Object.defineProperty(unrelatedPr, "provider", {
+      configurable: true,
+      get: () => {
+        throw new Error("unrelated PR should not be scanned during status fanout");
+      },
+    });
+
     await act(async () => {
       for (const listener of listeners) {
         listener({
@@ -4839,8 +4846,8 @@ describe("useThreadNavigation", () => {
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
         .toEqual([updatedPr]);
-      expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs)
-        .toEqual([unrelatedPr]);
+      expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])
+        .toBe(unrelatedPr);
     });
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
