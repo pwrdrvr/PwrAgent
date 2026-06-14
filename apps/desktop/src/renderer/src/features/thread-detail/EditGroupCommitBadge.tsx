@@ -3,10 +3,11 @@ import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
- * Git lifecycle badge for an accumulated edited-file group: uncommitted
- * (the "unread"/active state) → committed, with a copyable short-SHA chip and
- * a pushed/local indicator. Renders nothing until the commit state resolves,
- * so a freshly committed group doesn't flash "uncommitted" first.
+ * Git lifecycle badge for an accumulated edited-file group, as a single status
+ * pill plus a copyable short-SHA chip: uncommitted (the "unread"/active state)
+ * → committed (local) → pushed. Pushed implies committed, so "Pushed" REPLACES
+ * "Committed" rather than stacking both. Renders nothing until the commit state
+ * resolves, so a freshly committed group doesn't flash "uncommitted" first.
  */
 export function EditGroupCommitBadge(props: { state?: EditGroupCommitState }) {
   const { state } = props;
@@ -22,21 +23,19 @@ export function EditGroupCommitBadge(props: { state?: EditGroupCommitState }) {
     );
   }
 
+  const pushed = state.pushed === true;
   return (
     <span className="edit-commit-badge edit-commit-badge--committed">
-      <span className="edit-commit-badge__label">Committed</span>
+      <span
+        className={`edit-commit-badge__status edit-commit-badge__status--${
+          pushed ? "pushed" : "committed"
+        }`}
+      >
+        {pushed ? "Pushed" : "Committed"}
+      </span>
       {state.commitSha && state.shortSha ? (
         <CommitShaChip sha={state.commitSha} shortSha={state.shortSha} />
       ) : null}
-      {state.pushed === undefined ? null : (
-        <span
-          className={`edit-commit-badge__push edit-commit-badge__push--${
-            state.pushed ? "pushed" : "local"
-          }`}
-        >
-          {state.pushed ? "Pushed" : "Local"}
-        </span>
-      )}
     </span>
   );
 }

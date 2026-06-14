@@ -85,12 +85,14 @@ describe("EditedFileGroupList Show more / Show less", () => {
     expect(screen.getByText("Uncommitted")).toBeInTheDocument();
     expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
     expect(screen.getByText("Pushed")).toBeInTheDocument();
+    // Pushed implies committed, so "Pushed" replaces "Committed" — never both.
+    expect(screen.queryByText("Committed")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: `Copy commit ${"a".repeat(40)}` }),
     ).toBeInTheDocument();
   });
 
-  it("shows a local-only badge for an unpushed commit", () => {
+  it("shows a plain Committed badge for an unpushed commit", () => {
     render(
       <EditedFileGroupList
         groups={groups(2)}
@@ -105,7 +107,10 @@ describe("EditedFileGroupList Show more / Show less", () => {
       />,
     );
 
-    expect(screen.getByText("Local")).toBeInTheDocument();
+    expect(screen.getByText("Committed")).toBeInTheDocument();
+    // No "Pushed" for a local-only commit, and no separate "Local" pill.
+    expect(screen.queryByText("Pushed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Local")).not.toBeInTheDocument();
     // turn-2 has no resolved state yet → no badge (avoids a wrong flash).
     expect(screen.queryByText("Uncommitted")).not.toBeInTheDocument();
   });

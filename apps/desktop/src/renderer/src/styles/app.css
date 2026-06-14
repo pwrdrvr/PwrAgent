@@ -8911,10 +8911,26 @@ textarea,
   text-transform: uppercase;
 }
 
-.edit-commit-badge__label {
-  color: var(--text-muted);
+/* Single status pill: "Committed" (local) or "Pushed". Pushed implies
+   committed, so it replaces — never stacks with — the committed label. */
+.edit-commit-badge__status {
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.edit-commit-badge__status--committed {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+}
+
+.edit-commit-badge__status--pushed {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
 }
 
 .edit-commit-badge__sha {
@@ -8947,26 +8963,6 @@ textarea,
 .edit-commit-badge__sha-value {
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
-}
-
-.edit-commit-badge__push {
-  padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.edit-commit-badge__push--pushed {
-  border-color: var(--success-border);
-  background: var(--success-soft);
-  color: var(--success-text);
-}
-
-.edit-commit-badge__push--local {
-  border-color: var(--border-subtle);
-  background: var(--bg-panel-elevated);
-  color: var(--text-muted);
 }
 
 .edited-file-groups__group-time {
