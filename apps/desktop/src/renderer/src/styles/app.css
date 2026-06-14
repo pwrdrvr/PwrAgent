@@ -11464,6 +11464,16 @@ textarea,
   margin: 0;
 }
 
+.composer-tiptap-input__editor > p + p,
+.composer-tiptap-input__editor > p + pre,
+.composer-tiptap-input__editor > pre + p,
+.composer-tiptap-input__editor > p + ul,
+.composer-tiptap-input__editor > p + ol,
+.composer-tiptap-input__editor > ul + p,
+.composer-tiptap-input__editor > ol + p {
+  margin-top: 0.85em;
+}
+
 .composer-tiptap-input__editor h1,
 .composer-tiptap-input__editor h2,
 .composer-tiptap-input__editor h3,

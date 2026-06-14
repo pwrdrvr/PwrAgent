@@ -21,6 +21,7 @@ type ThreadMarkdownProps = {
 };
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
+  const markdownText = useMemo(() => repairNestedLanguageFences(props.text), [props.text]);
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -71,7 +72,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
         const skillPath = normalizeSkillPath(href);
         const label = extractTextContent(anchorProps.children).trim();
-        const source = sourceForNode(props.text, anchorProps.node);
+        const source = sourceForNode(markdownText, anchorProps.node);
 
         if (isImplicitBareAutolink({ href, label, source })) {
           return <>{anchorProps.children}</>;
@@ -110,7 +111,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       blockquote(blockquoteProps) {
         const copyText = normalizeBlockquoteCopyText(
-          sourceForNode(props.text, blockquoteProps.node) ??
+          sourceForNode(markdownText, blockquoteProps.node) ??
             extractTextContent(blockquoteProps.children)
         );
 
@@ -248,7 +249,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <ul className="transcript-message__list">{listProps.children}</ul>;
       },
     }),
-    [openLocalFileLink, props.text, skillsByPath]
+    [markdownText, openLocalFileLink, skillsByPath]
   );
 
   return (
@@ -266,7 +267,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         remarkPlugins={[remarkBreaks, remarkGfm, remarkTableProfile]}
         urlTransform={normalizeMarkdownUrl}
       >
-        {props.text}
+        {markdownText}
       </ReactMarkdown>
     </div>
   );
@@ -394,6 +395,98 @@ function denormalizeMarkdownUrl(url: string): string {
   }
 
   return url;
+}
+
+type BacktickFenceLine = {
+  carriageReturn: string;
+  indent: string;
+  info: string;
+  length: number;
+};
+
+function parseBacktickFenceLine(line: string): BacktickFenceLine | undefined {
+  const match = /^( {0,3})(`{3,})([^`\r\n]*?)[ \t]*(\r?)$/.exec(line);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    carriageReturn: match[4] ?? "",
+    indent: match[1] ?? "",
+    info: (match[3] ?? "").trim(),
+    length: match[2]?.length ?? 0,
+  };
+}
+
+function replaceBacktickFenceLine(line: string, length: number): string {
+  const parsed = parseBacktickFenceLine(line);
+  if (!parsed) {
+    return line;
+  }
+
+  const info = parsed.info ? parsed.info : "";
+  return `${parsed.indent}${"`".repeat(length)}${info}${parsed.carriageReturn}`;
+}
+
+function repairNestedLanguageFences(markdown: string): string {
+  if (!markdown.includes("```")) {
+    return markdown;
+  }
+
+  const lines = markdown.split("\n");
+  let changed = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = parseBacktickFenceLine(lines[index] ?? "");
+    if (!opening) {
+      continue;
+    }
+
+    let closeIndex = -1;
+    let depth = 1;
+    let maxFenceLength = opening.length;
+    let sawNestedLanguageFence = false;
+
+    for (let scanIndex = index + 1; scanIndex < lines.length; scanIndex += 1) {
+      const fence = parseBacktickFenceLine(lines[scanIndex] ?? "");
+      if (!fence) {
+        continue;
+      }
+
+      maxFenceLength = Math.max(maxFenceLength, fence.length);
+
+      if (fence.info) {
+        sawNestedLanguageFence = true;
+        depth += 1;
+        continue;
+      }
+
+      if (depth > 1) {
+        depth -= 1;
+        continue;
+      }
+
+      if (sawNestedLanguageFence) {
+        closeIndex = scanIndex;
+      }
+      break;
+    }
+
+    if (closeIndex === -1) {
+      continue;
+    }
+
+    const repairedFenceLength = maxFenceLength + 1;
+    lines[index] = replaceBacktickFenceLine(lines[index] ?? "", repairedFenceLength);
+    lines[closeIndex] = replaceBacktickFenceLine(
+      lines[closeIndex] ?? "",
+      repairedFenceLength
+    );
+    changed = true;
+    index = closeIndex;
+  }
+
+  return changed ? lines.join("\n") : markdown;
 }
 
 function stripFileLineSuffix(filePath: string): string {
