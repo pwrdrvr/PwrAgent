@@ -4,12 +4,20 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { editGroupPaths, type EditedFileGroup } from "./edited-file-groups";
 
 /**
+ * Debounce window before resolving. A git-heavy turn pushes a fresh working
+ * state after every commit; without this each push would spawn its own burst
+ * of `git` probes in the main process. Coalesce a flurry into one resolve.
+ */
+const RESOLVE_DEBOUNCE_MS = 300;
+
+/**
  * Resolve the git commit lifecycle (uncommitted → committed → pushed/local)
  * of a thread's edited-file groups against the live worktree, via the main
- * process. Re-resolves when the group set changes or the worktree's working
- * state shifts (`refreshKey` — pass a signature of the thread's
- * `gitWorkingState` so a commit/push flips the badges). Returns an empty map
- * until the first resolution lands; groups simply render unbadged until then.
+ * process. Re-resolves (debounced) when the group set changes or the
+ * worktree's working state shifts (`refreshKey` — pass a signature of the
+ * thread's `gitWorkingState` so a commit/push flips the badges). Pass an empty
+ * `groups` array when the edits surface isn't shown to skip resolution
+ * entirely. Returns an empty map until the first resolution lands.
  */
 export function useEditCommitStates(params: {
   desktopApi?: Pick<DesktopApi, "resolveEditCommitStates">;
@@ -42,20 +50,23 @@ export function useEditCommitStates(params: {
     }
 
     let cancelled = false;
-    void resolve({ worktreePath: normalizedWorktree, groups: groupsInput })
-      .then((response) => {
-        if (!cancelled) {
-          setStates(response.states);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStates({});
-        }
-      });
+    const timer = window.setTimeout(() => {
+      void resolve({ worktreePath: normalizedWorktree, groups: groupsInput })
+        .then((response) => {
+          if (!cancelled) {
+            setStates(response.states);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setStates({});
+          }
+        });
+    }, RESOLVE_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
     // groupsSignature stands in for groupsInput (deep value), refreshKey for
     // the worktree's working state.

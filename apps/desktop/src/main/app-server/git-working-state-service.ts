@@ -11,6 +11,9 @@ function normalizeAbsolutePath(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
 }
 
+/** Bounded concurrency for the per-group `git log`/`rev-list` commit probes. */
+const EDIT_COMMIT_RESOLVE_CONCURRENCY = 4;
+
 type GitCommandRunner = (
   cwd: string,
   args: string[],
@@ -253,22 +256,35 @@ export class GitWorkingStateService {
       }
     }
 
-    const pushedBySha = new Map<string, boolean>();
-    for (const group of groups) {
+    // Memoize the per-commit remote-reachability check by promise so concurrent
+    // groups sharing a commit run `rev-list` once.
+    const pushedBySha = new Map<string, Promise<boolean>>();
+    const resolvePushed = (sha: string): Promise<boolean> => {
+      const existing = pushedBySha.get(sha);
+      if (existing) {
+        return existing;
+      }
+      // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
+      // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no
+      // remotes configured, nothing is excluded ⇒ non-empty ⇒ local-only.
+      const promise = noLocks(["rev-list", "-1", sha, "--not", "--remotes"])
+        .then((output) => output.trim() === "")
+        .catch(() => true);
+      pushedBySha.set(sha, promise);
+      return promise;
+    };
+
+    const resolveGroupState = async (
+      group: EditGroupCommitInput,
+    ): Promise<{ key: string; state: EditGroupCommitState }> => {
       const paths = [
         ...new Set(group.paths.map((value) => value.trim()).filter(Boolean)),
       ];
       if (paths.length === 0) {
-        states[group.key] = { committed: false };
-        continue;
+        return { key: group.key, state: { committed: false } };
       }
-
-      const hasUncommittedChange = paths.some((value) =>
-        dirtyPaths.has(normalizeAbsolutePath(value)),
-      );
-      if (hasUncommittedChange) {
-        states[group.key] = { committed: false };
-        continue;
+      if (paths.some((value) => dirtyPaths.has(normalizeAbsolutePath(value)))) {
+        return { key: group.key, state: { committed: false } };
       }
 
       const sha = (
@@ -281,30 +297,26 @@ export class GitWorkingStateService {
       // agent wrote (invisible to both `diff HEAD` and `ls-files --others
       // --exclude-standard`). Don't claim "committed" without a SHA to back it.
       if (!sha) {
-        states[group.key] = { committed: false };
-        continue;
+        return { key: group.key, state: { committed: false } };
       }
 
-      let pushed = pushedBySha.get(sha);
-      if (pushed === undefined) {
-        // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
-        // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no
-        // remotes configured, nothing is excluded ⇒ non-empty ⇒ local-only.
-        const localOnly = (
-          await noLocks(["rev-list", "-1", sha, "--not", "--remotes"]).catch(
-            () => "",
-          )
-        ).trim();
-        pushed = localOnly === "";
-        pushedBySha.set(sha, pushed);
-      }
-
-      states[group.key] = {
-        committed: true,
-        commitSha: sha,
-        shortSha: sha.slice(0, 7),
-        pushed,
+      return {
+        key: group.key,
+        state: {
+          committed: true,
+          commitSha: sha,
+          shortSha: sha.slice(0, 7),
+          pushed: await resolvePushed(sha),
+        },
       };
+    };
+
+    // Bounded concurrency rather than one git subprocess at a time.
+    for await (const entry of new IterableMapper(groups, resolveGroupState, {
+      concurrency: EDIT_COMMIT_RESOLVE_CONCURRENCY,
+      maxUnread: EDIT_COMMIT_RESOLVE_CONCURRENCY * 2,
+    })) {
+      states[entry.key] = entry.state;
     }
 
     return states;
