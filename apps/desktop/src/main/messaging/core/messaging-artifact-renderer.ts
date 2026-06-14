@@ -17,10 +17,16 @@ const TRUNCATED_WITH_ATTACHMENT =
 const TRUNCATED_INLINE_ONLY =
   "[Preview truncated. Attachment delivery is unavailable for this provider.]";
 
-export type MessagingArtifactKind = "plan" | "review";
+export type MessagingArtifactKind = "plan" | "review" | "markdown_file";
 
 export type MessagingArtifact = {
+  attachmentDescription?: string;
+  attachmentName?: string;
   kind: MessagingArtifactKind;
+  preferAttachment?: boolean;
+  preserveMarkdown?: boolean;
+  previewMarkdown?: string;
+  previewTruncated?: boolean;
   title: string;
   summary?: string;
   markdown: string;
@@ -91,7 +97,9 @@ export function buildArtifactDeliveryIntent(params: {
   createdAt: number;
   id: string;
 }): MessagingArtifactMessageIntent {
-  const markdown = normalizeMarkdown(params.artifact.markdown);
+  const markdown = params.artifact.preserveMarkdown
+    ? params.artifact.markdown
+    : normalizeMarkdown(params.artifact.markdown);
   const inlineLimit = clampTextLimit(params.capabilityProfile, INLINE_ONLY_THRESHOLD);
   const canSendInlineOnly = markdown.length <= inlineLimit;
   const fileData = new TextEncoder().encode(markdown);
@@ -99,11 +107,15 @@ export function buildArtifactDeliveryIntent(params: {
   const canAttach =
     params.capabilityProfile.outboundAttachments?.supportsFileUpload === true &&
     (uploadLimit === undefined || fileData.byteLength <= uploadLimit);
-  const mode: MessagingArtifactDeliveryMode = canSendInlineOnly
-    ? "inline_only"
-    : canAttach
+  const mode: MessagingArtifactDeliveryMode = params.artifact.preferAttachment
+    ? canAttach
       ? "attachment_summary"
-      : "inline_fallback";
+      : "inline_fallback"
+    : canSendInlineOnly
+      ? "inline_only"
+      : canAttach
+        ? "attachment_summary"
+        : "inline_fallback";
   const text = mode === "inline_only"
     ? markdown
     : mode === "attachment_summary"
@@ -144,11 +156,13 @@ export function buildArtifactDeliveryIntent(params: {
         ? [
             {
               type: "file" as const,
-              name: artifactFileName(params.artifact.kind, markdown),
+              name: artifactFileName(params.artifact, markdown),
               data: fileData,
               mimeType: "text/markdown",
               sizeBytes: fileData.byteLength,
-              description: `Full ${params.artifact.kind} artifact`,
+              description:
+                params.artifact.attachmentDescription ??
+                `Full ${params.artifact.kind} artifact`,
             },
           ]
         : []),
@@ -273,13 +287,19 @@ function formatAttachmentSummary(params: {
   markdown: string;
   maxChars: number;
 }): string {
+  const preview = formatArtifactPreview({
+    artifact: params.artifact,
+    markdown: params.markdown,
+    maxChars: params.maxChars,
+    marker: TRUNCATED_WITH_ATTACHMENT,
+  });
   return boundedText(
     [
       `# ${params.artifact.title}`,
       params.artifact.summary,
       stepSummary(params.artifact.steps),
       "",
-      truncateMarkdown(params.markdown, params.maxChars, TRUNCATED_WITH_ATTACHMENT),
+      preview,
     ],
     params.maxChars,
     TRUNCATED_WITH_ATTACHMENT,
@@ -291,17 +311,43 @@ function formatInlineFallback(params: {
   markdown: string;
   maxChars: number;
 }): string {
+  const preview = formatArtifactPreview({
+    artifact: params.artifact,
+    markdown: params.markdown,
+    maxChars: params.maxChars,
+    marker: TRUNCATED_INLINE_ONLY,
+  });
   return boundedText(
     [
       `# ${params.artifact.title}`,
       params.artifact.summary,
       stepSummary(params.artifact.steps),
       "",
-      truncateMarkdown(params.markdown, params.maxChars, TRUNCATED_INLINE_ONLY),
+      preview,
     ],
     params.maxChars,
     TRUNCATED_INLINE_ONLY,
   );
+}
+
+function formatArtifactPreview(params: {
+  artifact: MessagingArtifact;
+  markdown: string;
+  maxChars: number;
+  marker: string;
+}): string {
+  if (params.artifact.previewMarkdown === undefined) {
+    return truncateMarkdown(params.markdown, params.maxChars, params.marker);
+  }
+  const preview = truncateMarkdown(
+    params.artifact.previewMarkdown,
+    params.maxChars,
+    params.marker,
+  );
+  if (!params.artifact.previewTruncated || preview.includes(params.marker)) {
+    return preview;
+  }
+  return `${preview.trimEnd()}\n\n${params.marker}`;
 }
 
 function truncateMarkdown(markdown: string, maxChars: number, marker: string): string {
@@ -337,9 +383,12 @@ function clampTextLimit(
   return Math.max(200, Math.min(preferred, capabilityProfile.text.maxLength));
 }
 
-function artifactFileName(kind: MessagingArtifactKind, markdown: string): string {
+function artifactFileName(artifact: MessagingArtifact, markdown: string): string {
+  if (artifact.attachmentName?.trim()) {
+    return artifact.attachmentName.trim();
+  }
   const digest = createHash("sha256").update(markdown).digest("hex").slice(0, 10);
-  return `${kind}-${digest}.md`;
+  return `${artifact.kind}-${digest}.md`;
 }
 
 function statusCheckbox(status: AppServerThreadPlanStep["status"]): string {

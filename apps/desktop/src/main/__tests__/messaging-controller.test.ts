@@ -3055,6 +3055,71 @@ describe("MessagingController", () => {
     });
   });
 
+  it("delivers a single added markdown file as attachment plus bounded preview", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const markdown = `# Release notes\n\n${"x".repeat(1_200)}\n\nDo not include this tail in the preview.`;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "file-1",
+            type: "fileChange",
+            changes: [
+              {
+                path: "/repo/docs/release-notes.md",
+                kind: {
+                  type: "add",
+                  content: markdown,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactIntent = harness.delivered.find(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "markdown_file"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactIntent).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "markdown_file",
+        mode: "attachment_summary",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Added /repo/docs/release-notes.md"),
+        }),
+        expect.objectContaining({
+          type: "file",
+          mimeType: "text/markdown",
+          name: "release-notes.md",
+          sizeBytes: new TextEncoder().encode(markdown).byteLength,
+        }),
+      ],
+    });
+    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    const filePart = artifactIntent?.kind === "message" ? artifactIntent.parts[1] : undefined;
+    expect(textPart?.type === "text" ? textPart.text : "").toContain("Open the attachment");
+    expect(textPart?.type === "text" ? textPart.text : "").not.toContain(
+      "Do not include this tail",
+    );
+    expect(filePart?.type === "file" ? new TextDecoder().decode(filePart.data) : "").toBe(
+      markdown,
+    );
+  });
+
   it("posts a durable start notice for automation turns", async () => {
     const harness = await createHarness();
     await bindThread(harness);

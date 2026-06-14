@@ -120,6 +120,10 @@ import {
   type MessagingArtifact,
   type MessagingArtifactMessageIntent,
 } from "./messaging-artifact-renderer.js";
+import {
+  artifactFromMarkdownFileSelection,
+  MessagingMarkdownFileAttachmentSelector,
+} from "./messaging-markdown-file-attachment-selector.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
@@ -571,6 +575,8 @@ export class MessagingController {
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
+  private readonly markdownFileAttachmentSelector =
+    new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
@@ -860,6 +866,8 @@ export class MessagingController {
       );
     }
     const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
+    const markdownFileArtifactSelection =
+      this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
       ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
@@ -972,6 +980,14 @@ export class MessagingController {
           artifact: artifactFromReviewEntry(reviewArtifact),
           binding,
           intentId: `artifact:review:${reviewArtifact.id}:${binding.id}`,
+        });
+      }
+
+      if (markdownFileArtifactSelection && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
+          binding,
+          intentId: `artifact:markdown-file:${markdownFileArtifactSelection.path}:${binding.id}`,
         });
       }
 
