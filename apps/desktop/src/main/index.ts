@@ -77,6 +77,7 @@ import {
   resolveMainLogProfileName,
 } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
+import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import {
   disposeDesktopMessagingRuntime,
   getDesktopMessagingRuntime,
@@ -178,6 +179,9 @@ function logBootDecision(decision: ProfileBootDecision): void {
 function prewarmInitialThreadList(): void {
   if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
+    recordStartupProfileEvent({
+      type: "startup-thread-list-prewarm:deferred",
+    });
     return;
   }
   const startedAt = Date.now();
@@ -186,6 +190,13 @@ function prewarmInitialThreadList(): void {
       callerReason: "startup-prewarm",
     })
     .then((threads) => {
+      recordStartupProfileEvent({
+        type: "startup-thread-list-prewarm:completed",
+        detail: {
+          count: threads.length,
+          durationMs: Date.now() - startedAt,
+        },
+      });
       if (!isDevelopment) {
         return;
       }
@@ -195,6 +206,13 @@ function prewarmInitialThreadList(): void {
       });
     })
     .catch((error) => {
+      recordStartupProfileEvent({
+        type: "startup-thread-list-prewarm:failed",
+        detail: {
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
       if (!isDevelopment) {
         return;
       }
@@ -514,6 +532,7 @@ export function bootstrapApp(): void {
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
+    recordStartupProfileEvent({ type: "app-when-ready" });
     installDevelopmentDockIcon();
     // Boot decision — resolves which profile (if any) this Electron
     // instance should open into. When the decision is `open` we run
@@ -555,6 +574,12 @@ export function bootstrapApp(): void {
     if (bootMode === "active-profile") {
       cleanupBootstrapProfile();
     }
+    recordStartupProfileEvent({
+      type: "boot-mode-resolved",
+      detail: {
+        bootMode,
+      },
+    });
     initializeAppState(bootMode);
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
@@ -661,12 +686,16 @@ export function bootstrapApp(): void {
     // current snapshot. When messaging is disabled the runtime singleton
     // still exists (default config); status returns []  / never emits.
     registerMessagingStatusIpcHandlers();
+    recordStartupProfileEvent({ type: "main-window-create:start" });
     quitAppOnMainWindowClose(
       createMainWindow({
         startupCpuProfiler,
       }),
     );
+    recordStartupProfileEvent({ type: "main-window-create:end" });
+    recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
     prewarmInitialThreadList();
+    recordStartupProfileEvent({ type: "startup-thread-list-prewarm:scheduled" });
 
     // Wire up auto-update *after* the window is created so a slow update
     // check does not delay first paint. Skips automatically in dev.

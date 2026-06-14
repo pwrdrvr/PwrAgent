@@ -62,6 +62,12 @@ describe("startup CPU profiling session", () => {
     expect(result.session.rendererProfilePath).toBe(
       path.join(expectedDirectory, "renderer.cpuprofile"),
     );
+    expect(result.session.mainHeapSnapshotPath).toBe(
+      path.join(expectedDirectory, "main.heapsnapshot"),
+    );
+    expect(result.session.rendererHeapSnapshotPath).toBe(
+      path.join(expectedDirectory, "renderer.heapsnapshot"),
+    );
     expect(result.session.analysisPath).toBe(path.join(expectedDirectory, "analysis.json"));
     expect(result.session.summaryPath).toBe(path.join(expectedDirectory, "summary.md"));
 
@@ -87,10 +93,15 @@ describe("startup CPU profiling session", () => {
         summaryFilename: "summary.md",
         generatedAt: null,
       },
+      heapSnapshots: {
+        enabled: false,
+        files: [],
+      },
       config: {
         postLoadDurationMs: 5000,
         hardTimeoutMs: 15000,
         quitOnComplete: false,
+        captureHeapSnapshots: false,
       },
       versions: {
         appVersion: "0.1.0",
@@ -141,6 +152,7 @@ describe("startup CPU profiling session", () => {
     });
 
     await result.session.markProfileCaptured("main", "2026-04-19T13:30:09.000Z");
+    await result.session.registerHeapSnapshot("main.heapsnapshot");
     await result.session.markAnalysisGenerated("2026-04-19T13:30:10.000Z");
     await result.session.complete({
       completedAt: "2026-04-19T13:30:11.000Z",
@@ -191,6 +203,9 @@ describe("startup CPU profiling session", () => {
         summaryFilename: "summary.md",
         generatedAt: "2026-04-19T13:30:10.000Z",
       },
+      heapSnapshots: {
+        files: ["main.heapsnapshot"],
+      },
     });
   });
 
@@ -219,6 +234,7 @@ describe("startup CPU profiling session", () => {
         PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS: "8000",
         PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS: "25000",
         PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE: "1",
+        PWRAGENT_STARTUP_PROFILE_HEAP_SNAPSHOTS: "1",
       },
       repoRoot: workspace.path,
     });
@@ -228,6 +244,7 @@ describe("startup CPU profiling session", () => {
       postLoadDurationMs: 8000,
       hardTimeoutMs: 25000,
       quitOnComplete: true,
+      captureHeapSnapshots: true,
     });
   });
 

@@ -1,6 +1,13 @@
 import { ipcMain } from "electron";
-import { PRELOAD_LOG_CHANNEL } from "../../shared/ipc";
+import {
+  PRELOAD_LOG_CHANNEL,
+  STARTUP_PROFILE_EVENT_CHANNEL,
+} from "../../shared/ipc";
 import { getMainLogger } from "../log";
+import {
+  recordStartupProfileEvent,
+  type StartupProfileEventSource,
+} from "../diagnostics/startup-profile-events";
 
 type PreloadLogLevel = "error" | "info" | "warn";
 
@@ -10,10 +17,17 @@ type PreloadLogRequest = {
   message?: string;
 };
 
+type StartupProfileRendererEventRequest = {
+  detail?: Record<string, unknown>;
+  source?: StartupProfileEventSource;
+  type?: string;
+};
+
 const preloadLog = getMainLogger("pwragent:preload");
 
 export function registerPreloadLogIpcHandlers(): void {
   ipcMain.removeAllListeners(PRELOAD_LOG_CHANNEL);
+  ipcMain.removeAllListeners(STARTUP_PROFILE_EVENT_CHANNEL);
   ipcMain.on(
     PRELOAD_LOG_CHANNEL,
     (_event, request: PreloadLogRequest): void => {
@@ -29,8 +43,24 @@ export function registerPreloadLogIpcHandlers(): void {
       preloadLog[level](message, details);
     },
   );
+  ipcMain.on(
+    STARTUP_PROFILE_EVENT_CHANNEL,
+    (_event, request: StartupProfileRendererEventRequest): void => {
+      const type = request.type?.trim();
+      if (!type) {
+        return;
+      }
+
+      recordStartupProfileEvent({
+        source: request.source ?? "renderer",
+        type,
+        detail: request.detail,
+      });
+    },
+  );
 }
 
 export function disposePreloadLogIpcHandlers(): void {
   ipcMain.removeAllListeners(PRELOAD_LOG_CHANNEL);
+  ipcMain.removeAllListeners(STARTUP_PROFILE_EVENT_CHANNEL);
 }

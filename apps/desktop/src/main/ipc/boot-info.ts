@@ -10,6 +10,7 @@ import {
   APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
+import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
   assertUnreachableProfileBootDecision,
   findLiveProfileRuntimeMarkers,
@@ -93,7 +94,11 @@ export function registerBootInfoIpcHandlers(options?: {
   ipcMain.removeHandler(APP_GET_BOOT_INFO_CHANNEL);
   ipcMain.handle(
     APP_GET_BOOT_INFO_CHANNEL,
-    async (): Promise<DesktopBootInfo> => buildBootInfo(),
+    async (): Promise<DesktopBootInfo> =>
+      await timeStartupProfileOperation({
+        type: "ipc-main:getBootInfo",
+        operation: async () => buildBootInfo(),
+      }),
   );
 
   // `quitApp` fires from the wizard's bootstrap-confirm "Quit

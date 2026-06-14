@@ -1886,6 +1886,7 @@ export function useThreadNavigation(
   worktreeArchiveError?: string;
   renameThreadError?: string;
   loading: boolean;
+  loaded: boolean;
   refreshing: boolean;
   refresh: () => Promise<void>;
   materializeDirectoryLaunchpad: (
@@ -2165,9 +2166,20 @@ export function useThreadNavigation(
       }));
 
       try {
+        desktopApi.recordStartupProfileEvent?.("navigation-refresh:start", {
+          forceRefresh: Boolean(options?.forceRefresh),
+          hasCurrentResponse: Boolean(stateRef.current.response),
+          preferredSelectionKey: preferredSelectionKey ?? null,
+        });
         const snapshot = options?.forceRefresh
           ? await desktopApi.getNavigationSnapshot({ forceRefresh: true })
           : await desktopApi.getNavigationSnapshot();
+        desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
+          directoryCount: snapshot.directories.length,
+          forceRefresh: Boolean(options?.forceRefresh),
+          threadCount: snapshot.threads.length,
+          unchanged: Boolean(snapshot.unchanged),
+        });
         const response = removeThreadKeysFromSnapshot(
           snapshot,
           suppressedArchivedThreadKeysRef.current
@@ -2232,6 +2244,9 @@ export function useThreadNavigation(
           );
         });
       } catch (error) {
+        desktopApi.recordStartupProfileEvent?.("navigation-refresh:error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         setState((current) => ({
           loading: false,
           refreshing: false,
@@ -4886,6 +4901,7 @@ export function useThreadNavigation(
     worktreeArchiveError,
     renameThreadError,
     loading: state.loading,
+    loaded: Boolean(state.response),
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,

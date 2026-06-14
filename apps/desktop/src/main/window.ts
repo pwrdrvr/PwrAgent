@@ -16,6 +16,7 @@ import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor"
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
 import { getMainLogger } from "./log";
+import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { attachWindowFocusSync } from "./window-focus-sync";
@@ -390,13 +391,21 @@ export function createMainWindow(options?: {
     if (isDevelopment) {
       mainLog.info("showing window", { reason });
     }
+    recordStartupProfileEvent({
+      type: "window-show",
+      detail: {
+        reason,
+      },
+    });
     window.show();
   };
   window.once("ready-to-show", () => {
+    recordStartupProfileEvent({ type: "window-ready-to-show" });
     showWindow("ready-to-show");
   });
   if (!isMac) {
     window.webContents.once("did-finish-load", () => {
+      recordStartupProfileEvent({ type: "window-did-finish-load-fallback-arm" });
       setTimeout(() => showWindow("fallback"), 500);
     });
   }

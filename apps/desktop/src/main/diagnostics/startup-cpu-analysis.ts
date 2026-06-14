@@ -45,6 +45,13 @@ export type StartupCpuProcessAnalysis = {
   topSourcesByTotal: RankedSource[];
 };
 
+export type StartupProfileTimelineEvent = {
+  elapsedMs?: number;
+  source: "main" | "renderer";
+  type: string;
+  detail?: Record<string, unknown>;
+};
+
 export type StartupCpuSessionAnalysis = {
   generatedAt: string;
   sessionDirectoryName: string;
@@ -52,6 +59,7 @@ export type StartupCpuSessionAnalysis = {
   analysisPath: string;
   summaryPath: string;
   results: StartupCpuProcessAnalysis[];
+  timeline: StartupProfileTimelineEvent[];
 };
 
 export function analyzeCpuProfile(params: {
@@ -163,6 +171,7 @@ function normalizeLocationNumber(value: number | undefined): number | undefined 
 export function renderStartupCpuAnalysisSummary(params: {
   sessionDirectoryName: string;
   results: StartupCpuProcessAnalysis[];
+  timeline?: StartupProfileTimelineEvent[];
 }): string {
   const lines = [
     "# Startup CPU Analysis",
@@ -170,6 +179,25 @@ export function renderStartupCpuAnalysisSummary(params: {
     `Session: \`${params.sessionDirectoryName}\``,
     "",
   ];
+
+  if (params.timeline?.length) {
+    lines.push("## Startup Timeline");
+    lines.push("");
+    for (const event of params.timeline.slice(0, 80)) {
+      const elapsed =
+        event.elapsedMs === undefined
+          ? "unknown"
+          : `${event.elapsedMs.toFixed(1)} ms`;
+      const detail = formatTimelineDetail(event.detail);
+      lines.push(
+        `- ${elapsed} [${event.source}] \`${event.type}\`${detail ? ` — ${detail}` : ""}`,
+      );
+    }
+    if (params.timeline.length > 80) {
+      lines.push(`- … ${params.timeline.length - 80} more events in analysis.json`);
+    }
+    lines.push("");
+  }
 
   for (const result of params.results) {
     lines.push(`## ${formatProcessHeading(result.process)}`);
@@ -209,6 +237,9 @@ export async function analyzeStartupCpuProfileSession(options: {
 }): Promise<StartupCpuSessionAnalysis> {
   const desktopRoot = path.join(options.repoRoot, "apps/desktop");
   const results: StartupCpuProcessAnalysis[] = [];
+  const timeline = await readStartupProfileTimeline(
+    path.join(options.sessionDirectoryPath, "events.ndjson"),
+  );
 
   const mainProfile = await readOptionalCpuProfile(
     path.join(options.sessionDirectoryPath, "main.cpuprofile"),
@@ -249,6 +280,7 @@ export async function analyzeStartupCpuProfileSession(options: {
     analysisPath: options.analysisPath,
     summaryPath: options.summaryPath,
     results,
+    timeline,
   };
 
   await fs.writeFile(options.analysisPath, `${JSON.stringify(analysis, null, 2)}\n`, "utf8");
@@ -257,11 +289,95 @@ export async function analyzeStartupCpuProfileSession(options: {
     renderStartupCpuAnalysisSummary({
       sessionDirectoryName: analysis.sessionDirectoryName,
       results: analysis.results,
+      timeline: analysis.timeline,
     }),
     "utf8",
   );
 
   return analysis;
+}
+
+function formatTimelineDetail(detail: Record<string, unknown> | undefined): string {
+  if (!detail) {
+    return "";
+  }
+
+  const entries = Object.entries(detail).filter(([key]) => key !== "elapsedMs");
+  if (entries.length === 0) {
+    return "";
+  }
+
+  return entries
+    .slice(0, 6)
+    .map(([key, value]) => `${key}=${formatTimelineValue(value)}`)
+    .join(", ");
+}
+
+function formatTimelineValue(value: unknown): string {
+  if (typeof value === "string") {
+    return JSON.stringify(value.length > 80 ? `${value.slice(0, 77)}...` : value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return String(value);
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+
+  return JSON.stringify(value);
+}
+
+async function readStartupProfileTimeline(
+  filePath: string,
+): Promise<StartupProfileTimelineEvent[]> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as {
+      detail?: Record<string, unknown>;
+      source?: unknown;
+      type?: unknown;
+    })
+    .filter(
+      (event): event is {
+        detail?: Record<string, unknown>;
+        source: "main" | "renderer";
+        type: string;
+      } =>
+        (event.source === "main" || event.source === "renderer") &&
+        typeof event.type === "string",
+    )
+    .map((event) => ({
+      source: event.source,
+      type: event.type,
+      ...(event.detail ? { detail: event.detail } : {}),
+      ...(typeof event.detail?.elapsedMs === "number"
+        ? { elapsedMs: event.detail.elapsedMs }
+        : {}),
+    }))
+    .sort((left, right) => {
+      if (left.elapsedMs === undefined && right.elapsedMs === undefined) {
+        return 0;
+      }
+      if (left.elapsedMs === undefined) {
+        return 1;
+      }
+      if (right.elapsedMs === undefined) {
+        return -1;
+      }
+      return left.elapsedMs - right.elapsedMs;
+    });
 }
 
 function formatProcessHeading(process: CpuProfileProcess): string {

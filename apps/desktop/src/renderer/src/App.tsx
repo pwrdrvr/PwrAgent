@@ -553,7 +553,12 @@ function DesktopAppShell(props: {
     };
   }, [desktopApi]);
   useEffect(() => {
-    if (threadViewReady || mainView !== "thread" || navigation.loading) {
+    if (
+      threadViewReady ||
+      mainView !== "thread" ||
+      navigation.loading ||
+      !navigation.loaded
+    ) {
       return;
     }
 
@@ -576,23 +581,34 @@ function DesktopAppShell(props: {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [mainView, navigation.loading, threadViewReady]);
+  }, [
+    mainView,
+    navigation.loaded,
+    navigation.loading,
+    threadViewReady,
+  ]);
   useEffect(() => {
     if (!threadViewReady || ThreadViewComponent) {
       return;
     }
 
     let cancelled = false;
+    desktopApi?.recordStartupProfileEvent?.("thread-view-import:start");
     void import("./features/thread-detail/ThreadView").then((module) => {
+      desktopApi?.recordStartupProfileEvent?.("thread-view-import:end");
       if (!cancelled) {
         setThreadViewComponent(() => module.ThreadView);
       }
+    }).catch((error) => {
+      desktopApi?.recordStartupProfileEvent?.("thread-view-import:error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [ThreadViewComponent, threadViewReady]);
+  }, [ThreadViewComponent, desktopApi, threadViewReady]);
   useEffect(() => {
     // Subscribe to the PwrAgent → Settings… menu push. The Settings
     // overlay is in-renderer (not a separate BrowserWindow), so the

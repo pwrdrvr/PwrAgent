@@ -25,6 +25,7 @@ export type StdioJsonRpcTransportOptions = {
   command: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 };
 
 export { compareCodexCliVersions };
@@ -49,7 +50,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       return;
     }
 
-    const env = this.options.env ?? process.env;
+    const env = this.options.resolveEnv
+      ? await this.options.resolveEnv()
+      : this.options.env ?? process.env;
     const command = await resolveCodexCommand({
       command: this.options.command,
       env,

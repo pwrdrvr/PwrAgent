@@ -35,13 +35,18 @@ type StartupCpuProfileManifest = {
   analysis: {
     jsonFilename: string;
     summaryFilename: string;
-    generatedAt: string | null;
-  };
-  config: {
-    postLoadDurationMs: number;
-    hardTimeoutMs: number;
-    quitOnComplete: boolean;
-  };
+      generatedAt: string | null;
+    };
+    heapSnapshots: {
+      enabled: boolean;
+      files: string[];
+    };
+    config: {
+      postLoadDurationMs: number;
+      hardTimeoutMs: number;
+      quitOnComplete: boolean;
+      captureHeapSnapshots: boolean;
+    };
   versions: StartupCpuProfileVersions;
 };
 
@@ -53,6 +58,8 @@ export type StartupCpuProfileSession = {
   eventsPath: string;
   mainProfilePath: string;
   rendererProfilePath: string;
+  mainHeapSnapshotPath: string;
+  rendererHeapSnapshotPath: string;
   analysisPath: string;
   summaryPath: string;
   appendEvent: (event: StartupCpuProfileSessionEvent) => Promise<void>;
@@ -61,6 +68,7 @@ export type StartupCpuProfileSession = {
     capturedAt: string,
   ) => Promise<void>;
   markAnalysisGenerated: (generatedAt: string) => Promise<void>;
+  registerHeapSnapshot: (filename: string) => Promise<void>;
   complete: (params: {
     status: "completed" | "partial" | "failed";
     completedAt: string;
@@ -109,6 +117,8 @@ export async function createStartupCpuProfileSession(options: {
   const eventsPath = path.join(directoryPath, "events.ndjson");
   const mainProfilePath = path.join(directoryPath, "main.cpuprofile");
   const rendererProfilePath = path.join(directoryPath, "renderer.cpuprofile");
+  const mainHeapSnapshotPath = path.join(directoryPath, "main.heapsnapshot");
+  const rendererHeapSnapshotPath = path.join(directoryPath, "renderer.heapsnapshot");
   const analysisPath = path.join(directoryPath, "analysis.json");
   const summaryPath = path.join(directoryPath, "summary.md");
 
@@ -132,10 +142,15 @@ export async function createStartupCpuProfileSession(options: {
       summaryFilename: path.basename(summaryPath),
       generatedAt: null,
     },
+    heapSnapshots: {
+      enabled: options.config.captureHeapSnapshots,
+      files: [],
+    },
     config: {
       postLoadDurationMs: options.config.postLoadDurationMs,
       hardTimeoutMs: options.config.hardTimeoutMs,
       quitOnComplete: options.config.quitOnComplete,
+      captureHeapSnapshots: options.config.captureHeapSnapshots,
     },
     versions: options.versions,
   };
@@ -176,6 +191,8 @@ export async function createStartupCpuProfileSession(options: {
       eventsPath,
       mainProfilePath,
       rendererProfilePath,
+      mainHeapSnapshotPath,
+      rendererHeapSnapshotPath,
       analysisPath,
       summaryPath,
       appendEvent: async (event) => {
@@ -193,6 +210,13 @@ export async function createStartupCpuProfileSession(options: {
       markAnalysisGenerated: async (generatedAt) => {
         await updateManifest((current) => {
           current.analysis.generatedAt = generatedAt;
+        });
+      },
+      registerHeapSnapshot: async (filename) => {
+        await updateManifest((current) => {
+          if (!current.heapSnapshots.files.includes(filename)) {
+            current.heapSnapshots.files.push(filename);
+          }
         });
       },
       complete: async ({ status, completedAt: completedAtValue }) => {

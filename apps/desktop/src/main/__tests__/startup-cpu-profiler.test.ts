@@ -19,6 +19,7 @@ function createEnabledConfig() {
     postLoadDurationMs: 5000,
     hardTimeoutMs: 15000,
     quitOnComplete: false,
+    captureHeapSnapshots: false,
   };
 }
 
@@ -31,11 +32,14 @@ function createSession(): StartupCpuProfileSession {
     eventsPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/events.ndjson",
     mainProfilePath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.cpuprofile",
     rendererProfilePath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.cpuprofile",
+    mainHeapSnapshotPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.heapsnapshot",
+    rendererHeapSnapshotPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.heapsnapshot",
     analysisPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/analysis.json",
     summaryPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/summary.md",
     appendEvent: vi.fn(async () => undefined),
     markProfileCaptured: vi.fn(async () => undefined),
     markAnalysisGenerated: vi.fn(async () => undefined),
+    registerHeapSnapshot: vi.fn(async () => undefined),
     complete: vi.fn(async () => undefined),
   };
 }
@@ -57,6 +61,7 @@ function createWindowTarget() {
           handlers.push(handler);
           webContentsHandlers.set(event, handlers);
         }),
+        takeHeapSnapshot: vi.fn(async () => undefined),
       },
     },
     emitWindow(event: string, ...args: unknown[]) {
@@ -144,9 +149,10 @@ describe("StartupCpuProfiler", () => {
       source: "main",
       capturedAt: "2026-04-19T13:30:00.000Z",
       type: "controller-started",
-      detail: {
+      detail: expect.objectContaining({
+        elapsedMs: expect.any(Number),
         sessionDirectory: session.directoryPath,
-      },
+      }),
     });
     expect(session.appendEvent).toHaveBeenCalledWith({
       source: "main",
@@ -157,6 +163,47 @@ describe("StartupCpuProfiler", () => {
         status: "completed",
       },
     });
+  });
+
+  it("captures startup heap snapshots when enabled", async () => {
+    const session = createSession();
+    const { window, emitWebContents } = createWindowTarget();
+    const writeMainHeapSnapshot = vi.fn(() => session.mainHeapSnapshotPath);
+
+    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const profiler = new StartupCpuProfiler({
+      config: {
+        ...createEnabledConfig(),
+        captureHeapSnapshots: true,
+      },
+      now: () => new Date("2026-04-19T13:30:00.000Z"),
+      createSession: vi.fn(async () => ({
+        ok: true as const,
+        session,
+      })),
+      createMainProfiler: vi.fn(() => ({
+        start: vi.fn(async () => true),
+        stop: vi.fn(async () => true),
+      })),
+      createRendererProfiler: vi.fn(() => ({
+        start: vi.fn(async () => true),
+        stop: vi.fn(async () => true),
+      })),
+      analyzeSession: vi.fn(async () => ({ ok: true })),
+      writeMainHeapSnapshot,
+    });
+
+    await profiler.start();
+    profiler.attachWindow(window as never);
+    emitWebContents("did-finish-load");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writeMainHeapSnapshot).toHaveBeenCalledWith(session.mainHeapSnapshotPath);
+    expect(window.webContents.takeHeapSnapshot).toHaveBeenCalledWith(
+      session.rendererHeapSnapshotPath,
+    );
+    expect(session.registerHeapSnapshot).toHaveBeenCalledWith("main.heapsnapshot");
+    expect(session.registerHeapSnapshot).toHaveBeenCalledWith("renderer.heapsnapshot");
   });
 
   it("quits the app after capture when requested by profiling config", async () => {
