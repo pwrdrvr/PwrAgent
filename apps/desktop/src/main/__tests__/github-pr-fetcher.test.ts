@@ -423,6 +423,47 @@ describe("GithubPrFetcher", () => {
     });
   });
 
+  describe("fetchPullRequestByUrl", () => {
+    it("uses gh pr view for retained PR chips whose head branch is no longer current", async () => {
+      const { fetcher, exec } = buildFetcher({
+        stdout: JSON.stringify(rawMergedPr()),
+      });
+      const result = await fetcher.fetchPullRequestByUrl({
+        cwd: "/tmp/repo",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
+      });
+      expect(result).toEqual({
+        provider: "github.com",
+        number: 178,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        title: "Retain thread pull request history",
+        state: "passing",
+        checkState: "passing",
+        lifecycleState: "merged",
+        reviewState: "ready_for_review",
+        mergeState: "unknown",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
+      });
+      expect(exec).toHaveBeenCalledWith("/tmp/repo", [
+        "pr",
+        "view",
+        "https://github.com/pwrdrvr/PwrAgent/pull/178",
+        "--json",
+        expect.any(String),
+      ]);
+    });
+
+    it("returns undefined on subprocess failure", async () => {
+      const { fetcher } = buildFetcher({ error: new Error("gh failed") });
+      const result = await fetcher.fetchPullRequestByUrl({
+        cwd: "/tmp/repo",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
+      });
+      expect(result).toBeUndefined();
+    });
+  });
+
   describe("isGhAvailable / invalidateGhAvailable", () => {
     it("caches the probe and re-uses for repeated calls within the TTL", async () => {
       const { fetcher, probeGhAvailable } = buildFetcher();
