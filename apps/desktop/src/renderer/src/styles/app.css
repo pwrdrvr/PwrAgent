@@ -2412,6 +2412,11 @@ textarea,
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
+  /* Width-query container so the longest label ("Directories") can swap to
+     a short form once the (resizable) sidebar narrows past the point where it
+     would otherwise spill past the segmented control. The width is extrinsic
+     (`width: 100%`), so inline-size containment is safe here. */
+  container-type: inline-size;
 }
 
 .lens-switch__button,
@@ -2426,13 +2431,48 @@ textarea,
 }
 
 .lens-switch__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
   height: 32px;
   padding: 0 6px;
+  /* Clip rather than let a too-long label bleed past the segmented control's
+     rounded box. The inner label handles the ellipsis; this is the wall. */
+  overflow: hidden;
   background: transparent;
   color: var(--text-secondary);
   transition: none;
   white-space: nowrap;
+}
+
+/* Label inside each lens button. Truncates with an ellipsis when a column is
+   too narrow to show the full word — the universal fallback for "Updated" /
+   "Created" / "Directories" alike. min-width:0 lets the flex child shrink
+   below its content width so text-overflow can engage. */
+.lens-switch__label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* "Directories" is the only label long enough to routinely clip, so it gets a
+   readable short form ("Dirs") instead of a mid-word ellipsis. The abbreviated
+   span is hidden until the container query below decides the column is too
+   tight for the full word. */
+.lens-switch__label--abbrev {
+  display: none;
+}
+
+@container (max-width: 300px) {
+  .lens-switch__label--full {
+    display: none;
+  }
+
+  .lens-switch__label--abbrev {
+    display: inline;
+  }
 }
 
 .lens-switch__button.is-active {
