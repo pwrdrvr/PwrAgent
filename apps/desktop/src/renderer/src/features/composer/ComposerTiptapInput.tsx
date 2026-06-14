@@ -859,6 +859,22 @@ function pastePlainMarkdownWithFences(
     return false;
   }
 
+  // HTML-authoritative paste: when the clipboard carries rich HTML that
+  // already represents the code block (a <pre>), defer to ProseMirror's
+  // default paste. It derives paragraph structure from the HTML — which
+  // disambiguates a single "\n" (soft break, same paragraph) from a real
+  // paragraph break — whereas rebuilding from text/plain alone would collapse
+  // paragraphs whenever the plain flavor flattens breaks to single newlines.
+  // A code fence must NOT change how prose paragraphs are parsed; it should
+  // only ensure the code block is formed, and the HTML already does that here.
+  // Only take over when there is no usable HTML (so text/plain is the only,
+  // and authoritative, markdown source) or the HTML lacks the code block the
+  // fence implies (so the default paste would drop the fence to literal text).
+  const html = event.clipboardData?.getData("text/html") ?? "";
+  if (html.trim().length > 0 && /<pre[\s>]/i.test(html)) {
+    return false;
+  }
+
   const markdownContent = buildMarkdownTiptapContent(text).content ?? [];
   if (markdownContent.length === 0) {
     return false;
