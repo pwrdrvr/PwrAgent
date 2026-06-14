@@ -1957,6 +1957,16 @@ describe("app server ipc", () => {
         pr: mergedPr,
       },
     ]);
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "pullRequest/status/updated",
+        params: {
+          prKey: "github.com/giphy/gifgrabber#255",
+          pr: mergedPr,
+        },
+      },
+    });
     expect(writePrLookupCacheEntry).toHaveBeenCalledWith({
       lookupKey,
       provider: "github.com",

@@ -23,6 +23,7 @@ import type {
 import {
   buildAppendPinRank,
   buildPinnedRanks,
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
@@ -1260,6 +1261,51 @@ function applyThreadPullRequestsUpdate(
     : snapshot;
 }
 
+function applyPullRequestStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: { prKey: string; pr: PrSummary }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (!thread.prs?.length) {
+      return thread;
+    }
+
+    let threadChanged = false;
+    const prs = thread.prs.map((pr) => {
+      if (buildPullRequestStatusKey(pr) !== params.prKey) {
+        return pr;
+      }
+      if (prSummariesEqual([pr], [params.pr])) {
+        return pr;
+      }
+      threadChanged = true;
+      return params.pr;
+    });
+
+    if (!threadChanged) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      prs,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
 function applyThreadModelSettingsUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2436,6 +2482,22 @@ export function useThreadNavigation(
             backend: event.backend,
             threadId,
             prs,
+          }),
+        }));
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "pullRequest/status/updated") {
+        const { prKey, pr } = event.notification.params as {
+          prKey: string;
+          pr: PrSummary;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyPullRequestStatusUpdate(current.response, {
+            prKey,
+            pr,
           }),
         }));
         scheduleRefresh();
