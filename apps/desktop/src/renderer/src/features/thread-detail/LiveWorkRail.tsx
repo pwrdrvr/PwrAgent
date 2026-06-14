@@ -7,7 +7,11 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptPlan } from "./TranscriptPlan";
-import { EditedFileGroupList } from "./EditedFileGroupList";
+import {
+  EditedFileGroupList,
+  EditedFileViewToggle,
+  type EditedFileGroupView,
+} from "./EditedFileGroupList";
 import {
   summarizeEditedFileGroups,
   type EditedFileGroup,
@@ -54,6 +58,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
     props.planEntry || editedSummary || props.changedFilesEntry,
   );
   const [collapsed, setCollapsed] = useState(false);
+  const [editedView, setEditedView] = useState<EditedFileGroupView>("turns");
   const bodyId = useId();
 
   if (!hasContent) {
@@ -92,17 +97,29 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           <span className="live-work-rail__chevron" aria-hidden="true" />
           <span className="live-work-rail__title">{railTitle}</span>
         </button>
-        {editedSummary && props.onMoveEditedFilesToSidebar ? (
-          <button
-            type="button"
-            className="live-work-rail__dock-toggle"
-            onClick={props.onMoveEditedFilesToSidebar}
-            aria-label="Move edited files to the sidebar Edits panel"
-            title="Move edited files to the sidebar Edits panel"
-          >
-            Sidebar
-          </button>
-        ) : null}
+        <div className="live-work-rail__header-actions">
+          {/* The view toggle lives in the fixed header (not the scroll body)
+              so it stays put while a long diff scrolls, and reclaims the
+              vertical band the inline toggle used to take. Only meaningful
+              with more than one turn group, and pointless while collapsed. */}
+          {editedFileGroups.length > 1 && !collapsed ? (
+            <EditedFileViewToggle
+              view={editedView}
+              onViewChange={setEditedView}
+            />
+          ) : null}
+          {editedSummary && props.onMoveEditedFilesToSidebar ? (
+            <button
+              type="button"
+              className="live-work-rail__dock-toggle"
+              onClick={props.onMoveEditedFilesToSidebar}
+              aria-label="Move edited files to the sidebar Edits panel"
+              title="Move edited files to the sidebar Edits panel"
+            >
+              Sidebar
+            </button>
+          ) : null}
+        </div>
       </header>
 
       {/* Body stays mounted across collapse toggles so the
@@ -123,6 +140,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
             <EditedFileGroupList
               groups={editedFileGroups}
               commitStatesByKey={props.editedFileCommitStates}
+              view={editedView}
             />
           </section>
         ) : null}

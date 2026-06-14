@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { EditedFileGroupList } from "../EditedFileGroupList";
+import { useState } from "react";
+import {
+  EditedFileGroupList,
+  EditedFileViewToggle,
+  type EditedFileGroupView,
+} from "../EditedFileGroupList";
 import type { EditedFileGroup } from "../edited-file-groups";
 
 afterEach(cleanup);
@@ -105,11 +110,42 @@ describe("EditedFileGroupList Show more / Show less", () => {
     expect(screen.queryByText("Uncommitted")).not.toBeInTheDocument();
   });
 
-  it("does not show the turn toggle in the All files view", () => {
-    render(<EditedFileGroupList groups={groups(5)} />);
+  it("does not show the turn-overflow toggle in the All files view", () => {
+    // View is now controlled by the parent; the flattened "files" view has no
+    // per-turn grouping, so no Show more / Show less affordance.
+    render(<EditedFileGroupList groups={groups(5)} view="files" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "All files" }));
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show less" })).not.toBeInTheDocument();
+  });
+});
+
+describe("EditedFileViewToggle", () => {
+  function Harness() {
+    const [view, setView] = useState<EditedFileGroupView>("turns");
+    return (
+      <>
+        <EditedFileViewToggle view={view} onViewChange={setView} />
+        <span data-testid="current-view">{view}</span>
+      </>
+    );
+  }
+
+  it("reflects the active view and reports changes", () => {
+    render(<Harness />);
+
+    expect(screen.getByTestId("current-view")).toHaveTextContent("turns");
+    expect(screen.getByRole("button", { name: "By turn" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "All files" }));
+
+    expect(screen.getByTestId("current-view")).toHaveTextContent("files");
+    expect(screen.getByRole("button", { name: "All files" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

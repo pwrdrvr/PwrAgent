@@ -18,6 +18,14 @@ type EditedFileGroupListProps = {
   groups: EditedFileGroup[];
   /** Git commit lifecycle per group key, from `useEditCommitStates`. */
   commitStatesByKey?: Record<string, EditGroupCommitState>;
+  /**
+   * Which view to render. Controlled by the parent so the `By turn / All
+   * files` toggle can live in the surface's fixed header (above the scroll
+   * region) instead of scrolling with the list. Defaults to `"turns"`; only
+   * meaningful with more than one group. Render `<EditedFileViewToggle>` in
+   * the header to drive it.
+   */
+  view?: EditedFileGroupView;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -39,8 +47,48 @@ const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
  */
 const VISIBLE_TURN_GROUPS = 3;
 
+/**
+ * The `By turn / All files` segmented control. Rendered by the parent in its
+ * fixed header (the context-rail Edits header, the LiveWorkRail card header)
+ * so it stays put while the list scrolls beneath it. Only worth showing when
+ * there is more than one group.
+ */
+export function EditedFileViewToggle(props: {
+  view: EditedFileGroupView;
+  onViewChange: (view: EditedFileGroupView) => void;
+}) {
+  return (
+    <div
+      className="edited-file-groups__view-toggle"
+      role="group"
+      aria-label="Edited files view"
+    >
+      <button
+        type="button"
+        className={`edited-file-groups__view-btn${
+          props.view === "turns" ? " is-active" : ""
+        }`}
+        aria-pressed={props.view === "turns"}
+        onClick={() => props.onViewChange("turns")}
+      >
+        By turn
+      </button>
+      <button
+        type="button"
+        className={`edited-file-groups__view-btn${
+          props.view === "files" ? " is-active" : ""
+        }`}
+        aria-pressed={props.view === "files"}
+        onClick={() => props.onViewChange("files")}
+      >
+        All files
+      </button>
+    </div>
+  );
+}
+
 export function EditedFileGroupList(props: EditedFileGroupListProps) {
-  const [view, setView] = useState<EditedFileGroupView>("turns");
+  const view = props.view ?? "turns";
   const [showAllTurns, setShowAllTurns] = useState(false);
 
   if (props.groups.length === 0) {
@@ -53,35 +101,6 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
 
   return (
     <div className="edited-file-groups">
-      <div className="edited-file-groups__view-toggle">
-        <div
-          className="edited-file-groups__view-toggle-inner"
-          role="group"
-          aria-label="Edited files view"
-        >
-          <button
-            type="button"
-            className={`edited-file-groups__view-btn${
-              view === "turns" ? " is-active" : ""
-            }`}
-            aria-pressed={view === "turns"}
-            onClick={() => setView("turns")}
-          >
-            By turn
-          </button>
-          <button
-            type="button"
-            className={`edited-file-groups__view-btn${
-              view === "files" ? " is-active" : ""
-            }`}
-            aria-pressed={view === "files"}
-            onClick={() => setView("files")}
-          >
-            All files
-          </button>
-        </div>
-      </div>
-
       {view === "turns" ? (
         (() => {
           const visibleGroups = showAllTurns

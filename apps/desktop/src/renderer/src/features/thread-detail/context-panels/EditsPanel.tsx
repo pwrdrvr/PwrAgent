@@ -1,5 +1,10 @@
+import { useState } from "react";
 import type { EditGroupCommitState } from "@pwragent/shared";
-import { EditedFileGroupList } from "../EditedFileGroupList";
+import {
+  EditedFileGroupList,
+  EditedFileViewToggle,
+  type EditedFileGroupView,
+} from "../EditedFileGroupList";
 import type { EditedFileGroup } from "../edited-file-groups";
 import type { EditedFilesDock } from "./context-tab";
 
@@ -17,12 +22,26 @@ type EditsPanelProps = {
  * the open thread, grouped per turn (newest first). Shows the same
  * data as the LiveWorkRail's Edited Files section; the dock toggle
  * controls whether that above-composer copy renders at all.
+ *
+ * The panel is a flex column with a FIXED header (title + view toggle +
+ * dock toggle) and an internally scrolling body, so the chrome never
+ * translates with the list — only the groups scroll, their sticky
+ * headers pinning to the body's top edge.
  */
 export function EditsPanel(props: EditsPanelProps) {
+  const [view, setView] = useState<EditedFileGroupView>("turns");
+  const hasGroups = props.groups.length > 0;
+  const showViewToggle = props.groups.length > 1;
+
   return (
     <section className="context-panel__section context-panel__section--edits">
       <div className="edits-panel__header">
-        <h3>Edits</h3>
+        <div className="edits-panel__title-group">
+          <h3>Edits</h3>
+          {showViewToggle ? (
+            <EditedFileViewToggle view={view} onViewChange={setView} />
+          ) : null}
+        </div>
         <button
           type="button"
           className="edits-panel__dock-toggle"
@@ -38,17 +57,20 @@ export function EditsPanel(props: EditsPanelProps) {
           {props.dock === "sidebar" ? "Show above composer" : "Only show here"}
         </button>
       </div>
-      {props.groups.length > 0 ? (
-        <EditedFileGroupList
-          groups={props.groups}
-          commitStatesByKey={props.commitStatesByKey}
-        />
-      ) : (
-        <p className="context-empty">
-          No uncommitted file edits yet. Edits from agent turns accumulate
-          here until they are committed.
-        </p>
-      )}
+      <div className="edits-panel__body">
+        {hasGroups ? (
+          <EditedFileGroupList
+            groups={props.groups}
+            commitStatesByKey={props.commitStatesByKey}
+            view={view}
+          />
+        ) : (
+          <p className="context-empty">
+            No uncommitted file edits yet. Edits from agent turns accumulate
+            here until they are committed.
+          </p>
+        )}
+      </div>
     </section>
   );
 }
