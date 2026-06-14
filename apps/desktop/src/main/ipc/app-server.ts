@@ -357,6 +357,7 @@ function getNavigationSnapshotRequestKey(
   return JSON.stringify({
     backend: request.backend ?? "all",
     filter: request.filter ?? "",
+    forceRefresh: request.forceRefresh === true,
   });
 }
 
@@ -879,6 +880,7 @@ class DesktopAppServerService {
       backend: backend === "all" ? undefined : backend,
       callerReason: "navigation-snapshot",
       filter: request.filter,
+      forceRefresh: request.forceRefresh,
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();

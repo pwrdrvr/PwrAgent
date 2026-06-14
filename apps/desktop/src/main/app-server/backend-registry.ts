@@ -3766,6 +3766,7 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
+    forceRefresh?: boolean;
   } = {}): Promise<AppServerThreadSummary[]> {
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
@@ -3816,6 +3817,7 @@ export class DesktopBackendRegistry {
         enrichDirectories: normalizedParams.enrichDirectories,
         expiresInMs: cached.expiresInMs,
         filterPresent: Boolean(normalizedParams.filter?.trim()),
+        forceRefresh: normalizedParams.forceRefresh === true,
         pending: cached.pending,
         source: cached.source,
         threadCount: cached.threadCount,
@@ -3830,6 +3832,7 @@ export class DesktopBackendRegistry {
       callerReason: normalizedParams.callerReason ?? "thread-list",
       enrichDirectories: normalizedParams.enrichDirectories,
       filterPresent: Boolean(normalizedParams.filter?.trim()),
+      forceRefresh: normalizedParams.forceRefresh === true,
     });
     const promise = this.readThreadList(normalizedParams)
       .then((threads) => {
@@ -3845,6 +3848,7 @@ export class DesktopBackendRegistry {
           enrichDirectories: normalizedParams.enrichDirectories,
           expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
           filterPresent: Boolean(normalizedParams.filter?.trim()),
+          forceRefresh: normalizedParams.forceRefresh === true,
           threadCount: threads.length,
         });
         return threads;
@@ -3859,6 +3863,7 @@ export class DesktopBackendRegistry {
           enrichDirectories: normalizedParams.enrichDirectories,
           error: error instanceof Error ? error.message : String(error),
           filterPresent: Boolean(normalizedParams.filter?.trim()),
+          forceRefresh: normalizedParams.forceRefresh === true,
         });
         throw error;
       });
@@ -8903,6 +8908,7 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
+    forceRefresh?: boolean;
   }): string {
     const codexDirectoryBackfill =
       params.backend === "grok" ||
@@ -8928,10 +8934,15 @@ export class DesktopBackendRegistry {
       callerReason?: ThreadListCallerReason;
       enrichDirectories?: boolean;
       filter?: string;
+      forceRefresh?: boolean;
     },
     cacheKey: string,
     now: number,
   ): ThreadListCacheHit | undefined {
+    if (params.forceRefresh === true) {
+      return this.readPendingThreadListCache(cacheKey, "exact");
+    }
+
     const exact = this.readFreshThreadListCache(cacheKey, now, "exact");
     if (exact) {
       return exact;
@@ -8981,6 +8992,22 @@ export class DesktopBackendRegistry {
       };
     }
     return undefined;
+  }
+
+  private readPendingThreadListCache(
+    cacheKey: string,
+    source: ThreadListCacheHit["source"],
+  ): ThreadListCacheHit | undefined {
+    const cached = this.threadListCache.get(cacheKey);
+    if (!cached?.promise) {
+      return undefined;
+    }
+    return {
+      cacheKey,
+      pending: true,
+      source,
+      value: cached.promise,
+    };
   }
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {

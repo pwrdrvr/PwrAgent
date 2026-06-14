@@ -5540,6 +5540,63 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("bypasses completed thread-list cache entries for forced navigation refreshes", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-codex",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+      }),
+    ).resolves.toMatchObject([{ id: "thread-codex" }]);
+    const initialReadCount = codexClient.listThreadsCallCount;
+
+    codexClient.setThreads([
+      {
+        id: "thread-codex-new",
+        title: "New Codex thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      },
+    ]);
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+      }),
+    ).resolves.toMatchObject([{ id: "thread-codex" }]);
+    expect(codexClient.listThreadsCallCount).toBe(initialReadCount);
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+        forceRefresh: true,
+      }),
+    ).resolves.toMatchObject([{ id: "thread-codex-new" }]);
+
+    expect(codexClient.listThreadsCallCount).toBeGreaterThan(initialReadCount);
+
+    await registry.close();
+  });
+
   it("keeps cheap navigation lists separate from directory-enriched thread lists", async () => {
     const codexClient = new MockBackendClient({
       threads: [

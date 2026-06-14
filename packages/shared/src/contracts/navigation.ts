@@ -643,6 +643,7 @@ export type NavigationSnapshot = {
 export type GetNavigationSnapshotRequest = {
   backend?: AppServerBackendScope;
   filter?: string;
+  forceRefresh?: boolean;
 };
 
 export type SetNavigationBrowseModeRequest = {
