@@ -3795,13 +3795,10 @@ export class DesktopBackendRegistry {
         params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
     };
     const cacheKey = this.buildThreadListCacheKey(normalizedParams);
-    const cached = this.threadListCache.get(cacheKey);
     const now = Date.now();
-    if (cached?.threads && (cached.expiresAt ?? 0) > now) {
-      return cached.threads;
-    }
-    if (cached?.promise) {
-      return await cached.promise;
+    const cached = this.findReusableThreadListCache(normalizedParams, cacheKey, now);
+    if (cached) {
+      return await cached;
     }
 
     const promise = this.readThreadList(normalizedParams)
@@ -8873,6 +8870,52 @@ export class DesktopBackendRegistry {
         params.backend === "grok" ? undefined : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
     });
+  }
+
+  private findReusableThreadListCache(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories?: boolean;
+      filter?: string;
+    },
+    cacheKey: string,
+    now: number,
+  ): Promise<AppServerThreadSummary[]> | AppServerThreadSummary[] | undefined {
+    const exact = this.readFreshThreadListCache(cacheKey, now);
+    if (exact) {
+      return exact;
+    }
+
+    if (
+      params.backend !== "codex" ||
+      params.archived === true ||
+      params.enrichDirectories !== false ||
+      shouldBackfillCodexDirectoryRelationships(params.callerReason)
+    ) {
+      return undefined;
+    }
+
+    const backfillCapableKey = this.buildThreadListCacheKey({
+      ...params,
+      callerReason: "navigation-snapshot",
+    });
+    if (backfillCapableKey === cacheKey) {
+      return undefined;
+    }
+    return this.readFreshThreadListCache(backfillCapableKey, now);
+  }
+
+  private readFreshThreadListCache(
+    cacheKey: string,
+    now: number,
+  ): Promise<AppServerThreadSummary[]> | AppServerThreadSummary[] | undefined {
+    const cached = this.threadListCache.get(cacheKey);
+    if (cached?.threads && (cached.expiresAt ?? 0) > now) {
+      return cached.threads;
+    }
+    return cached?.promise;
   }
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
