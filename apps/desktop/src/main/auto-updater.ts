@@ -61,6 +61,10 @@ function downloadedVersion(): string | undefined {
   return updateStatus.status === "downloaded" ? updateStatus.version : undefined;
 }
 
+export function readAppUpdateStatus(): AppUpdateStatus {
+  return updateStatus;
+}
+
 function currentUpdateChannel(): "latest" | "prerelease" {
   try {
     return getDesktopSettingsService().resolveUpdateChannel();
@@ -453,6 +457,41 @@ export function initAutoUpdater(): void {
   void checkForAppUpdatesNow("startup");
 }
 
+export async function installDownloadedAppUpdate(options?: {
+  requestQuit?: (performQuit: () => void) => Promise<boolean>;
+}): Promise<AppUpdateInstallResult> {
+  const version = downloadedVersion();
+  if (!version) {
+    return {
+      status: "error",
+      message: "No downloaded update is ready to install.",
+    };
+  }
+  try {
+    log.info("installing downloaded update", { version });
+    const performQuit = (): void => {
+      autoUpdater.quitAndInstall();
+    };
+    if (options?.requestQuit) {
+      const quitAccepted = await options.requestQuit(performQuit);
+      if (!quitAccepted) {
+        return {
+          status: "error",
+          message: "Update restart cancelled.",
+        };
+      }
+    } else {
+      performQuit();
+    }
+    return { status: "restarting" };
+  } catch (err) {
+    return {
+      status: "error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export function registerAppUpdateIpcHandlers(options?: {
   requestQuit?: (performQuit: () => void) => Promise<boolean>;
 }): void {
@@ -472,36 +511,7 @@ export function registerAppUpdateIpcHandlers(options?: {
   ipcMain.handle(
     APP_UPDATE_INSTALL_CHANNEL,
     async (): Promise<AppUpdateInstallResult> => {
-      const version = downloadedVersion();
-      if (!version) {
-        return {
-          status: "error",
-          message: "No downloaded update is ready to install.",
-        };
-      }
-      try {
-        log.info("installing downloaded update", { version });
-        const performQuit = (): void => {
-          autoUpdater.quitAndInstall();
-        };
-        if (options?.requestQuit) {
-          const quitAccepted = await options.requestQuit(performQuit);
-          if (!quitAccepted) {
-            return {
-              status: "error",
-              message: "Update restart cancelled.",
-            };
-          }
-        } else {
-          performQuit();
-        }
-        return { status: "restarting" };
-      } catch (err) {
-        return {
-          status: "error",
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
+      return await installDownloadedAppUpdate(options);
     },
   );
   ipcMain.handle(

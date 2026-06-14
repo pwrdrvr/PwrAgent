@@ -5299,6 +5299,10 @@ script = "echo setup"
           name: "create_monitor_delegation",
         }),
         expect.objectContaining({
+          namespace: "pwragent_app",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
           namespace: "pwragent_threads",
           name: "search_threads",
         }),
@@ -5329,6 +5333,7 @@ script = "echo setup"
     ).toEqual(
       new Set([
         "pwragent_automations",
+        "pwragent_app",
         "pwragent_threads",
         "pwragent_messaging",
         "pwragent_task_monitors",
@@ -5445,6 +5450,10 @@ script = "echo setup"
         expect.objectContaining({
           namespace: "pwragent_threads",
           name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_app",
+          name: "manage_pwragent",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -7371,6 +7380,10 @@ script = "pnpm install"
         expect.objectContaining({
           namespace: "pwragent_threads",
           name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent_app",
+          name: "manage_pwragent",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -13342,6 +13355,86 @@ command = "pnpm dev"
     });
     expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
       callerReason: "agent-thread-inspection",
+    });
+
+    await registry.close();
+  });
+
+  it("handles app management dynamic tool calls from active Agent turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const appManagementHandler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        action: "status" as const,
+        runtime: {
+          currentVersion: "1.2.3",
+          startedAt: 1_000,
+          startedAtIso: "1970-01-01T00:00:01.000Z",
+          startedAtLocal: "Jan 1, 1970, 12:00:01 AM",
+          now: 61_000,
+          nowIso: "1970-01-01T00:01:01.000Z",
+          nowLocal: "Jan 1, 1970, 12:01:01 AM",
+          uptimeMs: 60_000,
+          uptimeHuman: "1m 0s",
+        },
+        update: {
+          status: { status: "idle" as const },
+          updateAvailableToDownload: false,
+          updateDownloadedWillInstallOnRestart: false,
+        },
+        result: { status: "reported" as const },
+      },
+    }));
+    const registry = new DesktopBackendRegistry({
+      appManagementHandler,
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_app",
+        tool: "manage_pwragent",
+        arguments: {
+          action: "status",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining('"currentVersion": "1.2.3"'),
+        },
+      ],
+    });
+    expect(appManagementHandler).toHaveBeenCalledWith({
+      operation: "manage_pwragent",
+      context: {},
+      args: { action: "status" },
     });
 
     await registry.close();

@@ -4,6 +4,7 @@ import type {
   ThreadAgentMetadata,
 } from "@pwragent/shared";
 import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_APP_TOOL_NAMESPACE } from "@pwragent/shared";
 import { PWRAGENT_MESSAGING_TOOL_NAMESPACE } from "@pwragent/shared";
 import { PWRAGENT_THREAD_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -11,6 +12,10 @@ import {
   buildAutomationInspectionToolRouter,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-agent-tools.js";
+import {
+  buildPwrAgentAppToolRouter,
+  type PwrAgentAppManagementHandler,
+} from "./pwragent-app-agent-tools.js";
 import {
   buildPwrAgentThreadToolRouter,
   type PwrAgentThreadInspectionHandler,
@@ -28,6 +33,7 @@ export type ResolvedAgentToolCatalog = {
 
 export function resolveAgentToolCatalogs(params: {
   agent?: ThreadAgentMetadata | { name: string; instructions?: string } | null;
+  appManagementHandler?: PwrAgentAppManagementHandler;
   automationInspectionHandler?: AutomationInspectionHandler;
   messagingHandler?: PwrAgentMessagingHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
@@ -40,6 +46,8 @@ export function resolveAgentToolCatalogs(params: {
     params.automationInspectionHandler,
   );
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
+  const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
+  const appDynamicTools = appRouter.buildDynamicToolSpecs();
   const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
@@ -57,6 +65,21 @@ export function resolveAgentToolCatalogs(params: {
           id: "automation_inspection",
           namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
           tools: automationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "app_management",
+      dynamicTools: appDynamicTools,
+      summary: {
+        id: "app_management",
+        namespace: PWRAGENT_APP_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: appDynamicTools.length,
+        fingerprint: buildCatalogFingerprint({
+          id: "app_management",
+          namespace: PWRAGENT_APP_TOOL_NAMESPACE,
+          tools: appDynamicTools,
         }),
       },
     },

@@ -1,5 +1,6 @@
 export const AGENT_TOOL_CATALOG_IDS = [
   "automation_inspection",
+  "app_management",
   "thread_inspection",
   "messaging_context",
 ] as const;

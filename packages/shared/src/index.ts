@@ -5,6 +5,7 @@ export * from "./codex-turn-error";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
 export * from "./contracts/agent-tools";
+export * from "./contracts/app-tools";
 export * from "./contracts/automations";
 export * from "./contracts/automation-tools";
 export * from "./contracts/task-monitor-tools";

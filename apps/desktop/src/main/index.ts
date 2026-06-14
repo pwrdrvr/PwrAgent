@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeAppMetadataIpcHandlers,
@@ -138,6 +139,7 @@ const PWRAGENT_ISSUE_REPORTER_URL =
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
+const mainProcessStartedAt = Date.now();
 let mainProcessResourcesDisposed = false;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
@@ -597,6 +599,12 @@ export function bootstrapApp(): void {
       installProfileFocusRequestWatcher();
     }
     installApplicationMenu();
+    getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
+      createPwrAgentAppManagementHandler({
+        startedAt: mainProcessStartedAt,
+        version: () => app.getVersion(),
+      }),
+    );
     // Windows: serve the painted title-bar menu bar from the live application
     // menu (idempotent; the renderer mounts the bar only on win32).
     wireAppMenuBridge();

@@ -149,6 +149,7 @@ import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+  PWRAGENT_APP_TOOL_NAMESPACE,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
   PWRAGENT_THREAD_TOOL_NAMESPACE,
   isThreadSearchContentMode,
@@ -213,6 +214,12 @@ import {
   normalizePreferredMonitorReasoningEffort,
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
+import {
+  buildPwrAgentAppDynamicToolErrorResponse,
+  handlePwrAgentAppDynamicToolCall,
+  readPwrAgentAppDynamicToolCall,
+} from "../agent-tools/pwragent-app-codex-tools";
+import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import {
   buildPwrAgentThreadDynamicToolErrorResponse,
   handlePwrAgentThreadDynamicToolCall,
@@ -4164,6 +4171,7 @@ export class DesktopBackendRegistry {
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
+  private appManagementHandler?: PwrAgentAppManagementHandler;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
@@ -4280,6 +4288,7 @@ export class DesktopBackendRegistry {
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
+    appManagementHandler?: PwrAgentAppManagementHandler | null;
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
@@ -4431,6 +4440,7 @@ export class DesktopBackendRegistry {
     });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
+    this.appManagementHandler = options?.appManagementHandler ?? undefined;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
@@ -4659,6 +4669,12 @@ export class DesktopBackendRegistry {
     handler: AutomationInspectionHandler | null | undefined,
   ): void {
     this.automationInspectionHandler = handler ?? undefined;
+  }
+
+  setPwrAgentAppManagementHandler(
+    handler: PwrAgentAppManagementHandler | null | undefined,
+  ): void {
+    this.appManagementHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -6704,6 +6720,7 @@ export class DesktopBackendRegistry {
     });
     const agentToolCatalogs = resolveAgentToolCatalogs({
       agent: request.agent,
+      appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
       threadInspectionHandler: this.threadInspectionHandler,
@@ -7280,6 +7297,7 @@ export class DesktopBackendRegistry {
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
               const agentToolCatalogs = resolveAgentToolCatalogs({
                 agent: overlay?.agent,
+                appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
                 threadInspectionHandler: this.threadInspectionHandler,
@@ -13520,6 +13538,41 @@ export class DesktopBackendRegistry {
         handler: this.threadInspectionHandler,
       });
     }
+    const appToolCall = readPwrAgentAppDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (appToolCall?.namespace === PWRAGENT_APP_TOOL_NAMESPACE) {
+      if (!this.isLiveDynamicToolCall(backend, appToolCall)) {
+        backendRegistryLog.warn("rejecting app management dynamic tool call", {
+          backend,
+          callId: appToolCall.callId,
+          namespace: appToolCall.namespace,
+          threadId: appToolCall.threadId,
+          tool: appToolCall.tool,
+          turnId: appToolCall.turnId,
+        });
+        return buildPwrAgentAppDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "App management tool calls must originate from an active Agent turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling app management dynamic tool call", {
+        backend,
+        callId: appToolCall.callId,
+        namespace: appToolCall.namespace,
+        threadId: appToolCall.threadId,
+        tool: appToolCall.tool,
+        turnId: appToolCall.turnId,
+      });
+      return await handlePwrAgentAppDynamicToolCall({
+        backend,
+        call: appToolCall,
+        handler: this.appManagementHandler,
+      });
+    }
+
     const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
       method: request.method,
       params: request.params,
