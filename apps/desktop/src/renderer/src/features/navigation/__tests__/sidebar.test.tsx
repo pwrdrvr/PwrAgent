@@ -220,15 +220,18 @@ describe("Sidebar", () => {
     const lensTabs = within(
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("tab");
-    expect(lensTabs.map((tab) => tab.textContent)).toEqual([
-      "Updated",
-      "Created",
-      "Directories",
-    ]);
-    expect(screen.getByRole("tab", { name: "Directories" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
+    // The Directories tab carries a responsive short form ("Dirs") alongside
+    // the full word; which one shows is decided purely in CSS by a container
+    // query, so the tab's raw textContent holds both spans. Assert the full
+    // label (the visible text in a real browser at normal widths).
+    expect(
+      lensTabs.map(
+        (tab) =>
+          tab.querySelector(".lens-switch__label--full")?.textContent ??
+          tab.textContent
+      )
+    ).toEqual(["Updated", "Created", "Directories"]);
+    expect(lensTabs[2]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);

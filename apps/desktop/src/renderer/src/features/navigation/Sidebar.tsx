@@ -868,7 +868,23 @@ export function Sidebar(props: SidebarProps) {
               type="button"
               onClick={() => props.onBrowseModeChange(mode)}
             >
-              {browseModeLabels[mode]}
+              {mode === "directories" ? (
+                // Two labels, one shown at a time by the .lens-switch
+                // container query: the full word while the column is wide
+                // enough, "Dirs" once it narrows. The hidden span drops out
+                // of the accessible name (display:none), so the visible text
+                // is always the tab's name.
+                <>
+                  <span className="lens-switch__label lens-switch__label--full">
+                    {browseModeLabels[mode]}
+                  </span>
+                  <span className="lens-switch__label lens-switch__label--abbrev">
+                    Dirs
+                  </span>
+                </>
+              ) : (
+                <span className="lens-switch__label">{browseModeLabels[mode]}</span>
+              )}
             </button>
           ))}
         </div>
