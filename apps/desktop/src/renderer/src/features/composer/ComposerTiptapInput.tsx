@@ -860,16 +860,22 @@ function pastePlainMarkdownWithFences(
   }
 
   // HTML-authoritative paste: when the clipboard carries rich HTML that
-  // already represents the code block (a <pre>), defer to ProseMirror's
-  // default paste. It derives paragraph structure from the HTML — which
-  // disambiguates a single "\n" (soft break, same paragraph) from a real
-  // paragraph break — whereas rebuilding from text/plain alone would collapse
-  // paragraphs whenever the plain flavor flattens breaks to single newlines.
-  // A code fence must NOT change how prose paragraphs are parsed; it should
-  // only ensure the code block is formed, and the HTML already does that here.
-  // Only take over when there is no usable HTML (so text/plain is the only,
-  // and authoritative, markdown source) or the HTML lacks the code block the
-  // fence implies (so the default paste would drop the fence to literal text).
+  // already represents a code block (a <pre>), defer to ProseMirror's default
+  // paste. It derives paragraph structure from the HTML — which disambiguates
+  // a single "\n" (soft break, same paragraph) from a real paragraph break —
+  // whereas rebuilding from text/plain alone would collapse paragraphs whenever
+  // the plain flavor flattens breaks to single newlines. A code fence must NOT
+  // change how prose paragraphs are parsed; it should only ensure a code block
+  // is formed, and the HTML already does that here.
+  //
+  // We keep the custom fence parse (do NOT defer) only when text/plain is the
+  // authoritative markdown source: either there is no usable HTML, or the HTML
+  // carries no <pre> at all (so the default paste would render the fence as
+  // literal prose). The <pre> test is a deliberately coarse presence heuristic,
+  // not a per-fence reconciliation: a multi-fence paste whose HTML happens to
+  // carry only some of those code blocks still defers wholesale. That is fine
+  // for the case this targets — one rendered message copied with both flavors —
+  // and is not meant to be a general fence/HTML merge.
   const html = event.clipboardData?.getData("text/html") ?? "";
   if (html.trim().length > 0 && /<pre[\s>]/i.test(html)) {
     return false;

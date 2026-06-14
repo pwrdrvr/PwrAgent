@@ -243,6 +243,38 @@ test("a pasted code fence still becomes a code block when the clipboard is plain
   }
 });
 
+test("a code fence is upgraded from text/plain even when HTML is present but has no code block", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    // HTML is present but carries NO <pre>, so it does not represent the code
+    // block the text/plain fence implies. text/plain stays authoritative: the
+    // custom fence parse must still run and form the code block. (If the guard
+    // deferred on any HTML rather than on a <pre> specifically, the default
+    // paste would render the prose <p>s and drop the fence to literal text.)
+    await pasteIntoReply(app.window, {
+      html: "<p>Intro paragraph.</p><p>Body paragraph.</p>",
+      text: ["Intro paragraph.", "", "Body paragraph.", "", CODE_PLAIN].join("\n"),
+    });
+
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      `Intro paragraph.\n\nBody paragraph.\n\n${EXPECTED_CODE_VALUE}`,
+    );
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__editor > pre"),
+    ).toHaveCount(1);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 // --- Convergence: one source markdown, two clipboard flavors, one paste result ---
 //
 // A faithful "copy from VS Code" puts the markdown SOURCE on text/plain (real
