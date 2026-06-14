@@ -101,7 +101,7 @@ type ThreadContextPanelProps = {
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
   editedFilesWorktreeRoot?: string;
   onOpenEditedFile?: (absolutePath: string) => void;
-  onScrollToTurn?: (turnId: string) => void;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };

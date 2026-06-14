@@ -878,11 +878,15 @@ export function TranscriptList(props: TranscriptListProps) {
             const entryKey =
               item.type === "workPhaseGroup" ? item.id : item.entry.id;
             // Anchor each item to its turn so external surfaces (the edited-file
-            // group timestamps) can scroll the transcript to a turn's position.
-            const turnId =
+            // group timestamps) can scroll the transcript to a turn's position —
+            // by turn id, with the turn's end/start time as a fallback for turns
+            // whose id isn't directly on a rendered item (work-phase grouping).
+            const itemTurn =
               item.type === "workPhaseGroup"
-                ? item.entries[0]?.turn?.id
-                : item.entry.turn?.id;
+                ? item.entries[0]?.turn
+                : item.entry.turn;
+            const turnId = itemTurn?.id;
+            const turnTime = itemTurn?.completedAt ?? itemTurn?.startedAt;
             const body =
               item.type === "workPhaseGroup" ? (
                 <TranscriptWorkPhaseGroup
@@ -935,6 +939,9 @@ export function TranscriptList(props: TranscriptListProps) {
                 className="transcript-list__item"
                 role="listitem"
                 data-turn-id={turnId || undefined}
+                data-turn-time={
+                  typeof turnTime === "number" ? turnTime : undefined
+                }
               >
                 {body}
               </div>

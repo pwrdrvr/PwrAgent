@@ -79,7 +79,7 @@ type EditedFileGroupListProps = {
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
   /** Scroll the transcript to a group's turn (clickable timestamp). */
-  onScrollToTurn?: (turnId: string) => void;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -256,12 +256,14 @@ function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
   defaultExpanded: boolean;
-  onScrollToTurn?: (turnId: string) => void;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 }) {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
   const bodyId = useId();
   const timestamp = formatGroupTimestamp(props.group);
   const turnId = props.group.turn?.id;
+  const turnTimeMs =
+    props.group.turn?.completedAt ?? props.group.turn?.startedAt;
   const canScrollToTurn = Boolean(turnId && props.onScrollToTurn);
   // Feed the measured header height to `--edits-group-header-height` so an
   // expanded file's sticky toggle pins flush beneath this group's header
@@ -318,7 +320,9 @@ function EditedFileGroupSection(props: {
               className="edited-file-groups__group-time edited-file-groups__group-time--link"
               title="Scroll the transcript to this turn"
               aria-label={`Scroll the transcript to this turn (${timestamp})`}
-              onClick={() => turnId && props.onScrollToTurn?.(turnId)}
+              onClick={() =>
+                turnId && props.onScrollToTurn?.(turnId, turnTimeMs)
+              }
             >
               {timestamp}
             </button>

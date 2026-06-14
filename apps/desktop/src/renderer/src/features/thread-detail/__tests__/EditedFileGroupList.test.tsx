@@ -172,7 +172,8 @@ describe("EditedFileGroupList Show more / Show less", () => {
         name: /Scroll the transcript to this turn/,
       }),
     );
-    expect(onScrollToTurn).toHaveBeenCalledWith("turn-9");
+    // Turn id for the precise match, plus the turn-end time for the fallback.
+    expect(onScrollToTurn).toHaveBeenCalledWith("turn-9", 1_718_000_000_000);
   });
 
   it("renders the timestamp as plain text when scrolling isn't wired", () => {

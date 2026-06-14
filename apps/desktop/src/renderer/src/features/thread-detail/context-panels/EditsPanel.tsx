@@ -18,7 +18,7 @@ type EditsPanelProps = {
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
   /** Scroll the transcript to a group's turn position (timestamp click). */
-  onScrollToTurn?: (turnId: string) => void;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   dock: EditedFilesDock;
   onDockChange: (dock: EditedFilesDock) => void;
 };

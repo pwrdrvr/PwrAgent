@@ -1593,18 +1593,38 @@ export function ThreadView(props: ThreadViewProps) {
   );
 
   // Scroll the transcript to a turn's position — backs the clickable
-  // edited-file group timestamps. The transcript items are anchored with
-  // `data-turn-id` (TranscriptList); a no-op if that turn isn't in the DOM.
-  const handleScrollToTurn = useCallback((turnId: string) => {
-    const container = transcriptPanelRef.current;
-    if (!container || !turnId) {
-      return;
-    }
-    const target = container.querySelector(
-      `[data-turn-id="${CSS.escape(turnId)}"]`,
-    );
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, []);
+  // edited-file group timestamps. Transcript items are anchored with
+  // `data-turn-id`; but a turn's id isn't always on a rendered item (work-phase
+  // grouping renders only the group's first entry, members are folded in), so
+  // fall back to the rendered turn whose time is closest to the group's
+  // timestamp. No-op if neither resolves.
+  const handleScrollToTurn = useCallback(
+    (turnId: string, turnTimeMs?: number) => {
+      const container = transcriptPanelRef.current;
+      if (!container) {
+        return;
+      }
+      let target: Element | null = turnId
+        ? container.querySelector(`[data-turn-id="${CSS.escape(turnId)}"]`)
+        : null;
+      if (!target && typeof turnTimeMs === "number") {
+        let bestDelta = Infinity;
+        for (const candidate of container.querySelectorAll("[data-turn-time]")) {
+          const time = Number((candidate as HTMLElement).dataset.turnTime);
+          if (!Number.isFinite(time)) {
+            continue;
+          }
+          const delta = Math.abs(time - turnTimeMs);
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            target = candidate;
+          }
+        }
+      }
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+    [],
+  );
 
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");

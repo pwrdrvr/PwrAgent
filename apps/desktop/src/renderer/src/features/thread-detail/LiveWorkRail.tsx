@@ -40,7 +40,7 @@ export type LiveWorkRailProps = {
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenEditedFile?: (absolutePath: string) => void;
   /** Scroll the transcript to a group's turn position (timestamp click). */
-  onScrollToTurn?: (turnId: string) => void;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   /**
    * `true` when the rail is showing snapshots from a completed turn
    * (pinned until the next turn starts). `false` while the live turn
