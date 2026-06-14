@@ -1,4 +1,11 @@
-import { useId, useState } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import type {
   AppServerThreadActivityDetail,
   EditGroupCommitState,
@@ -144,6 +151,31 @@ function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
     : undefined;
 }
 
+/**
+ * Live element height via ResizeObserver. Drives the sticky offset for a
+ * group's file rows: a fixed pixel estimate gaps or overlaps because the
+ * group header height varies (one vs two rows, badge state, summary wrap), so
+ * we measure the real header instead.
+ */
+function useMeasuredHeight(ref: RefObject<HTMLElement | null>): number | undefined {
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    const measure = () => setHeight(element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return height;
+}
+
 function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
@@ -152,10 +184,24 @@ function EditedFileGroupSection(props: {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
   const bodyId = useId();
   const timestamp = formatGroupTimestamp(props.group);
+  // Feed the measured header height to `--edits-group-header-height` so an
+  // expanded file's sticky toggle pins flush beneath this group's header
+  // rather than at a guessed offset.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const headerHeight = useMeasuredHeight(headerRef);
 
   return (
-    <section className="edited-file-groups__group">
-      <div className="edited-file-groups__group-header">
+    <section
+      className="edited-file-groups__group"
+      style={
+        headerHeight != null
+          ? ({
+              "--edits-group-header-height": `${headerHeight}px`,
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <div ref={headerRef} className="edited-file-groups__group-header">
         <button
           type="button"
           className="edited-file-groups__group-toggle"

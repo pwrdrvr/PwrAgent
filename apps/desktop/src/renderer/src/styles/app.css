@@ -8608,12 +8608,12 @@ textarea,
      resets font-size, so a longhand before it is silently overridden. */
   font-size: 12px;
   text-align: left;
-  /* Stay reachable while scrolling through an expanded file's diff
-     (#510). Pins BELOW the group header (the bottom rung of the sticky
-     z-index ladder) so the file row scrolls behind the group header
-     rather than over it. The `--edits-group-header-height` offset resolves
-     to 0 in the single-group view (rendered without the `.edited-file-groups`
-     wrapper, so no group header sits above it). */
+  /* Stay reachable while scrolling through an expanded file's diff (#510).
+     Pins flush BELOW its group header (whose MEASURED height feeds
+     `--edits-group-header-height`), and the group header (z-index 2) sits
+     above this row so the diff scrolls behind it. The offset resolves to 0 in
+     the single-group view (rendered without the `.edited-file-groups` wrapper,
+     so no group header sits above it). */
   position: sticky;
   top: var(--edits-group-header-height, 0px);
   z-index: 1;
@@ -8671,8 +8671,10 @@ textarea,
   /* Sticky group headers pin to the top of the surface's scroll body (the
      fixed title + view toggle live OUTSIDE that body, so nothing pins above
      them here). The per-file row, when its diff is expanded, pins just below
-     its group header — `--edits-group-header-height` is that offset. Estimate;
-     tune against the running app. */
+     its group header — `--edits-group-header-height` is that offset, set
+     per-group from the MEASURED header height (EditedFileGroupSection) so it's
+     always flush. This 52px is only the pre-measurement / no-ResizeObserver
+     fallback. */
   --edits-group-header-height: 52px;
 }
 
