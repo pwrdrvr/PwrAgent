@@ -17,6 +17,8 @@ type EditsPanelProps = {
   worktreeRoot?: string;
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
+  /** Scroll the transcript to a group's turn position (timestamp click). */
+  onScrollToTurn?: (turnId: string) => void;
   dock: EditedFilesDock;
   onDockChange: (dock: EditedFilesDock) => void;
 };
@@ -69,6 +71,7 @@ export function EditsPanel(props: EditsPanelProps) {
             view={view}
             worktreeRoot={props.worktreeRoot}
             onOpenFile={props.onOpenFile}
+            onScrollToTurn={props.onScrollToTurn}
           />
         ) : (
           <p className="context-empty">

@@ -877,6 +877,12 @@ export function TranscriptList(props: TranscriptListProps) {
           {transcriptRenderItems.map((item) => {
             const entryKey =
               item.type === "workPhaseGroup" ? item.id : item.entry.id;
+            // Anchor each item to its turn so external surfaces (the edited-file
+            // group timestamps) can scroll the transcript to a turn's position.
+            const turnId =
+              item.type === "workPhaseGroup"
+                ? item.entries[0]?.turn?.id
+                : item.entry.turn?.id;
             const body =
               item.type === "workPhaseGroup" ? (
                 <TranscriptWorkPhaseGroup
@@ -924,7 +930,12 @@ export function TranscriptList(props: TranscriptListProps) {
                 />
               );
             return (
-              <div key={entryKey} className="transcript-list__item" role="listitem">
+              <div
+                key={entryKey}
+                className="transcript-list__item"
+                role="listitem"
+                data-turn-id={turnId || undefined}
+              >
                 {body}
               </div>
             );

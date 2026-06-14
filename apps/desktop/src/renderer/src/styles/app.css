@@ -9065,6 +9065,35 @@ textarea,
   font-size: 11px;
 }
 
+/* Clickable variant: scrolls the transcript to this group's turn. Reads as the
+   same muted timestamp until hovered/focused, then reveals a link affordance.
+   `font-size` must follow `font: inherit` — the shorthand resets it. */
+.edited-file-groups__group-time--link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 2px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+}
+
+.edited-file-groups__group-time--link:hover {
+  color: var(--text-secondary);
+  text-decoration-color: currentColor;
+}
+
+.edited-file-groups__group-time--link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
 /* Context-rail Edits panel: a FIXED header (it lives outside the panel's
    scroll body, so it never translates with the list) carrying the title, the
    view toggle, and the dock toggle. Left group = title + `By turn / All files`;

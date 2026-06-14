@@ -101,6 +101,7 @@ type ThreadContextPanelProps = {
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
   editedFilesWorktreeRoot?: string;
   onOpenEditedFile?: (absolutePath: string) => void;
+  onScrollToTurn?: (turnId: string) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };
@@ -605,6 +606,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={props.editedFilesWorktreeRoot}
             onOpenFile={props.onOpenEditedFile}
+            onScrollToTurn={props.onScrollToTurn}
             dock={props.editedFilesDock ?? "above"}
             onDockChange={props.onEditedFilesDockChange ?? noop}
           />

@@ -147,6 +147,52 @@ describe("EditedFileGroupList Show more / Show less", () => {
     // Per-file chip on the ignored row.
     expect(screen.getByText("Ignored")).toBeInTheDocument();
   });
+
+  it("makes the group timestamp scroll the transcript to its turn", () => {
+    const onScrollToTurn = vi.fn();
+    const timed: EditedFileGroup = {
+      key: "turn-9",
+      turn: { id: "turn-9", completedAt: 1_718_000_000_000 },
+      details: group(9).details,
+      summary: "Edited 1 file",
+      additions: 1,
+      removals: 0,
+      live: false,
+    };
+    // group(8) carries no timestamp, so only the timed group renders a button.
+    render(
+      <EditedFileGroupList
+        groups={[timed, group(8)]}
+        onScrollToTurn={onScrollToTurn}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+    expect(onScrollToTurn).toHaveBeenCalledWith("turn-9");
+  });
+
+  it("renders the timestamp as plain text when scrolling isn't wired", () => {
+    const timed: EditedFileGroup = {
+      key: "turn-9",
+      turn: { id: "turn-9", completedAt: 1_718_000_000_000 },
+      details: group(9).details,
+      summary: "Edited 1 file",
+      additions: 1,
+      removals: 0,
+      live: false,
+    };
+    render(<EditedFileGroupList groups={[timed, group(8)]} />);
+
+    expect(
+      screen.queryByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("EditedFileRow path + open affordances", () => {

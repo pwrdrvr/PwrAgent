@@ -39,6 +39,8 @@ export type LiveWorkRailProps = {
   editedFilesWorktreeRoot?: string;
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenEditedFile?: (absolutePath: string) => void;
+  /** Scroll the transcript to a group's turn position (timestamp click). */
+  onScrollToTurn?: (turnId: string) => void;
   /**
    * `true` when the rail is showing snapshots from a completed turn
    * (pinned until the next turn starts). `false` while the live turn
@@ -147,6 +149,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
               view={editedView}
               worktreeRoot={props.editedFilesWorktreeRoot}
               onOpenFile={props.onOpenEditedFile}
+              onScrollToTurn={props.onScrollToTurn}
             />
           </section>
         ) : null}

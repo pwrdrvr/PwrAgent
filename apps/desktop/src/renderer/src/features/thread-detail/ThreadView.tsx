@@ -1592,6 +1592,20 @@ export function ThreadView(props: ThreadViewProps) {
     [applications, desktopApi],
   );
 
+  // Scroll the transcript to a turn's position — backs the clickable
+  // edited-file group timestamps. The transcript items are anchored with
+  // `data-turn-id` (TranscriptList); a no-op if that turn isn't in the DOM.
+  const handleScrollToTurn = useCallback((turnId: string) => {
+    const container = transcriptPanelRef.current;
+    if (!container || !turnId) {
+      return;
+    }
+    const target = container.querySelector(
+      `[data-turn-id="${CSS.escape(turnId)}"]`,
+    );
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, []);
+
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
     onActiveContextTabChange("edits");
@@ -2444,6 +2458,7 @@ export function ThreadView(props: ThreadViewProps) {
             editedFileCommitStates={editedFileCommitStates}
             editedFilesWorktreeRoot={editedFilesWorktreeRoot}
             onOpenEditedFile={handleOpenEditedFile}
+            onScrollToTurn={handleScrollToTurn}
             pinned={!props.activeTurnId}
             planEntry={
               pendingPlanEntry ??
@@ -2519,6 +2534,7 @@ export function ThreadView(props: ThreadViewProps) {
           editedFileCommitStates={editedFileCommitStates}
           editedFilesWorktreeRoot={editedFilesWorktreeRoot}
           onOpenEditedFile={handleOpenEditedFile}
+          onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
           onActiveTabChange={onActiveContextTabChange}

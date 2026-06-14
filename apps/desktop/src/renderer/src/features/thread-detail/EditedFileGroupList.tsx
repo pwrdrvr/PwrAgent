@@ -78,6 +78,8 @@ type EditedFileGroupListProps = {
   worktreeRoot?: string;
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
+  /** Scroll the transcript to a group's turn (clickable timestamp). */
+  onScrollToTurn?: (turnId: string) => void;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -196,6 +198,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
                   group={group}
                   commitState={props.commitStatesByKey?.[group.key]}
                   defaultExpanded={index === 0}
+                  onScrollToTurn={props.onScrollToTurn}
                 />
               ))}
               {props.groups.length > VISIBLE_TURN_GROUPS ? (
@@ -253,10 +256,13 @@ function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
   defaultExpanded: boolean;
+  onScrollToTurn?: (turnId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
   const bodyId = useId();
   const timestamp = formatGroupTimestamp(props.group);
+  const turnId = props.group.turn?.id;
+  const canScrollToTurn = Boolean(turnId && props.onScrollToTurn);
   // Feed the measured header height to `--edits-group-header-height` so an
   // expanded file's sticky toggle pins flush beneath this group's header
   // rather than at a guessed offset.
@@ -306,7 +312,19 @@ function EditedFileGroupSection(props: {
           className="diff-stat--chip"
         />
         {timestamp ? (
-          <span className="edited-file-groups__group-time">{timestamp}</span>
+          canScrollToTurn ? (
+            <button
+              type="button"
+              className="edited-file-groups__group-time edited-file-groups__group-time--link"
+              title="Scroll the transcript to this turn"
+              aria-label={`Scroll the transcript to this turn (${timestamp})`}
+              onClick={() => turnId && props.onScrollToTurn?.(turnId)}
+            >
+              {timestamp}
+            </button>
+          ) : (
+            <span className="edited-file-groups__group-time">{timestamp}</span>
+          )
         ) : null}
       </div>
       <div id={bodyId} hidden={!expanded}>
