@@ -21,6 +21,12 @@ shell_quote() {
   printf "%q" "$1"
 }
 
+detached_session_name() {
+  local checksum
+  checksum="$(print -rn -- "$root" | cksum | awk '{print $1}')"
+  print -r -- "pwragent-dev-$checksum"
+}
+
 log_line() {
   print -r -- "[$(timestamp)] $*"
 }
@@ -205,8 +211,17 @@ restart_now() {
 
   log_line "starting pnpm dev:dev in $root"
   if [[ "$detach_start" == "true" ]]; then
-    nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev" >> "$log_path" 2>&1 &
-    log_line "started detached pnpm dev:dev pid=$!"
+    if command -v tmux >/dev/null 2>&1; then
+      local session_name start_command
+      session_name="$(detached_session_name)"
+      start_command="pnpm dev:dev >> $(shell_quote "$log_path") 2>&1"
+      tmux has-session -t "$session_name" 2>/dev/null && tmux kill-session -t "$session_name" 2>/dev/null || true
+      tmux new-session -d -s "$session_name" -c "$root" "/bin/zsh -lc $(shell_quote "$start_command")"
+      log_line "started detached tmux session=$session_name command=pnpm dev:dev"
+    else
+      nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev" >> "$log_path" 2>&1 &
+      log_line "started detached pnpm dev:dev pid=$!"
+    fi
     return 0
   fi
 
