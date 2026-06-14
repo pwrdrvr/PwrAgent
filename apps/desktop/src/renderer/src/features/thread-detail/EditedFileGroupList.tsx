@@ -207,7 +207,11 @@ export function EditedFileRow(props: {
         <span className="live-work-rail__file-path" title={props.detail.path}>
           {props.detail.label}
         </span>
-        <DiffStat additions={additions} removals={removals} />
+        <DiffStat
+          additions={additions}
+          removals={removals}
+          className="diff-stat--chip"
+        />
       </button>
       {/* Diff container stays in the DOM (with `hidden`) so the
           row's `aria-controls={diffId}` always resolves. The

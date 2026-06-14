@@ -263,10 +263,10 @@ export class GitWorkingStateService {
         continue;
       }
 
-      const committed = paths.every(
-        (value) => !dirtyPaths.has(normalizeAbsolutePath(value)),
+      const hasUncommittedChange = paths.some((value) =>
+        dirtyPaths.has(normalizeAbsolutePath(value)),
       );
-      if (!committed) {
+      if (hasUncommittedChange) {
         states[group.key] = { committed: false };
         continue;
       }
@@ -276,8 +276,12 @@ export class GitWorkingStateService {
           () => "",
         )
       ).trim();
+      // Not dirty AND no commit in history ⇒ the files left the working tree
+      // without a commit we can find: almost always `.gitignore`'d files the
+      // agent wrote (invisible to both `diff HEAD` and `ls-files --others
+      // --exclude-standard`). Don't claim "committed" without a SHA to back it.
       if (!sha) {
-        states[group.key] = { committed: true };
+        states[group.key] = { committed: false };
         continue;
       }
 

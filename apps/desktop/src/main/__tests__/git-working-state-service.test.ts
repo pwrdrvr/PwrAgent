@@ -164,6 +164,9 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
       { key: "g-a", paths: ["/repo/wt/src/a.ts"] },
       { key: "g-b", paths: ["/repo/wt/src/b.ts"] },
       { key: "g-c", paths: ["/repo/wt/src/c.ts"] },
+      // Not dirty (git ignores it) and no commit in history — e.g. a
+      // `.gitignore`'d PR.md the agent wrote. Must NOT be "committed".
+      { key: "g-ignored", paths: ["/repo/wt/PR.md"] },
     ]);
 
     expect(states["g-a"]).toEqual({ committed: false });
@@ -179,6 +182,7 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
       shortSha: "ccccccc",
       pushed: false,
     });
+    expect(states["g-ignored"]).toEqual({ committed: false });
     // Every probe is lock-safe.
     for (const call of calls) {
       expect(call.args[0]).toBe("--no-optional-locks");
