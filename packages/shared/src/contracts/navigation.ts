@@ -739,6 +739,7 @@ export type GetNavigationSnapshotRequest = {
   backend?: AppServerBackendScope;
   filter?: string;
   forceRefresh?: boolean;
+  refreshMode?: "active-recent" | "full";
 };
 
 export type SetNavigationBrowseModeRequest = {

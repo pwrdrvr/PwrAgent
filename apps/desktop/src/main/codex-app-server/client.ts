@@ -4422,13 +4422,14 @@ function extractThreadListPage(value: unknown): RawCodexThreadListPage {
 function buildThreadDiscoveryPayloads(
   filter?: string,
   archived?: boolean,
-  cursor?: string
+  cursor?: string,
+  limit = 50
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
     archived,
     cursor,
-    limit: 50,
+    limit,
     sortKey: "updated_at",
     sourceKinds: ["cli", "vscode"],
     useStateDbOnly: true,
@@ -5177,6 +5178,8 @@ async function requestThreadListPages(params: {
   client: JsonRpcConnection;
   diagnostics?: JsonRpcObserverDiagnostics;
   filter?: string;
+  limit?: number;
+  maxPages?: number;
   requestTimeoutMs: number;
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
@@ -5187,15 +5190,25 @@ async function requestThreadListPages(params: {
   let pageCount = 0;
   let previewBytes = 0;
   let rawThreadCount = 0;
-  let terminalReason: "no-next-cursor" | "repeated-cursor" | undefined;
+  let terminalReason: "max-pages" | "no-next-cursor" | "repeated-cursor" | undefined;
   let cursor: string | undefined;
+  const requestedLimit = params.limit ?? 50;
+  const maxPagesLimit =
+    params.maxPages !== undefined && Number.isFinite(params.maxPages)
+      ? Math.max(1, Math.floor(params.maxPages))
+      : undefined;
 
   do {
     const result = await requestWithFallbacks({
       client: params.client,
       diagnostics: params.diagnostics,
       methods: ["thread/list"] as CodexClientRequestMethod[],
-      payloads: buildThreadDiscoveryPayloads(params.filter, params.archived, cursor),
+      payloads: buildThreadDiscoveryPayloads(
+        params.filter,
+        params.archived,
+        cursor,
+        requestedLimit,
+      ),
       timeoutMs: params.requestTimeoutMs,
     });
     const page = extractThreadListPage(result);
@@ -5207,6 +5220,12 @@ async function requestThreadListPages(params: {
       const threadPreviewBytes = measureThreadPreviewBytes(thread);
       previewBytes += threadPreviewBytes;
       maxPreviewBytes = Math.max(maxPreviewBytes, threadPreviewBytes);
+    }
+
+    if (maxPagesLimit !== undefined && pageCount >= maxPagesLimit) {
+      terminalReason = "max-pages";
+      cursor = undefined;
+      break;
     }
 
     const nextCursor = page.nextCursor?.trim();
@@ -5645,6 +5664,9 @@ export class CodexAppServerClient {
     archived?: boolean;
     enrichDirectories?: boolean;
     filter?: string;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
@@ -5660,6 +5682,8 @@ export class CodexAppServerClient {
         client: this.connection,
         diagnostics,
         filter: params?.filter,
+        limit: params?.limit,
+        maxPages: params?.maxPages,
         requestTimeoutMs: requestParams.timeoutMs,
       });
       return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
@@ -5673,14 +5697,20 @@ export class CodexAppServerClient {
         client: this.connection,
         diagnostics,
         filter: params?.filter,
+        limit: params?.limit,
+        maxPages: params?.maxPages,
         requestTimeoutMs: requestParams.timeoutMs,
       }),
     );
-    const threads = mergeArchivedThreadMetadata({
-      activeThreads,
-      archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
-    });
-    this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
+    const threads = params?.skipArchivedMetadataRefresh
+      ? activeThreads
+      : mergeArchivedThreadMetadata({
+          activeThreads,
+          archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
+        });
+    if (!params?.skipArchivedMetadataRefresh) {
+      this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
+    }
 
     return await this.enrichThreads(threads, {
       enrichDirectories: params?.enrichDirectories ?? true,

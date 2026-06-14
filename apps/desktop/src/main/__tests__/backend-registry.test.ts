@@ -983,6 +983,9 @@ class MockBackendClient {
     archived?: boolean;
     enrichDirectories?: boolean;
     filter?: string;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   }, diagnostics?: { callerReason?: string; ownerId?: string }): Promise<AppServerThreadSummary[]> {
     this.listThreadsCallCount += 1;
     this.lastListThreadsDiagnostics = diagnostics;
@@ -5669,6 +5672,69 @@ script = "echo setup"
     ).resolves.toMatchObject([{ id: "thread-codex-new" }]);
 
     expect(codexClient.listThreadsCallCount).toBeGreaterThan(initialReadCount);
+
+    await registry.close();
+  });
+
+  it("does not run archive cleanup from partial active-recent Codex lists", async () => {
+    const codexClient = new MockBackendClient({
+      archivedThreads: [
+        {
+          id: "thread-codex",
+          title: "Archived Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          archivedAt: 2_000,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-codex",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+    });
+    codexClient.setThreads([
+      {
+        id: "thread-codex-new",
+        title: "New Codex thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      },
+    ]);
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot:active-recent",
+      forceRefresh: true,
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+    await Promise.resolve();
+
+    expect(codexClient.listThreadsCalls).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({ archived: true }),
+        }),
+      ]),
+    );
 
     await registry.close();
   });

@@ -55,6 +55,7 @@ export type ArchiveThreadOptions = {
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
+const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
 const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
 
 function normalizeBrowseMode(value: unknown): BrowseMode {
@@ -94,6 +95,7 @@ type NavigationState = {
 
 type NavigationRefreshOptions = {
   forceRefresh?: boolean;
+  refreshMode?: "active-recent" | "full";
 };
 
 type PrChipLocation = {
@@ -2173,6 +2175,7 @@ export function useThreadNavigation(
         forcePreferredSelection?: boolean;
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
+        refreshMode?: "active-recent" | "full";
       }
     | undefined
   >(undefined);
@@ -2180,6 +2183,12 @@ export function useThreadNavigation(
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
+  const scheduledFocusRefreshTimerRef = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
+  const focusRefreshInFlightRef = useRef(false);
+  const focusRefreshQueuedRef = useRef(false);
+  const lastFocusRefreshCompletedAtRef = useRef(0);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
   const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
@@ -2268,8 +2277,15 @@ export function useThreadNavigation(
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
         });
-        const snapshot = options?.forceRefresh
-          ? await desktopApi.getNavigationSnapshot({ forceRefresh: true })
+        const snapshotRequest =
+          options?.forceRefresh || options?.refreshMode
+            ? {
+                ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+                ...(options?.refreshMode ? { refreshMode: options.refreshMode } : {}),
+              }
+            : undefined;
+        const snapshot = snapshotRequest
+          ? await desktopApi.getNavigationSnapshot(snapshotRequest)
           : await desktopApi.getNavigationSnapshot();
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
           directoryCount: snapshot.directories.length,
@@ -2369,6 +2385,7 @@ export function useThreadNavigation(
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
+        refreshMode: options?.refreshMode,
       };
 
       if (refreshInFlightRef.current) {
@@ -2386,7 +2403,10 @@ export function useThreadNavigation(
             nextRequest.preferredSelectionKey,
             nextRequest.preferredOptimisticThread,
             nextRequest.forcePreferredSelection,
-            { forceRefresh: nextRequest.forceRefresh }
+            {
+              forceRefresh: nextRequest.forceRefresh,
+              refreshMode: nextRequest.refreshMode,
+            }
           );
           nextRequest = queuedRefreshRef.current;
         }
@@ -2413,6 +2433,11 @@ export function useThreadNavigation(
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
+        refreshMode:
+          options?.refreshMode === "full" ||
+          queuedRefreshRef.current?.refreshMode === "full"
+            ? "full"
+            : options?.refreshMode ?? queuedRefreshRef.current?.refreshMode,
       };
 
       if (scheduledRefreshTimerRef.current !== undefined) {
@@ -2431,17 +2456,66 @@ export function useThreadNavigation(
           nextRequest.preferredSelectionKey,
           nextRequest.preferredOptimisticThread,
           nextRequest.forcePreferredSelection,
-          { forceRefresh: nextRequest.forceRefresh }
+          {
+            forceRefresh: nextRequest.forceRefresh,
+            refreshMode: nextRequest.refreshMode,
+          }
         );
       }, 0);
     },
     [refresh]
   );
 
+  const scheduleFocusRefresh = useCallback((): void => {
+    if (focusRefreshInFlightRef.current) {
+      focusRefreshQueuedRef.current = true;
+      return;
+    }
+
+    if (scheduledFocusRefreshTimerRef.current !== undefined) {
+      focusRefreshQueuedRef.current = true;
+      return;
+    }
+
+    const elapsedSinceLastCompletion =
+      Date.now() - lastFocusRefreshCompletedAtRef.current;
+    const delayMs = Math.max(
+      0,
+      NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS - elapsedSinceLastCompletion,
+    );
+
+    const runRefresh = () => {
+      scheduledFocusRefreshTimerRef.current = undefined;
+      focusRefreshQueuedRef.current = false;
+      focusRefreshInFlightRef.current = true;
+      void refresh(undefined, undefined, false, {
+        forceRefresh: true,
+        refreshMode: "full",
+      }).finally(() => {
+        focusRefreshInFlightRef.current = false;
+        lastFocusRefreshCompletedAtRef.current = Date.now();
+        if (focusRefreshQueuedRef.current) {
+          scheduleFocusRefresh();
+        }
+      });
+    };
+
+    if (delayMs === 0) {
+      runRefresh();
+      return;
+    }
+
+    focusRefreshQueuedRef.current = true;
+    scheduledFocusRefreshTimerRef.current = setTimeout(runRefresh, delayMs);
+  }, [refresh]);
+
   useEffect(() => {
     return () => {
       if (scheduledRefreshTimerRef.current !== undefined) {
         clearTimeout(scheduledRefreshTimerRef.current);
+      }
+      if (scheduledFocusRefreshTimerRef.current !== undefined) {
+        clearTimeout(scheduledFocusRefreshTimerRef.current);
       }
     };
   }, []);
@@ -2483,20 +2557,21 @@ export function useThreadNavigation(
   }, [enabled, refresh]);
 
   useEffect(() => {
-    if (!enabled || !desktopApi?.getNavigationSnapshot) {
+    if (!enabled || !desktopApi?.getNavigationSnapshot || !viewForeground) {
       return;
     }
 
     const timer = setInterval(() => {
       scheduleRefresh(undefined, undefined, false, {
         forceRefresh: true,
+        refreshMode: "active-recent",
       });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
     return () => {
       clearInterval(timer);
     };
-  }, [desktopApi?.getNavigationSnapshot, enabled, scheduleRefresh]);
+  }, [desktopApi?.getNavigationSnapshot, enabled, scheduleRefresh, viewForeground]);
 
   useEffect(() => {
     if (!enabled || !desktopApi?.onWindowFocus) {
@@ -2504,9 +2579,9 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onWindowFocus(() => {
-      scheduleRefresh();
+      scheduleFocusRefresh();
     });
-  }, [desktopApi, enabled, scheduleRefresh]);
+  }, [desktopApi, enabled, scheduleFocusRefresh]);
 
   useEffect(() => {
     if (!enabled || !desktopApi?.onAgentEvent) {

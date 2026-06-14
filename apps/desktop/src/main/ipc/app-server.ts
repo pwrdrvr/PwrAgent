@@ -374,7 +374,47 @@ function getNavigationSnapshotRequestKey(
     backend: request.backend ?? "all",
     filter: request.filter ?? "",
     forceRefresh: request.forceRefresh === true,
+    refreshMode: request.refreshMode ?? "full",
   });
+}
+
+function buildThreadSnapshotCacheKey(
+  backend: AppServerBackendScope,
+  filter?: string,
+): string {
+  return JSON.stringify({
+    backend,
+    filter: filter?.trim() ?? "",
+  });
+}
+
+function mergeRecentThreadsIntoCachedSnapshot(
+  cachedThreads: AppServerThreadSummary[] | undefined,
+  recentThreads: AppServerThreadSummary[],
+): AppServerThreadSummary[] {
+  if (!cachedThreads || cachedThreads.length === 0) {
+    return recentThreads;
+  }
+  const recentByKey = new Map(
+    recentThreads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+  const merged = cachedThreads.map((thread) => {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    return recentByKey.get(threadKey) ?? thread;
+  });
+  const cachedKeys = new Set(
+    cachedThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+  );
+  for (const thread of recentThreads) {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    if (!cachedKeys.has(threadKey)) {
+      merged.push(thread);
+    }
+  }
+  return merged.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 function getThreadPullRequestsRequestKey(
@@ -634,6 +674,10 @@ class DesktopAppServerService {
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
+  >();
+  private readonly lastFullNavigationThreadsByKey = new Map<
+    string,
+    AppServerThreadSummary[]
   >();
   private readonly directoryGitStatusByKey = new Map<
     string,
@@ -983,12 +1027,29 @@ class DesktopAppServerService {
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
     const backend: AppServerBackendScope = request.backend ?? "all";
-    const threads = await getDesktopBackendRegistry().listThreads({
+    const refreshMode = request.refreshMode ?? "full";
+    const activeRecentRefresh = refreshMode === "active-recent";
+    const cacheKey = buildThreadSnapshotCacheKey(backend, request.filter);
+    const fetchedThreads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
-      callerReason: "navigation-snapshot",
+      callerReason: activeRecentRefresh
+        ? "navigation-snapshot:active-recent"
+        : "navigation-snapshot",
       filter: request.filter,
       forceRefresh: request.forceRefresh,
+      limit: activeRecentRefresh ? 50 : undefined,
+      maxPages: activeRecentRefresh ? 1 : undefined,
+      skipArchivedMetadataRefresh: activeRecentRefresh,
     });
+    const threads = activeRecentRefresh
+      ? mergeRecentThreadsIntoCachedSnapshot(
+          this.lastFullNavigationThreadsByKey.get(cacheKey),
+          fetchedThreads,
+        )
+      : fetchedThreads;
+    if (!activeRecentRefresh) {
+      this.lastFullNavigationThreadsByKey.set(cacheKey, threads);
+    }
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
@@ -2978,6 +3039,7 @@ class DesktopAppServerService {
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();
+    this.lastFullNavigationThreadsByKey.clear();
     this.directoryGitStatusByKey.clear();
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;

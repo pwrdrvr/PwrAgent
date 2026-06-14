@@ -371,7 +371,14 @@ type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   listThreads(
-    params?: { archived?: boolean; enrichDirectories?: boolean; filter?: string },
+    params?: {
+      archived?: boolean;
+      enrichDirectories?: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
   enrichThreadDirectories?(
@@ -4191,6 +4198,9 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
     forceRefresh?: boolean;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   } = {}): Promise<AppServerThreadSummary[]> {
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
@@ -4242,6 +4252,10 @@ export class DesktopBackendRegistry {
         expiresInMs: cached.expiresInMs,
         filterPresent: Boolean(normalizedParams.filter?.trim()),
         forceRefresh: normalizedParams.forceRefresh === true,
+        limit: normalizedParams.limit,
+        maxPages: normalizedParams.maxPages,
+        skipArchivedMetadataRefresh:
+          normalizedParams.skipArchivedMetadataRefresh === true,
         pending: cached.pending,
         source: cached.source,
         threadCount: cached.threadCount,
@@ -4257,6 +4271,10 @@ export class DesktopBackendRegistry {
       enrichDirectories: normalizedParams.enrichDirectories,
       filterPresent: Boolean(normalizedParams.filter?.trim()),
       forceRefresh: normalizedParams.forceRefresh === true,
+      limit: normalizedParams.limit,
+      maxPages: normalizedParams.maxPages,
+      skipArchivedMetadataRefresh:
+        normalizedParams.skipArchivedMetadataRefresh === true,
     });
     const promise = this.readThreadList(normalizedParams)
       .then((threads) => {
@@ -4273,6 +4291,10 @@ export class DesktopBackendRegistry {
           expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
           filterPresent: Boolean(normalizedParams.filter?.trim()),
           forceRefresh: normalizedParams.forceRefresh === true,
+          limit: normalizedParams.limit,
+          maxPages: normalizedParams.maxPages,
+          skipArchivedMetadataRefresh:
+            normalizedParams.skipArchivedMetadataRefresh === true,
           threadCount: threads.length,
         });
         return threads;
@@ -4288,6 +4310,10 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
           filterPresent: Boolean(normalizedParams.filter?.trim()),
           forceRefresh: normalizedParams.forceRefresh === true,
+          limit: normalizedParams.limit,
+          maxPages: normalizedParams.maxPages,
+          skipArchivedMetadataRefresh:
+            normalizedParams.skipArchivedMetadataRefresh === true,
         });
         throw error;
       });
@@ -4309,6 +4335,9 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     enrichDirectories: boolean;
     filter?: string;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   }): Promise<AppServerThreadSummary[]> {
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
@@ -4324,14 +4353,19 @@ export class DesktopBackendRegistry {
           archived: params.archived,
           enrichDirectories: params.enrichDirectories,
           filter: params.filter,
+          limit: params.limit,
+          maxPages: params.maxPages,
+          skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
         }, diagnostics),
       });
-      this.scheduleThreadListArchiveStateCleanup({
-        backend: "codex",
-        filter: params.filter,
-        archived: params.archived,
-        threads,
-      });
+      if (!params.skipArchivedMetadataRefresh) {
+        this.scheduleThreadListArchiveStateCleanup({
+          backend: "codex",
+          filter: params.filter,
+          archived: params.archived,
+          threads,
+        });
+      }
       return threads;
     }
 
@@ -4374,6 +4408,9 @@ export class DesktopBackendRegistry {
         callerReason: params.callerReason,
         enrichDirectories: params.enrichDirectories,
         filter: params.filter,
+        limit: params.limit,
+        maxPages: params.maxPages,
+        skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
       this.listThreads({
         backend: "grok",
@@ -9526,6 +9563,9 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
     forceRefresh?: boolean;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   }): string {
     const codexDirectoryBackfill =
       params.backend === "grok" ||
@@ -9541,6 +9581,9 @@ export class DesktopBackendRegistry {
       enrichDirectories:
         params.backend === "grok" ? undefined : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
+      limit: params.limit,
+      maxPages: params.maxPages,
+      skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh === true,
     });
   }
 
@@ -9552,6 +9595,9 @@ export class DesktopBackendRegistry {
       enrichDirectories?: boolean;
       filter?: string;
       forceRefresh?: boolean;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
     },
     cacheKey: string,
     now: number,
@@ -10143,6 +10189,9 @@ export class DesktopBackendRegistry {
     archived?: boolean;
     enrichDirectories?: boolean;
     filter?: string;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
   } = {}, diagnostics?: {
     callerReason?: string;
     ownerId?: string;
