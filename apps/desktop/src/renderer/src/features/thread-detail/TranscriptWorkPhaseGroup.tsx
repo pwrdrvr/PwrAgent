@@ -42,14 +42,12 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           aria-expanded={props.expanded}
           onClick={props.onToggle}
         >
+          <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
           <span>
             <TranscriptWorkPhaseGroupLabel
               activeStartedAt={props.activeStartedAt}
               label={props.label}
             />
-          </span>
-          <span className="transcript-work-phase-group__chevron" aria-hidden="true">
-            {props.expanded ? "^" : "v"}
           </span>
         </button>
       ) : (
