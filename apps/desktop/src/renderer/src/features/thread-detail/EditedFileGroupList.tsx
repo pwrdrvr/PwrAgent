@@ -201,6 +201,10 @@ function EditedFileGroupSection(props: {
           : undefined
       }
     >
+      {/* Flat header: summary / badge / diff-stat / time are siblings so the
+          group header can reflow per surface via CSS grid areas — a two-row
+          stack in the width-constrained sidebar, a single row (summary + badge
+          … stat + time) in the width-rich transcript rail. */}
       <div ref={headerRef} className="edited-file-groups__group-header">
         <button
           type="button"
@@ -213,13 +217,8 @@ function EditedFileGroupSection(props: {
           <span className="edited-file-groups__group-summary">
             {props.group.summary}
           </span>
-          <DiffStat
-            additions={props.group.additions}
-            removals={props.group.removals}
-            className="diff-stat--chip"
-          />
         </button>
-        <div className="edited-file-groups__group-meta">
+        <div className="edited-file-groups__group-badge">
           {props.group.live ? (
             <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
               This turn
@@ -227,10 +226,15 @@ function EditedFileGroupSection(props: {
           ) : (
             <EditGroupCommitBadge state={props.commitState} />
           )}
-          {timestamp ? (
-            <span className="edited-file-groups__group-time">{timestamp}</span>
-          ) : null}
         </div>
+        <DiffStat
+          additions={props.group.additions}
+          removals={props.group.removals}
+          className="diff-stat--chip"
+        />
+        {timestamp ? (
+          <span className="edited-file-groups__group-time">{timestamp}</span>
+        ) : null}
       </div>
       <div id={bodyId} hidden={!expanded}>
         {expanded ? <EditedFileList details={props.group.details} /> : null}

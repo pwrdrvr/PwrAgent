@@ -8785,15 +8785,22 @@ textarea,
   outline-offset: 1px;
 }
 
-/* Two-row card header: the "Edited N files" summary gets its own line so
-   the commit badges can't crush it, with the badge + date on a wrapping
-   second line. Sticky so the header pins to the top of the scroll body
-   while a long diff scrolls beneath it (the opaque card background hides the
-   scrolled content). */
+/* Group header is a grid of four cells — summary / badge / diff-stat / time —
+   so it can reflow per surface without changing the DOM. DEFAULT (the
+   width-constrained sidebar Edits panel) is a two-row stack: summary + stat on
+   top, badge + date beneath, so the commit badges never crush the summary. The
+   transcript rail overrides to a single row below. Sticky so the header pins to
+   the top of the scroll body while a long diff scrolls beneath it (the opaque
+   card background hides the scrolled content). */
 .edited-file-groups__group-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "summary stat"
+    "badge   time";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
   min-width: 0;
   position: sticky;
   /* Pins to the top of the surface's scroll body (the title + view toggle are
@@ -8808,10 +8815,10 @@ textarea,
 }
 
 .edited-file-groups__group-toggle {
+  grid-area: summary;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -8827,14 +8834,19 @@ textarea,
   color: var(--text-primary);
 }
 
-/* Second row: badge (left) + date (right), aligned under the summary text
-   (past the chevron). Wraps rather than truncating on a narrow rail. */
-.edited-file-groups__group-meta {
-  display: flex;
+/* Badge cell (commit lifecycle / "This turn"). In the sidebar's second row it
+   sits under the summary text, so it's indented past the chevron + gap. */
+.edited-file-groups__group-badge {
+  grid-area: badge;
+  display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 6px;
+  min-width: 0;
   padding-left: 22px;
+}
+
+.edited-file-groups__group-header > .diff-stat {
+  grid-area: stat;
+  justify-self: end;
 }
 
 .edited-file-groups__group-summary {
@@ -8844,6 +8856,19 @@ textarea,
   min-width: 0;
   flex: 1 1 auto;
   font-weight: 600;
+}
+
+/* Transcript rail (width-rich, height-constrained): collapse the header to a
+   single row — `summary  badge  ……  stat  time` — to reclaim vertical space.
+   The 1fr spacer column pushes the diff-stat + timestamp to the right edge. */
+.live-work-rail__section--edited .edited-file-groups__group-header {
+  grid-template-columns: auto auto minmax(8px, 1fr) auto auto;
+  grid-template-areas: "summary badge . stat time";
+  row-gap: 0;
+}
+
+.live-work-rail__section--edited .edited-file-groups__group-badge {
+  padding-left: 0;
 }
 
 .edited-file-groups__group-tag {
@@ -8945,8 +8970,8 @@ textarea,
 }
 
 .edited-file-groups__group-time {
-  flex: 0 0 auto;
-  margin-left: auto;
+  grid-area: time;
+  justify-self: end;
   color: var(--text-muted);
   font-size: 11px;
 }
