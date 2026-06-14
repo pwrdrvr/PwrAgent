@@ -2602,8 +2602,16 @@ textarea,
   padding-left: 12px;
 }
 
-.thread-row-shell.has-subthreads .thread-row {
-  padding-left: 30px;
+/* A parent card (has sub-threads) stays flush with its sibling rows —
+   only the TITLE LINE is inset to clear the disclosure chevron
+   (`.thread-row__subthread-toggle`, which sits at the title-line start).
+   The card edge, chips, and everything below align with non-parent rows,
+   so the card reads as a tree parent rather than an indented child; the
+   children below it carry the only real indent (`--nested` + the
+   subthread-list connector). Previously the whole card was padded 30px,
+   which made parents look nested. */
+.thread-row-shell.has-subthreads .thread-row__heading {
+  padding-left: 20px;
 }
 
 .thread-row__subthread-toggle {
