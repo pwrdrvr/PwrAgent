@@ -1649,7 +1649,10 @@ class DesktopAppServerService {
     })).map(normalizePrSummary);
     const fetchedAt = Date.now();
     const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
-      prs: params.previousPrs,
+      prs: this.getPullRequestLookupSubscriberPreviousPrs({
+        lookupKey: params.lookupKey,
+        fallbackPrs: params.previousPrs,
+      }),
       discoveredPrs: prs,
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
@@ -1674,6 +1677,17 @@ class DesktopAppServerService {
     });
 
     return { prs, fetchedAt };
+  }
+
+  private getPullRequestLookupSubscriberPreviousPrs(params: {
+    lookupKey: string;
+    fallbackPrs: PrSummary[];
+  }): PrSummary[] {
+    const subscribers = this.prLookupSubscribers.get(params.lookupKey);
+    if (!subscribers?.size) {
+      return params.fallbackPrs;
+    }
+    return [...subscribers.values()].flatMap((subscriber) => subscriber.previousPrs);
   }
 
   private async fetchRetainedNonTerminalPullRequests(params: {

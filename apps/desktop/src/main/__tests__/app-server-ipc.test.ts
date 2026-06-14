@@ -289,7 +289,8 @@ const getAuthStatus = vi.fn(async () => ({
   hasRepoScope: true,
 }));
 const fetchPullRequestByUrl = vi.fn(
-  async (): Promise<PrSummary | undefined> => undefined,
+  async (_request: { cwd: string; url: string }): Promise<PrSummary | undefined> =>
+    undefined,
 );
 const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
 
@@ -1394,6 +1395,143 @@ describe("app server ipc", () => {
         prs: fetchedPrs,
       }),
     );
+  });
+
+  it("refreshes retained PRs from all subscribers on a coalesced lookup", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const baseRequest = {
+      backend: "codex",
+      branch: "codex/reused-branch",
+      directoryPaths: ["/repo"],
+    } satisfies Omit<RefreshThreadPullRequestsRequest, "threadId">;
+    const firstRequest = {
+      ...baseRequest,
+      threadId: "thread-1",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const secondRequest = {
+      ...baseRequest,
+      threadId: "thread-2",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const firstRequestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: firstRequest.threadId,
+      branch: baseRequest.branch,
+      directoryPaths: baseRequest.directoryPaths,
+    });
+    const secondRequestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: secondRequest.threadId,
+      branch: baseRequest.branch,
+      directoryPaths: baseRequest.directoryPaths,
+    });
+    const firstStalePr = githubPr({
+      number: 255,
+      org: "Giphy",
+      repo: "GifGrabber",
+      state: "passing",
+      url: "https://github.com/Giphy/GifGrabber/pull/255",
+    });
+    const secondStalePr = githubPr({
+      number: 256,
+      org: "Giphy",
+      repo: "GifGrabber",
+      state: "pending",
+      url: "https://github.com/Giphy/GifGrabber/pull/256",
+    });
+    const firstMergedPr = githubPr({
+      ...firstStalePr,
+      state: "passing",
+      lifecycleState: "merged",
+    });
+    const secondMergedPr = githubPr({
+      ...secondStalePr,
+      state: "passing",
+      lifecycleState: "merged",
+    });
+    getThreadOverlayState
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: firstRequest.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: [firstStalePr],
+        prsFetchedAt: Date.now() - 120_000,
+        prsRefreshKey: firstRequestKey,
+      })
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: secondRequest.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: [secondStalePr],
+        prsFetchedAt: Date.now() - 120_000,
+        prsRefreshKey: secondRequestKey,
+      });
+    let resolveFetch: ((prs: PrSummary[]) => void) | undefined;
+    detectPullRequestsForThread.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    fetchPullRequestByUrl.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/255")) return firstMergedPr;
+      if (url.endsWith("/256")) return secondMergedPr;
+      return undefined;
+    });
+
+    registerAppServerIpcHandlers();
+
+    const handler = handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)!;
+    const first = handler({}, firstRequest);
+    const second = handler({}, secondRequest);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        provider: "github.com",
+        ghAvailable: true,
+        prs: [firstStalePr],
+      },
+      {
+        backend: "codex",
+        threadId: "thread-2",
+        provider: "github.com",
+        ghAvailable: true,
+        prs: [secondStalePr],
+      },
+    ]);
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+    });
+    resolveFetch?.([]);
+
+    await vi.waitFor(() => {
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
+        cwd: "/repo",
+        url: "https://github.com/Giphy/GifGrabber/pull/255",
+      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
+        cwd: "/repo",
+        url: "https://github.com/Giphy/GifGrabber/pull/256",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [firstMergedPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: firstRequestKey,
+      });
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-2",
+        prs: [secondMergedPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: secondRequestKey,
+      });
+    });
   });
 
   it("returns recent cached empty PR lookups without hitting GitHub", async () => {
