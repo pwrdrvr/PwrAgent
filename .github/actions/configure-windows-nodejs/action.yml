@@ -1,0 +1,39 @@
+name: Configure Windows Node.js
+description: Set up Node.js, activate the repo-pinned pnpm via Corepack, and restore the pnpm store cache.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: .nvmrc
+
+    - name: Activate pnpm
+      id: pnpm
+      shell: pwsh
+      run: |
+        $packageManager = (Get-Content package.json | ConvertFrom-Json).packageManager
+        if (-not $packageManager.StartsWith("pnpm@")) {
+          throw "Expected packageManager to pin pnpm, got '$packageManager'"
+        }
+
+        corepack enable pnpm
+        corepack prepare $packageManager --activate
+        pnpm --version
+        "cache-key-segment=$($packageManager.Replace('@', '-'))" >> $env:GITHUB_OUTPUT
+
+    - name: Resolve pnpm store path
+      id: pnpm-store
+      shell: pwsh
+      run: |
+        $storePath = pnpm store path --silent
+        "path=$storePath" >> $env:GITHUB_OUTPUT
+
+    - name: Restore pnpm store
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.pnpm.outputs.cache-key-segment }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.pnpm.outputs.cache-key-segment }}-

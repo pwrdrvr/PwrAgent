@@ -135,20 +135,11 @@ jobs:
         uses: actions/checkout@v6
         timeout-minutes: 10
 
-      # The Linux configure-nodejs / install-ripgrep composite actions are
-      # POSIX-only, so set up Node + pnpm + ripgrep directly here. Git-for-Windows
-      # (bundling bash.exe, used by the agent's shell tools) is preinstalled on
-      # windows-latest runners.
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        timeout-minutes: 5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      # pwrdrvr/configure-nodejs is POSIX-only, so use a Windows-specific
+      # setup action that activates the repo-pinned pnpm through Corepack.
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/configure-windows-nodejs
         timeout-minutes: 10
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
 
       - name: Install dependencies
         timeout-minutes: 15
@@ -183,16 +174,9 @@ jobs:
         uses: actions/checkout@v6
         timeout-minutes: 10
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        timeout-minutes: 5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/configure-windows-nodejs
         timeout-minutes: 10
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
 
       - name: Install dependencies
         timeout-minutes: 15
