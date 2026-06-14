@@ -15,6 +15,10 @@ test("renders a wide assistant markdown findings table without crushing the colu
       width: 1440,
       height: 900,
     },
+    // This spec asserts on the full-width transcript layout; unpin the
+    // (default pinned-open) context rail so it doesn't narrow the assistant
+    // column under test.
+    contextRailPinned: false,
   });
 
   try {

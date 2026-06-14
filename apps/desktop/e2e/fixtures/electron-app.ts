@@ -78,6 +78,16 @@ export async function launchElectronApp(params: {
     density?: DesktopAppearanceDensity;
   };
   /**
+   * Seed `ui.context_rail_pinned` into the per-test profile's
+   * `config.toml` before launch. The rail defaults to pinned-open (for
+   * discoverability), which narrows the transcript content area; specs
+   * that assert on the full-width transcript layout pass `false` to run
+   * against an unpinned (hover-reveal) rail. Left unset, the app default
+   * (pinned-open) applies. Only seeded when `suppressOnboarding` is true
+   * (every replay-backed spec).
+   */
+  contextRailPinned?: boolean;
+  /**
    * Whether to seed `onboarding.completed = true` into the
    * `default` profile's config.toml before launch. Defaults to
    * `true` so the wizard doesn't intercept clicks in most specs.
@@ -133,6 +143,9 @@ export async function launchElectronApp(params: {
         // intercept clicks in every spec. Wizard specs explicitly pass
         // `suppressOnboarding: false` to let the wizard fire.
         onboarding: { completed: true },
+        ...(params.contextRailPinned !== undefined
+          ? { ui: { contextRailPinned: params.contextRailPinned } }
+          : {}),
       },
     );
   }

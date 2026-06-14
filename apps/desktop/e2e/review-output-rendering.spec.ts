@@ -11,6 +11,10 @@ test("renders captured Codex review findings once in the review card", async () 
       specDir,
       "fixtures/review-output-rendering/replay.fixture.json"
     ),
+    // The finding-title text-selection drag below needs the full-width
+    // review card; unpin the (default pinned-open) context rail so the
+    // title isn't reflowed/narrowed under the rail.
+    contextRailPinned: false,
   });
 
   try {
