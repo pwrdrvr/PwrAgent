@@ -1119,6 +1119,21 @@ export type OpenDesktopApplicationResponse = {
   opened: true;
 };
 
+/**
+ * Open a filesystem path with the OS default handler (`shell.openPath`). The
+ * fallback for "open this edited file" when no editor application is
+ * configured/available. `opened` is false with an `error` message when the OS
+ * could not open it.
+ */
+export type OpenPathRequest = {
+  path: string;
+};
+
+export type OpenPathResponse = {
+  opened: boolean;
+  error?: string;
+};
+
 export function isDesktopChatReplyComposer(
   value: string,
 ): value is DesktopChatReplyComposer {

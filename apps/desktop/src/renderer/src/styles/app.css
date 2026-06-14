@@ -8671,10 +8671,91 @@ textarea,
   background: var(--bg-panel-hover);
 }
 
+/* Middle grid cell of the file toggle: the filename (ellipsizing) with an
+   optional "Ignored" chip riding alongside it. */
+.live-work-rail__file-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .live-work-rail__file-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Per-file flag: this file is gitignored, so it never enters a commit even
+   when its group reads "Committed". Warning-toned so it stands out from the
+   filename. */
+.edited-file-row__ignored {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  color: var(--status-warning);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Expanded-file meta line above the diff: the repo-relative path (so the
+   reader knows WHERE the file lives, not just its basename) and an
+   open-in-editor affordance. */
+.edited-file-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.edited-file-row__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.edited-file-row__open {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.edited-file-row__open:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.edited-file-row__open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.edited-file-row__open-icon {
+  width: 14px;
+  height: 14px;
 }
 
 /* Shared +A/-R stat: + (green) then - (red), no comma — consistent with the
@@ -8891,7 +8972,8 @@ textarea,
 }
 
 /* Per-group git lifecycle: uncommitted → committed (with copyable SHA chip)
-   → pushed / local. Mirrors the group-tag pill scale. */
+   → pushed, plus a "N ignored" hint for gitignored files. Mirrors the
+   group-tag pill scale. */
 .edit-commit-badge {
   flex: 0 0 auto;
   display: inline-flex;
@@ -8901,24 +8983,21 @@ textarea,
   font-weight: 600;
 }
 
-.edit-commit-badge--uncommitted {
-  padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 42%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
-  color: var(--status-warning);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* Single status pill: "Committed" (local) or "Pushed". Pushed implies
-   committed, so it replaces — never stacks with — the committed label. */
+/* Single status pill: one of "Uncommitted" / "Committed" (local) / "Pushed".
+   Pushed implies committed, so it replaces — never stacks with — the committed
+   label. */
 .edit-commit-badge__status {
   padding: 0 6px;
   border: 1px solid transparent;
   border-radius: 999px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.edit-commit-badge__status--uncommitted {
+  border-color: color-mix(in srgb, var(--status-warning) 42%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  color: var(--status-warning);
 }
 
 .edit-commit-badge__status--committed {
@@ -8931,6 +9010,20 @@ textarea,
   border-color: var(--success-border);
   background: var(--success-soft);
   color: var(--success-text);
+}
+
+/* Gitignored-file hint, e.g. "· 1 ignored". Muted, not a pill — a quiet aside
+   to the committed/pushed status so a `.gitignore`'d file isn't read as part
+   of the commit. */
+.edit-commit-badge__ignored {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.edit-commit-badge__ignored::before {
+  content: "· ";
 }
 
 .edit-commit-badge__sha {

@@ -35,6 +35,10 @@ export type LiveWorkRailProps = {
   editedFileGroups?: EditedFileGroup[];
   /** Git commit lifecycle per group key, from `useEditCommitStates`. */
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
+  /** Absolute worktree root, for repo-relative paths on expanded file rows. */
+  editedFilesWorktreeRoot?: string;
+  /** Open an edited file (absolute path) in the editor / OS default. */
+  onOpenEditedFile?: (absolutePath: string) => void;
   /**
    * `true` when the rail is showing snapshots from a completed turn
    * (pinned until the next turn starts). `false` while the live turn
@@ -141,6 +145,8 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
               groups={editedFileGroups}
               commitStatesByKey={props.editedFileCommitStates}
               view={editedView}
+              worktreeRoot={props.editedFilesWorktreeRoot}
+              onOpenFile={props.onOpenEditedFile}
             />
           </section>
         ) : null}

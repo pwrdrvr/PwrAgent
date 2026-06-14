@@ -99,6 +99,8 @@ type ThreadContextPanelProps = {
   /** Accumulated edited-file groups for the Edits tab (newest first). */
   editedFileGroups?: EditedFileGroup[];
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
+  editedFilesWorktreeRoot?: string;
+  onOpenEditedFile?: (absolutePath: string) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };
@@ -601,6 +603,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <EditsPanel
             groups={props.editedFileGroups ?? []}
             commitStatesByKey={props.editedFileCommitStates}
+            worktreeRoot={props.editedFilesWorktreeRoot}
+            onOpenFile={props.onOpenEditedFile}
             dock={props.editedFilesDock ?? "above"}
             onDockChange={props.onEditedFilesDockChange ?? noop}
           />

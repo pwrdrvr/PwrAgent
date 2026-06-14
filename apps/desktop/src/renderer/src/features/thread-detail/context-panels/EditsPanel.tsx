@@ -13,6 +13,10 @@ type EditsPanelProps = {
   groups: EditedFileGroup[];
   /** Git commit lifecycle per group key, from `useEditCommitStates`. */
   commitStatesByKey?: Record<string, EditGroupCommitState>;
+  /** Absolute worktree root, for repo-relative paths on expanded file rows. */
+  worktreeRoot?: string;
+  /** Open an edited file (absolute path) in the editor / OS default. */
+  onOpenFile?: (absolutePath: string) => void;
   dock: EditedFilesDock;
   onDockChange: (dock: EditedFilesDock) => void;
 };
@@ -63,6 +67,8 @@ export function EditsPanel(props: EditsPanelProps) {
             groups={props.groups}
             commitStatesByKey={props.commitStatesByKey}
             view={view}
+            worktreeRoot={props.worktreeRoot}
+            onOpenFile={props.onOpenFile}
           />
         ) : (
           <p className="context-empty">

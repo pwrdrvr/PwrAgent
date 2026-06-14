@@ -1551,6 +1551,47 @@ export function ThreadView(props: ThreadViewProps) {
     refreshKey: JSON.stringify(selectedThread?.gitWorkingState ?? null),
   });
 
+  // Open an edited file: the configured/first-available editor (same
+  // resolution as transcript file links), falling back to the OS default
+  // handler when no editor is available. Shared by both edited-file surfaces.
+  const editedFilesWorktreeRoot = selectedThread?.projectKey;
+  const applications = props.applications;
+  const desktopApi = props.desktopApi;
+  const handleOpenEditedFile = useCallback(
+    (absolutePath: string) => {
+      const editor =
+        applications?.editors.find(
+          (application) =>
+            application.canOpenWorkspace &&
+            application.id === applications?.preferredEditorId.value,
+        ) ??
+        applications?.editors.find((application) => application.canOpenWorkspace);
+      if (editor && desktopApi?.openApplication) {
+        void desktopApi
+          .openApplication({
+            applicationId: editor.id,
+            kind: "editor",
+            targetPath: absolutePath,
+          })
+          .catch((error: unknown) => {
+            console.error("Failed to open edited file in editor", error);
+          });
+        return;
+      }
+      void desktopApi
+        ?.openPath?.({ path: absolutePath })
+        .then((response) => {
+          if (response && !response.opened) {
+            console.error("Failed to open edited file", response.error);
+          }
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to open edited file", error);
+        });
+    },
+    [applications, desktopApi],
+  );
+
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
     onActiveContextTabChange("edits");
@@ -2401,6 +2442,8 @@ export function ThreadView(props: ThreadViewProps) {
               editedFilesDock === "above" ? editedFileGroups : undefined
             }
             editedFileCommitStates={editedFileCommitStates}
+            editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+            onOpenEditedFile={handleOpenEditedFile}
             pinned={!props.activeTurnId}
             planEntry={
               pendingPlanEntry ??
@@ -2474,6 +2517,8 @@ export function ThreadView(props: ThreadViewProps) {
           desktopApi={props.desktopApi}
           editedFileGroups={editedFileGroups}
           editedFileCommitStates={editedFileCommitStates}
+          editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+          onOpenEditedFile={handleOpenEditedFile}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
           onActiveTabChange={onActiveContextTabChange}

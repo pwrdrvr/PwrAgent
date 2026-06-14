@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import {
@@ -122,6 +122,88 @@ describe("EditedFileGroupList Show more / Show less", () => {
 
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show less" })).not.toBeInTheDocument();
+  });
+
+  it("flags gitignored files with a per-file chip and a group count", () => {
+    // turn-2 is the newest group (index 0), so it's expanded by default and
+    // its file row renders.
+    render(
+      <EditedFileGroupList
+        groups={groups(2)}
+        commitStatesByKey={{
+          "turn-2": {
+            committed: true,
+            commitSha: "a".repeat(40),
+            shortSha: "aaaaaaa",
+            pushed: true,
+            ignoredPaths: ["src/file-2.ts"],
+          },
+        }}
+      />,
+    );
+
+    // Group-level hint on the badge ("· 1 ignored" — the dot is CSS).
+    expect(screen.getByText("1 ignored")).toBeInTheDocument();
+    // Per-file chip on the ignored row.
+    expect(screen.getByText("Ignored")).toBeInTheDocument();
+  });
+});
+
+describe("EditedFileRow path + open affordances", () => {
+  const fileGroup: EditedFileGroup = {
+    key: "turn-x",
+    turn: { id: "turn-x" },
+    details: [
+      {
+        id: "detail-x",
+        kind: "write",
+        label: "Foo.ts",
+        path: "/repo/apps/desktop/Foo.ts",
+        fileDiff: {
+          kind: "update",
+          diff: "@@ -1 +1 @@\n+hello\n",
+          additions: 1,
+          removals: 0,
+        },
+      },
+    ],
+    summary: "Edited 1 file",
+    additions: 1,
+    removals: 0,
+    live: false,
+  };
+
+  it("shows the repo-relative path and opens the file from the expanded row", () => {
+    const onOpenFile = vi.fn();
+    render(
+      <EditedFileGroupList
+        groups={[fileGroup]}
+        worktreeRoot="/repo"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    // The repo-relative path only appears once the row is expanded.
+    expect(screen.queryByText("apps/desktop/Foo.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Foo\.ts/ }));
+
+    expect(screen.getByText("apps/desktop/Foo.ts")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open apps/desktop/Foo.ts in editor",
+      }),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/apps/desktop/Foo.ts");
+  });
+
+  it("omits the open affordance when no handler is provided", () => {
+    render(<EditedFileGroupList groups={[fileGroup]} worktreeRoot="/repo" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Foo\.ts/ }));
+    expect(screen.getByText("apps/desktop/Foo.ts")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Open .* in editor/ }),
+    ).not.toBeInTheDocument();
   });
 });
 

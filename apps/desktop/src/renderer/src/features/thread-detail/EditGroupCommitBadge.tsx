@@ -6,8 +6,10 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
  * Git lifecycle badge for an accumulated edited-file group, as a single status
  * pill plus a copyable short-SHA chip: uncommitted (the "unread"/active state)
  * → committed (local) → pushed. Pushed implies committed, so "Pushed" REPLACES
- * "Committed" rather than stacking both. Renders nothing until the commit state
- * resolves, so a freshly committed group doesn't flash "uncommitted" first.
+ * "Committed" rather than stacking both. A trailing "N ignored" hint flags any
+ * gitignored files in the group (never part of a commit). Renders nothing until
+ * the commit state resolves, so a freshly committed group doesn't flash
+ * "uncommitted" first.
  */
 export function EditGroupCommitBadge(props: { state?: EditGroupCommitState }) {
   const { state } = props;
@@ -15,26 +17,31 @@ export function EditGroupCommitBadge(props: { state?: EditGroupCommitState }) {
     return null;
   }
 
-  if (!state.committed) {
-    return (
-      <span className="edit-commit-badge edit-commit-badge--uncommitted">
-        Uncommitted
-      </span>
-    );
-  }
+  const status: { variant: "uncommitted" | "committed" | "pushed"; label: string } =
+    !state.committed
+      ? { variant: "uncommitted", label: "Uncommitted" }
+      : state.pushed === true
+        ? { variant: "pushed", label: "Pushed" }
+        : { variant: "committed", label: "Committed" };
+  const ignoredCount = state.ignoredPaths?.length ?? 0;
 
-  const pushed = state.pushed === true;
   return (
-    <span className="edit-commit-badge edit-commit-badge--committed">
+    <span className="edit-commit-badge">
       <span
-        className={`edit-commit-badge__status edit-commit-badge__status--${
-          pushed ? "pushed" : "committed"
-        }`}
+        className={`edit-commit-badge__status edit-commit-badge__status--${status.variant}`}
       >
-        {pushed ? "Pushed" : "Committed"}
+        {status.label}
       </span>
-      {state.commitSha && state.shortSha ? (
+      {state.committed && state.commitSha && state.shortSha ? (
         <CommitShaChip sha={state.commitSha} shortSha={state.shortSha} />
+      ) : null}
+      {ignoredCount > 0 ? (
+        <span
+          className="edit-commit-badge__ignored"
+          title="Files in this group that git ignores — never part of a commit"
+        >
+          {ignoredCount} ignored
+        </span>
       ) : null}
     </span>
   );

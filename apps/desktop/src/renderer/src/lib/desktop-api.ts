@@ -172,6 +172,8 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenPathRequest,
+  OpenPathResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
@@ -486,6 +488,7 @@ export type DesktopApi = {
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
+  openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   listThreads?: (
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;

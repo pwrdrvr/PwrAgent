@@ -167,6 +167,8 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenPathRequest,
+  OpenPathResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
@@ -272,6 +274,7 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
+  PATH_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
@@ -633,6 +636,8 @@ const desktopApi = Object.freeze({
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
+  openPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
+    await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>

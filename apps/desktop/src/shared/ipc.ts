@@ -261,6 +261,7 @@ export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
+export const PATH_OPEN_CHANNEL = "path:open";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";
 export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL = "app:read-changelog-document";
