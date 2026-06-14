@@ -189,6 +189,21 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     }
   });
 
+  it("runs the remote-reachability check once per unique commit", async () => {
+    const { runGit, calls } = fakeGit(respondCommitStates);
+    const service = new GitWorkingStateService({ runGit });
+
+    // Two groups resolving to the same commit must share one `rev-list`.
+    const states = await service.resolveEditCommitStates("/repo/wt", [
+      { key: "g-b", paths: ["/repo/wt/src/b.ts"] },
+      { key: "g-b2", paths: ["/repo/wt/src/b.ts"] },
+    ]);
+
+    expect(states["g-b"]).toMatchObject({ committed: true, pushed: true });
+    expect(states["g-b2"]).toMatchObject({ committed: true, pushed: true });
+    expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(1);
+  });
+
   it("returns an empty map for no worktree or no groups", async () => {
     const { runGit, calls } = fakeGit(respondCommitStates);
     const service = new GitWorkingStateService({ runGit });

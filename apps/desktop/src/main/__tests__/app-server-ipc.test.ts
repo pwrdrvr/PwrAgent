@@ -204,6 +204,17 @@ const readWorktreeWorkingStateEntries = vi.fn(
     })(),
 );
 const invalidateWorktreeWorkingState = vi.fn((_worktreePath?: string) => undefined);
+// Hold the result until the test releases it, so two concurrent IPC requests
+// overlap and exercise the in-flight dedup.
+let releaseEditCommitResolve: (() => void) | undefined;
+const resolveEditCommitStates = vi.fn(
+  async (): Promise<Record<string, unknown>> => {
+    await new Promise<void>((resolve) => {
+      releaseEditCommitResolve = resolve;
+    });
+    return { "g-1": { committed: false } };
+  },
+);
 const registryEventListeners: Array<(event: unknown) => void> = [];
 const onEvent = vi.fn((listener: (event: unknown) => void) => {
   registryEventListeners.push(listener);
@@ -395,6 +406,7 @@ vi.mock("../app-server/backend-registry", () => ({
     readDirectoryStatusEntries,
     readWorktreeWorkingStateEntries,
     invalidateWorktreeWorkingState,
+    resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
     ensureDirectoryLaunchpad,
@@ -436,6 +448,8 @@ describe("app server ipc", () => {
     readThreadGitWorkingStateCache.mockResolvedValue({});
     writeThreadGitWorkingStateCacheEntry.mockClear();
     readWorktreeWorkingStateEntries.mockClear();
+    resolveEditCommitStates.mockClear();
+    releaseEditCommitResolve = undefined;
     invalidateWorktreeWorkingState.mockClear();
     onEvent.mockClear();
     registryEventListeners.length = 0;
@@ -2500,6 +2514,34 @@ describe("app server ipc", () => {
     expect(readWorktreeWorkingStateEntries.mock.calls.length).toBe(
       callsAfterSnapshot,
     );
+  });
+
+  it("coalesces concurrent identical resolveEditCommitStates requests", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+
+    registerAppServerIpcHandlers();
+
+    const request = {
+      worktreePath: "/repo/wt",
+      groups: [{ key: "g-1", paths: ["/repo/wt/a.ts"] }],
+    };
+    const handler = handlers.get(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
+    const first = handler?.({}, request);
+    const second = handler?.({}, request);
+
+    // Both requests are in flight; release the single shared registry call.
+    await vi.waitFor(() => {
+      expect(releaseEditCommitResolve).toBeDefined();
+    });
+    releaseEditCommitResolve?.();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual({ states: { "g-1": { committed: false } } });
+    expect(b).toEqual({ states: { "g-1": { committed: false } } });
+    expect(resolveEditCommitStates).toHaveBeenCalledTimes(1);
   });
 
   it("caps automatic startup directory git status refreshes", async () => {

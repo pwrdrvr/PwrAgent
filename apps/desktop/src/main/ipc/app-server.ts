@@ -525,6 +525,10 @@ class DesktopAppServerService {
     string,
     Promise<RefreshThreadPullRequestsResponse>
   >();
+  private readonly pendingEditCommitResolves = new Map<
+    string,
+    Promise<ResolveEditCommitStatesResponse>
+  >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly prLookupRegistry = new Map<string, PrLookupRegistryEntry>();
   private readonly pendingPrLookupRefreshes = new Map<string, Promise<void>>();
@@ -939,11 +943,27 @@ class DesktopAppServerService {
   async resolveEditCommitStates(
     request: ResolveEditCommitStatesRequest,
   ): Promise<ResolveEditCommitStatesResponse> {
-    const states = await getDesktopBackendRegistry().resolveEditCommitStates(
-      request.worktreePath,
-      request.groups,
-    );
-    return { states };
+    // Coalesce identical in-flight requests (same worktree + groups) so an
+    // overlapping renderer re-resolve doesn't spawn a second git burst — they
+    // share one result.
+    const requestKey = JSON.stringify({
+      worktreePath: request.worktreePath,
+      groups: request.groups,
+    });
+    const pending = this.pendingEditCommitResolves.get(requestKey);
+    if (pending) {
+      return await pending;
+    }
+
+    const promise = getDesktopBackendRegistry()
+      .resolveEditCommitStates(request.worktreePath, request.groups)
+      .then((states) => ({ states }));
+    this.pendingEditCommitResolves.set(requestKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingEditCommitResolves.delete(requestKey);
+    }
   }
 
   private collectThreadWorktreePaths(
@@ -2452,6 +2472,7 @@ class DesktopAppServerService {
     this.prFetcher = undefined;
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
+    this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();

@@ -1539,10 +1539,15 @@ export function ThreadView(props: ThreadViewProps) {
   // Git commit lifecycle per group, resolved against the live worktree.
   // Re-resolves when the thread's working state shifts (a commit/push), so the
   // per-group badges stay accurate without re-reading the transcript.
+  // Only resolve commit state when an edits surface is actually on screen —
+  // the above-composer rail (dock "above") or the context-rail Edits tab.
+  // Otherwise the badges aren't rendered and the git probes are pure waste.
+  const editsSurfaceVisible =
+    editedFilesDock === "above" || activeContextTab === "edits";
   const editedFileCommitStates = useEditCommitStates({
     desktopApi: props.desktopApi,
     worktreePath: selectedThread?.projectKey,
-    groups: editedFileGroups,
+    groups: editsSurfaceVisible ? editedFileGroups : [],
     refreshKey: JSON.stringify(selectedThread?.gitWorkingState ?? null),
   });
 
