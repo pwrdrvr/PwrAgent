@@ -4713,6 +4713,35 @@ describe("MessagingController", () => {
         }),
       ]),
     });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:environment" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Environment",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-environment",
+          label: "PwrAgnt (current)",
+          value: { environmentId: "pwragnt" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "pwragnt" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Environment: PwrAgnt"),
+    });
   });
 
   it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {

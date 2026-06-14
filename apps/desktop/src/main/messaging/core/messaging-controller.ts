@@ -4863,9 +4863,14 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     navigation: NavigationSnapshot,
   ): Promise<void> {
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
+    const ensured = await this.ensureNewThreadProjectLaunchpad(
+      session,
+      navigation,
+      session.backend ?? navigation.launchpadDefaults.backend,
+    );
+    const directory = ensured.directory ?? (session.selectedProject
+      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
+      : undefined);
     const environmentId = readNullableStringValue(event.value, "environmentId");
     if (environmentId === undefined) {
       await this.deliverInvalidBrowseSelection(event);
@@ -4901,7 +4906,7 @@ export class MessagingController {
         },
       },
       event,
-      navigation,
+      ensured.navigation,
     );
   }
 
