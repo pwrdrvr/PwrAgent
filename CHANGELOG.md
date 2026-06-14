@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.0.0-beta.33 - 2026-06-14
+
+- Added browser-style Back/Forward navigation across threads and search results, including keyboard and mouse navigation shortcuts.
+- Added search shortcuts: Cmd/Ctrl+Shift+F for global thread search, Cmd/Ctrl+F for in-thread find, sidebar quick-jump, and PR-number search.
+- Added Sub-thread and Fork actions to child thread cards, inserting new child threads directly below the source card without creating invisible deeper nesting.
+- Moved edited files into the context rail, with per-turn grouping, persistent edit history, dirty/unpushed thread chips, and live git-state refresh.
+- Added commit/push state badges for edited-file groups, including copyable short SHAs and clearer diff stat rendering.
+- Polished the edited-files rail with fixed headers, controlled scrolling, better file-row sizing, pinned file rows, and bounded/debounced git-state resolution.
+- Made Codex turn failures durable in the transcript and sidebar state, with sticky failure toasts and retained diagnostics.
+- Tightened sidebar density, reduced gutters, capped long directory thread lists behind Show more/less, and improved thread chip ordering.
+- Fixed transcript wrapping for long unbroken plain-text runs.
+- Fixed malformed nested code fence rendering.
+- Fixed stale messaging turns stuck in waiting state.
+- Hid retired Codex 5.3 models.
+- Improved branch-drift checks by reusing navigation thread lists.
+- Reduced noisy per-thread routing logs during content search.
+
 ## v1.0.0-beta.32 - 2026-06-11
 
 - Added a "without a directory" option for new threads so users can start work without first choosing or linking a project folder.
