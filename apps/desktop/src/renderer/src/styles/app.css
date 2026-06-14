@@ -8439,6 +8439,17 @@ textarea,
   border-bottom: 0;
 }
 
+/* Right-aligned cluster in the fixed card header: the edited-files view
+   toggle (when more than one turn group) next to the Sidebar dock toggle.
+   Holding the toggle here — outside the scroll body — keeps it put while a
+   long diff scrolls and frees the vertical band an inline toggle bar took. */
+.live-work-rail__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .live-work-rail__collapse {
   display: inline-flex;
   align-items: center;
@@ -8597,12 +8608,14 @@ textarea,
      resets font-size, so a longhand before it is silently overridden. */
   font-size: 12px;
   text-align: left;
-  /* Stay reachable while scrolling through an expanded file's diff
-     (#510). Sticky stacking is handled by the browser: when the next
-     file-toggle reaches top, it pushes the previous one out.
-     z-index sits above the diff body. */
+  /* Stay reachable while scrolling through an expanded file's diff (#510).
+     Pins flush BELOW its group header (whose MEASURED height feeds
+     `--edits-group-header-height`), and the group header (z-index 2) sits
+     above this row so the diff scrolls behind it. The offset resolves to 0 in
+     the single-group view (rendered without the `.edited-file-groups` wrapper,
+     so no group header sits above it). */
   position: sticky;
-  top: 0;
+  top: var(--edits-group-header-height, 0px);
   z-index: 1;
 }
 
@@ -8655,12 +8668,22 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Sticky group headers pin to the top of the surface's scroll body (the
+     fixed title + view toggle live OUTSIDE that body, so nothing pins above
+     them here). The per-file row, when its diff is expanded, pins just below
+     its group header — `--edits-group-header-height` is that offset, set
+     per-group from the MEASURED header height (EditedFileGroupSection) so it's
+     always flush. This 52px is only the pre-measurement / no-ResizeObserver
+     fallback. */
+  --edits-group-header-height: 52px;
 }
 
+/* `By turn / All files` segmented control. Rendered in the surface's fixed
+   header (Edits-panel header, LiveWorkRail card header), not the scroll body. */
 .edited-file-groups__view-toggle {
   display: inline-flex;
-  align-self: flex-start;
   gap: 0;
+  flex: 0 0 auto;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   overflow: hidden;
@@ -8716,7 +8739,7 @@ textarea,
 
 /* Two-row card header: the "Edited N files" summary gets its own line so
    the commit badges can't crush it, with the badge + date on a wrapping
-   second line. Sticky so the header pins to the top of the scroll region
+   second line. Sticky so the header pins to the top of the scroll body
    while a long diff scrolls beneath it (the opaque card background hides the
    scrolled content). */
 .edited-file-groups__group-header {
@@ -8725,8 +8748,12 @@ textarea,
   gap: 2px;
   min-width: 0;
   position: sticky;
+  /* Pins to the top of the surface's scroll body (the title + view toggle are
+     a fixed header OUTSIDE the body, so nothing pins above this). z-index 2
+     sits ABOVE the file row (z-index 1) so an expanded diff scrolls BEHIND the
+     group header instead of painting over it — mirroring the Directories tab. */
   top: 0;
-  z-index: 1;
+  z-index: 2;
   padding: 5px 6px;
   border-radius: 6px;
   background: var(--bg-panel-elevated);
@@ -8876,14 +8903,41 @@ textarea,
   font-size: 11px;
 }
 
-/* Context-rail Edits panel: section header carries the dock toggle so
-   "Only show here" / "Show above composer" sits next to the title. */
+/* Context-rail Edits panel: a FIXED header (it lives outside the panel's
+   scroll body, so it never translates with the list) carrying the title, the
+   view toggle, and the dock toggle. Left group = title + `By turn / All files`;
+   right = "Only show here" / "Show above composer". */
 .edits-panel__header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.edits-panel__title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Scroll body: only the edited-file groups scroll, their sticky headers
+   pinning to this body's top edge. `padding-top: 0` lets the first group
+   header pin flush; the 8px of breathing room above it is restored as a
+   first-child margin that scrolls away with the content. */
+.edits-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
+}
+
+.edits-panel__body > *:first-child {
+  margin-block-start: 8px;
 }
 
 .edits-panel__dock-toggle {
@@ -10373,6 +10427,21 @@ textarea,
 .context-panel__section--status {
   margin-top: auto;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* Edits panel fills the tab as a flex column: a fixed `.edits-panel__header`
+   over an internally scrolling `.edits-panel__body`. Overrides the default
+   section padding (the header + body own their own insets) so the body's
+   sticky group headers pin to its top edge with no translate. The outer
+   `.context-panel__scroll` then never scrolls for this tab — the section is
+   exactly its height and the body owns the overflow. */
+.context-panel__section.context-panel__section--edits {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border-bottom: 0;
 }
 
 .context-list {

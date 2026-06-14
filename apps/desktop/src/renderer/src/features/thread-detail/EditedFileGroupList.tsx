@@ -1,4 +1,11 @@
-import { useId, useState } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import type {
   AppServerThreadActivityDetail,
   EditGroupCommitState,
@@ -18,6 +25,14 @@ type EditedFileGroupListProps = {
   groups: EditedFileGroup[];
   /** Git commit lifecycle per group key, from `useEditCommitStates`. */
   commitStatesByKey?: Record<string, EditGroupCommitState>;
+  /**
+   * Which view to render. Controlled by the parent so the `By turn / All
+   * files` toggle can live in the surface's fixed header (above the scroll
+   * region) instead of scrolling with the list. Defaults to `"turns"`; only
+   * meaningful with more than one group. Render `<EditedFileViewToggle>` in
+   * the header to drive it.
+   */
+  view?: EditedFileGroupView;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -39,8 +54,48 @@ const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
  */
 const VISIBLE_TURN_GROUPS = 3;
 
+/**
+ * The `By turn / All files` segmented control. Rendered by the parent in its
+ * fixed header (the context-rail Edits header, the LiveWorkRail card header)
+ * so it stays put while the list scrolls beneath it. Only worth showing when
+ * there is more than one group.
+ */
+export function EditedFileViewToggle(props: {
+  view: EditedFileGroupView;
+  onViewChange: (view: EditedFileGroupView) => void;
+}) {
+  return (
+    <div
+      className="edited-file-groups__view-toggle"
+      role="group"
+      aria-label="Edited files view"
+    >
+      <button
+        type="button"
+        className={`edited-file-groups__view-btn${
+          props.view === "turns" ? " is-active" : ""
+        }`}
+        aria-pressed={props.view === "turns"}
+        onClick={() => props.onViewChange("turns")}
+      >
+        By turn
+      </button>
+      <button
+        type="button"
+        className={`edited-file-groups__view-btn${
+          props.view === "files" ? " is-active" : ""
+        }`}
+        aria-pressed={props.view === "files"}
+        onClick={() => props.onViewChange("files")}
+      >
+        All files
+      </button>
+    </div>
+  );
+}
+
 export function EditedFileGroupList(props: EditedFileGroupListProps) {
-  const [view, setView] = useState<EditedFileGroupView>("turns");
+  const view = props.view ?? "turns";
   const [showAllTurns, setShowAllTurns] = useState(false);
 
   if (props.groups.length === 0) {
@@ -53,33 +108,6 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
 
   return (
     <div className="edited-file-groups">
-      <div
-        className="edited-file-groups__view-toggle"
-        role="group"
-        aria-label="Edited files view"
-      >
-        <button
-          type="button"
-          className={`edited-file-groups__view-btn${
-            view === "turns" ? " is-active" : ""
-          }`}
-          aria-pressed={view === "turns"}
-          onClick={() => setView("turns")}
-        >
-          By turn
-        </button>
-        <button
-          type="button"
-          className={`edited-file-groups__view-btn${
-            view === "files" ? " is-active" : ""
-          }`}
-          aria-pressed={view === "files"}
-          onClick={() => setView("files")}
-        >
-          All files
-        </button>
-      </div>
-
       {view === "turns" ? (
         (() => {
           const visibleGroups = showAllTurns
@@ -123,6 +151,31 @@ function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
     : undefined;
 }
 
+/**
+ * Live element height via ResizeObserver. Drives the sticky offset for a
+ * group's file rows: a fixed pixel estimate gaps or overlaps because the
+ * group header height varies (one vs two rows, badge state, summary wrap), so
+ * we measure the real header instead.
+ */
+function useMeasuredHeight(ref: RefObject<HTMLElement | null>): number | undefined {
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    const measure = () => setHeight(element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return height;
+}
+
 function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
@@ -131,10 +184,24 @@ function EditedFileGroupSection(props: {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
   const bodyId = useId();
   const timestamp = formatGroupTimestamp(props.group);
+  // Feed the measured header height to `--edits-group-header-height` so an
+  // expanded file's sticky toggle pins flush beneath this group's header
+  // rather than at a guessed offset.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const headerHeight = useMeasuredHeight(headerRef);
 
   return (
-    <section className="edited-file-groups__group">
-      <div className="edited-file-groups__group-header">
+    <section
+      className="edited-file-groups__group"
+      style={
+        headerHeight != null
+          ? ({
+              "--edits-group-header-height": `${headerHeight}px`,
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <div ref={headerRef} className="edited-file-groups__group-header">
         <button
           type="button"
           className="edited-file-groups__group-toggle"
