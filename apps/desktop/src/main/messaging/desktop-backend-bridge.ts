@@ -61,6 +61,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       backend: backend === "all" ? undefined : backend,
       callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
+      forceRefresh: request.forceRefresh,
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const queuedExecutionModesByThreadKey =

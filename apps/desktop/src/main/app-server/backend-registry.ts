@@ -284,9 +284,11 @@ type InitializeResult = {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
-// Keep startup prewarm useful through renderer parse/effect scheduling. Thread
-// lifecycle notifications still invalidate this cache when the list changes.
-const THREAD_LIST_REUSE_WINDOW_MS = 5_000;
+// Keep expensive Codex thread-list walks reusable across focus/navigation bursts.
+// Thread lifecycle notifications still invalidate this cache when list metadata
+// changes, so this window can cover ordinary foreground idle time while
+// background polling catches external Codex changes on a slower cadence.
+const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 /**
@@ -2165,6 +2167,15 @@ type ThreadListCacheState = {
   threads?: AppServerThreadSummary[];
 };
 
+type ThreadListCacheHit = {
+  cacheKey: string;
+  expiresInMs?: number;
+  pending: boolean;
+  source: "exact" | "navigation-shared";
+  threadCount?: number;
+  value: Promise<AppServerThreadSummary[]> | AppServerThreadSummary[];
+};
+
 let threadListCacheSequence = 0;
 
 function shouldEnrichThreadDirectories(
@@ -3755,6 +3766,7 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
+    forceRefresh?: boolean;
   } = {}): Promise<AppServerThreadSummary[]> {
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
@@ -3798,19 +3810,61 @@ export class DesktopBackendRegistry {
     const now = Date.now();
     const cached = this.findReusableThreadListCache(normalizedParams, cacheKey, now);
     if (cached) {
-      return await cached;
+      logDebug("threadListCache:hit", {
+        archived: normalizedParams.archived === true,
+        backend: normalizedParams.backend ?? "all",
+        callerReason: normalizedParams.callerReason ?? "thread-list",
+        enrichDirectories: normalizedParams.enrichDirectories,
+        expiresInMs: cached.expiresInMs,
+        filterPresent: Boolean(normalizedParams.filter?.trim()),
+        forceRefresh: normalizedParams.forceRefresh === true,
+        pending: cached.pending,
+        source: cached.source,
+        threadCount: cached.threadCount,
+      });
+      return await cached.value;
     }
 
+    const startedAt = Date.now();
+    logDebug("threadListCache:miss", {
+      archived: normalizedParams.archived === true,
+      backend: normalizedParams.backend ?? "all",
+      callerReason: normalizedParams.callerReason ?? "thread-list",
+      enrichDirectories: normalizedParams.enrichDirectories,
+      filterPresent: Boolean(normalizedParams.filter?.trim()),
+      forceRefresh: normalizedParams.forceRefresh === true,
+    });
     const promise = this.readThreadList(normalizedParams)
       .then((threads) => {
         this.threadListCache.set(cacheKey, {
           expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
           threads,
         });
+        logDebug("threadListCache:store", {
+          archived: normalizedParams.archived === true,
+          backend: normalizedParams.backend ?? "all",
+          callerReason: normalizedParams.callerReason ?? "thread-list",
+          durationMs: Date.now() - startedAt,
+          enrichDirectories: normalizedParams.enrichDirectories,
+          expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
+          filterPresent: Boolean(normalizedParams.filter?.trim()),
+          forceRefresh: normalizedParams.forceRefresh === true,
+          threadCount: threads.length,
+        });
         return threads;
       })
       .catch((error) => {
         this.threadListCache.delete(cacheKey);
+        logDebug("threadListCache:error", {
+          archived: normalizedParams.archived === true,
+          backend: normalizedParams.backend ?? "all",
+          callerReason: normalizedParams.callerReason ?? "thread-list",
+          durationMs: Date.now() - startedAt,
+          enrichDirectories: normalizedParams.enrichDirectories,
+          error: error instanceof Error ? error.message : String(error),
+          filterPresent: Boolean(normalizedParams.filter?.trim()),
+          forceRefresh: normalizedParams.forceRefresh === true,
+        });
         throw error;
       });
     this.threadListCache.set(cacheKey, { promise });
@@ -8854,6 +8908,7 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
+    forceRefresh?: boolean;
   }): string {
     const codexDirectoryBackfill =
       params.backend === "grok" ||
@@ -8879,11 +8934,16 @@ export class DesktopBackendRegistry {
       callerReason?: ThreadListCallerReason;
       enrichDirectories?: boolean;
       filter?: string;
+      forceRefresh?: boolean;
     },
     cacheKey: string,
     now: number,
-  ): Promise<AppServerThreadSummary[]> | AppServerThreadSummary[] | undefined {
-    const exact = this.readFreshThreadListCache(cacheKey, now);
+  ): ThreadListCacheHit | undefined {
+    if (params.forceRefresh === true) {
+      return this.readPendingThreadListCache(cacheKey, "exact");
+    }
+
+    const exact = this.readFreshThreadListCache(cacheKey, now, "exact");
     if (exact) {
       return exact;
     }
@@ -8904,18 +8964,50 @@ export class DesktopBackendRegistry {
     if (backfillCapableKey === cacheKey) {
       return undefined;
     }
-    return this.readFreshThreadListCache(backfillCapableKey, now);
+    return this.readFreshThreadListCache(backfillCapableKey, now, "navigation-shared");
   }
 
   private readFreshThreadListCache(
     cacheKey: string,
     now: number,
-  ): Promise<AppServerThreadSummary[]> | AppServerThreadSummary[] | undefined {
+    source: ThreadListCacheHit["source"],
+  ): ThreadListCacheHit | undefined {
     const cached = this.threadListCache.get(cacheKey);
     if (cached?.threads && (cached.expiresAt ?? 0) > now) {
-      return cached.threads;
+      return {
+        cacheKey,
+        expiresInMs: Math.max(0, (cached.expiresAt ?? 0) - now),
+        pending: false,
+        source,
+        threadCount: cached.threads.length,
+        value: cached.threads,
+      };
     }
-    return cached?.promise;
+    if (cached?.promise) {
+      return {
+        cacheKey,
+        pending: true,
+        source,
+        value: cached.promise,
+      };
+    }
+    return undefined;
+  }
+
+  private readPendingThreadListCache(
+    cacheKey: string,
+    source: ThreadListCacheHit["source"],
+  ): ThreadListCacheHit | undefined {
+    const cached = this.threadListCache.get(cacheKey);
+    if (!cached?.promise) {
+      return undefined;
+    }
+    return {
+      cacheKey,
+      pending: true,
+      source,
+      value: cached.promise,
+    };
   }
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
@@ -9095,10 +9187,12 @@ export class DesktopBackendRegistry {
       method === "thread/parent/cleared" ||
       method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/status/changed" ||
       method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
+      method === "turn/cancelled" ||
       method === "turn/completed" ||
       method === "turn/failed"
     );

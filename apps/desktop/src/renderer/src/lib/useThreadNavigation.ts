@@ -53,7 +53,7 @@ export type ArchiveThreadOptions = {
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
-const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
+const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
 
 function normalizeBrowseMode(value: unknown): BrowseMode {
@@ -89,6 +89,10 @@ type NavigationState = {
   refreshing: boolean;
   error?: string;
   response?: NavigationSnapshot;
+};
+
+type NavigationRefreshOptions = {
+  forceRefresh?: boolean;
 };
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
@@ -2069,6 +2073,7 @@ export function useThreadNavigation(
   const refreshInFlightRef = useRef(false);
   const queuedRefreshRef = useRef<
     | {
+        forceRefresh?: boolean;
         forcePreferredSelection?: boolean;
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
@@ -2129,7 +2134,8 @@ export function useThreadNavigation(
     async (
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
-      forcePreferredSelection = false
+      forcePreferredSelection = false,
+      options?: NavigationRefreshOptions
     ): Promise<void> => {
       if (!enabled) {
         setState({
@@ -2159,8 +2165,11 @@ export function useThreadNavigation(
       }));
 
       try {
+        const snapshot = options?.forceRefresh
+          ? await desktopApi.getNavigationSnapshot({ forceRefresh: true })
+          : await desktopApi.getNavigationSnapshot();
         const response = removeThreadKeysFromSnapshot(
-          await desktopApi.getNavigationSnapshot(),
+          snapshot,
           suppressedArchivedThreadKeysRef.current
         );
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
@@ -2238,9 +2247,11 @@ export function useThreadNavigation(
     async (
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
-      forcePreferredSelection = false
+      forcePreferredSelection = false,
+      options?: NavigationRefreshOptions
     ): Promise<void> => {
       const initialRequest = {
+        forceRefresh: options?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
@@ -2260,7 +2271,8 @@ export function useThreadNavigation(
           await performRefresh(
             nextRequest.preferredSelectionKey,
             nextRequest.preferredOptimisticThread,
-            nextRequest.forcePreferredSelection
+            nextRequest.forcePreferredSelection,
+            { forceRefresh: nextRequest.forceRefresh }
           );
           nextRequest = queuedRefreshRef.current;
         }
@@ -2278,9 +2290,12 @@ export function useThreadNavigation(
     (
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
-      forcePreferredSelection = false
+      forcePreferredSelection = false,
+      options?: NavigationRefreshOptions
     ): void => {
       queuedRefreshRef.current = {
+        forceRefresh:
+          options?.forceRefresh === true || queuedRefreshRef.current?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
@@ -2301,7 +2316,8 @@ export function useThreadNavigation(
         void refresh(
           nextRequest.preferredSelectionKey,
           nextRequest.preferredOptimisticThread,
-          nextRequest.forcePreferredSelection
+          nextRequest.forcePreferredSelection,
+          { forceRefresh: nextRequest.forceRefresh }
         );
       }, 0);
     },
@@ -2357,7 +2373,9 @@ export function useThreadNavigation(
     }
 
     const timer = setInterval(() => {
-      scheduleRefresh();
+      scheduleRefresh(undefined, undefined, false, {
+        forceRefresh: true,
+      });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
     return () => {

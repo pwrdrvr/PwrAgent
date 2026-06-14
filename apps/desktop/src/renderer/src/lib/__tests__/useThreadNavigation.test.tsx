@@ -762,6 +762,69 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("forces background navigation refreshes to bypass backend thread-list cache", async () => {
+    let intervalHandler: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
+      if (timeout !== 5 * 60_000) {
+        return originalSetInterval(handler, timeout, ...args);
+      }
+      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+    };
+
+    const { result, unmount } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(getNavigationSnapshot.mock.calls[0]).toEqual([]);
+    expect(intervalHandler).toBeDefined();
+
+    act(() => {
+      intervalHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({ forceRefresh: true });
+    });
+
+    unmount();
+  });
+
   it("applies streamed directory git status updates without refreshing the snapshot", async () => {
     const listeners = new Set<(event: any) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
