@@ -284,9 +284,10 @@ type InitializeResult = {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
-// Keep startup prewarm useful through renderer parse/effect scheduling. Thread
-// lifecycle notifications still invalidate this cache when the list changes.
-const THREAD_LIST_REUSE_WINDOW_MS = 5_000;
+// Keep expensive Codex thread-list walks reusable across focus/navigation bursts.
+// Thread lifecycle notifications still invalidate this cache when list metadata
+// changes, so this window can be much longer than initial renderer scheduling.
+const THREAD_LIST_REUSE_WINDOW_MS = 60_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 /**
@@ -9158,10 +9159,12 @@ export class DesktopBackendRegistry {
       method === "thread/parent/cleared" ||
       method === "thread/parent/set" ||
       method === "thread/started" ||
+      method === "thread/status/changed" ||
       method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
+      method === "turn/cancelled" ||
       method === "turn/completed" ||
       method === "turn/failed"
     );
