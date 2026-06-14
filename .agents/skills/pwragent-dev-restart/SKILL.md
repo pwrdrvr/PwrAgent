@@ -39,7 +39,7 @@ Use this skill when the running Electron app must be stopped and restarted from 
 
 ## Script Notes
 
-- The script stops processes matching the target checkout path and their bounded parent dev-server chain, then starts `pnpm dev` from the checkout.
+- The script stops processes matching the target checkout path and their bounded parent dev-server chain, then starts `pnpm dev:dev` from the checkout.
 - The script discovers running processes by checkout path. It does not require a pidfile or a previous skill-started instance.
 - It excludes Codex helper processes whose serialized command payloads mention the checkout path but are not part of the PwrAgent dev process tree.
 - It uses a `nohup` sleep wrapper for the delayed timer. Do not use `launchctl submit` here: launchd can keep descendant `pnpm dev` processes in the submitted job context and relaunch them after they exit.

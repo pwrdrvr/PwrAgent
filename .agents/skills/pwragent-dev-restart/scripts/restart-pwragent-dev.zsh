@@ -7,9 +7,9 @@ Usage:
   restart-pwragent-dev.zsh schedule [--root PATH] [--delay SECONDS] [--log PATH] [--dry-run]
   restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run] [--detach-start]
 
-Schedules or performs a local PwrAgent dev restart. The restart stops processes
-that match the target checkout path plus the bounded parent dev-server chain,
-then starts `pnpm dev` from the target checkout.
+Schedules or performs a local PwrAgent dev-profile restart. The restart stops
+processes that match the target checkout path plus the bounded parent
+dev-server chain, then starts `pnpm dev:dev` from the target checkout.
 USAGE
 }
 
@@ -203,14 +203,14 @@ restart_now() {
   sleep 5
   stop_matches KILL
 
-  log_line "starting pnpm dev in $root"
+  log_line "starting pnpm dev:dev in $root"
   if [[ "$detach_start" == "true" ]]; then
-    nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev" >> "$log_path" 2>&1 &
-    log_line "started detached pnpm dev pid=$!"
+    nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev" >> "$log_path" 2>&1 &
+    log_line "started detached pnpm dev:dev pid=$!"
     return 0
   fi
 
-  exec /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev"
+  exec /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev:dev"
 }
 
 run_main() {
