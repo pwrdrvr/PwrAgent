@@ -95,6 +95,7 @@ matching_pids() {
     [[ "$pid" == "$PPID" ]] && continue
     command="$(process_command "$pid")"
     [[ "$command" == *"restart-pwragent-dev.zsh"* ]] && continue
+    is_restart_excluded_process "$command" && continue
     print -r -- "$pid"
   done
 }
@@ -116,6 +117,16 @@ is_dev_chain_parent() {
   return 1
 }
 
+is_restart_excluded_process() {
+  local command="$1"
+  # Codex helper processes can include the checkout path in JSON payloads even
+  # though they are not part of the running PwrAgent dev app.
+  [[ "$command" == *"/.codex/computer-use/"* ]] && return 0
+  [[ "$command" == *"SkyComputerUseClient"* ]] && return 0
+  [[ "$command" == *"turn-ended"* ]] && return 0
+  return 1
+}
+
 candidate_pids() {
   local command parent pid
   for pid in $(matching_pids "$root"); do
@@ -125,6 +136,7 @@ candidate_pids() {
     while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
       [[ "$parent" == "$$" || "$parent" == "$PPID" ]] && break
       command="$(process_command "$parent")"
+      is_restart_excluded_process "$command" && break
       if [[ "$command" == *"$root"* ]] || is_dev_chain_parent "$command"; then
         print -r -- "$parent"
         parent="$(parent_pid "$parent")"
