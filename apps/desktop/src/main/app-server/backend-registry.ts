@@ -286,8 +286,9 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // Keep expensive Codex thread-list walks reusable across focus/navigation bursts.
 // Thread lifecycle notifications still invalidate this cache when list metadata
-// changes, so this window can be much longer than initial renderer scheduling.
-const THREAD_LIST_REUSE_WINDOW_MS = 60_000;
+// changes, so this window can cover ordinary foreground idle time while
+// background polling catches external Codex changes on a slower cadence.
+const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 /**

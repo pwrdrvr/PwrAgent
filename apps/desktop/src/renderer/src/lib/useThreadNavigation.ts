@@ -53,7 +53,7 @@ export type ArchiveThreadOptions = {
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
-const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
+const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
 
 function normalizeBrowseMode(value: unknown): BrowseMode {
