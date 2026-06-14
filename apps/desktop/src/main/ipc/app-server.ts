@@ -411,6 +411,20 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   };
 }
 
+function dedupePrsByStatusKey(prs: PrSummary[]): PrSummary[] {
+  const seen = new Set<string>();
+  const out: PrSummary[] = [];
+  for (const pr of prs.map(normalizePrSummary)) {
+    const key = getPrStatusKey(pr);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(pr);
+  }
+  return out;
+}
+
 function normalizePrCheckState(
   state: string | undefined,
 ): NonNullable<PrSummary["checkState"]> {
@@ -1626,6 +1640,7 @@ class DesktopAppServerService {
     request: RefreshThreadPullRequestsRequest;
     lookupKey: string;
     lookupDirectoryPaths: string[];
+    previousPrs: PrSummary[];
   }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
     const prs = (await detectPullRequestsForThread({
       fetcher: this.getPrFetcher(),
@@ -1633,8 +1648,14 @@ class DesktopAppServerService {
       directoryPaths: params.request.directoryPaths,
     })).map(normalizePrSummary);
     const fetchedAt = Date.now();
-    this.rememberPrStatuses(prs, fetchedAt);
-    await this.writePrStatusesToCache(prs, fetchedAt);
+    const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
+      prs: params.previousPrs,
+      discoveredPrs: prs,
+      cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
+    });
+    const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
+    this.rememberPrStatuses(statusPrs, fetchedAt);
+    await this.writePrStatusesToCache(statusPrs, fetchedAt);
     this.rememberPrLookup({
       lookupKey: params.lookupKey,
       provider: normalizePullRequestProvider(params.request.provider),
@@ -1653,6 +1674,47 @@ class DesktopAppServerService {
     });
 
     return { prs, fetchedAt };
+  }
+
+  private async fetchRetainedNonTerminalPullRequests(params: {
+    prs: PrSummary[];
+    discoveredPrs: PrSummary[];
+    cwd?: string;
+  }): Promise<PrSummary[]> {
+    const cwd = params.cwd;
+    if (!cwd) {
+      return [];
+    }
+
+    const discoveredKeys = new Set(
+      params.discoveredPrs.map((pr) => getPrStatusKey(pr)),
+    );
+    const seenRetainedKeys = new Set<string>();
+    const retainedPrs = params.prs
+      .map(normalizePrSummary)
+      .filter((pr) => {
+        const key = getPrStatusKey(pr);
+        if (discoveredKeys.has(key)) return false;
+        if (seenRetainedKeys.has(key)) return false;
+        if (pr.lifecycleState === "merged" || pr.lifecycleState === "closed") {
+          return false;
+        }
+        seenRetainedKeys.add(key);
+        return true;
+      });
+
+    if (retainedPrs.length === 0) {
+      return [];
+    }
+
+    const fetcher = this.getPrFetcher();
+    const refreshed = await Promise.all(
+      retainedPrs.map((pr) =>
+        fetcher.fetchPullRequestByUrl({ cwd, url: pr.url }),
+      ),
+    );
+    return refreshed.filter((pr): pr is PrSummary => Boolean(pr))
+      .map(normalizePrSummary);
   }
 
   private startPullRequestLookupRefresh(params: {

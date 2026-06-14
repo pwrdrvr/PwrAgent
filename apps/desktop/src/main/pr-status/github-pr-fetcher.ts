@@ -266,6 +266,38 @@ export class GithubPrFetcher {
   }
 
   /**
+   * Fetch the latest state for a retained PR chip by URL. This covers thread
+   * history chips whose original head branch no longer matches the thread's
+   * current branch lookup.
+   */
+  async fetchPullRequestByUrl(params: {
+    cwd: string;
+    url: string;
+  }): Promise<PrSummary | undefined> {
+    if (!(await this.isGhAvailable())) {
+      return undefined;
+    }
+    try {
+      const { stdout } = await this.exec(params.cwd, [
+        "pr",
+        "view",
+        params.url,
+        "--json",
+        GH_FIELDS,
+      ]);
+      const payload = JSON.parse(stdout) as GhPrPayload;
+      return parseGhPrPayload(payload);
+    } catch (error) {
+      fetcherLog.warn("gh pr view failed", {
+        cwd: params.cwd,
+        url: params.url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
    * Probe `gh auth status` and return parsed installed / logged-in /
    * scopes info for the Applications settings panel. Result is cached
    * for `authStatusCacheTtlMs` (default 5 min) so reopening the
