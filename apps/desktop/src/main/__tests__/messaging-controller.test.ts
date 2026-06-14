@@ -4742,6 +4742,24 @@ describe("MessagingController", () => {
       title: "Ready to start",
       body: expect.stringContaining("Environment: PwrAgnt"),
     });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the build"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: expect.stringMatching(/^messaging:browse:/),
+        launchpad: expect.objectContaining({
+          codexEnvironmentId: "pwragnt",
+          codexEnvironmentExecutionTarget: "local",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0]).not.toEqual(
+      expect.objectContaining({
+        input: expect.anything(),
+      }),
+    );
   });
 
   it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {

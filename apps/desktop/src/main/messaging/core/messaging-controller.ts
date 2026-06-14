@@ -5118,7 +5118,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
+    let navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
     let selectedBackend: BackendSummary | undefined;
@@ -5155,7 +5155,13 @@ export class MessagingController {
       this.now(),
     );
     const project = bundle.session.selectedProject;
-    const directory = directoryForProjectSelection(navigation, project);
+    const ensured = await this.ensureNewThreadProjectLaunchpad(
+      session,
+      navigation,
+      selectedBackend.kind,
+    );
+    navigation = ensured.navigation;
+    const directory = ensured.directory ?? directoryForProjectSelection(navigation, project);
     const preferences = session.preferences;
     const options = newThreadOptionsForSession(
       session,
