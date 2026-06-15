@@ -28,6 +28,7 @@ const GH_FIELDS = [
   "mergeable",
   "mergeStateStatus",
   "mergedAt",
+  "commits",
   "headRefName",
   "headRepository",
   "headRepositoryOwner",
@@ -64,6 +65,7 @@ type GhPrPayload = {
   mergeable?: string | null;
   mergeStateStatus?: string | null;
   mergedAt: string | null;
+  commits?: { oid?: string | null }[] | null;
   headRefName: string;
   headRepository: { name?: string } | null;
   headRepositoryOwner: { login?: string } | null;
@@ -428,8 +430,22 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     lifecycleState: deriveLifecycleState(row),
     reviewState: deriveReviewState(row),
     mergeState: deriveMergeState(row),
+    ...parseCommitShas(row),
     url: row.url,
   };
+}
+
+function parseCommitShas(
+  row: Pick<GhPrPayload, "commits">,
+): Pick<PrSummary, "commitShas"> {
+  const commitShas = [
+    ...new Set(
+      (row.commits ?? [])
+        .map((commit) => commit.oid?.trim().toLowerCase())
+        .filter((oid): oid is string => Boolean(oid && /^[0-9a-f]{40}$/.test(oid))),
+    ),
+  ].sort();
+  return commitShas.length > 0 ? { commitShas } : {};
 }
 
 function parsePullRequestProvider(url: string): string {

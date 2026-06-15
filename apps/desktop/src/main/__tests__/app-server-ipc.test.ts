@@ -196,7 +196,12 @@ type WorkingStateEntry = {
   };
 };
 const readWorktreeWorkingStateEntries = vi.fn(
-  (worktreePaths: string[]): AsyncGenerator<WorkingStateEntry> =>
+  (
+    worktreePaths: string[],
+    _options?: {
+      acceptedPushedCommitShasByWorktreePath?: Record<string, string[] | undefined>;
+    },
+  ): AsyncGenerator<WorkingStateEntry> =>
     (async function* () {
       for (const worktreePath of worktreePaths) {
         yield { worktreePath } satisfies WorkingStateEntry;
@@ -2768,6 +2773,50 @@ describe("app server ipc", () => {
     });
   });
 
+  it("passes merged PR commit SHAs into working-state probes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const mergedPrSha = "a".repeat(40);
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+        prs: [
+          githubPr({
+            number: 806,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "PR canonical info store",
+            state: "passing",
+            lifecycleState: "merged",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/806",
+            commitShas: [mergedPrSha],
+          }),
+        ],
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        ["/repo/wt"],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            "/repo/wt": [mergedPrSha],
+          },
+        },
+      );
+    });
+  });
+
   it("refreshes a thread's working state after the agent finishes a turn", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
@@ -2812,6 +2861,206 @@ describe("app server ipc", () => {
     expect(readWorktreeWorkingStateEntries.mock.calls.at(-1)?.[0]).toEqual([
       "/repo/wt",
     ]);
+  });
+
+  it("refreshes a thread's working state after its expected branch changes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: "thread-1",
+          branch: "fix/new-branch",
+        },
+      },
+    });
+
+    expect(invalidateWorktreeWorkingState).toHaveBeenCalledWith("/repo/wt");
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries.mock.calls.length).toBe(
+        callsAfterSnapshot + 1,
+      );
+    });
+    expect(readWorktreeWorkingStateEntries.mock.calls.at(-1)?.[0]).toEqual([
+      "/repo/wt",
+    ]);
+  });
+
+  it("refreshes pull requests for the rendered branch when a turn completes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const discoveredPr = githubPr({
+      number: 813,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Count merged PR commits as pushed",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/813",
+    });
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "worktree",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        gitBranch: "fix/merged-pr-commits-pushed",
+        observedGitBranch: "fix/merged-pr-commits-pushed",
+        updatedAt: 2000,
+      },
+    ] as never);
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/merged-pr-commits-pushed",
+        directoryPaths: ["/repo/wt"],
+      });
+    });
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [discoveredPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: buildThreadPrRequestKey({
+          backend: "codex",
+          threadId: "thread-1",
+          branch: "fix/merged-pr-commits-pushed",
+          directoryPaths: ["/repo/wt"],
+        }),
+      });
+    });
+  });
+
+  it("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const discoveredPr = githubPr({
+      number: 814,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Refresh adopted branch PRs",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/814",
+    });
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "worktree",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        gitBranch: "fix/old-branch",
+        observedGitBranch: "fix/old-branch",
+        updatedAt: 2000,
+      },
+    ] as never);
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: "thread-1",
+          branch: "fix/adopted-branch",
+        },
+      },
+    });
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/adopted-branch",
+        directoryPaths: ["/repo/wt"],
+      });
+    });
+    expect(detectPullRequestsForThread).not.toHaveBeenCalledWith({
+      fetcher: expect.any(Object),
+      branch: "fix/old-branch",
+      directoryPaths: ["/repo/wt"],
+    });
   });
 
   it("ignores a completed non-git command for working-state refresh", async () => {

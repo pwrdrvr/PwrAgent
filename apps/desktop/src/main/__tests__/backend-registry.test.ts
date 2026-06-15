@@ -16838,7 +16838,9 @@ command = "pnpm dev"
     });
 
     let overlayDuringTerminalEvent: ThreadOverlayState | undefined;
+    const eventMethods: string[] = [];
     registry.onEvent(async (event) => {
+      eventMethods.push(event.notification.method);
       if (event.notification.method !== "turn/completed") {
         return;
       }
@@ -16881,6 +16883,11 @@ command = "pnpm dev"
         gitBranch: "fix/queued-review-release",
         observedGitBranch: "fix/queued-review-release",
       });
+      expect(eventMethods).toEqual([
+        "turn/started",
+        "thread/branch/updated",
+        "turn/completed",
+      ]);
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-branch",
         gitInfo: {
@@ -16890,6 +16897,45 @@ command = "pnpm dev"
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("notifies listeners when the renderer adopts a new expected branch", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/metadata/update"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    try {
+      await registry.updateThreadExpectedBranch({
+        backend: "codex",
+        threadId: "thread-branch",
+        branch: "fix/new-branch",
+      });
+
+      expect(events).toContainEqual({
+        backend: "codex",
+        notification: {
+          method: "thread/branch/updated",
+          params: {
+            threadId: "thread-branch",
+            branch: "fix/new-branch",
+          },
+        },
+      });
+    } finally {
+      unsubscribe();
+      await registry.close();
     }
   });
 

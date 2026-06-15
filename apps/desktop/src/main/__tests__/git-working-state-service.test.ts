@@ -79,6 +79,26 @@ describe("probeWorktreeWorkingState", () => {
     expect(calls.some((call) => call.args.includes("rev-list"))).toBe(false);
   });
 
+  it("does not count commits attached to merged PRs as unpushed", async () => {
+    const mergedPrSha = "a".repeat(40);
+    const localOnlySha = "b".repeat(40);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-list") && args.includes("--count")) return "2\n";
+      if (args.includes("rev-list")) return `${mergedPrSha}\n${localOnlySha}\n`;
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", {
+      runGit,
+      acceptedPushedCommitShas: [mergedPrSha],
+    });
+
+    expect(state?.unpushedCommits).toBe(1);
+  });
+
   it("returns undefined when the directory is not a git checkout", async () => {
     const { runGit } = fakeGit(() => undefined);
     expect(await probeWorktreeWorkingState("/not/a/repo", { runGit })).toBeUndefined();
@@ -252,6 +272,32 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     expect(states["g-b"]).toMatchObject({ committed: true, pushed: true });
     expect(states["g-b2"]).toMatchObject({ committed: true, pushed: true });
     expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(1);
+  });
+
+  it("treats commits attached to merged PRs as pushed even when no remote ref contains them", async () => {
+    const mergedPrSha = "d".repeat(40);
+    const responder = (args: string[]): string | undefined => {
+      if (args.includes("diff") && args.includes("--name-only")) return "";
+      if (args.includes("ls-files")) return "";
+      if (args.includes("check-ignore")) return "";
+      if (args.includes("log")) return `${mergedPrSha}\n`;
+      if (args.includes("rev-list")) return `${mergedPrSha}\n`;
+      return undefined;
+    };
+    const { runGit } = fakeGit(responder);
+    const service = new GitWorkingStateService({ runGit });
+
+    const states = await service.resolveEditCommitStates(
+      "/repo/wt",
+      [{ key: "g-merged", paths: ["/repo/wt/src/merged.ts"] }],
+      { acceptedPushedCommitShas: [mergedPrSha] },
+    );
+
+    expect(states["g-merged"]).toMatchObject({
+      committed: true,
+      commitSha: mergedPrSha,
+      pushed: true,
+    });
   });
 
   it("returns an empty map for no worktree or no groups", async () => {

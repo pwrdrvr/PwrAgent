@@ -20,6 +20,30 @@ type GitCommandRunner = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
+type AcceptedPushedCommitOptions = {
+  acceptedPushedCommitShas?: string[];
+};
+
+function buildAcceptedPushedCommitSet(
+  commitShas: string[] | undefined,
+): Set<string> {
+  return new Set(
+    (commitShas ?? [])
+      .map((sha) => sha.trim().toLowerCase())
+      .filter((sha) => /^[0-9a-f]{40}$/.test(sha)),
+  );
+}
+
+function buildWorkingStateCacheKey(
+  worktreePath: string,
+  acceptedPushedCommitShas: string[] | undefined,
+): string {
+  const accepted = [...buildAcceptedPushedCommitSet(acceptedPushedCommitShas)]
+    .sort()
+    .join(",");
+  return accepted ? `${worktreePath}\0${accepted}` : worktreePath;
+}
+
 async function defaultRunGit(
   cwd: string,
   args: string[],
@@ -65,7 +89,10 @@ function parseNumstat(output: string): {
  */
 export async function probeWorktreeWorkingState(
   worktreePath: string,
-  options: { runGit?: GitCommandRunner; gitEnv?: NodeJS.ProcessEnv } = {},
+  options: {
+    runGit?: GitCommandRunner;
+    gitEnv?: NodeJS.ProcessEnv;
+  } & AcceptedPushedCommitOptions = {},
 ): Promise<ThreadGitWorkingState | undefined> {
   const runGit = options.runGit ?? defaultRunGit;
   const gitEnv = options.gitEnv;
@@ -93,14 +120,33 @@ export async function probeWorktreeWorkingState(
   // local-only repo, so report 0 instead.
   let unpushedCommits = 0;
   if (remotesOutput?.trim()) {
-    const count = await runGitNoLocks([
-      "rev-list",
-      "--count",
-      "HEAD",
-      "--not",
-      "--remotes",
-    ]).catch(() => undefined);
-    unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
+    const acceptedPushedCommitShas = buildAcceptedPushedCommitSet(
+      options.acceptedPushedCommitShas,
+    );
+    if (acceptedPushedCommitShas.size > 0) {
+      const output = await runGitNoLocks([
+        "rev-list",
+        "HEAD",
+        "--not",
+        "--remotes",
+      ]).catch(() => undefined);
+      unpushedCommits = output === undefined
+        ? 0
+        : output
+          .split("\n")
+          .map((sha) => sha.trim().toLowerCase())
+          .filter((sha) => sha && !acceptedPushedCommitShas.has(sha))
+          .length;
+    } else {
+      const count = await runGitNoLocks([
+        "rev-list",
+        "--count",
+        "HEAD",
+        "--not",
+        "--remotes",
+      ]).catch(() => undefined);
+      unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
+    }
   }
 
   return {
@@ -116,6 +162,12 @@ export type WorktreeWorkingStateEntry = {
   worktreePath: string;
   gitWorkingState?: ThreadGitWorkingState;
 };
+
+export type GitWorkingStateEntryOptions = {
+  acceptedPushedCommitShasByWorktreePath?: Record<string, string[] | undefined>;
+};
+
+export type ResolveEditCommitStatesOptions = AcceptedPushedCommitOptions;
 
 type CachedWorkingState = {
   expiresAt: number;
@@ -158,12 +210,16 @@ export class GitWorkingStateService {
 
   readWorkingStateEntries(
     worktreePaths: string[],
+    options: GitWorkingStateEntryOptions = {},
   ): AsyncIterable<WorktreeWorkingStateEntry> {
     return new IterableMapper(
       worktreePaths,
       async (worktreePath): Promise<WorktreeWorkingStateEntry> => ({
         worktreePath,
-        gitWorkingState: await this.readWorkingState(worktreePath),
+        gitWorkingState: await this.readWorkingState(worktreePath, {
+          acceptedPushedCommitShas:
+            options.acceptedPushedCommitShasByWorktreePath?.[worktreePath],
+        }),
       }),
       {
         concurrency: this.concurrency,
@@ -174,14 +230,16 @@ export class GitWorkingStateService {
 
   async readWorkingState(
     worktreePath: string,
+    options: AcceptedPushedCommitOptions = {},
   ): Promise<ThreadGitWorkingState | undefined> {
     const key = worktreePath?.trim();
     if (!key) {
       return undefined;
     }
+    const cacheKey = buildWorkingStateCacheKey(key, options.acceptedPushedCommitShas);
 
     const now = Date.now();
-    const cached = this.cache.get(key);
+    const cached = this.cache.get(cacheKey);
     if (cached?.inFlight) {
       return await cached.inFlight;
     }
@@ -192,17 +250,18 @@ export class GitWorkingStateService {
     const inFlight = probeWorktreeWorkingState(key, {
       runGit: this.runGit,
       gitEnv: this.gitEnv,
+      acceptedPushedCommitShas: options.acceptedPushedCommitShas,
     })
       .then((value) => {
-        this.cache.set(key, { expiresAt: Date.now() + this.cacheTtlMs, value });
+        this.cache.set(cacheKey, { expiresAt: Date.now() + this.cacheTtlMs, value });
         return value;
       })
       .catch((error) => {
-        this.cache.delete(key);
+        this.cache.delete(cacheKey);
         throw error;
       });
 
-    this.cache.set(key, {
+    this.cache.set(cacheKey, {
       expiresAt: cached?.expiresAt ?? 0,
       inFlight,
       value: cached?.value,
@@ -216,7 +275,11 @@ export class GitWorkingStateService {
     if (!key) {
       return;
     }
-    this.cache.delete(key);
+    for (const cacheKey of this.cache.keys()) {
+      if (cacheKey === key || cacheKey.startsWith(`${key}\0`)) {
+        this.cache.delete(cacheKey);
+      }
+    }
   }
 
   /**
@@ -230,6 +293,7 @@ export class GitWorkingStateService {
   async resolveEditCommitStates(
     worktreePath: string,
     groups: EditGroupCommitInput[],
+    options: ResolveEditCommitStatesOptions = {},
   ): Promise<Record<string, EditGroupCommitState>> {
     const cwd = worktreePath?.trim();
     const states: Record<string, EditGroupCommitState> = {};
@@ -240,6 +304,9 @@ export class GitWorkingStateService {
     const gitEnv = this.gitEnv;
     const noLocks = (args: string[]): Promise<string> =>
       this.runGit(cwd, ["--no-optional-locks", ...args], gitEnv);
+    const acceptedPushedCommitShas = buildAcceptedPushedCommitSet(
+      options.acceptedPushedCommitShas,
+    );
 
     // The set of files that still have working-tree changes (tracked diffs vs
     // HEAD + untracked). Clean newline-separated relative paths — easier to
@@ -293,6 +360,11 @@ export class GitWorkingStateService {
       const existing = pushedBySha.get(sha);
       if (existing) {
         return existing;
+      }
+      if (acceptedPushedCommitShas.has(sha.trim().toLowerCase())) {
+        const promise = Promise.resolve(true);
+        pushedBySha.set(sha, promise);
+        return promise;
       }
       // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
       // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no

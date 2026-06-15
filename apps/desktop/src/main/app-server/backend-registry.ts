@@ -221,7 +221,11 @@ import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
 import type { DirectoryGitStatusEntry } from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
-import type { WorktreeWorkingStateEntry } from "./git-working-state-service";
+import type {
+  GitWorkingStateEntryOptions,
+  ResolveEditCommitStatesOptions,
+  WorktreeWorkingStateEntry,
+} from "./git-working-state-service";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
@@ -5262,8 +5266,9 @@ export class DesktopBackendRegistry {
 
   readWorktreeWorkingStateEntries(
     worktreePaths: string[],
+    options?: GitWorkingStateEntryOptions,
   ): AsyncIterable<WorktreeWorkingStateEntry> {
-    return this.gitWorkingStateService.readWorkingStateEntries(worktreePaths);
+    return this.gitWorkingStateService.readWorkingStateEntries(worktreePaths, options);
   }
 
   invalidateWorktreeWorkingState(worktreePath?: string): void {
@@ -5273,10 +5278,12 @@ export class DesktopBackendRegistry {
   async resolveEditCommitStates(
     worktreePath: string,
     groups: EditGroupCommitInput[],
+    options?: ResolveEditCommitStatesOptions,
   ): Promise<Record<string, EditGroupCommitState>> {
     return await this.gitWorkingStateService.resolveEditCommitStates(
       worktreePath,
       groups,
+      options,
     );
   }
 
@@ -7516,6 +7523,18 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       branch: normalizedObservedBranch,
     });
+    if (previousExpectedBranch !== normalizedObservedBranch) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/branch/updated",
+          params: {
+            threadId: params.threadId,
+            branch: normalizedObservedBranch,
+          },
+        },
+      } as unknown as AgentEvent);
+    }
 
     if (previousExpectedBranch !== normalizedObservedBranch) {
       backendRegistryLog.info("adopted active-turn branch change", {
@@ -7546,6 +7565,16 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       branch,
     });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: params.threadId,
+          branch,
+        },
+      },
+    } as unknown as AgentEvent);
 
     backendRegistryLog.info("updated thread expected branch", {
       backend: params.backend,
