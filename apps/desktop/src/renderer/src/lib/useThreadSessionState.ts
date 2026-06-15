@@ -2925,10 +2925,19 @@ export function useThreadSessionState(params: {
       }));
 
       try {
+        desktopApi?.recordStartupProfileEvent?.("thread-hydration:start", {
+          backend: targetThread.source,
+          threadId: targetThread.id,
+        });
         const response = normalizeResponseImageBoundaryText(await readThread({
           backend: targetThread.source,
           threadId: targetThread.id,
         }));
+        desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
+          backend: targetThread.source,
+          entryCount: response.replay.entries.length,
+          threadId: targetThread.id,
+        });
 
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
@@ -3006,6 +3015,11 @@ export function useThreadSessionState(params: {
           };
         });
       } catch (error) {
+        desktopApi?.recordStartupProfileEvent?.("thread-hydration:error", {
+          backend: targetThread.source,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: targetThread.id,
+        });
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
         }
@@ -3019,7 +3033,12 @@ export function useThreadSessionState(params: {
         }));
       }
     },
-    [desktopApi?.readThread, logStaleThinkingState, updateSession]
+    [
+      desktopApi?.readThread,
+      desktopApi?.recordStartupProfileEvent,
+      logStaleThinkingState,
+      updateSession,
+    ]
   );
 
   useEffect(() => {

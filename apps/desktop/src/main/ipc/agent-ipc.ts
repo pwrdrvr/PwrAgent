@@ -48,6 +48,7 @@ import {
   type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -283,7 +284,13 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request?: ListBackendsRequest
     ): Promise<ListBackendsResponse> => {
-      return await registry.listBackends(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:listBackends",
+        detail: {
+          hasRequest: request !== undefined,
+        },
+        operation: async () => await registry.listBackends(request),
+      });
     },
   );
 

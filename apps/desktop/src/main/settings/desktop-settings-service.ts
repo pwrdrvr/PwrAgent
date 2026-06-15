@@ -22,6 +22,7 @@ import type {
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
+import { execFile } from "node:child_process";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
@@ -137,6 +138,11 @@ import { getMainLogger } from "../log";
 // (passed below) where the in-tree copy hardcoded `getMainLogger`.
 import { mergeLoginShellEnvIntoEnv } from "@pwrdrvr/agent-transport";
 
+const LOGIN_SHELL_ENV_MARKER_START = "__PWRAGENT_LOGIN_SHELL_ENV_START__";
+const LOGIN_SHELL_ENV_MARKER_END = "__PWRAGENT_LOGIN_SHELL_ENV_END__";
+const LOGIN_SHELL_ENV_TIMEOUT_MS = 2_500;
+const LOGIN_SHELL_ENV_MAX_BUFFER = 1024 * 1024;
+
 // Codex home/profile paths come back from `@pwrdrvr/codex-discovery` via
 // `path.join`/`path.resolve`, which emit backslashes on Windows
 // (`C:\Users\…\.codex\profiles\work`). These strings are surfaced as
@@ -236,6 +242,88 @@ function clampInteger(value: number, maxValue: number): number {
   return Math.min(Math.max(value, 0), maxValue);
 }
 
+function defaultLoginShellCandidates(env: NodeJS.ProcessEnv): string[] {
+  return [
+    env.SHELL?.trim(),
+    "/bin/zsh",
+    "/bin/bash",
+    "/bin/sh",
+  ].filter((shell): shell is string => Boolean(shell));
+}
+
+function extractMarkedEnv(output: string): NodeJS.ProcessEnv | undefined {
+  const lines = output.split(/\r?\n/);
+  const startIndex = lines.indexOf(LOGIN_SHELL_ENV_MARKER_START);
+  const endIndex = lines.indexOf(LOGIN_SHELL_ENV_MARKER_END);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return undefined;
+  }
+
+  const shellEnv: NodeJS.ProcessEnv = {};
+  for (const line of lines.slice(startIndex + 1, endIndex)) {
+    const equalsIndex = line.indexOf("=");
+    if (equalsIndex <= 0) {
+      continue;
+    }
+    shellEnv[line.slice(0, equalsIndex)] = line.slice(equalsIndex + 1);
+  }
+  return shellEnv;
+}
+
+async function resolveInteractiveLoginShellEnvAsync(
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  if (process.platform === "win32") {
+    return undefined;
+  }
+
+  const command = [
+    `command printf '${LOGIN_SHELL_ENV_MARKER_START}\\n'`,
+    "command env",
+    `command printf '${LOGIN_SHELL_ENV_MARKER_END}\\n'`,
+  ].join("; ");
+  const failures: Array<{ error: string; shell: string }> = [];
+
+  for (const shell of defaultLoginShellCandidates(env)) {
+    try {
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(
+          shell,
+          ["-ilc", command],
+          {
+            encoding: "utf8",
+            env,
+            maxBuffer: LOGIN_SHELL_ENV_MAX_BUFFER,
+            timeout: LOGIN_SHELL_ENV_TIMEOUT_MS,
+          },
+          (error, stdout) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(stdout);
+          },
+        );
+      });
+      const shellEnv = extractMarkedEnv(output);
+      if (shellEnv) {
+        return shellEnv;
+      }
+      failures.push({ shell, error: "missing env markers" });
+    } catch (error) {
+      failures.push({
+        shell,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  getMainLogger("pwragent:shell-environment").warn("login-shell-env-failed", {
+    failures,
+  });
+  return undefined;
+}
+
 export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
@@ -263,6 +351,8 @@ export class DesktopSettingsService {
     key: string;
     promise: ReturnType<typeof discoverGhCommands>;
   };
+  private codexSpawnEnv?: NodeJS.ProcessEnv;
+  private codexSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -1115,15 +1205,70 @@ export class DesktopSettingsService {
   }
 
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
-    const spawnEnv = mergeLoginShellEnvIntoEnv(this.env, {
-      resolveShellEnv: this.options.resolveCodexShellEnv,
-      // Preserve the in-tree copy's diagnostic logging (the kit defaults to
-      // no-op when no logger is injected).
-      logger: getMainLogger("pwragent:shell-environment"),
-    });
-    if (!this.startupCodexHome) return spawnEnv;
+    if (this.options.resolveCodexShellEnv) {
+      return this.withStartupCodexHome(
+        mergeLoginShellEnvIntoEnv(this.env, {
+          resolveShellEnv: this.options.resolveCodexShellEnv,
+          // Preserve the in-tree copy's diagnostic logging (the kit defaults to
+          // no-op when no logger is injected).
+          logger: getMainLogger("pwragent:shell-environment"),
+        }),
+      );
+    }
+
+    const targetEnv = this.ensureBaseCodexSpawnEnv();
+    void this.resolveCodexSpawnEnvAsync();
+    return targetEnv;
+  }
+
+  async resolveCodexSpawnEnvAsync(): Promise<NodeJS.ProcessEnv> {
+    if (this.options.resolveCodexShellEnv) {
+      return this.resolveCodexSpawnEnv();
+    }
+
+    if (this.codexSpawnEnvHydrationPromise) {
+      return await this.codexSpawnEnvHydrationPromise;
+    }
+
+    const targetEnv = this.ensureBaseCodexSpawnEnv();
+    this.codexSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(this.env)
+      .then((shellEnv) => {
+        const logger = getMainLogger("pwragent:shell-environment");
+        if (!shellEnv || Object.keys(shellEnv).length === 0) {
+          logger.warn("login-shell-env-merge-empty", {
+            parentPathLength: this.env.PATH?.length ?? 0,
+            parentShell: this.env.SHELL,
+            shellCandidates: defaultLoginShellCandidates(this.env),
+          });
+          return targetEnv;
+        }
+
+        logger.info("login-shell-env-merged", {
+          keys: Object.keys(shellEnv).length,
+          parentPathLength: this.env.PATH?.length ?? 0,
+          hydratedPathLength: shellEnv.PATH?.length ?? 0,
+          hadNvmDir: Boolean(shellEnv.NVM_DIR),
+          hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+        });
+        Object.assign(targetEnv, shellEnv);
+        if (this.startupCodexHome) {
+          targetEnv.CODEX_HOME = this.startupCodexHome;
+        }
+        return targetEnv;
+      });
+
+    return await this.codexSpawnEnvHydrationPromise;
+  }
+
+  private ensureBaseCodexSpawnEnv(): NodeJS.ProcessEnv {
+    this.codexSpawnEnv ??= this.withStartupCodexHome({ ...this.env });
+    return this.codexSpawnEnv;
+  }
+
+  private withStartupCodexHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    if (!this.startupCodexHome) return env;
     return {
-      ...spawnEnv,
+      ...env,
       CODEX_HOME: this.startupCodexHome,
     };
   }

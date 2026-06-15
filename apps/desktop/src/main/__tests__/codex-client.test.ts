@@ -99,10 +99,12 @@ class MockTransport implements JsonRpcTransport {
     | undefined = undefined;
 
   readonly sentMessages: string[] = [];
+  readonly options?: unknown;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
 
-  constructor() {
+  constructor(options?: unknown) {
+    this.options = options;
     MockTransport.instances.push(this);
   }
 
@@ -929,8 +931,8 @@ class MockTransport implements JsonRpcTransport {
 
 vi.mock("../codex-app-server/stdio-transport", () => {
   class MockStdioJsonRpcTransport extends MockTransport {
-    constructor() {
-      super();
+    constructor(options?: unknown) {
+      super(options);
     }
   }
 
@@ -1016,6 +1018,44 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
+  });
+
+  it("passes hydrated env into dynamic launch args", async () => {
+    const resolveEnv = vi.fn(async () => ({
+      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin",
+    }));
+    const resolveArgs = vi.fn((env: NodeJS.ProcessEnv) => [
+      "-c",
+      `shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`,
+    ]);
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    new CodexAppServerClient({
+      args: [
+        "-c",
+        'shell_environment_policy.set.PATH="/usr/bin"',
+      ],
+      resolveArgs,
+      resolveEnv,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const options = transport?.options as
+      | {
+          resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+          resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+        }
+      | undefined;
+    const hydratedEnv = await options?.resolveEnv?.();
+    const args = await options?.resolveArgs?.(hydratedEnv ?? {});
+
+    expect(resolveEnv).toHaveBeenCalledTimes(1);
+    expect(resolveArgs).toHaveBeenCalledWith({
+      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin",
+    });
+    expect(args).toContain(
+      'shell_environment_policy.set.PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin"',
+    );
   });
 
   it("initializes once and normalizes thread/list results", async () => {

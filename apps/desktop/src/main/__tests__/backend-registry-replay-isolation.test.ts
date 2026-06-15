@@ -11,15 +11,26 @@ const constructorState = vi.hoisted(() => ({
   codexCount: 0,
   codexArgs: [] as Array<string[] | undefined>,
   codexEnvs: [] as Array<NodeJS.ProcessEnv | undefined>,
+  codexResolveArgs: [] as Array<
+    ((env: NodeJS.ProcessEnv) => Promise<string[]> | string[]) | undefined
+  >,
+  codexResolveEnvs: [] as Array<(() => Promise<NodeJS.ProcessEnv>) | undefined>,
   grokCount: 0,
 }));
 
 vi.mock("../codex-app-server/client", () => ({
   CodexAppServerClient: class {
-    constructor(options?: { args?: string[]; env?: NodeJS.ProcessEnv }) {
+    constructor(options?: {
+      args?: string[];
+      env?: NodeJS.ProcessEnv;
+      resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+      resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+    }) {
       constructorState.codexCount += 1;
       constructorState.codexArgs.push(options?.args);
       constructorState.codexEnvs.push(options?.env);
+      constructorState.codexResolveArgs.push(options?.resolveArgs);
+      constructorState.codexResolveEnvs.push(options?.resolveEnv);
     }
 
     async close(): Promise<void> {
@@ -79,6 +90,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     resolveCodexCommandPreference: () => undefined,
     resolveCodexSpawnEnv: () => settingsState.codexEnv,
+    resolveCodexSpawnEnvAsync: async () => settingsState.codexEnv ?? process.env,
     resolveWorktreeStorage: () => "in-repo",
   }),
 }));
@@ -181,6 +193,8 @@ beforeEach(() => {
   constructorState.codexCount = 0;
   constructorState.codexArgs = [];
   constructorState.codexEnvs = [];
+  constructorState.codexResolveArgs = [];
+  constructorState.codexResolveEnvs = [];
   constructorState.grokCount = 0;
   settingsState.codexEnv = undefined;
 });
@@ -279,14 +293,15 @@ describe("DesktopBackendRegistry replay isolation", () => {
     });
 
     expect(constructorState.codexCount).toBe(1);
-    expect(constructorState.codexArgs).toEqual([
-      [
-        "-c",
-        'approval_policy="on-request"',
-        "-c",
-        'sandbox_mode="workspace-write"',
-      ],
+    const resolveArgs = constructorState.codexResolveArgs[0];
+    expect(resolveArgs).toBeTypeOf("function");
+    await expect(Promise.resolve(resolveArgs?.({}))).resolves.toEqual([
+      "-c",
+      'approval_policy="on-request"',
+      "-c",
+      'sandbox_mode="workspace-write"',
     ]);
+    expect(constructorState.codexArgs).toEqual([undefined]);
 
     await registry.close();
   });
@@ -303,6 +318,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
 
     expect(constructorState.codexCount).toBe(1);
     expect(constructorState.codexEnvs[0]?.CODEX_HOME).toBe(codexHome);
+    await expect(constructorState.codexResolveEnvs[0]?.()).resolves.toMatchObject({
+      CODEX_HOME: codexHome,
+    });
 
     await registry.close();
   });
@@ -316,7 +334,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
       overlayStore: createOverlayStoreMock(),
     });
 
-    expect(constructorState.codexArgs[0]).toContain(
+    const resolvedEnv = await constructorState.codexResolveEnvs[0]?.();
+    const resolvedArgs = await constructorState.codexResolveArgs[0]?.(resolvedEnv ?? {});
+    expect(resolvedArgs).toContain(
       'shell_environment_policy.set.PATH="/opt/homebrew/bin:/usr/bin:/bin"',
     );
 

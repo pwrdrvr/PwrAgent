@@ -323,6 +323,7 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   PRELOAD_LOG_CHANNEL,
+  STARTUP_PROFILE_EVENT_CHANNEL,
   PROFILES_CREATE_CHANNEL,
   APP_GET_BOOT_INFO_CHANNEL,
   APP_QUIT_CHANNEL,
@@ -391,10 +392,77 @@ function recordPreloadLog(
   });
 }
 
+function isEnvEnabled(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+const startupProfileEnabled =
+  isEnvEnabled(process.env.PWRAGENT_STARTUP_PROFILE) ||
+  isEnvEnabled(process.env.PWRAGENT_STARTUP_CPU_PROFILING);
+const preloadStartedAt = performance.now();
+
+function recordStartupProfileRendererEvent(
+  type: string,
+  detail?: Record<string, unknown>,
+): void {
+  if (!startupProfileEnabled) {
+    return;
+  }
+
+  ipcRenderer.send(STARTUP_PROFILE_EVENT_CHANNEL, {
+    source: "renderer",
+    type,
+    detail: {
+      preloadElapsedMs: Number((performance.now() - preloadStartedAt).toFixed(3)),
+      ...(detail ?? {}),
+    },
+  });
+}
+
+async function invokeWithStartupProfileTiming<T>(
+  label: string,
+  channel: string,
+  ...args: unknown[]
+): Promise<T> {
+  if (!startupProfileEnabled) {
+    return await ipcRenderer.invoke(channel, ...args);
+  }
+
+  const startedAt = performance.now();
+  recordStartupProfileRendererEvent("ipc-renderer:start", {
+    channel,
+    label,
+  });
+
+  try {
+    const result = await ipcRenderer.invoke(channel, ...args);
+    recordStartupProfileRendererEvent("ipc-renderer:end", {
+      channel,
+      durationMs: Number((performance.now() - startedAt).toFixed(3)),
+      label,
+      ok: true,
+    });
+    return result as T;
+  } catch (error) {
+    recordStartupProfileRendererEvent("ipc-renderer:end", {
+      channel,
+      durationMs: Number((performance.now() - startedAt).toFixed(3)),
+      error: error instanceof Error ? error.message : String(error),
+      label,
+      ok: false,
+    });
+    throw error;
+  }
+}
+
 recordPreloadLog("info", "start", {
   contextIsolated: process.contextIsolated,
   platform: process.platform,
   electron: process.versions.electron
+});
+recordStartupProfileRendererEvent("preload-start", {
+  contextIsolated: process.contextIsolated,
+  platform: process.platform,
 });
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -538,7 +606,10 @@ const desktopApi = Object.freeze({
   ): Promise<WriteDesktopSecretsToProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_WRITE_SECRETS_CHANNEL, request),
   getBootInfo: async (): Promise<DesktopBootInfo> =>
-    await ipcRenderer.invoke(APP_GET_BOOT_INFO_CHANNEL),
+    await invokeWithStartupProfileTiming(
+      "getBootInfo",
+      APP_GET_BOOT_INFO_CHANNEL,
+    ),
   quitApp: async (): Promise<void> => await ipcRenderer.invoke(APP_QUIT_CHANNEL),
   waitForProfileAlive: async (
     request: WaitForDesktopProfileAliveRequest,
@@ -553,7 +624,11 @@ const desktopApi = Object.freeze({
   listThreads: async (
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>
-    await ipcRenderer.invoke(APP_SERVER_LIST_THREADS_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "listThreads",
+      APP_SERVER_LIST_THREADS_CHANNEL,
+      request,
+    ),
   searchThreads: async (
     request?: ThreadSearchRequest,
   ): Promise<ThreadSearchResponse> =>
@@ -565,7 +640,11 @@ const desktopApi = Object.freeze({
   listBackends: async (
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
-    await ipcRenderer.invoke(BACKEND_LIST_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "listBackends",
+      BACKEND_LIST_CHANNEL,
+      request,
+    ),
   listAcpAgents: async (
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
@@ -573,7 +652,11 @@ const desktopApi = Object.freeze({
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
-    await ipcRenderer.invoke(SETTINGS_READ_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "readSettings",
+      SETTINGS_READ_CHANNEL,
+      request,
+    ),
   writeSettingsConfig: async (
     request: WriteDesktopSettingsConfigRequest,
   ): Promise<DesktopSettingsWriteResponse> =>
@@ -641,7 +724,11 @@ const desktopApi = Object.freeze({
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>
-    await ipcRenderer.invoke(APP_SERVER_READ_THREAD_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "readThread",
+      APP_SERVER_READ_THREAD_CHANNEL,
+      request,
+    ),
   persistThreadUsageActivity: async (
     request: PersistThreadUsageActivityRequest,
   ): Promise<PersistThreadUsageActivityResponse> =>
@@ -791,7 +878,11 @@ const desktopApi = Object.freeze({
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>
-    await ipcRenderer.invoke(NAVIGATION_SNAPSHOT_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "getNavigationSnapshot",
+      NAVIGATION_SNAPSHOT_CHANNEL,
+      request,
+    ),
   setNavigationBrowseMode: async (
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
@@ -842,11 +933,16 @@ const desktopApi = Object.freeze({
   refreshThreadPullRequests: async (
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "refreshThreadPullRequests",
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+      request,
+    ),
   refreshDirectoryGitStatuses: async (
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> =>
-    await ipcRenderer.invoke(
+    await invokeWithStartupProfileTiming(
+      "refreshDirectoryGitStatuses",
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
       request,
     ),
@@ -858,7 +954,11 @@ const desktopApi = Object.freeze({
       request,
     ),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
-    await ipcRenderer.invoke(NAVIGATION_GET_GH_STATUS_CHANNEL, request),
+    await invokeWithStartupProfileTiming(
+      "getGhStatus",
+      NAVIGATION_GET_GH_STATUS_CHANNEL,
+      request,
+    ),
   ensureDirectoryLaunchpad: async (
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> =>
@@ -914,6 +1014,12 @@ const desktopApi = Object.freeze({
     request: RendererDiagnosticLogRequest,
   ): Promise<void> => {
     recordPreloadLog(request.level, request.message, request.details);
+  },
+  recordStartupProfileEvent: (
+    type: string,
+    detail?: Record<string, unknown>,
+  ): void => {
+    recordStartupProfileRendererEvent(type, detail);
   },
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();
@@ -1015,7 +1121,10 @@ const desktopApi = Object.freeze({
     };
   },
   getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>
-    await ipcRenderer.invoke(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL),
+    await invokeWithStartupProfileTiming(
+      "getMessagingPlatformStatuses",
+      MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+    ),
   setMessagingEnabled: async (
     request: SetMessagingEnabledRequest,
   ): Promise<SetMessagingEnabledResponse> =>
@@ -1093,7 +1202,10 @@ const desktopApi = Object.freeze({
   // reads the top-level model once on mount and pops the live native submenu on
   // click / Alt-mnemonic. No-op surface on macOS/Linux (the bar isn't mounted).
   getAppMenuModel: async (): Promise<AppMenuTopLevel[]> =>
-    await ipcRenderer.invoke(APP_MENU_MODEL_CHANNEL),
+    await invokeWithStartupProfileTiming(
+      "getAppMenuModel",
+      APP_MENU_MODEL_CHANNEL,
+    ),
   popupAppMenu: (request: AppMenuPopupRequest): void => {
     ipcRenderer.send(APP_MENU_POPUP_CHANNEL, request);
   },

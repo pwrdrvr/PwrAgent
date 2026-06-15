@@ -27,6 +27,7 @@ import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-c
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "../messaging/desktop-messaging-pairing-store";
 import { getMainLogger } from "../log";
+import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
@@ -310,7 +311,10 @@ export function registerMessagingStatusIpcHandlers(): void {
   ipcMain.handle(
     MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
     async (): Promise<MessagingPlatformStatus[]> => {
-      return runtime.getPlatformStatuses();
+      return await timeStartupProfileOperation({
+        type: "ipc-main:getMessagingPlatformStatuses",
+        operation: async () => runtime.getPlatformStatuses(),
+      });
     },
   );
 

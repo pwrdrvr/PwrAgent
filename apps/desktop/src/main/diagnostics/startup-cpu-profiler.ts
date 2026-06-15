@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from "electron";
 import path from "node:path";
+import { writeHeapSnapshot } from "node:v8";
 import { getMainLogger } from "../log";
 import { analyzeStartupCpuProfileSession } from "./startup-cpu-analysis";
 import {
@@ -17,6 +18,11 @@ import {
   resolveStartupCpuProfileConfig,
   type StartupCpuProfileConfig,
 } from "./startup-cpu-profile-config";
+import {
+  flushStartupProfileEvents,
+  installStartupProfileEventRecorder,
+  recordStartupProfileEvent,
+} from "./startup-profile-events";
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 
@@ -31,6 +37,10 @@ type RendererProfiler = {
 };
 
 type WindowTarget = Pick<BrowserWindow, "on" | "webContents">;
+type StartupHeapSnapshotTarget = {
+  isDestroyed?: () => boolean;
+  takeHeapSnapshot?: (filePath: string) => Promise<void>;
+};
 
 type EnabledStartupCpuProfileConfig = Extract<StartupCpuProfileConfig, { enabled: true }>;
 
@@ -80,6 +90,7 @@ export class StartupCpuProfiler {
   private readonly createMainProfiler: CreateMainProfiler;
   private readonly createRendererProfiler: CreateRendererProfiler;
   private readonly analyzeSession: AnalyzeStartupCpuProfileSession;
+  private readonly writeMainHeapSnapshot: (filePath: string) => string;
 
   private session?: StartupCpuProfileSession;
   private mainProfiler?: MainProfiler;
@@ -87,6 +98,8 @@ export class StartupCpuProfiler {
   private attachedWindow = false;
   private postLoadStopTimer?: ReturnType<typeof setTimeout>;
   private hardTimeoutTimer?: ReturnType<typeof setTimeout>;
+  private disposeEventRecorder?: () => void;
+  private rendererHeapSnapshotTarget?: StartupHeapSnapshotTarget;
   private stopped = false;
 
   constructor(options?: {
@@ -97,6 +110,7 @@ export class StartupCpuProfiler {
     createMainProfiler?: CreateMainProfiler;
     createRendererProfiler?: CreateRendererProfiler;
     analyzeSession?: AnalyzeStartupCpuProfileSession;
+    writeMainHeapSnapshot?: (filePath: string) => string;
   }) {
     this.config =
       options?.config
@@ -122,6 +136,7 @@ export class StartupCpuProfiler {
     this.analyzeSession =
       options?.analyzeSession
       ?? analyzeStartupCpuProfileSession;
+    this.writeMainHeapSnapshot = options?.writeMainHeapSnapshot ?? writeHeapSnapshot;
   }
 
   async start(): Promise<void> {
@@ -147,10 +162,12 @@ export class StartupCpuProfiler {
     }
 
     this.session = created.session;
+    this.disposeEventRecorder = installStartupProfileEventRecorder({
+      session: created.session,
+      now: this.now,
+    });
     this.mainProfiler = this.createMainProfiler(created.session);
-    await created.session.appendEvent({
-      source: "main",
-      capturedAt: this.now().toISOString(),
+    recordStartupProfileEvent({
       type: "controller-started",
       detail: {
         sessionDirectory: created.session.directoryPath,
@@ -173,10 +190,17 @@ export class StartupCpuProfiler {
     }
 
     this.attachedWindow = true;
+    this.rendererHeapSnapshotTarget = window.webContents as StartupHeapSnapshotTarget;
+    recordStartupProfileEvent({
+      type: "window-attached",
+    });
     this.rendererProfiler = this.createRendererProfiler(this.session, window.webContents);
     void this.rendererProfiler.start();
 
     window.webContents.on("did-finish-load", () => {
+      recordStartupProfileEvent({
+        type: "window-did-finish-load",
+      });
       if (this.stopped) {
         return;
       }
@@ -195,14 +219,23 @@ export class StartupCpuProfiler {
     });
 
     window.webContents.on("did-fail-load", () => {
+      recordStartupProfileEvent({
+        type: "window-did-fail-load",
+      });
       void this.stop("did-fail-load");
     });
 
     window.webContents.on("render-process-gone", () => {
+      recordStartupProfileEvent({
+        type: "window-render-process-gone",
+      });
       void this.stop("render-process-gone");
     });
 
     window.on("closed", () => {
+      recordStartupProfileEvent({
+        type: "window-closed",
+      });
       void this.stop("window-closed");
     });
   }
@@ -229,6 +262,8 @@ export class StartupCpuProfiler {
       : mainCaptured || rendererCaptured
         ? "partial"
         : "failed";
+    await this.captureHeapSnapshots();
+    await flushStartupProfileEvents();
 
     try {
       if (mainCaptured || rendererCaptured) {
@@ -265,6 +300,8 @@ export class StartupCpuProfiler {
         status,
       },
     });
+    this.disposeEventRecorder?.();
+    this.disposeEventRecorder = undefined;
 
     if (this.config.quitOnComplete) {
       app.quit();
@@ -285,6 +322,108 @@ export class StartupCpuProfiler {
     if (this.hardTimeoutTimer) {
       clearTimeout(this.hardTimeoutTimer);
       this.hardTimeoutTimer = undefined;
+    }
+  }
+
+  private async captureHeapSnapshots(): Promise<void> {
+    if (!this.config.enabled || !this.config.captureHeapSnapshots || !this.session) {
+      return;
+    }
+
+    const results = await Promise.allSettled([
+      this.captureMainHeapSnapshot(),
+      this.captureRendererHeapSnapshot(),
+    ]);
+
+    for (const result of results) {
+      if (result.status === "rejected") {
+        this.logger.error("startup heap snapshot failed", result.reason);
+      }
+    }
+  }
+
+  private async captureMainHeapSnapshot(): Promise<void> {
+    if (!this.session) {
+      return;
+    }
+
+    const filename = path.basename(this.session.mainHeapSnapshotPath);
+    try {
+      recordStartupProfileEvent({
+        type: "heap-snapshot:start",
+        detail: {
+          filename,
+          process: "main",
+        },
+      });
+      this.writeMainHeapSnapshot(this.session.mainHeapSnapshotPath);
+      await this.session.registerHeapSnapshot(filename);
+      recordStartupProfileEvent({
+        type: "heap-snapshot:end",
+        detail: {
+          filename,
+          ok: true,
+          process: "main",
+        },
+      });
+    } catch (error) {
+      recordStartupProfileEvent({
+        type: "heap-snapshot:end",
+        detail: {
+          error: serializeError(error),
+          filename,
+          ok: false,
+          process: "main",
+        },
+      });
+      throw error;
+    }
+  }
+
+  private async captureRendererHeapSnapshot(): Promise<void> {
+    if (!this.session || !this.rendererHeapSnapshotTarget?.takeHeapSnapshot) {
+      return;
+    }
+
+    if (this.rendererHeapSnapshotTarget.isDestroyed?.()) {
+      return;
+    }
+
+    const filename = path.basename(this.session.rendererHeapSnapshotPath);
+    try {
+      recordStartupProfileEvent({
+        source: "renderer",
+        type: "heap-snapshot:start",
+        detail: {
+          filename,
+          process: "renderer",
+        },
+      });
+      await this.rendererHeapSnapshotTarget.takeHeapSnapshot(
+        this.session.rendererHeapSnapshotPath,
+      );
+      await this.session.registerHeapSnapshot(filename);
+      recordStartupProfileEvent({
+        source: "renderer",
+        type: "heap-snapshot:end",
+        detail: {
+          filename,
+          ok: true,
+          process: "renderer",
+        },
+      });
+    } catch (error) {
+      recordStartupProfileEvent({
+        source: "renderer",
+        type: "heap-snapshot:end",
+        detail: {
+          error: serializeError(error),
+          filename,
+          ok: false,
+          process: "renderer",
+        },
+      });
+      throw error;
     }
   }
 }

@@ -77,6 +77,7 @@ import {
   resolveDefaultCodexHome,
 } from "@pwrdrvr/codex-discovery";
 import { getMainLogger } from "../log";
+import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
@@ -872,11 +873,15 @@ export function registerSettingsIpcHandlers(
     async (
       _event,
       _request?: ReadDesktopSettingsRequest,
-    ): Promise<ReadDesktopSettingsResponse> => ({
-      snapshot: applyRuntimeMessagingSnapshot(
-        await getService(service).readSettings(),
-      ),
-    }),
+    ): Promise<ReadDesktopSettingsResponse> =>
+      await timeStartupProfileOperation({
+        type: "ipc-main:readSettings",
+        operation: async () => ({
+          snapshot: applyRuntimeMessagingSnapshot(
+            await getService(service).readSettings(),
+          ),
+        }),
+      }),
   );
 
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);

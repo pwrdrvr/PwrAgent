@@ -159,6 +159,7 @@ import { ThreadMigrationService } from "../app-server/thread-migration-service";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -2692,7 +2693,14 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request?: AppServerListThreadsRequest
     ): Promise<AppServerListThreadsResponse> => {
-      return await appServerService.listThreads(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:listThreads",
+        detail: {
+          archived: Boolean(request?.archived),
+          backend: request?.backend ?? null,
+        },
+        operation: async () => await appServerService.listThreads(request),
+      });
     }
   );
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
@@ -2712,7 +2720,14 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request: AppServerReadThreadRequest
     ): Promise<AppServerReadThreadResponse> => {
-      return await appServerService.readThread(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:readThread",
+        detail: {
+          backend: request.backend,
+          threadId: request.threadId,
+        },
+        operation: async () => await appServerService.readThread(request),
+      });
     }
   );
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
@@ -2839,7 +2854,13 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request?: GetNavigationSnapshotRequest,
     ): Promise<NavigationSnapshot> => {
-      return await appServerService.getNavigationSnapshot(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:getNavigationSnapshot",
+        detail: {
+          forceRefresh: Boolean(request?.forceRefresh),
+        },
+        operation: async () => await appServerService.getNavigationSnapshot(request),
+      });
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
@@ -2959,7 +2980,17 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request: RefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> => {
-      return await appServerService.refreshThreadPullRequests(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:refreshThreadPullRequests",
+        detail: {
+          backend: request.backend ?? null,
+          directoryPathCount: request.directoryPaths.length,
+          threadId: request.threadId,
+          trigger: request.trigger ?? null,
+        },
+        operation: async () =>
+          await appServerService.refreshThreadPullRequests(request),
+      });
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
@@ -2969,7 +3000,15 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request: RefreshDirectoryGitStatusesRequest,
     ): Promise<RefreshDirectoryGitStatusesResponse> => {
-      return await appServerService.refreshDirectoryGitStatusesForKeys(request);
+      return await timeStartupProfileOperation({
+        type: "ipc-main:refreshDirectoryGitStatuses",
+        detail: {
+          force: Boolean(request.force),
+          keyCount: request.directoryKeys.length,
+        },
+        operation: async () =>
+          await appServerService.refreshDirectoryGitStatusesForKeys(request),
+      });
     },
   );
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
@@ -2986,7 +3025,10 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
     async (_event, request: GetGhStatusRequest | undefined): Promise<GhStatus> => {
-      return await appServerService.getGhStatus(request ?? {});
+      return await timeStartupProfileOperation({
+        type: "ipc-main:getGhStatus",
+        operation: async () => await appServerService.getGhStatus(request ?? {}),
+      });
     },
   );
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);

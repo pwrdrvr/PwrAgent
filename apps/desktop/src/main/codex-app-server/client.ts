@@ -106,6 +106,8 @@ type CodexClientOptions = {
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -4963,7 +4965,9 @@ export class CodexAppServerClient {
       new StdioJsonRpcTransport({
         command: options.command?.trim() || "codex",
         args: options.args ?? [],
-        env: options.env
+        env: options.env,
+        resolveArgs: options.resolveArgs,
+        resolveEnv: options.resolveEnv,
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.connectionObserver,

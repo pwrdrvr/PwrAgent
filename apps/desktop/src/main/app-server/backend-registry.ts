@@ -3211,10 +3211,16 @@ export class DesktopBackendRegistry {
       options?.codexClient ??
       replayClients?.codexClient ??
       new CodexAppServerClient({
-        args: buildCodexClientArgs(codexEnv),
+        args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
         env: codexEnv,
+        resolveArgs: settingsService
+          ? async (env) => buildCodexClientArgs(env)
+          : undefined,
+        resolveEnv: settingsService
+          ? async () => await settingsService.resolveCodexSpawnEnvAsync()
+          : undefined,
         clientVersion,
         // Fire the gate at the client level too, not just the
         // listThreads layer. Without this, `describeCodexBackend`

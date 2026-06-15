@@ -18,6 +18,7 @@ import {
   APP_MENU_POPUP_CHANNEL,
 } from "../shared/ipc";
 import type { AppMenuTopLevel } from "../shared/app-menu";
+import { timeStartupProfileOperation } from "./diagnostics/startup-profile-events";
 
 /**
  * Top-level entries of the current application menu, for the renderer's custom
@@ -52,7 +53,12 @@ export function wireAppMenuBridge(): void {
   if (wired) return;
   wired = true;
 
-  ipcMain.handle(APP_MENU_MODEL_CHANNEL, () => appMenuTopLevel());
+  ipcMain.handle(APP_MENU_MODEL_CHANNEL, async () =>
+    await timeStartupProfileOperation({
+      type: "ipc-main:getAppMenuModel",
+      operation: async () => appMenuTopLevel(),
+    }),
+  );
 
   ipcMain.on(APP_MENU_POPUP_CHANNEL, (event, payload: unknown) => {
     if (payload === null || typeof payload !== "object") return;

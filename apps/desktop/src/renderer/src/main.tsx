@@ -41,9 +41,16 @@ const desktopApi = (
         callback: (isFullScreen: boolean) => void,
       ) => () => void;
       platform?: string;
+      recordStartupProfileEvent?: (
+        type: string,
+        detail?: Record<string, unknown>,
+      ) => void;
     };
   }
 ).pwragent;
+desktopApi?.recordStartupProfileEvent?.("renderer-main-module-start", {
+  hash: window.location.hash,
+});
 if (desktopApi?.platform) {
   document.documentElement.dataset.platform = desktopApi.platform;
 }
@@ -151,6 +158,7 @@ function chooseRoot(): ReactElement {
   return routes.find((route) => route.match(hash))?.render() ?? <App />;
 }
 
+desktopApi?.recordStartupProfileEvent?.("react-render:start");
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <RendererErrorBoundary>
@@ -158,3 +166,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </RendererErrorBoundary>
   </React.StrictMode>,
 );
+desktopApi?.recordStartupProfileEvent?.("react-render:scheduled");
+requestAnimationFrame(() => {
+  desktopApi?.recordStartupProfileEvent?.("renderer-first-animation-frame");
+});

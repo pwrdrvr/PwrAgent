@@ -12,6 +12,7 @@ export type StartupCpuProfileConfig =
       postLoadDurationMs: number;
       hardTimeoutMs: number;
       quitOnComplete: boolean;
+      captureHeapSnapshots: boolean;
     };
 
 function isEnabled(value: string | undefined): boolean {
@@ -40,7 +41,10 @@ export function resolveStartupCpuProfileConfig(options?: {
   repoRoot?: string;
 }): StartupCpuProfileConfig {
   const env = options?.env ?? process.env;
-  if (!isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILING)) {
+  if (
+    !isEnabled(env.PWRAGENT_STARTUP_PROFILE) &&
+    !isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILING)
+  ) {
     return { enabled: false };
   }
 
@@ -51,7 +55,11 @@ export function resolveStartupCpuProfileConfig(options?: {
   return {
     enabled: true,
     repoRoot,
-    outputRoot: path.join(repoRoot, ".local"),
+    outputRoot: path.resolve(
+      env.PWRAGENT_STARTUP_PROFILE_DIR
+      ?? env.PWRAGENT_STARTUP_CPU_PROFILE_DIR
+      ?? path.join(repoRoot, ".local"),
+    ),
     postLoadDurationMs: parsePositiveInteger(
       env.PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS,
       DEFAULT_POST_LOAD_DURATION_MS,
@@ -61,5 +69,6 @@ export function resolveStartupCpuProfileConfig(options?: {
       DEFAULT_HARD_TIMEOUT_MS,
     ),
     quitOnComplete: isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE),
+    captureHeapSnapshots: isEnabled(env.PWRAGENT_STARTUP_PROFILE_HEAP_SNAPSHOTS),
   };
 }

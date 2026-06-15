@@ -580,6 +580,10 @@ export type DesktopApi = {
     request: ImageUploadNormalizationLogRequest
   ) => Promise<void>;
   logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
+  recordStartupProfileEvent?: (
+    type: string,
+    detail?: Record<string, unknown>,
+  ) => void;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   /**
