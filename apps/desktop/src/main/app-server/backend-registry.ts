@@ -7553,6 +7553,16 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       branch,
     });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: params.threadId,
+          branch,
+        },
+      },
+    } as unknown as AgentEvent);
 
     backendRegistryLog.info("updated thread expected branch", {
       backend: params.backend,

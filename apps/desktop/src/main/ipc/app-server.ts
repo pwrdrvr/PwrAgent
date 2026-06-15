@@ -599,6 +599,15 @@ class DesktopAppServerService {
   // a turn/command-completion event can refresh the right worktree's chips
   // without re-reading the navigation snapshot. Populated on every snapshot.
   private readonly worktreePathByThreadKey = new Map<string, string>();
+  private readonly prRefreshContextByThreadKey = new Map<
+    string,
+    {
+      backend: AppServerBackendKind;
+      threadId: string;
+      branch: string;
+      directoryPaths: string[];
+    }
+  >();
   // Merged PR commits are accepted as "pushed" even when the PR head branch
   // has been deleted and no remote ref still contains those SHAs locally.
   private readonly mergedPrCommitShasByThread = new Map<
@@ -959,6 +968,7 @@ class DesktopAppServerService {
 
     await this.loadThreadGitWorkingStateCache();
     this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
+    this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
     this.rememberMergedPrCommitShas(canonicalSnapshot.threads);
     const threadsWithWorkingState = canonicalSnapshot.threads.map((thread) =>
       this.applyCachedWorktreeWorkingState(thread),
@@ -1033,6 +1043,27 @@ class DesktopAppServerService {
       } else {
         this.worktreePathByThreadKey.delete(threadKey);
       }
+    }
+  }
+
+  private rememberThreadPrRefreshContexts(
+    threads: NavigationSnapshot["threads"],
+  ): void {
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const branch =
+        thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || "";
+      const directoryPaths = resolveThreadPullRequestDirectoryPaths(thread);
+      if (!branch || directoryPaths.length === 0) {
+        this.prRefreshContextByThreadKey.delete(threadKey);
+        continue;
+      }
+      this.prRefreshContextByThreadKey.set(threadKey, {
+        backend: thread.source,
+        threadId: thread.id,
+        branch,
+        directoryPaths,
+      });
     }
   }
 
@@ -1527,7 +1558,8 @@ class DesktopAppServerService {
       method !== "turn/completed" &&
       method !== "turn/failed" &&
       method !== "turn/cancelled" &&
-      method !== "item/completed"
+      method !== "item/completed" &&
+      method !== "thread/branch/updated"
     ) {
       return;
     }
@@ -1542,7 +1574,7 @@ class DesktopAppServerService {
     }
 
     // A command item only matters here when it mutated git state; a turn
-    // ending always warrants a re-probe (it may have committed/edited).
+    // ending or expected-branch adoption always warrants a re-probe.
     if (method === "item/completed") {
       const command = params.item?.command;
       if (!command || !commandLooksLikeGitMutation(command)) {
@@ -1552,18 +1584,32 @@ class DesktopAppServerService {
 
     const threadKey = buildThreadIdentityKey(event.backend, threadId);
     const worktreePath = this.worktreePathByThreadKey.get(threadKey);
-    if (!worktreePath) {
-      return;
+    if (worktreePath) {
+      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+      void this.loadThreadGitWorkingStateCache().then(() => {
+        this.startWorktreeWorkingStateRefresh({
+          automatic: false,
+          worktreePaths: [worktreePath],
+          force: true,
+        });
+      });
     }
 
-    getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
-    void this.loadThreadGitWorkingStateCache().then(() => {
-      this.startWorktreeWorkingStateRefresh({
-        automatic: false,
-        worktreePaths: [worktreePath],
-        force: true,
-      });
-    });
+    if (method === "turn/completed") {
+      const prContext = this.prRefreshContextByThreadKey.get(threadKey);
+      if (prContext) {
+        void this.refreshThreadPullRequests({
+          ...prContext,
+          provider: "github.com",
+          trigger: "post-turn",
+        }).catch((error) => {
+          appServerLog.warn("post-turn PR refresh failed", {
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
   }
 
   async markThreadSeen(
@@ -1694,6 +1740,7 @@ class DesktopAppServerService {
       allExistingPrsTerminal
       && branch !== "HEAD"
       && request.trigger !== "user"
+      && request.trigger !== "post-turn"
     ) {
       return {
         backend,
@@ -1983,7 +2030,9 @@ class DesktopAppServerService {
   ): string | undefined {
     const now = Date.now();
     const minInterval =
-      trigger === "user"
+      trigger === "post-turn"
+        ? 0
+        : trigger === "user"
         ? terminalOnly
           ? TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
           : USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS
@@ -2706,6 +2755,7 @@ class DesktopAppServerService {
     this.workingStateCacheLoaded = false;
     this.automaticWorktreeWorkingStateRefreshesStarted = 0;
     this.worktreePathByThreadKey.clear();
+    this.prRefreshContextByThreadKey.clear();
     await this.threadMigrationService?.dispose();
     this.threadMigrationService = null;
     await disposeDesktopBackendRegistry();
@@ -2752,6 +2802,26 @@ function isFreshWorktreeWorkingStateCacheEntry(
   entry: WorktreeGitWorkingStateCacheEntry,
 ): boolean {
   return Date.now() - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
+}
+
+function resolveThreadPullRequestDirectoryPaths(
+  thread: NavigationSnapshot["threads"][number],
+): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const directory of thread.linkedDirectories ?? []) {
+    const candidate =
+      directory.kind === "worktree"
+        ? directory.worktreePath ?? directory.path
+        : directory.path;
+    const normalized = candidate?.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    paths.push(normalized);
+  }
+  return paths;
 }
 
 /**

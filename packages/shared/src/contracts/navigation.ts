@@ -829,8 +829,10 @@ export type RefreshThreadPullRequestsRequest = {
    * Refresh intent controls main-process coalescing. Scheduled polling is
    * rate-limited globally and per PR; direct user interaction gets a much
    * shorter per-PR cooldown and bypasses the global GitHub token bucket.
+   * Post-turn refreshes also bypass the scheduled bucket so a PR opened
+   * during a turn can appear as soon as the turn ends.
    */
-  trigger?: "scheduled" | "user";
+  trigger?: "scheduled" | "user" | "post-turn";
   /** Branch the renderer believes the thread is on. */
   branch: string;
   /**
