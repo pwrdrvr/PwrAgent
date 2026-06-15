@@ -299,6 +299,15 @@ function isMarkdownBlockStart(line: string): boolean {
   );
 }
 
+// Does the text contain block-level markdown that `buildMarkdownTiptapContent`
+// reconstructs but ProseMirror's default paste does not? Inline marks
+// (bold/italic/code) are handled by paste rules, so a pure-prose paste does NOT
+// match here — only a fenced code block or a list does. This is the gate for
+// rerouting a paste through the markdown parser instead of the default path.
+function containsBlockMarkdown(text: string): boolean {
+  return text.split("\n").some((line) => isMarkdownBlockStart(line));
+}
+
 function isMarkdownSectionLabelLine(line: string): boolean {
   return /^[^\s].*:\s*$/.test(line);
 }
@@ -850,34 +859,40 @@ function pastePlainTextIntoActiveBlock(
   return false;
 }
 
-function pastePlainMarkdownWithFences(
+function pastePlainMarkdownText(
   editor: TiptapEditor,
   event: ClipboardEvent<HTMLDivElement>,
 ): boolean {
   const text = getPlainTextFromPaste(event);
-  if (!/^```[A-Za-z0-9_-]*\s*$/m.test(text)) {
+  // Only reroute through the markdown parser when the text carries block
+  // structure the default paste won't rebuild (fences, bullet/ordered lists).
+  // Pure prose — and inline-only markdown like **bold** / `code`, which paste
+  // rules already handle — stays on the default path so we don't disturb
+  // mid-sentence pastes.
+  if (!containsBlockMarkdown(text)) {
     return false;
   }
 
-  // HTML-authoritative paste: when the clipboard carries rich HTML that
-  // already represents a code block (a <pre>), defer to ProseMirror's default
-  // paste. It derives paragraph structure from the HTML — which disambiguates
-  // a single "\n" (soft break, same paragraph) from a real paragraph break —
-  // whereas rebuilding from text/plain alone would collapse paragraphs whenever
-  // the plain flavor flattens breaks to single newlines. A code fence must NOT
-  // change how prose paragraphs are parsed; it should only ensure a code block
-  // is formed, and the HTML already does that here.
+  // HTML-authoritative paste: when the clipboard carries rich HTML that already
+  // encodes this block structure (a <pre>, <ul>/<ol>, <blockquote>, or heading),
+  // defer to ProseMirror's default paste. It derives structure — and paragraph
+  // breaks — from the HTML, which disambiguates a single "\n" (soft break, same
+  // paragraph) from a real paragraph break, whereas rebuilding from text/plain
+  // alone would collapse paragraphs whenever the plain flavor flattens breaks to
+  // single newlines. The presence of block markdown must NOT change how prose is
+  // parsed; it should only ensure the block is formed, which the HTML does here.
   //
-  // We keep the custom fence parse (do NOT defer) only when text/plain is the
+  // We keep the custom parse (do NOT defer) only when text/plain is the
   // authoritative markdown source: either there is no usable HTML, or the HTML
-  // carries no <pre> at all (so the default paste would render the fence as
-  // literal prose). The <pre> test is a deliberately coarse presence heuristic,
-  // not a per-fence reconciliation: a multi-fence paste whose HTML happens to
-  // carry only some of those code blocks still defers wholesale. That is fine
-  // for the case this targets — one rendered message copied with both flavors —
-  // and is not meant to be a general fence/HTML merge.
+  // carries none of those block tags (so the default paste would flatten the
+  // list/fence to literal prose). The tag test is a deliberately coarse presence
+  // heuristic, not a per-block reconciliation; a mixed paste whose HTML encodes
+  // only some of the blocks still defers wholesale. That is fine for the case
+  // this targets — one rendered message copied with both flavors — and is not
+  // meant to be a general markdown/HTML merge. Note <p> alone does NOT count:
+  // bare paragraph HTML around a text/plain fence must still reach the parser.
   const html = event.clipboardData?.getData("text/html") ?? "";
-  if (html.trim().length > 0 && /<pre[\s>]/i.test(html)) {
+  if (html.trim().length > 0 && /<(?:pre|ul|ol|blockquote|h[1-6])[\s>]/i.test(html)) {
     return false;
   }
 
@@ -1581,7 +1596,7 @@ export const ComposerTiptapInput = forwardRef<
           return pastePlainTextIntoActiveBlock(
             currentEditor,
             event as unknown as ClipboardEvent<HTMLDivElement>,
-          ) || pastePlainMarkdownWithFences(
+          ) || pastePlainMarkdownText(
             currentEditor,
             event as unknown as ClipboardEvent<HTMLDivElement>,
           );

@@ -386,3 +386,151 @@ test("plain-text and text/html copies of one source paste to identical markdown"
   expect(html.value).toBe(plain.value);
   expect(plain.value).toBe(SOURCE_EXPECTED);
 });
+
+// --- Block reconstruction: lists and inline-code styling on paste ---
+//
+// A fence-less markdown paste (e.g. the "copy" button on a rendered transcript
+// message, which yields text/plain markdown only) used to bypass the markdown
+// parser entirely: bold/inline-code came back via paste rules, but `- item`
+// stayed literal text because ProseMirror's default paste has no block rules.
+// pastePlainMarkdownText now reroutes any paste carrying block markdown (a fence
+// OR a list) through buildMarkdownTiptapContent, so lists reconstruct too. The
+// HTML-authoritative guard still defers to the default paste when the clipboard
+// HTML already encodes the structure (a <pre>/<ul>/<ol>/<blockquote>/<hN>).
+
+async function pasteListAndReadValue(flavor: {
+  html?: string;
+  text: string;
+}): Promise<string | null> {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+    await pasteIntoReply(app.window, flavor);
+    // Wait for the list to render before snapshotting the serialized value.
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__editor > ul > li"),
+    ).toHaveCount(2);
+    return await tiptapInput.getAttribute("data-value");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+}
+
+test("a pasted bullet list is reconstructed as a list (text/plain only)", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    await pasteIntoReply(app.window, {
+      text: ["Here are the steps:", "", "- First item", "- Second item", "- Third item"].join("\n"),
+    });
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__editor > ul > li"),
+    ).toHaveCount(3);
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "Here are the steps:\n\n- First item\n- Second item\n- Third item",
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("a pasted ordered list is reconstructed as a list (text/plain only)", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    await pasteIntoReply(app.window, {
+      text: ["Order matters:", "", "1. Alpha", "2. Beta", "3. Gamma"].join("\n"),
+    });
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__editor > ol > li"),
+    ).toHaveCount(3);
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "Order matters:\n\n1. Alpha\n2. Beta\n3. Gamma",
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("pasted inline code renders as a styled pill, not bare text", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    // Bullet items that are entirely inline code (the shape of the real handoff
+    // messages). The list routes through the parser, which applies code marks.
+    await pasteIntoReply(app.window, {
+      text: [
+        "The cache hit log:",
+        "",
+        "- `Cache hit for: node-cache`",
+        "- `Cache restored successfully`",
+      ].join("\n"),
+    });
+
+    const editor = tiptapInput.locator(".composer-tiptap-input__editor");
+    await expect(editor.locator("> ul > li")).toHaveCount(2);
+
+    const code = editor.locator(":not(pre) > code").first();
+    await expect(code).toHaveText("Cache hit for: node-cache");
+    // The inline-code pill landed (border + non-transparent fill), unlike a bare
+    // browser <code> which has neither.
+    const pill = await code.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+    });
+    expect(pill.borderWidth).toBe("1px");
+    expect(pill.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(pill.background).not.toBe("transparent");
+
+    // The marks round-trip back to backticks, and the list is preserved.
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "The cache hit log:\n\n- `Cache hit for: node-cache`\n- `Cache restored successfully`",
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("a bullet list round-trips identically from text/plain and from list HTML", async () => {
+  const text = ["Steps:", "", "- First", "- Second"].join("\n");
+  const expected = "Steps:\n\n- First\n- Second";
+
+  // text/plain only → parser reconstructs the list.
+  const plain = await pasteListAndReadValue({ text });
+  // Rich HTML with a <ul> → the guard defers to the default paste, which
+  // reconstructs from the HTML. Either flavor must serialize to the same markdown.
+  const html = await pasteListAndReadValue({
+    html: "<p>Steps:</p><ul><li>First</li><li>Second</li></ul>",
+    text,
+  });
+
+  expect(plain).toBe(expected);
+  expect(html).toBe(plain);
+});
