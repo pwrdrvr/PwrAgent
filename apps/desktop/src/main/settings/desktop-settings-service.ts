@@ -555,6 +555,10 @@ export class DesktopSettingsService {
           config.experimental?.liveTranscriptEventFiltering,
           false,
         ),
+        lightweightNavigationRefresh: this.resolveConfigBoolean(
+          config.experimental?.lightweightNavigationRefresh,
+          false,
+        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           false,

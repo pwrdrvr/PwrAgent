@@ -1942,6 +1942,7 @@ function reviewDisplayTextFromTarget(
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  lightweightNavigationRefresh?: boolean;
   threadViewVisible?: boolean;
 };
 
@@ -2124,6 +2125,7 @@ export function useThreadNavigation(
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
+  const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -2557,21 +2559,31 @@ export function useThreadNavigation(
   }, [enabled, refresh]);
 
   useEffect(() => {
-    if (!enabled || !desktopApi?.getNavigationSnapshot || !viewForeground) {
+    if (
+      !enabled ||
+      !desktopApi?.getNavigationSnapshot ||
+      (lightweightNavigationRefresh && !viewForeground)
+    ) {
       return;
     }
 
     const timer = setInterval(() => {
       scheduleRefresh(undefined, undefined, false, {
         forceRefresh: true,
-        refreshMode: "active-recent",
+        refreshMode: lightweightNavigationRefresh ? "active-recent" : undefined,
       });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
     return () => {
       clearInterval(timer);
     };
-  }, [desktopApi?.getNavigationSnapshot, enabled, scheduleRefresh, viewForeground]);
+  }, [
+    desktopApi?.getNavigationSnapshot,
+    enabled,
+    lightweightNavigationRefresh,
+    scheduleRefresh,
+    viewForeground,
+  ]);
 
   useEffect(() => {
     if (!enabled || !desktopApi?.onWindowFocus) {
@@ -2579,9 +2591,19 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onWindowFocus(() => {
-      scheduleFocusRefresh();
+      if (lightweightNavigationRefresh) {
+        scheduleFocusRefresh();
+        return;
+      }
+      scheduleRefresh();
     });
-  }, [desktopApi, enabled, scheduleFocusRefresh]);
+  }, [
+    desktopApi,
+    enabled,
+    lightweightNavigationRefresh,
+    scheduleFocusRefresh,
+    scheduleRefresh,
+  ]);
 
   useEffect(() => {
     if (!enabled || !desktopApi?.onAgentEvent) {

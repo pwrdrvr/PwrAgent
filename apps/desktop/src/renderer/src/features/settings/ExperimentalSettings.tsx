@@ -32,6 +32,11 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   source: "default" as const,
 };
 
+const DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   value: false,
   source: "default" as const,
@@ -63,6 +68,7 @@ export function ExperimentalSettings(props: {
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
+  onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
@@ -75,6 +81,9 @@ export function ExperimentalSettings(props: {
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+  const lightweightNavigationRefresh =
+    props.snapshot.experimental.lightweightNavigationRefresh ??
+    DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH;
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
     DEFAULT_THREAD_PRICING_SUMMARY;
@@ -154,6 +163,32 @@ export function ExperimentalSettings(props: {
                 label="Display Codex Credits"
                 onChange={(enabled) => {
                   void props.onThreadPricingDisplayCodexCreditsChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Lightweight Navigation Refresh"
+        description="Use a one-page active thread-list poll while focused and coalesce full refreshes after focus events. Disabled by default while this behavior is validated against external Codex changes."
+        chip={lightweightNavigationRefresh.value ? "On" : "Off"}
+        chipKind={lightweightNavigationRefresh.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable lightweight navigation refresh"
+            sub="When on, foreground background polling reads only the most recently active page and focus refreshes are throttled."
+            source={sourceBadge(lightweightNavigationRefresh)}
+            control={
+              <SettingsSwitch
+                checked={lightweightNavigationRefresh.value}
+                disabled={props.saving}
+                label="Enable lightweight navigation refresh"
+                onChange={(enabled) => {
+                  void props.onLightweightNavigationRefreshChange(enabled);
                 }}
               />
             }

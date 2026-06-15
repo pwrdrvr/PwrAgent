@@ -1648,6 +1648,37 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults lightweight navigation refresh to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.lightweightNavigationRefresh).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        lightweightNavigationRefresh: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.lightweightNavigationRefresh).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "lightweight_navigation_refresh = true",
+    );
+  });
+
   it("defaults thread pricing summary to false and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

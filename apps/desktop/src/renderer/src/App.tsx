@@ -461,6 +461,8 @@ function DesktopAppShell(props: {
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const navigation = useThreadNavigation(desktopApi, {
     enabled: normalAppEnabled,
+    lightweightNavigationRefresh:
+      settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
   // Keep the backend-error toast's thread lookup fresh without making the

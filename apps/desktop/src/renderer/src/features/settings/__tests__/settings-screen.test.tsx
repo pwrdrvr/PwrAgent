@@ -141,6 +141,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      lightweightNavigationRefresh: {
+        value: false,
+        source: "default",
+      },
       threadPricingSummary: {
         value: false,
         source: "default",
@@ -658,6 +662,17 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(
       screen.getByRole("switch", {
+        name: "Enable lightweight navigation refresh",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { lightweightNavigationRefresh: true },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("switch", {
         name: "Enable Codex skill questions",
       }),
     );
@@ -954,6 +969,31 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { codexDefaultModeRequestUserInput: true },
+      });
+    });
+  });
+
+  it("defaults lightweight navigation refresh off for stale snapshots", async () => {
+    const snapshot = createSnapshot() as any;
+    delete snapshot.experimental.lightweightNavigationRefresh;
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="experimental"
+        settings={settings}
+      />,
+    );
+
+    const refreshSwitch = screen.getByRole("switch", {
+      name: "Enable lightweight navigation refresh",
+    });
+    expect(refreshSwitch).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(refreshSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { lightweightNavigationRefresh: true },
       });
     });
   });
