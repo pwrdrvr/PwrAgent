@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.35 - 2026-06-15
+
+- Improved composer paste handling so rich clipboard content reconstructs lists, preserves inline code styling, and handles nested fenced code blocks consistently.
+- Added Escape-key handling to close the thread search screen without disturbing the current thread context.
+- Fixed pull-request progress chips so merged PR commits count as pushed work.
+- Polished thread hierarchy layout by vertically centering the sub-thread toggle on the title line.
+- Updated production and development dependencies, including Vite, Tiptap/ProseMirror, and Node type definitions.
+
 ## v1.0.0-beta.34 - 2026-06-15
 
 - Added deep-linking from thread search results to the matched message, including loading older history when needed and landing on the highlighted match instead of the bottom of the thread.
