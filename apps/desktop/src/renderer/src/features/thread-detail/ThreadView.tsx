@@ -1604,9 +1604,17 @@ export function ThreadView(props: ThreadViewProps) {
       if (!container) {
         return;
       }
-      let target: Element | null = turnId
-        ? container.querySelector(`[data-turn-id="${CSS.escape(turnId)}"]`)
-        : null;
+      // Land on the turn's LAST anchored entry, not its first: the clicked
+      // timestamp is the turn-END time, and the edited-file activity sits near
+      // the turn's tail. Scrolling to the first entry drops the user at the
+      // turn's start (an earlier time than the label, which reads as wrong).
+      let target: Element | null = null;
+      if (turnId) {
+        const matches = container.querySelectorAll(
+          `[data-turn-id="${CSS.escape(turnId)}"]`,
+        );
+        target = matches.length > 0 ? matches[matches.length - 1] : null;
+      }
       if (!target && typeof turnTimeMs === "number") {
         let bestDelta = Infinity;
         for (const candidate of container.querySelectorAll("[data-turn-time]")) {
@@ -1615,7 +1623,9 @@ export function ThreadView(props: ThreadViewProps) {
             continue;
           }
           const delta = Math.abs(time - turnTimeMs);
-          if (delta < bestDelta) {
+          // `<=` so the LAST entry of the nearest turn wins (its tail), to
+          // match the turn-end semantics of the primary path.
+          if (delta <= bestDelta) {
             bestDelta = delta;
             target = candidate;
           }
