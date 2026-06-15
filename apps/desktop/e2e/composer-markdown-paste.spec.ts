@@ -585,3 +585,68 @@ test("a pasted nested language fence stays one code block (matches the transcrip
     await fixture.cleanup();
   }
 });
+
+// --- Backfill: paste-fidelity gaps surfaced in #809 review ---
+//
+// Two paths the #809 tests didn't exercise directly:
+//  (1) inline code in a PLAIN paragraph — the original report's shape, which
+//      rides ProseMirror's paste rules rather than buildMarkdownTiptapContent,
+//      so the pill CSS must apply to a <code> the parser never produced; and
+//  (2) a list pasted into a NON-empty composer — the realistic "typed an intro,
+//      then pasted a list" flow, where the block must append rather than land
+//      as literal "- " text.
+
+test("pasted inline code in a plain paragraph (paste-rule path) renders as a styled pill", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    // No block markdown: this does NOT route through the markdown parser; the
+    // code mark comes from ProseMirror's inline paste rules. The pill must still
+    // land (the original complaint was inline code in prose looking like bare text).
+    await pasteIntoReply(app.window, { text: "Run `pnpm install` then build." });
+
+    const code = tiptapInput.locator(".composer-tiptap-input__editor :not(pre) > code").first();
+    await expect(code).toHaveText("pnpm install");
+    const pill = await code.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+    });
+    expect(pill.borderWidth).toBe("1px");
+    expect(pill.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(pill.background).not.toBe("transparent");
+
+    await expect(tiptapInput).toHaveAttribute("data-value", "Run `pnpm install` then build.");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("a list pasted after existing composer text appends as a real list", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    // Existing content first, cursor left at the end — a paste into a NON-empty
+    // composer, unlike the other tests which paste into an empty one.
+    await app.window.keyboard.type("My intro");
+    await pasteIntoReply(app.window, { text: ["- First", "- Second"].join("\n") });
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__editor > ul > li"),
+    ).toHaveCount(2);
+    await expect(tiptapInput).toHaveAttribute("data-value", "My intro\n\n- First\n- Second");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
