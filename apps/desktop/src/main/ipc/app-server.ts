@@ -1565,6 +1565,7 @@ class DesktopAppServerService {
     }
 
     const params = event.notification.params as {
+      branch?: string;
       threadId?: string;
       item?: { command?: string };
     };
@@ -1583,6 +1584,17 @@ class DesktopAppServerService {
     }
 
     const threadKey = buildThreadIdentityKey(event.backend, threadId);
+    if (method === "thread/branch/updated") {
+      const branch = params.branch?.trim();
+      const existingContext = this.prRefreshContextByThreadKey.get(threadKey);
+      if (branch && existingContext) {
+        this.prRefreshContextByThreadKey.set(threadKey, {
+          ...existingContext,
+          branch,
+        });
+      }
+    }
+
     const worktreePath = this.worktreePathByThreadKey.get(threadKey);
     if (worktreePath) {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);

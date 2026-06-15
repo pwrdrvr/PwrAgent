@@ -7523,6 +7523,18 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       branch: normalizedObservedBranch,
     });
+    if (previousExpectedBranch !== normalizedObservedBranch) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/branch/updated",
+          params: {
+            threadId: params.threadId,
+            branch: normalizedObservedBranch,
+          },
+        },
+      } as unknown as AgentEvent);
+    }
 
     if (previousExpectedBranch !== normalizedObservedBranch) {
       backendRegistryLog.info("adopted active-turn branch change", {

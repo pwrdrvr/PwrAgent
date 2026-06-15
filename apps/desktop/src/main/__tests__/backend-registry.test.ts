@@ -16838,7 +16838,9 @@ command = "pnpm dev"
     });
 
     let overlayDuringTerminalEvent: ThreadOverlayState | undefined;
+    const eventMethods: string[] = [];
     registry.onEvent(async (event) => {
+      eventMethods.push(event.notification.method);
       if (event.notification.method !== "turn/completed") {
         return;
       }
@@ -16881,6 +16883,11 @@ command = "pnpm dev"
         gitBranch: "fix/queued-review-release",
         observedGitBranch: "fix/queued-review-release",
       });
+      expect(eventMethods).toEqual([
+        "turn/started",
+        "thread/branch/updated",
+        "turn/completed",
+      ]);
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-branch",
         gitInfo: {

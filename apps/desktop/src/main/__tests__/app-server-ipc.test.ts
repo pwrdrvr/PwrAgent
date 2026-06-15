@@ -2985,6 +2985,84 @@ describe("app server ipc", () => {
     });
   });
 
+  it("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const discoveredPr = githubPr({
+      number: 814,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Refresh adopted branch PRs",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/814",
+    });
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "worktree",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        gitBranch: "fix/old-branch",
+        observedGitBranch: "fix/old-branch",
+        updatedAt: 2000,
+      },
+    ] as never);
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: "thread-1",
+          branch: "fix/adopted-branch",
+        },
+      },
+    });
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/adopted-branch",
+        directoryPaths: ["/repo/wt"],
+      });
+    });
+    expect(detectPullRequestsForThread).not.toHaveBeenCalledWith({
+      fetcher: expect.any(Object),
+      branch: "fix/old-branch",
+      directoryPaths: ["/repo/wt"],
+    });
+  });
+
   it("ignores a completed non-git command for working-state refresh", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
