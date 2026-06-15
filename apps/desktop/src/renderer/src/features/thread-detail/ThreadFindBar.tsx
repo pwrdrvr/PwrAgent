@@ -224,14 +224,14 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
       return;
     }
     const container = props.containerRef.current;
-    // Resolve the scroll target LIVE on every frame, not once. Two reasons:
-    // (1) the matched text often renders a frame or two after its turn anchor,
-    // so a target captured at landing can miss it; (2) the message re-renders
-    // as the heavy thread reflows, detaching any captured node. A turn spans
-    // several transcript items sharing one `data-turn-id` (user prompt +
-    // assistant reply + activities), so we can't just take the first — we scope
-    // the text search to each item and pick the one actually containing the
-    // match (the assistant reply), falling back to the captured text range.
+    // Resolve the scroll target, caching the confirmed text match so we don't
+    // re-walk the turn every frame. A turn spans several transcript items
+    // sharing one `data-turn-id` (user prompt + assistant reply + activities),
+    // so we can't take the first — we scope the text search to each item and
+    // pick the one actually containing the match (the assistant reply). The
+    // matched text usually renders a frame or two after the turn anchor, so we
+    // keep re-resolving until it appears; once found we reuse it while it stays
+    // connected, re-resolving only if a re-render detaches the node.
     const turnId = props.turnId;
     const fallbackAnchor = ((): Element | null => {
       const active = matches[activeIndex];
@@ -240,25 +240,37 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
       }
       return active?.startContainer.parentElement ?? null;
     })();
+    let cached: Element | null = null;
+    let cachedIsMatch = false;
     const resolveTarget = (): Element | null => {
+      if (cached && cachedIsMatch && cached.isConnected) {
+        return cached;
+      }
       if (turnId && container) {
         const items = container.querySelectorAll(
           `[data-turn-id="${CSS.escape(turnId)}"]`,
         );
         for (const item of items) {
-          const ranges = collectMatchRanges(item as HTMLElement, seed);
-          const node = ranges[0]?.startContainer;
+          const node = collectMatchRanges(item as HTMLElement, seed)[0]
+            ?.startContainer;
           if (node) {
-            return node instanceof Element ? node : node.parentElement;
+            cached = node instanceof Element ? node : node.parentElement;
+            cachedIsMatch = true;
+            return cached;
           }
         }
         // No text hit in the turn yet (still rendering, or the snippet isn't
-        // plain text e.g. a PR-number deep-link): aim at the last item of the
-        // turn — the assistant reply — rather than the user prompt up top.
+        // plain text e.g. a PR-number deep-link): aim at the last item — the
+        // assistant reply — not the user prompt up top. Not cached as a match,
+        // so later frames keep looking for the real hit.
         const last = items[items.length - 1];
-        return last?.querySelector("*") ?? last ?? fallbackAnchor;
+        cached = last?.querySelector("*") ?? last ?? fallbackAnchor;
+        cachedIsMatch = false;
+        return cached;
       }
-      return fallbackAnchor;
+      cached = fallbackAnchor;
+      cachedIsMatch = false;
+      return cached;
     };
     if (!resolveTarget()) {
       return;
@@ -295,7 +307,14 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
-  }, [matches, activeIndex, props.loadingMore, query, targetFound, props.turnId, props.containerRef]);
+    // Tear down on unmount (bar closed) so the loop can't keep scrolling the
+    // transcript or leak its wheel listener past close. `matches`/`activeIndex`
+    // are intentionally excluded from deps: they change as the thread settles,
+    // and re-running mid-hold would tear the loop down early (the landedSeedRef
+    // guard already blocks a second landing). `fallbackAnchor` reads them once,
+    // at landing — when the match is freshest.
+    return stop;
+  }, [props.loadingMore, query, targetFound, props.turnId, props.containerRef]);
 
   const step = useCallback(
     (delta: number) => {
