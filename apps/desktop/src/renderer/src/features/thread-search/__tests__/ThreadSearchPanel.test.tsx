@@ -61,6 +61,17 @@ describe("ThreadSearchPanel", () => {
       });
     });
   });
+
+  it("closes on Escape, including after typing a query", () => {
+    const onClose = vi.fn();
+    render(<ThreadSearchPanel onOpenResult={vi.fn()} onClose={onClose} />);
+
+    const input = screen.getByLabelText("Search threads");
+    fireEvent.change(input, { target: { value: "still typing" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("basename", () => {

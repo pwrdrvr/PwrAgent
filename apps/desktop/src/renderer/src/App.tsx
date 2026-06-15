@@ -1060,6 +1060,16 @@ function DesktopAppShell(props: {
               history={historyNav}
               state={threadSearchState}
               threads={navigation.threads}
+              onClose={() => {
+                // Esc pops the search screen off the history stack (same as the
+                // title-bar Back button); if there's nowhere to go back to,
+                // just leave the search view.
+                if (history.canGoBack) {
+                  history.goBack();
+                } else {
+                  setMainView("thread");
+                }
+              }}
               onOpenResult={async (result) => {
                 // Deep-link to the match: open the thread with the find bar
                 // seeded with the search query so it highlights + scrolls the
