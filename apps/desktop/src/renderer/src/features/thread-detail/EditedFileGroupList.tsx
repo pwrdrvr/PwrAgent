@@ -151,6 +151,9 @@ export function EditedFileViewToggle(props: {
 
 export function EditedFileGroupList(props: EditedFileGroupListProps) {
   const view = props.view ?? "turns";
+  const preserveSingleGroupHeader =
+    props.groups.length === 1 && props.showSingleGroupHeader;
+  const effectiveView = preserveSingleGroupHeader ? "turns" : view;
   const [showAllTurns, setShowAllTurns] = useState(false);
 
   // Union of gitignored paths across every resolved group, so a row in any
@@ -179,7 +182,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
   }
 
   const content =
-    props.groups.length === 1 && !props.showSingleGroupHeader ? (
+    props.groups.length === 1 && !preserveSingleGroupHeader ? (
       <EditedFileList details={props.groups[0].details} />
     ) : (
       <div className="edited-file-groups">{renderGroupedOrFlat()}</div>
@@ -192,7 +195,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
   );
 
   function renderGroupedOrFlat() {
-    return view === "turns" ? (
+    return effectiveView === "turns" ? (
         (() => {
           const visibleGroups = showAllTurns
             ? props.groups
