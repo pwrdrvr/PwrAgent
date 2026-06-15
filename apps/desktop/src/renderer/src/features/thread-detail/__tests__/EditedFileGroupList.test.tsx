@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import {
@@ -85,12 +85,14 @@ describe("EditedFileGroupList Show more / Show less", () => {
     expect(screen.getByText("Uncommitted")).toBeInTheDocument();
     expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
     expect(screen.getByText("Pushed")).toBeInTheDocument();
+    // Pushed implies committed, so "Pushed" replaces "Committed" — never both.
+    expect(screen.queryByText("Committed")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: `Copy commit ${"a".repeat(40)}` }),
     ).toBeInTheDocument();
   });
 
-  it("shows a local-only badge for an unpushed commit", () => {
+  it("shows a plain Committed badge for an unpushed commit", () => {
     render(
       <EditedFileGroupList
         groups={groups(2)}
@@ -105,7 +107,10 @@ describe("EditedFileGroupList Show more / Show less", () => {
       />,
     );
 
-    expect(screen.getByText("Local")).toBeInTheDocument();
+    expect(screen.getByText("Committed")).toBeInTheDocument();
+    // No "Pushed" for a local-only commit, and no separate "Local" pill.
+    expect(screen.queryByText("Pushed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Local")).not.toBeInTheDocument();
     // turn-2 has no resolved state yet → no badge (avoids a wrong flash).
     expect(screen.queryByText("Uncommitted")).not.toBeInTheDocument();
   });
@@ -117,6 +122,135 @@ describe("EditedFileGroupList Show more / Show less", () => {
 
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show less" })).not.toBeInTheDocument();
+  });
+
+  it("flags gitignored files with a per-file chip and a group count", () => {
+    // turn-2 is the newest group (index 0), so it's expanded by default and
+    // its file row renders.
+    render(
+      <EditedFileGroupList
+        groups={groups(2)}
+        commitStatesByKey={{
+          "turn-2": {
+            committed: true,
+            commitSha: "a".repeat(40),
+            shortSha: "aaaaaaa",
+            pushed: true,
+            ignoredPaths: ["src/file-2.ts"],
+          },
+        }}
+      />,
+    );
+
+    // Group-level hint on the badge ("· 1 ignored" — the dot is CSS).
+    expect(screen.getByText("1 ignored")).toBeInTheDocument();
+    // Per-file chip on the ignored row.
+    expect(screen.getByText("Ignored")).toBeInTheDocument();
+  });
+
+  it("makes the group timestamp scroll the transcript to its turn", () => {
+    const onScrollToTurn = vi.fn();
+    const timed: EditedFileGroup = {
+      key: "turn-9",
+      turn: { id: "turn-9", completedAt: 1_718_000_000_000 },
+      details: group(9).details,
+      summary: "Edited 1 file",
+      additions: 1,
+      removals: 0,
+      live: false,
+    };
+    // group(8) carries no timestamp, so only the timed group renders a button.
+    render(
+      <EditedFileGroupList
+        groups={[timed, group(8)]}
+        onScrollToTurn={onScrollToTurn}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+    // Turn id for the precise match, plus the turn-end time for the fallback.
+    expect(onScrollToTurn).toHaveBeenCalledWith("turn-9", 1_718_000_000_000);
+  });
+
+  it("renders the timestamp as plain text when scrolling isn't wired", () => {
+    const timed: EditedFileGroup = {
+      key: "turn-9",
+      turn: { id: "turn-9", completedAt: 1_718_000_000_000 },
+      details: group(9).details,
+      summary: "Edited 1 file",
+      additions: 1,
+      removals: 0,
+      live: false,
+    };
+    render(<EditedFileGroupList groups={[timed, group(8)]} />);
+
+    expect(
+      screen.queryByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("EditedFileRow path + open affordances", () => {
+  const fileGroup: EditedFileGroup = {
+    key: "turn-x",
+    turn: { id: "turn-x" },
+    details: [
+      {
+        id: "detail-x",
+        kind: "write",
+        label: "Foo.ts",
+        path: "/repo/apps/desktop/Foo.ts",
+        fileDiff: {
+          kind: "update",
+          diff: "@@ -1 +1 @@\n+hello\n",
+          additions: 1,
+          removals: 0,
+        },
+      },
+    ],
+    summary: "Edited 1 file",
+    additions: 1,
+    removals: 0,
+    live: false,
+  };
+
+  it("shows the repo-relative path and opens the file from the expanded row", () => {
+    const onOpenFile = vi.fn();
+    render(
+      <EditedFileGroupList
+        groups={[fileGroup]}
+        worktreeRoot="/repo"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    // The repo-relative path only appears once the row is expanded.
+    expect(screen.queryByText("apps/desktop/Foo.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Foo\.ts/ }));
+
+    expect(screen.getByText("apps/desktop/Foo.ts")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open apps/desktop/Foo.ts in editor",
+      }),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/apps/desktop/Foo.ts");
+  });
+
+  it("omits the open affordance when no handler is provided", () => {
+    render(<EditedFileGroupList groups={[fileGroup]} worktreeRoot="/repo" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Foo\.ts/ }));
+    expect(screen.getByText("apps/desktop/Foo.ts")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Open .* in editor/ }),
+    ).not.toBeInTheDocument();
   });
 });
 

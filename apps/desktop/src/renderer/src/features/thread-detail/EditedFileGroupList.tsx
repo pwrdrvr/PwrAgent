@@ -1,6 +1,9 @@
 import {
+  createContext,
+  useContext,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -10,6 +13,7 @@ import type {
   AppServerThreadActivityDetail,
   EditGroupCommitState,
 } from "@pwragent/shared";
+import { EditorIcon } from "../../icons";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { DiffStat } from "./DiffStat";
 import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
@@ -19,6 +23,43 @@ import {
 } from "./edited-file-groups";
 
 export type EditedFileGroupView = "turns" | "files";
+
+/**
+ * Per-row config the surface supplies once (worktree root for repo-relative
+ * paths, the set of gitignored absolute paths, and an open-in-editor handler)
+ * and every `EditedFileRow` reads via context, so it doesn't have to be
+ * threaded through the grouped / flattened / single-group render paths.
+ */
+type EditedFileRowConfig = {
+  worktreeRoot?: string;
+  ignoredPaths: ReadonlySet<string>;
+  onOpenFile?: (absolutePath: string) => void;
+};
+
+const EditedFileRowContext = createContext<EditedFileRowConfig>({
+  ignoredPaths: new Set<string>(),
+});
+
+/** Forward-slash normalize so renderer paths match the main-process set. */
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+/** Display the path relative to the worktree root, falling back to absolute. */
+function toRepoRelativePath(
+  absolutePath: string,
+  worktreeRoot?: string,
+): string {
+  if (!worktreeRoot) {
+    return absolutePath;
+  }
+  const root = normalizePath(worktreeRoot).replace(/\/+$/, "");
+  const full = normalizePath(absolutePath);
+  if (full === root) {
+    return absolutePath;
+  }
+  return full.startsWith(`${root}/`) ? full.slice(root.length + 1) : absolutePath;
+}
 
 type EditedFileGroupListProps = {
   /** Newest-first, from `collectEditedFileGroups`. */
@@ -33,6 +74,12 @@ type EditedFileGroupListProps = {
    * the header to drive it.
    */
   view?: EditedFileGroupView;
+  /** Absolute worktree root, for showing repo-relative paths on a file row. */
+  worktreeRoot?: string;
+  /** Open an edited file (absolute path) in the editor / OS default. */
+  onOpenFile?: (absolutePath: string) => void;
+  /** Scroll the transcript to a group's turn (clickable timestamp). */
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -98,17 +145,46 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
   const view = props.view ?? "turns";
   const [showAllTurns, setShowAllTurns] = useState(false);
 
+  // Union of gitignored paths across every resolved group, so a row in any
+  // view (grouped / flattened / single) can flag itself as ignored.
+  const ignoredPaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const state of Object.values(props.commitStatesByKey ?? {})) {
+      for (const ignored of state.ignoredPaths ?? []) {
+        set.add(normalizePath(ignored));
+      }
+    }
+    return set;
+  }, [props.commitStatesByKey]);
+
+  const rowConfig = useMemo<EditedFileRowConfig>(
+    () => ({
+      worktreeRoot: props.worktreeRoot,
+      ignoredPaths,
+      onOpenFile: props.onOpenFile,
+    }),
+    [props.worktreeRoot, ignoredPaths, props.onOpenFile],
+  );
+
   if (props.groups.length === 0) {
     return null;
   }
 
-  if (props.groups.length === 1) {
-    return <EditedFileList details={props.groups[0].details} />;
-  }
+  const content =
+    props.groups.length === 1 ? (
+      <EditedFileList details={props.groups[0].details} />
+    ) : (
+      <div className="edited-file-groups">{renderGroupedOrFlat()}</div>
+    );
 
   return (
-    <div className="edited-file-groups">
-      {view === "turns" ? (
+    <EditedFileRowContext.Provider value={rowConfig}>
+      {content}
+    </EditedFileRowContext.Provider>
+  );
+
+  function renderGroupedOrFlat() {
+    return view === "turns" ? (
         (() => {
           const visibleGroups = showAllTurns
             ? props.groups
@@ -122,6 +198,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
                   group={group}
                   commitState={props.commitStatesByKey?.[group.key]}
                   defaultExpanded={index === 0}
+                  onScrollToTurn={props.onScrollToTurn}
                 />
               ))}
               {props.groups.length > VISIBLE_TURN_GROUPS ? (
@@ -139,9 +216,8 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
         })()
       ) : (
         <EditedFileList details={flattenEditedFileGroups(props.groups)} />
-      )}
-    </div>
-  );
+      );
+  }
 }
 
 function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
@@ -180,10 +256,15 @@ function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
   defaultExpanded: boolean;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 }) {
   const [expanded, setExpanded] = useState(props.defaultExpanded);
   const bodyId = useId();
   const timestamp = formatGroupTimestamp(props.group);
+  const turnId = props.group.turn?.id;
+  const turnTimeMs =
+    props.group.turn?.completedAt ?? props.group.turn?.startedAt;
+  const canScrollToTurn = Boolean(turnId && props.onScrollToTurn);
   // Feed the measured header height to `--edits-group-header-height` so an
   // expanded file's sticky toggle pins flush beneath this group's header
   // rather than at a guessed offset.
@@ -201,6 +282,10 @@ function EditedFileGroupSection(props: {
           : undefined
       }
     >
+      {/* Flat header: summary / badge / diff-stat / time are siblings so the
+          group header can reflow per surface via CSS grid areas — a two-row
+          stack in the width-constrained sidebar, a single row (summary + badge
+          … stat + time) in the width-rich transcript rail. */}
       <div ref={headerRef} className="edited-file-groups__group-header">
         <button
           type="button"
@@ -213,13 +298,8 @@ function EditedFileGroupSection(props: {
           <span className="edited-file-groups__group-summary">
             {props.group.summary}
           </span>
-          <DiffStat
-            additions={props.group.additions}
-            removals={props.group.removals}
-            className="diff-stat--chip"
-          />
         </button>
-        <div className="edited-file-groups__group-meta">
+        <div className="edited-file-groups__group-badge">
           {props.group.live ? (
             <span className="edited-file-groups__group-tag edited-file-groups__group-tag--live">
               This turn
@@ -227,10 +307,29 @@ function EditedFileGroupSection(props: {
           ) : (
             <EditGroupCommitBadge state={props.commitState} />
           )}
-          {timestamp ? (
-            <span className="edited-file-groups__group-time">{timestamp}</span>
-          ) : null}
         </div>
+        <DiffStat
+          additions={props.group.additions}
+          removals={props.group.removals}
+          className="diff-stat--chip"
+        />
+        {timestamp ? (
+          canScrollToTurn ? (
+            <button
+              type="button"
+              className="edited-file-groups__group-time edited-file-groups__group-time--link"
+              title="Scroll the transcript to this turn"
+              aria-label={`Scroll the transcript to this turn (${timestamp})`}
+              onClick={() =>
+                turnId && props.onScrollToTurn?.(turnId, turnTimeMs)
+              }
+            >
+              {timestamp}
+            </button>
+          ) : (
+            <span className="edited-file-groups__group-time">{timestamp}</span>
+          )
+        ) : null}
       </div>
       <div id={bodyId} hidden={!expanded}>
         {expanded ? <EditedFileList details={props.group.details} /> : null}
@@ -260,6 +359,17 @@ export function EditedFileRow(props: {
   const diffId = useId();
   const additions = props.detail.fileDiff?.additions ?? 0;
   const removals = props.detail.fileDiff?.removals ?? 0;
+  const { worktreeRoot, ignoredPaths, onOpenFile } = useContext(
+    EditedFileRowContext,
+  );
+  const absolutePath = props.detail.path;
+  const ignored = absolutePath
+    ? ignoredPaths.has(normalizePath(absolutePath))
+    : false;
+  const repoRelativePath = absolutePath
+    ? toRepoRelativePath(absolutePath, worktreeRoot)
+    : undefined;
+  const canOpen = Boolean(absolutePath && onOpenFile);
 
   return (
     <>
@@ -271,8 +381,18 @@ export function EditedFileRow(props: {
         onClick={() => setExpanded((current) => !current)}
       >
         <span className="live-work-rail__chevron" aria-hidden="true" />
-        <span className="live-work-rail__file-path" title={props.detail.path}>
-          {props.detail.label}
+        <span className="live-work-rail__file-label">
+          <span className="live-work-rail__file-path" title={props.detail.path}>
+            {props.detail.label}
+          </span>
+          {ignored ? (
+            <span
+              className="edited-file-row__ignored"
+              title="This file is gitignored — it isn't part of any commit"
+            >
+              Ignored
+            </span>
+          ) : null}
         </span>
         <DiffStat
           additions={additions}
@@ -286,7 +406,34 @@ export function EditedFileRow(props: {
           conditionally mounted to keep the render cost in line
           with what the user actually opens. */}
       <div id={diffId} className="live-work-rail__file-diff" hidden={!expanded}>
-        {expanded ? <TranscriptDiff detail={props.detail} compact /> : null}
+        {expanded ? (
+          <>
+            {repoRelativePath || canOpen ? (
+              <div className="edited-file-row__meta">
+                {repoRelativePath ? (
+                  <span
+                    className="edited-file-row__path"
+                    title={props.detail.path}
+                  >
+                    {repoRelativePath}
+                  </span>
+                ) : null}
+                {canOpen && absolutePath ? (
+                  <button
+                    type="button"
+                    className="edited-file-row__open"
+                    onClick={() => onOpenFile?.(absolutePath)}
+                    aria-label={`Open ${repoRelativePath ?? props.detail.label} in editor`}
+                    title="Open in editor"
+                  >
+                    <EditorIcon className="edited-file-row__open-icon" />
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <TranscriptDiff detail={props.detail} compact />
+          </>
+        ) : null}
       </div>
     </>
   );

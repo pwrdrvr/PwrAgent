@@ -1551,6 +1551,98 @@ export function ThreadView(props: ThreadViewProps) {
     refreshKey: JSON.stringify(selectedThread?.gitWorkingState ?? null),
   });
 
+  // Open an edited file: the configured/first-available editor (same
+  // resolution as transcript file links), falling back to the OS default
+  // handler when no editor is available. Shared by both edited-file surfaces.
+  const editedFilesWorktreeRoot = selectedThread?.projectKey;
+  const applications = props.applications;
+  const desktopApi = props.desktopApi;
+  const handleOpenEditedFile = useCallback(
+    (absolutePath: string) => {
+      const editor =
+        applications?.editors.find(
+          (application) =>
+            application.canOpenWorkspace &&
+            application.id === applications?.preferredEditorId.value,
+        ) ??
+        applications?.editors.find((application) => application.canOpenWorkspace);
+      if (editor && desktopApi?.openApplication) {
+        void desktopApi
+          .openApplication({
+            applicationId: editor.id,
+            kind: "editor",
+            targetPath: absolutePath,
+          })
+          .catch((error: unknown) => {
+            console.error("Failed to open edited file in editor", error);
+          });
+        return;
+      }
+      void desktopApi
+        ?.openPath?.({ path: absolutePath })
+        .then((response) => {
+          if (response && !response.opened) {
+            console.error("Failed to open edited file", response.error);
+          }
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to open edited file", error);
+        });
+    },
+    [applications, desktopApi],
+  );
+
+  // Scroll the transcript to a turn's position — backs the clickable
+  // edited-file group timestamps. Transcript items are anchored with
+  // `data-turn-id`; but a turn's id isn't always on a rendered item (work-phase
+  // grouping renders only the group's first entry, members are folded in), so
+  // fall back to the rendered turn whose time is closest to the group's
+  // timestamp. No-op if neither resolves.
+  const handleScrollToTurn = useCallback(
+    (turnId: string, turnTimeMs?: number) => {
+      const container = transcriptPanelRef.current;
+      if (!container) {
+        return;
+      }
+      // Land on the turn's LAST anchored entry, not its first: the clicked
+      // timestamp is the turn-END time, and the edited-file activity sits near
+      // the turn's tail. Scrolling to the first entry drops the user at the
+      // turn's start (an earlier time than the label, which reads as wrong).
+      let target: Element | null = null;
+      if (turnId) {
+        const matches = container.querySelectorAll(
+          `[data-turn-id="${CSS.escape(turnId)}"]`,
+        );
+        target = matches.length > 0 ? matches[matches.length - 1] : null;
+      }
+      if (!target && typeof turnTimeMs === "number") {
+        let bestDelta = Infinity;
+        for (const candidate of container.querySelectorAll("[data-turn-time]")) {
+          const time = Number((candidate as HTMLElement).dataset.turnTime);
+          if (!Number.isFinite(time)) {
+            continue;
+          }
+          const delta = Math.abs(time - turnTimeMs);
+          // `<=` so the LAST entry of the nearest turn wins (its tail), to
+          // match the turn-end semantics of the primary path.
+          if (delta <= bestDelta) {
+            bestDelta = delta;
+            target = candidate;
+          }
+        }
+      }
+      if (!target) {
+        return;
+      }
+      // The `.transcript-list__item` wrapper is `display: contents` (no box),
+      // so scrolling IT is a no-op and its rect is empty. Scroll a real child
+      // element into view instead — the same approach the find bar uses.
+      const anchor = target.querySelector("*") ?? target;
+      anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+    [],
+  );
+
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
     onActiveContextTabChange("edits");
@@ -2401,6 +2493,9 @@ export function ThreadView(props: ThreadViewProps) {
               editedFilesDock === "above" ? editedFileGroups : undefined
             }
             editedFileCommitStates={editedFileCommitStates}
+            editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+            onOpenEditedFile={handleOpenEditedFile}
+            onScrollToTurn={handleScrollToTurn}
             pinned={!props.activeTurnId}
             planEntry={
               pendingPlanEntry ??
@@ -2474,6 +2569,9 @@ export function ThreadView(props: ThreadViewProps) {
           desktopApi={props.desktopApi}
           editedFileGroups={editedFileGroups}
           editedFileCommitStates={editedFileCommitStates}
+          editedFilesWorktreeRoot={editedFilesWorktreeRoot}
+          onOpenEditedFile={handleOpenEditedFile}
+          onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
           onActiveTabChange={onActiveContextTabChange}

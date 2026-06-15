@@ -552,6 +552,14 @@ export type EditGroupCommitState = {
   commitSha?: string;
   shortSha?: string;
   pushed?: boolean;
+  /**
+   * Absolute paths in this group that git ignores (matched by `.gitignore` /
+   * excludes). Such files never enter a commit, so the group can read
+   * `committed`/`pushed` from its tracked files while these are flagged
+   * separately — a per-file "ignored" chip plus a group-level count — so a
+   * `.gitignore`'d file isn't silently implied to be committed.
+   */
+  ignoredPaths?: string[];
 };
 
 export type ResolveEditCommitStatesRequest = {

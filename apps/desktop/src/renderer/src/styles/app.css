@@ -8671,10 +8671,91 @@ textarea,
   background: var(--bg-panel-hover);
 }
 
+/* Middle grid cell of the file toggle: the filename (ellipsizing) with an
+   optional "Ignored" chip riding alongside it. */
+.live-work-rail__file-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .live-work-rail__file-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Per-file flag: this file is gitignored, so it never enters a commit even
+   when its group reads "Committed". Warning-toned so it stands out from the
+   filename. */
+.edited-file-row__ignored {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  color: var(--status-warning);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Expanded-file meta line above the diff: the repo-relative path (so the
+   reader knows WHERE the file lives, not just its basename) and an
+   open-in-editor affordance. */
+.edited-file-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.edited-file-row__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.edited-file-row__open {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.edited-file-row__open:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.edited-file-row__open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.edited-file-row__open-icon {
+  width: 14px;
+  height: 14px;
 }
 
 /* Shared +A/-R stat: + (green) then - (red), no comma — consistent with the
@@ -8785,15 +8866,22 @@ textarea,
   outline-offset: 1px;
 }
 
-/* Two-row card header: the "Edited N files" summary gets its own line so
-   the commit badges can't crush it, with the badge + date on a wrapping
-   second line. Sticky so the header pins to the top of the scroll body
-   while a long diff scrolls beneath it (the opaque card background hides the
-   scrolled content). */
+/* Group header is a grid of four cells — summary / badge / diff-stat / time —
+   so it can reflow per surface without changing the DOM. DEFAULT (the
+   width-constrained sidebar Edits panel) is a two-row stack: summary + stat on
+   top, badge + date beneath, so the commit badges never crush the summary. The
+   transcript rail overrides to a single row below. Sticky so the header pins to
+   the top of the scroll body while a long diff scrolls beneath it (the opaque
+   card background hides the scrolled content). */
 .edited-file-groups__group-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "summary stat"
+    "badge   time";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
   min-width: 0;
   position: sticky;
   /* Pins to the top of the surface's scroll body (the title + view toggle are
@@ -8808,10 +8896,10 @@ textarea,
 }
 
 .edited-file-groups__group-toggle {
+  grid-area: summary;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -8827,14 +8915,19 @@ textarea,
   color: var(--text-primary);
 }
 
-/* Second row: badge (left) + date (right), aligned under the summary text
-   (past the chevron). Wraps rather than truncating on a narrow rail. */
-.edited-file-groups__group-meta {
-  display: flex;
+/* Badge cell (commit lifecycle / "This turn"). In the sidebar's second row it
+   sits under the summary text, so it's indented past the chevron + gap. */
+.edited-file-groups__group-badge {
+  grid-area: badge;
+  display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 6px;
+  min-width: 0;
   padding-left: 22px;
+}
+
+.edited-file-groups__group-header > .diff-stat {
+  grid-area: stat;
+  justify-self: end;
 }
 
 .edited-file-groups__group-summary {
@@ -8844,6 +8937,19 @@ textarea,
   min-width: 0;
   flex: 1 1 auto;
   font-weight: 600;
+}
+
+/* Transcript rail (width-rich, height-constrained): collapse the header to a
+   single row — `summary  badge  ……  stat  time` — to reclaim vertical space.
+   The 1fr spacer column pushes the diff-stat + timestamp to the right edge. */
+.live-work-rail__section--edited .edited-file-groups__group-header {
+  grid-template-columns: auto auto minmax(8px, 1fr) auto auto;
+  grid-template-areas: "summary badge . stat time";
+  row-gap: 0;
+}
+
+.live-work-rail__section--edited .edited-file-groups__group-badge {
+  padding-left: 0;
 }
 
 .edited-file-groups__group-tag {
@@ -8866,7 +8972,8 @@ textarea,
 }
 
 /* Per-group git lifecycle: uncommitted → committed (with copyable SHA chip)
-   → pushed / local. Mirrors the group-tag pill scale. */
+   → pushed, plus a "N ignored" hint for gitignored files. Mirrors the
+   group-tag pill scale. */
 .edit-commit-badge {
   flex: 0 0 auto;
   display: inline-flex;
@@ -8876,20 +8983,47 @@ textarea,
   font-weight: 600;
 }
 
-.edit-commit-badge--uncommitted {
+/* Single status pill: one of "Uncommitted" / "Committed" (local) / "Pushed".
+   Pushed implies committed, so it replaces — never stacks with — the committed
+   label. */
+.edit-commit-badge__status {
   padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 42%, transparent);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
-  color: var(--status-warning);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.edit-commit-badge__label {
+.edit-commit-badge__status--uncommitted {
+  border-color: color-mix(in srgb, var(--status-warning) 42%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  color: var(--status-warning);
+}
+
+.edit-commit-badge__status--committed {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
   color: var(--text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+}
+
+.edit-commit-badge__status--pushed {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+/* Gitignored-file hint, e.g. "· 1 ignored". Muted, not a pill — a quiet aside
+   to the committed/pushed status so a `.gitignore`'d file isn't read as part
+   of the commit. */
+.edit-commit-badge__ignored {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.edit-commit-badge__ignored::before {
+  content: "· ";
 }
 
 .edit-commit-badge__sha {
@@ -8924,31 +9058,40 @@ textarea,
   letter-spacing: 0.02em;
 }
 
-.edit-commit-badge__push {
-  padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.edit-commit-badge__push--pushed {
-  border-color: var(--success-border);
-  background: var(--success-soft);
-  color: var(--success-text);
-}
-
-.edit-commit-badge__push--local {
-  border-color: var(--border-subtle);
-  background: var(--bg-panel-elevated);
-  color: var(--text-muted);
-}
-
 .edited-file-groups__group-time {
-  flex: 0 0 auto;
-  margin-left: auto;
+  grid-area: time;
+  justify-self: end;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* Clickable variant: scrolls the transcript to this group's turn. Reads as the
+   same muted timestamp until hovered/focused, then reveals a link affordance.
+   `font-size` must follow `font: inherit` — the shorthand resets it. */
+.edited-file-groups__group-time--link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 2px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+}
+
+.edited-file-groups__group-time--link:hover {
+  color: var(--text-secondary);
+  text-decoration-color: currentColor;
+}
+
+.edited-file-groups__group-time--link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 3px;
 }
 
 /* Context-rail Edits panel: a FIXED header (it lives outside the panel's

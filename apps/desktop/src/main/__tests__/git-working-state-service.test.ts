@@ -189,6 +189,56 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     }
   });
 
+  it("flags gitignored paths and excludes them from the committed judgement", async () => {
+    const responder = (args: string[]): string | undefined => {
+      if (args.includes("diff") && args.includes("--name-only")) return "";
+      if (args.includes("ls-files")) return "";
+      if (args.includes("check-ignore")) {
+        // Report the relative inputs ending in PR.md as ignored.
+        const inputs = args.slice(args.indexOf("--") + 1);
+        return inputs.filter((value) => value.endsWith("PR.md")).join("\n");
+      }
+      if (args.includes("log")) {
+        const paths = args.slice(args.indexOf("--") + 1);
+        return paths.some((p) => p.endsWith("src/b.ts"))
+          ? `${"b".repeat(40)}\n`
+          : "";
+      }
+      if (args.includes("rev-list")) return ""; // pushed
+      return undefined;
+    };
+    const { runGit, calls } = fakeGit(responder);
+    const service = new GitWorkingStateService({ runGit });
+
+    const states = await service.resolveEditCommitStates("/repo/wt", [
+      // Mixed: a committed tracked file alongside a gitignored one. The group
+      // still reads committed/pushed from the tracked file, but the ignored
+      // file is surfaced separately rather than implied committed.
+      { key: "g-mixed", paths: ["/repo/wt/src/b.ts", "/repo/wt/PR.md"] },
+      // All-ignored: no tracked files ⇒ not committed, but flagged ignored.
+      { key: "g-ignored", paths: ["/repo/wt/PR.md"] },
+    ]);
+
+    expect(states["g-mixed"]).toEqual({
+      committed: true,
+      commitSha: "b".repeat(40),
+      shortSha: "bbbbbbb",
+      pushed: true,
+      ignoredPaths: ["/repo/wt/PR.md"],
+    });
+    expect(states["g-ignored"]).toEqual({
+      committed: false,
+      ignoredPaths: ["/repo/wt/PR.md"],
+    });
+    // The ignored set is resolved once over the union, lock-safe.
+    expect(
+      calls.filter((call) => call.args.includes("check-ignore")),
+    ).toHaveLength(1);
+    for (const call of calls) {
+      expect(call.args[0]).toBe("--no-optional-locks");
+    }
+  });
+
   it("runs the remote-reachability check once per unique commit", async () => {
     const { runGit, calls } = fakeGit(respondCommitStates);
     const service = new GitWorkingStateService({ runGit });

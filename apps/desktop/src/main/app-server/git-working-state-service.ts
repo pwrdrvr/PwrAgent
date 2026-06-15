@@ -256,6 +256,36 @@ export class GitWorkingStateService {
       }
     }
 
+    // Gitignored inputs, resolved in one `check-ignore` over the union of all
+    // group paths (relative to cwd, dropping any outside the worktree). These
+    // files can never be committed, so they're carried separately rather than
+    // letting their absence silently read as "committed". `check-ignore` exits
+    // non-zero when nothing matches — treated here as "none ignored".
+    const allInputPaths = [
+      ...new Set(
+        groups.flatMap((group) =>
+          group.paths.map((value) => value.trim()).filter(Boolean),
+        ),
+      ),
+    ];
+    const ignoredPaths = new Set<string>();
+    const relativeInputs = allInputPaths
+      .map((value) => path.relative(cwd, value))
+      .filter((relative) => relative && !relative.startsWith(".."));
+    if (relativeInputs.length > 0) {
+      const ignoredOutput = await noLocks([
+        "check-ignore",
+        "--",
+        ...relativeInputs,
+      ]).catch(() => "");
+      for (const line of ignoredOutput.split("\n")) {
+        const relative = line.trim();
+        if (relative) {
+          ignoredPaths.add(normalizeAbsolutePath(path.resolve(cwd, relative)));
+        }
+      }
+    }
+
     // Memoize the per-commit remote-reachability check by promise so concurrent
     // groups sharing a commit run `rev-list` once.
     const pushedBySha = new Map<string, Promise<boolean>>();
@@ -280,24 +310,41 @@ export class GitWorkingStateService {
       const paths = [
         ...new Set(group.paths.map((value) => value.trim()).filter(Boolean)),
       ];
-      if (paths.length === 0) {
-        return { key: group.key, state: { committed: false } };
+      // Ignored files are surfaced separately and excluded from the
+      // committed/pushed judgement — only the tracked files decide that.
+      const ignored = paths.filter((value) =>
+        ignoredPaths.has(normalizeAbsolutePath(value)),
+      );
+      const ignoredState: Pick<EditGroupCommitState, "ignoredPaths"> =
+        ignored.length > 0 ? { ignoredPaths: ignored } : {};
+      const trackedPaths = paths.filter(
+        (value) => !ignoredPaths.has(normalizeAbsolutePath(value)),
+      );
+
+      if (trackedPaths.length === 0) {
+        return { key: group.key, state: { committed: false, ...ignoredState } };
       }
-      if (paths.some((value) => dirtyPaths.has(normalizeAbsolutePath(value)))) {
-        return { key: group.key, state: { committed: false } };
+      if (
+        trackedPaths.some((value) =>
+          dirtyPaths.has(normalizeAbsolutePath(value)),
+        )
+      ) {
+        return { key: group.key, state: { committed: false, ...ignoredState } };
       }
 
       const sha = (
-        await noLocks(["log", "-1", "--format=%H", "--", ...paths]).catch(
-          () => "",
-        )
+        await noLocks([
+          "log",
+          "-1",
+          "--format=%H",
+          "--",
+          ...trackedPaths,
+        ]).catch(() => "")
       ).trim();
       // Not dirty AND no commit in history ⇒ the files left the working tree
-      // without a commit we can find: almost always `.gitignore`'d files the
-      // agent wrote (invisible to both `diff HEAD` and `ls-files --others
-      // --exclude-standard`). Don't claim "committed" without a SHA to back it.
+      // without a commit we can find. Don't claim "committed" without a SHA.
       if (!sha) {
-        return { key: group.key, state: { committed: false } };
+        return { key: group.key, state: { committed: false, ...ignoredState } };
       }
 
       return {
@@ -307,6 +354,7 @@ export class GitWorkingStateService {
           commitSha: sha,
           shortSha: sha.slice(0, 7),
           pushed: await resolvePushed(sha),
+          ...ignoredState,
         },
       };
     };
