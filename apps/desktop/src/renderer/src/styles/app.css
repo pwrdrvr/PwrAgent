@@ -347,6 +347,13 @@
   top: 3px;
 }
 
+/* Mirror the .thread-row__actions compact shift for the sub-thread toggle:
+   compact rows pad 6px (vs 8px), so the title line — and the toggle that
+   centers on it — moves up 2px (9px -> 7px). */
+:root[data-density="compact"] .thread-row__subthread-toggle {
+  top: 7px;
+}
+
 :root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--reaction)):not(:has(.thread-row__chip--pin)) {
   gap: 0;
 }
@@ -2656,7 +2663,13 @@ textarea,
 
 .thread-row__subthread-toggle {
   position: absolute;
-  top: 13px;
+  /* Center the toggle on the title's FIRST line, not the row's geometric
+     center — same anchoring as .thread-row__actions, whose 26px button is
+     topped at 5px so its midpoint lands on the ~18px title-line midpoint
+     (8px row padding-top + ~9px into the 15px/1.25 line box). The toggle is
+     18px tall, so top = 18 - 9 = 9. Compact density shifts this up 2px (see
+     the density-compact block) to track its 6px top padding. */
+  top: 9px;
   left: 8px;
   z-index: 4;
   display: grid;
@@ -3118,14 +3131,14 @@ textarea,
 }
 
 /* A card with sub-threads carries the expand/collapse toggle in its left
-   gutter (`.thread-row__subthread-toggle`, top: 13px / 18px tall → bottom
-   at 31px, left: 8px). The selection accent bar (`::before`, top: 8px,
+   gutter (`.thread-row__subthread-toggle`, top: 9px / 18px tall → bottom
+   at 27px, left: 8px). The selection accent bar (`::before`, top: 8px,
    left: 5px) otherwise starts level with the toggle and the two cluster
-   against the card border. Drop the bar's start below the toggle so it
+   against the card border. Drop the bar's start just below the toggle so it
    still telegraphs selection down the card's left edge without running
    into the chevron. */
 .thread-row-shell.has-subthreads .thread-row.is-selected::before {
-  top: 34px;
+  top: 30px;
 }
 
 .thread-row__header {
