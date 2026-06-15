@@ -12259,6 +12259,16 @@ textarea,
   white-space: nowrap;
 }
 
+/* When a real app icon is present the label is hidden (kept in aria-label +
+   tooltip), so the chip collapses to a round icon-only button. */
+.composer__application-button--icon-only {
+  width: 26px;
+  max-width: 26px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+
 /* App icon (real OS icon when available, kind glyph or initial otherwise),
    shared by the composer launcher chips via the <AppIcon> component. */
 .composer__application-icon {

@@ -1375,9 +1375,19 @@ function ComposerApplicationButton(props: {
   label: string;
   onOpen: (application: DesktopApplicationDiscoveryCandidate) => Promise<void>;
 }) {
+  // A real OS icon (iconDataUrl) is a recognizable brand mark, so collapse to
+  // an icon-only chip — the name stays available via aria-label + tooltip.
+  // Fallback glyphs keep the text label, since a generic editor/terminal glyph
+  // alone is ambiguous.
+  const hasRealIcon = Boolean(props.application.iconDataUrl);
   return (
     <button
-      className="composer__application-button"
+      aria-label={props.application.name}
+      className={
+        hasRealIcon
+          ? "composer__application-button composer__application-button--icon-only"
+          : "composer__application-button"
+      }
       title={`Open workspace in ${props.application.name}`}
       type="button"
       onClick={() => {
@@ -1389,7 +1399,7 @@ function ComposerApplicationButton(props: {
         className="composer__application-icon"
         size={16}
       />
-      <span>{props.label}</span>
+      {hasRealIcon ? null : <span>{props.label}</span>}
     </button>
   );
 }
