@@ -53,6 +53,10 @@ files:
   # rebuilds build/Release for each target arch before creating the universal
   # app, so including electron-native would break universal merge.
   - "!**/electron-native/**"
+  # node-pty ships every platform's native prebuild in its package tarball.
+  # Keep those out of app.asar.unpacked so macOS universal merging only sees
+  # electron-builder's rebuilt current-arch binary under build/Release.
+  - "!**/node_modules/node-pty/prebuilds/**"
   # Our own workspace package metadata is unused at runtime — vite inlines.
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"

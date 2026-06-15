@@ -67,4 +67,24 @@ describe("ThreadHeader", () => {
     expect(chip).toHaveClass("chip--mode");
     expect(chip).toHaveAttribute("title", "Inbox Triage, 1 instruction line");
   });
+
+  it("renders the terminal toggle as an icon-only affordance with a tooltip", () => {
+    render(
+      <ThreadHeader
+        thread={thread}
+        layout={{
+          railOpen: true,
+          sidebarOpen: true,
+          terminalOpen: false,
+          onToggleRail: vi.fn(),
+          onToggleSidebar: vi.fn(),
+          onToggleTerminal: vi.fn(),
+        }}
+      />,
+    );
+
+    const toggle = screen.getByTitle("Open integrated terminal");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveTextContent("");
+  });
 });

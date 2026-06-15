@@ -9,6 +9,7 @@ import type {
   DesktopGitDiscoverySnapshot,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
+  DesktopIntegratedTerminalWindowsShell,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopOnboardingCompletedSource,
@@ -31,6 +32,7 @@ import {
   DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+  DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
@@ -353,6 +355,8 @@ export class DesktopSettingsService {
   };
   private codexSpawnEnv?: NodeJS.ProcessEnv;
   private codexSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
+  private terminalSpawnEnv?: NodeJS.ProcessEnv;
+  private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -572,6 +576,11 @@ export class DesktopSettingsService {
       },
       updates: {
         channel: this.resolveUpdateChannelValue(config.updates?.channel),
+      },
+      integratedTerminal: {
+        windowsShell: this.resolveIntegratedTerminalWindowsShellValue(
+          config.integratedTerminal?.windowsShell,
+        ),
       },
       ui: {
         sidebarHidden: this.resolveConfigBoolean(
@@ -1008,6 +1017,12 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  resolveIntegratedTerminalWindowsShell(): DesktopIntegratedTerminalWindowsShell {
+    return this.resolveIntegratedTerminalWindowsShellValue(
+      this.readConfig().config.integratedTerminal?.windowsShell,
+    ).value;
+  }
+
   resolveConfirmQuitWithInProgressThreads(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.confirmQuitWithInProgressThreads,
@@ -1260,9 +1275,54 @@ export class DesktopSettingsService {
     return await this.codexSpawnEnvHydrationPromise;
   }
 
+  async resolveTerminalSpawnEnvAsync(): Promise<NodeJS.ProcessEnv> {
+    if (this.options.resolveCodexShellEnv) {
+      return mergeLoginShellEnvIntoEnv(this.env, {
+        resolveShellEnv: this.options.resolveCodexShellEnv,
+        logger: getMainLogger("pwragent:shell-environment"),
+      });
+    }
+
+    if (this.terminalSpawnEnvHydrationPromise) {
+      return await this.terminalSpawnEnvHydrationPromise;
+    }
+
+    const targetEnv = this.ensureBaseTerminalSpawnEnv();
+    this.terminalSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(
+      this.env,
+    ).then((shellEnv) => {
+      const logger = getMainLogger("pwragent:shell-environment");
+      if (!shellEnv || Object.keys(shellEnv).length === 0) {
+        logger.warn("terminal-login-shell-env-merge-empty", {
+          parentPathLength: this.env.PATH?.length ?? 0,
+          parentShell: this.env.SHELL,
+          shellCandidates: defaultLoginShellCandidates(this.env),
+        });
+        return targetEnv;
+      }
+
+      logger.info("terminal-login-shell-env-merged", {
+        keys: Object.keys(shellEnv).length,
+        parentPathLength: this.env.PATH?.length ?? 0,
+        hydratedPathLength: shellEnv.PATH?.length ?? 0,
+        hadNvmDir: Boolean(shellEnv.NVM_DIR),
+        hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+      });
+      Object.assign(targetEnv, shellEnv);
+      return targetEnv;
+    });
+
+    return await this.terminalSpawnEnvHydrationPromise;
+  }
+
   private ensureBaseCodexSpawnEnv(): NodeJS.ProcessEnv {
     this.codexSpawnEnv ??= this.withStartupCodexHome({ ...this.env });
     return this.codexSpawnEnv;
+  }
+
+  private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {
+    this.terminalSpawnEnv ??= { ...this.env };
+    return this.terminalSpawnEnv;
   }
 
   private withStartupCodexHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -1428,6 +1488,16 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopAppearanceDensity> {
     return {
       value: configValue ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveIntegratedTerminalWindowsShellValue(
+    configValue: DesktopIntegratedTerminalWindowsShell | undefined,
+  ): DesktopSettingsValue<DesktopIntegratedTerminalWindowsShell> {
+    return {
+      value:
+        configValue ?? DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

@@ -27,6 +27,8 @@ const showLicenseWindowMock = vi.fn();
 const showThirdPartyNoticesWindowMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
+const registerIntegratedTerminalIpcHandlersMock = vi.fn();
+const disposeIntegratedTerminalIpcHandlersMock = vi.fn();
 const registerComposerDraftIpcHandlersMock = vi.fn();
 const disposeComposerDraftIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
@@ -247,6 +249,11 @@ vi.mock("../ipc/image-normalization", () => ({
   disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
 }));
 
+vi.mock("../ipc/integrated-terminal", () => ({
+  registerIntegratedTerminalIpcHandlers: registerIntegratedTerminalIpcHandlersMock,
+  disposeIntegratedTerminalIpcHandlers: disposeIntegratedTerminalIpcHandlersMock,
+}));
+
 vi.mock("../ipc/composer-drafts", () => ({
   registerComposerDraftIpcHandlers: registerComposerDraftIpcHandlersMock,
   disposeComposerDraftIpcHandlers: disposeComposerDraftIpcHandlersMock,
@@ -398,6 +405,8 @@ describe("bootstrapApp", () => {
     showThirdPartyNoticesWindowMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
+    registerIntegratedTerminalIpcHandlersMock.mockReset();
+    disposeIntegratedTerminalIpcHandlersMock.mockReset();
     registerComposerDraftIpcHandlersMock.mockReset();
     disposeComposerDraftIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
@@ -559,6 +568,7 @@ describe("bootstrapApp", () => {
     expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -997,11 +1007,13 @@ describe("bootstrapApp", () => {
     appEventHandlers.get("before-quit")?.();
 
     expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeIntegratedTerminalIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeSettingsIpcHandlersMock).not.toHaveBeenCalled();
 
     appEventHandlers.get("will-quit")?.();
 
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
   });
@@ -1130,6 +1142,7 @@ describe("bootstrapApp", () => {
     appEventHandlers.get("will-quit")?.();
     expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();

@@ -8,6 +8,16 @@ import type {
 } from "../../../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type {
+  IntegratedTerminalCloseRequest,
+  IntegratedTerminalCreateRequest,
+  IntegratedTerminalCreateResponse,
+  IntegratedTerminalErrorEvent,
+  IntegratedTerminalExitEvent,
+  IntegratedTerminalOutputEvent,
+  IntegratedTerminalResizeRequest,
+  IntegratedTerminalWriteRequest,
+} from "../../../shared/integrated-terminal";
+import type {
   AgentEvent,
   AutomationIdRequest,
   AutomationMutationResponse,
@@ -489,6 +499,27 @@ export type DesktopApi = {
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
+  createIntegratedTerminal?: (
+    request: IntegratedTerminalCreateRequest,
+  ) => Promise<IntegratedTerminalCreateResponse>;
+  writeIntegratedTerminal?: (
+    request: IntegratedTerminalWriteRequest,
+  ) => Promise<void>;
+  resizeIntegratedTerminal?: (
+    request: IntegratedTerminalResizeRequest,
+  ) => Promise<void>;
+  closeIntegratedTerminal?: (
+    request: IntegratedTerminalCloseRequest,
+  ) => Promise<void>;
+  onIntegratedTerminalOutput?: (
+    callback: (event: IntegratedTerminalOutputEvent) => void,
+  ) => () => void;
+  onIntegratedTerminalExit?: (
+    callback: (event: IntegratedTerminalExitEvent) => void,
+  ) => () => void;
+  onIntegratedTerminalError?: (
+    callback: (event: IntegratedTerminalErrorEvent) => void,
+  ) => () => void;
   listThreads?: (
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;

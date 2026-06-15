@@ -213,6 +213,16 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type {
+  IntegratedTerminalCloseRequest,
+  IntegratedTerminalCreateRequest,
+  IntegratedTerminalCreateResponse,
+  IntegratedTerminalErrorEvent,
+  IntegratedTerminalExitEvent,
+  IntegratedTerminalOutputEvent,
+  IntegratedTerminalResizeRequest,
+  IntegratedTerminalWriteRequest,
+} from "../shared/integrated-terminal";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -274,6 +284,13 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
+  INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CREATE_CHANNEL,
+  INTEGRATED_TERMINAL_ERROR_CHANNEL,
+  INTEGRATED_TERMINAL_EXIT_CHANNEL,
+  INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+  INTEGRATED_TERMINAL_RESIZE_CHANNEL,
+  INTEGRATED_TERMINAL_WRITE_CHANNEL,
   PATH_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -721,6 +738,61 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
   openPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
+  createIntegratedTerminal: async (
+    request: IntegratedTerminalCreateRequest,
+  ): Promise<IntegratedTerminalCreateResponse> =>
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, request),
+  writeIntegratedTerminal: async (
+    request: IntegratedTerminalWriteRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_WRITE_CHANNEL, request);
+  },
+  resizeIntegratedTerminal: async (
+    request: IntegratedTerminalResizeRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_RESIZE_CHANNEL, request);
+  },
+  closeIntegratedTerminal: async (
+    request: IntegratedTerminalCloseRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, request);
+  },
+  onIntegratedTerminalOutput: (
+    callback: (event: IntegratedTerminalOutputEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalOutputEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_OUTPUT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_OUTPUT_CHANNEL, listener);
+    };
+  },
+  onIntegratedTerminalExit: (
+    callback: (event: IntegratedTerminalExitEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalExitEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_EXIT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_EXIT_CHANNEL, listener);
+    };
+  },
+  onIntegratedTerminalError: (
+    callback: (event: IntegratedTerminalErrorEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalErrorEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
+    };
+  },
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>

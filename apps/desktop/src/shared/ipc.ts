@@ -263,6 +263,15 @@ export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
+export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
+  "integrated-terminal:create";
+export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
+export const INTEGRATED_TERMINAL_RESIZE_CHANNEL =
+  "integrated-terminal:resize";
+export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";
+export const INTEGRATED_TERMINAL_OUTPUT_CHANNEL = "integrated-terminal:output";
+export const INTEGRATED_TERMINAL_EXIT_CHANNEL = "integrated-terminal:exit";
+export const INTEGRATED_TERMINAL_ERROR_CHANNEL = "integrated-terminal:error";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";
 export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL = "app:read-changelog-document";

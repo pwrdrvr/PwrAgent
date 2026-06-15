@@ -9,6 +9,7 @@ import type {
   DesktopCodexProfileModel,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
+  DesktopIntegratedTerminalWindowsShell,
   DesktopMessagingAcknowledgment,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
@@ -23,12 +24,14 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+  DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
   isDesktopCodexProfileModel,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
+  isDesktopIntegratedTerminalWindowsShell,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
@@ -105,6 +108,9 @@ export type DesktopSettingsConfig = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+  };
+  integratedTerminal?: {
+    windowsShell?: DesktopIntegratedTerminalWindowsShell;
   };
   ui?: {
     sidebarHidden?: boolean;
@@ -734,6 +740,23 @@ export function desktopSettingsPatchToEdits(
     }
   }
 
+  if (patch.integratedTerminal?.windowsShell !== undefined) {
+    if (
+      patch.integratedTerminal.windowsShell ===
+      DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT
+    ) {
+      edits.push({
+        op: "delete",
+        path: ["integrated_terminal", "windows_shell"],
+      });
+    } else {
+      set(
+        ["integrated_terminal", "windows_shell"],
+        patch.integratedTerminal.windowsShell,
+      );
+    }
+  }
+
   // Window-layout prefs delete on default so the [ui] section only carries
   // non-default values.
   if (patch.ui?.sidebarHidden !== undefined) {
@@ -1125,6 +1148,7 @@ function normalizeDesktopConfig(
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
+  const integratedTerminal = tables["integrated_terminal"];
   const ui = tables["ui"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
@@ -1203,6 +1227,11 @@ function normalizeDesktopConfig(
     },
     updates: {
       channel: readUpdateChannel(updates?.channel),
+    },
+    integratedTerminal: {
+      windowsShell: readIntegratedTerminalWindowsShell(
+        integratedTerminal?.windows_shell,
+      ),
     },
     ui: {
       sidebarHidden: readBoolean(ui?.sidebar_hidden),
@@ -1488,6 +1517,13 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.updates = config.updates;
   }
 
+  if (
+    config.integratedTerminal &&
+    hasDefinedValue(config.integratedTerminal)
+  ) {
+    pruned.integratedTerminal = config.integratedTerminal;
+  }
+
   if (config.ui && hasDefinedValue(config.ui)) {
     pruned.ui = config.ui;
   }
@@ -1671,6 +1707,15 @@ function readAppearanceDensity(
 ): DesktopAppearanceDensity | undefined {
   return typeof value === "string" && isDesktopAppearanceDensity(value)
     ? value
+    : undefined;
+}
+
+function readIntegratedTerminalWindowsShell(
+  value: TomlScalar | undefined,
+): DesktopIntegratedTerminalWindowsShell | undefined {
+  const normalized = typeof value === "string" ? value.trim() : undefined;
+  return normalized && isDesktopIntegratedTerminalWindowsShell(normalized)
+    ? normalized
     : undefined;
 }
 
