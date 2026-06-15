@@ -1195,6 +1195,13 @@ export type AppServerNotification =
         prs: PrSummary[];
       };
     }
+  | {
+      method: "pullRequest/status/updated";
+      params: {
+        prKey: string;
+        pr: PrSummary;
+      };
+    }
   /**
    * Directory pin lifecycle — mirror of `thread/pin/*` minus the
    * implicit per-backend dimension (directories are

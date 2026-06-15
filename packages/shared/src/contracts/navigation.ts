@@ -237,6 +237,19 @@ export type PrSummary = {
   url: string;
 };
 
+export function normalizePullRequestProvider(
+  provider: PullRequestProvider | undefined,
+): PullRequestProvider {
+  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER;
+}
+
+export function buildPullRequestStatusKey(
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
+): string {
+  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+}
+
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 export type NavigationBrowseMode = "inbox" | "recents" | "directories";
 export type LaunchpadWorkMode = "local" | "worktree";

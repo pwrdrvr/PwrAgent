@@ -23,6 +23,7 @@ import type {
 import {
   buildAppendPinRank,
   buildPinnedRanks,
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
@@ -93,6 +94,16 @@ type NavigationState = {
 
 type NavigationRefreshOptions = {
   forceRefresh?: boolean;
+};
+
+type PrChipLocation = {
+  threadIndex: number;
+  prIndex: number;
+};
+
+type PrChipLocationIndex = {
+  snapshot: NavigationSnapshot;
+  byPrKey: Map<string, PrChipLocation[]>;
 };
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
@@ -1260,6 +1271,88 @@ function applyThreadPullRequestsUpdate(
     : snapshot;
 }
 
+function applyPullRequestStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: { prKey: string; pr: PrSummary; index?: PrChipLocationIndex }
+): { snapshot: NavigationSnapshot | undefined; index: PrChipLocationIndex | undefined } {
+  if (!snapshot) {
+    return { snapshot, index: undefined };
+  }
+
+  const index =
+    params.index?.snapshot === snapshot
+      ? params.index
+      : buildPrChipLocationIndex(snapshot);
+  const locations = index.byPrKey.get(params.prKey);
+  if (!locations?.length) {
+    return { snapshot, index };
+  }
+
+  let threads: NavigationSnapshot["threads"] | undefined;
+  const updatedThreadIndexes = new Set<number>();
+  for (const location of locations) {
+    const sourceThreads = threads ?? snapshot.threads;
+    const thread = sourceThreads[location.threadIndex];
+    const currentPr = thread?.prs?.[location.prIndex];
+    if (!thread || !currentPr) {
+      continue;
+    }
+    if (buildPullRequestStatusKey(currentPr) !== params.prKey) {
+      continue;
+    }
+    if (prSummariesEqual([currentPr], [params.pr])) {
+      continue;
+    }
+
+    if (!threads) {
+      threads = [...snapshot.threads];
+    }
+    if (!updatedThreadIndexes.has(location.threadIndex)) {
+      threads[location.threadIndex] = {
+        ...thread,
+        prs: [...(thread.prs ?? [])],
+      };
+      updatedThreadIndexes.add(location.threadIndex);
+    }
+    threads[location.threadIndex]!.prs![location.prIndex] = params.pr;
+  }
+
+  if (!threads) {
+    return { snapshot, index };
+  }
+
+  const nextSnapshot = {
+    ...snapshot,
+    threads,
+  };
+  return {
+    snapshot: nextSnapshot,
+    index: {
+      snapshot: nextSnapshot,
+      byPrKey: index.byPrKey,
+    },
+  };
+}
+
+function buildPrChipLocationIndex(
+  snapshot: NavigationSnapshot,
+): PrChipLocationIndex {
+  const byPrKey = new Map<string, PrChipLocation[]>();
+  snapshot.threads.forEach((thread, threadIndex) => {
+    thread.prs?.forEach((pr, prIndex) => {
+      const prKey = buildPullRequestStatusKey(pr);
+      const locations = byPrKey.get(prKey) ?? [];
+      locations.push({ threadIndex, prIndex });
+      byPrKey.set(prKey, locations);
+    });
+  });
+
+  return {
+    snapshot,
+    byPrKey,
+  };
+}
+
 function applyThreadModelSettingsUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2065,6 +2158,7 @@ export function useThreadNavigation(
     refreshing: false,
   });
   const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
+  const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
@@ -2138,6 +2232,7 @@ export function useThreadNavigation(
       options?: NavigationRefreshOptions
     ): Promise<void> => {
       if (!enabled) {
+        prChipLocationIndexRef.current = undefined;
         setState({
           loading: false,
           refreshing: false,
@@ -2148,6 +2243,7 @@ export function useThreadNavigation(
       }
 
       if (!desktopApi?.getNavigationSnapshot) {
+        prChipLocationIndexRef.current = undefined;
         setState({
           loading: false,
           refreshing: false,
@@ -2187,11 +2283,13 @@ export function useThreadNavigation(
             };
           }
 
+          const nextResponse = reconcileNavigationSnapshot(current.response, response);
+          prChipLocationIndexRef.current = buildPrChipLocationIndex(nextResponse);
           return {
             loading: false,
             refreshing: false,
             error: undefined,
-            response: reconcileNavigationSnapshot(current.response, response),
+            response: nextResponse,
           };
         });
 
@@ -2355,6 +2453,7 @@ export function useThreadNavigation(
 
   useEffect(() => {
     if (!enabled) {
+      prChipLocationIndexRef.current = undefined;
       setState({
         loading: false,
         refreshing: false,
@@ -2430,14 +2529,47 @@ export function useThreadNavigation(
           threadId: string;
           prs: PrSummary[];
         };
-        setState((current) => ({
-          ...current,
-          response: applyThreadPullRequestsUpdate(current.response, {
+        setState((current) => {
+          const nextResponse = applyThreadPullRequestsUpdate(current.response, {
             backend: event.backend,
             threadId,
             prs,
-          }),
-        }));
+          });
+          prChipLocationIndexRef.current = nextResponse
+            ? buildPrChipLocationIndex(nextResponse)
+            : undefined;
+          if (nextResponse === current.response) {
+            return current;
+          }
+          return {
+            ...current,
+            response: nextResponse,
+          };
+        });
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "pullRequest/status/updated") {
+        const { prKey, pr } = event.notification.params as {
+          prKey: string;
+          pr: PrSummary;
+        };
+        setState((current) => {
+          const result = applyPullRequestStatusUpdate(current.response, {
+            prKey,
+            pr,
+            index: prChipLocationIndexRef.current,
+          });
+          prChipLocationIndexRef.current = result.index;
+          if (result.snapshot === current.response) {
+            return current;
+          }
+          return {
+            ...current,
+            response: result.snapshot,
+          };
+        });
         scheduleRefresh();
         return;
       }

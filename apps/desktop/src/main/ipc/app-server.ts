@@ -95,8 +95,9 @@ import {
   type UpdateSubthreadOrderResponse,
 } from "@pwragent/shared";
 import {
-  DEFAULT_PULL_REQUEST_PROVIDER,
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  normalizePullRequestProvider as normalizeSharedPullRequestProvider,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
@@ -395,8 +396,7 @@ function getPullRequestLookupKey(
 }
 
 function normalizePullRequestProvider(provider: string | undefined): string {
-  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
-    || DEFAULT_PULL_REQUEST_PROVIDER;
+  return normalizeSharedPullRequestProvider(provider);
 }
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
@@ -454,7 +454,7 @@ function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"
 function getPrStatusKey(
   pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
 ): string {
-  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+  return buildPullRequestStatusKey(pr);
 }
 
 function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
@@ -1639,6 +1639,7 @@ class DesktopAppServerService {
   }
 
   private async fetchPullRequestLookup(params: {
+    backend: AppServerBackendKind;
     request: RefreshThreadPullRequestsRequest;
     lookupKey: string;
     lookupDirectoryPaths: string[];
@@ -1659,8 +1660,12 @@ class DesktopAppServerService {
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
     const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
-    this.rememberPrStatuses(statusPrs, fetchedAt);
+    const changedStatusPrs = this.rememberPrStatuses(statusPrs, fetchedAt);
     await this.writePrStatusesToCache(statusPrs, fetchedAt);
+    await this.publishPullRequestStatusUpdates({
+      backend: params.backend,
+      prs: changedStatusPrs,
+    });
     this.rememberPrLookup({
       lookupKey: params.lookupKey,
       provider: normalizePullRequestProvider(params.request.provider),
@@ -1921,12 +1926,16 @@ class DesktopAppServerService {
     return lookupKey;
   }
 
-  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
+  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
+    const changedPrs: PrSummary[] = [];
     for (const pr of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
         continue;
+      }
+      if (!current || !prSummariesEqual([current.pr], [pr])) {
+        changedPrs.push(pr);
       }
       this.prStatusRegistry.set(key, {
         ...current,
@@ -1934,6 +1943,7 @@ class DesktopAppServerService {
         fetchedAt,
       });
     }
+    return changedPrs;
   }
 
   private rememberPrLookup(entry: {
@@ -2074,6 +2084,26 @@ class DesktopAppServerService {
         },
       },
     });
+  }
+
+  private async publishPullRequestStatusUpdates(params: {
+    backend: AppServerBackendKind;
+    prs: PrSummary[];
+  }): Promise<void> {
+    await Promise.all(
+      params.prs.map(async (pr) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend: params.backend,
+          notification: {
+            method: "pullRequest/status/updated",
+            params: {
+              prKey: getPrStatusKey(pr),
+              pr,
+            },
+          },
+        });
+      }),
+    );
   }
 
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {

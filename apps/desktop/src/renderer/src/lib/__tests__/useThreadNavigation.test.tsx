@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { shortenDerivedThreadTitle } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  shortenDerivedThreadTitle,
+} from "@pwragent/shared";
 import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -4714,6 +4717,140 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
+    });
+  });
+
+  it("fans out pull request status updates to every visible matching PR key", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const initialPr: PrSummary = {
+      provider: "github.com",
+      number: 255,
+      org: "Giphy",
+      repo: "GifGrabber",
+      state: "passing",
+      checkState: "passing",
+      lifecycleState: "open",
+      reviewState: "draft",
+      mergeState: "mergeable",
+      url: "https://github.com/Giphy/GifGrabber/pull/255",
+    };
+    const updatedPr: PrSummary = {
+      ...initialPr,
+      lifecycleState: "merged",
+      reviewState: "ready_for_review",
+      mergeState: "unknown",
+    };
+    const unrelatedPr: PrSummary = {
+      ...initialPr,
+      number: 256,
+      url: "https://github.com/Giphy/GifGrabber/pull/256",
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-1", "grok:thread-2"],
+        threads: [
+          {
+            id: "thread-1",
+            title: "First thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            prs: [initialPr],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 1_000,
+          },
+          {
+            id: "thread-2",
+            title: "Second thread",
+            titleSource: "explicit" as const,
+            source: "grok" as const,
+            linkedDirectories: [],
+            prs: [{ ...initialPr }],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 2_000,
+          },
+          {
+            id: "thread-3",
+            title: "Unrelated thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            prs: [unrelatedPr],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 3_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })
+      .mockResolvedValue({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: true,
+        inboxThreadKeys: ["codex:thread-1", "grok:thread-2"],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(3);
+    });
+
+    Object.defineProperty(unrelatedPr, "provider", {
+      configurable: true,
+      get: () => {
+        throw new Error("unrelated PR should not be scanned during status fanout");
+      },
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "pullRequest/status/updated",
+            params: {
+              prKey: buildPullRequestStatusKey(updatedPr),
+              pr: updatedPr,
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
+        .toEqual([updatedPr]);
+      expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
+        .toEqual([updatedPr]);
+      expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])
+        .toBe(unrelatedPr);
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
     });
   });
 
