@@ -183,9 +183,14 @@ function DesktopAppShell(props: {
   const [mainView, setMainView] = useState<
     "thread" | "settings" | "automations" | "search"
   >("thread");
-  // In-thread find bar (⌘F) visibility, owned here so the find chord and the
-  // bar's own Escape share one source of truth.
-  const [threadFindOpen, setThreadFindOpen] = useState(false);
+  // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
+  // is a deep-link from a search result (seeded query + its target thread).
+  // The bar is open when either applies (see `threadFindOpen` below).
+  const [manualFindOpen, setManualFindOpen] = useState(false);
+  const [findRequest, setFindRequest] = useState<{
+    query: string;
+    threadKey: string;
+  }>();
   // Thread-list quick-jump popup (⌘F while the sidebar is focused).
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   // Initial section for SettingsScreen — non-undefined when navigation
@@ -502,15 +507,29 @@ function DesktopAppShell(props: {
         return;
       }
       if (mainView === "thread") {
-        setThreadFindOpen(true);
+        setManualFindOpen(true);
       }
     },
   });
-  // The in-thread find bar is per-thread chrome: drop it when the operator
-  // leaves the thread view or switches to a different thread.
+  // Manual find is per-thread chrome: drop it when the operator leaves the
+  // thread view or switches threads. The deep-link find (findRequest) closes
+  // on its own — it's keyed to its target thread (see `threadFindOpen`).
   useEffect(() => {
-    setThreadFindOpen(false);
-  }, [mainView, navigation.selectedThreadKey]);
+    if (mainView !== "thread") {
+      setManualFindOpen(false);
+      setFindRequest(undefined);
+    }
+  }, [mainView]);
+  useEffect(() => {
+    setManualFindOpen(false);
+  }, [navigation.selectedThreadKey]);
+  // Find bar is open for a manual ⌘F, or for a search deep-link while its
+  // target thread is the one on screen.
+  const deepLinkFindActive =
+    findRequest !== undefined &&
+    findRequest.threadKey === navigation.selectedThreadKey;
+  const threadFindOpen = manualFindOpen || deepLinkFindActive;
+  const threadFindInitialQuery = deepLinkFindActive ? findRequest.query : undefined;
   const historyNav: HistoryNavControls = useMemo(
     () => ({
       canGoBack: history.canGoBack,
@@ -793,7 +812,15 @@ function DesktopAppShell(props: {
     mastheadActions,
     historyNav,
     findOpen: threadFindOpen,
-    onFindOpenChange: setThreadFindOpen,
+    findInitialQuery: threadFindInitialQuery,
+    onFindOpenChange: (open: boolean) => {
+      // The bar only ever calls this to close itself (Escape / ✕). Clear both
+      // the manual toggle and any deep-link request so it stays closed.
+      if (!open) {
+        setManualFindOpen(false);
+        setFindRequest(undefined);
+      }
+    },
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
@@ -999,6 +1026,22 @@ function DesktopAppShell(props: {
               state={threadSearchState}
               threads={navigation.threads}
               onOpenResult={async (result) => {
+                // Deep-link to the match: open the thread with the find bar
+                // seeded with the search query so it highlights + scrolls the
+                // matched message into view (auto-loading older history if the
+                // match lives further up than the first page).
+                const seed = threadSearchState.query.trim();
+                setFindRequest(
+                  seed
+                    ? {
+                        query: seed,
+                        threadKey: buildThreadIdentityKey(
+                          result.backend,
+                          result.threadId,
+                        ),
+                      }
+                    : undefined,
+                );
                 setMainView("thread");
                 await navigation.showThread(result);
               }}
