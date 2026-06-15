@@ -734,8 +734,8 @@ export function desktopSettingsPatchToEdits(
     }
   }
 
-  // Window-layout prefs default to off/"info"; delete on default so the
-  // [ui] section only carries non-default values.
+  // Window-layout prefs delete on default so the [ui] section only carries
+  // non-default values.
   if (patch.ui?.sidebarHidden !== undefined) {
     if (patch.ui.sidebarHidden) {
       set(["ui", "sidebar_hidden"], true);
@@ -743,11 +743,14 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["ui", "sidebar_hidden"] });
     }
   }
+  // The context rail defaults to pinned-open (for discoverability), so the
+  // non-default value we persist is `false` — an explicit unpin. Pinned is the
+  // default, so we delete the key in that case.
   if (patch.ui?.contextRailPinned !== undefined) {
     if (patch.ui.contextRailPinned) {
-      set(["ui", "context_rail_pinned"], true);
-    } else {
       edits.push({ op: "delete", path: ["ui", "context_rail_pinned"] });
+    } else {
+      set(["ui", "context_rail_pinned"], false);
     }
   }
   if (patch.ui?.activeContextTab !== undefined) {

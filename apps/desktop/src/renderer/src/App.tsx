@@ -173,8 +173,10 @@ function DesktopAppShell(props: {
   // `ui` settings section). The left sidebar can be hidden entirely and
   // the right context rail pinned open; the active rail tab is also
   // remembered. Seeded from the settings snapshot once it arrives.
+  // The rail defaults to pinned-open (matches the persisted default) so a
+  // fresh user discovers it without a collapse→expand flash on first paint.
   const [sidebarHidden, setSidebarHidden] = useState(false);
-  const [contextRailPinned, setContextRailPinned] = useState(false);
+  const [contextRailPinned, setContextRailPinned] = useState(true);
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
   const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(

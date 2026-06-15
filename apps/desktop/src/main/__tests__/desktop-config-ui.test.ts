@@ -40,10 +40,12 @@ describe("desktop config [ui] section", () => {
   });
 
   it("round-trips a write then read of the [ui] section", () => {
+    // `context_rail_pinned` defaults to pinned-open, so its persisted
+    // non-default value is `false` (an explicit unpin).
     const edits = desktopSettingsPatchToEdits({
       ui: {
         sidebarHidden: true,
-        contextRailPinned: true,
+        contextRailPinned: false,
         activeContextTab: "providers",
         editedFilesDock: "sidebar",
       },
@@ -53,17 +55,17 @@ describe("desktop config [ui] section", () => {
 
     expect(config.ui).toEqual({
       sidebarHidden: true,
-      contextRailPinned: true,
+      contextRailPinned: false,
       activeContextTab: "providers",
       editedFilesDock: "sidebar",
     });
   });
 
-  it("deletes default-valued [ui] keys on write (off/info/above are absent on disk)", () => {
+  it("deletes default-valued [ui] keys on write (off/pinned/info/above are absent on disk)", () => {
     const existing = [
       "[ui]",
       "sidebar_hidden = true",
-      "context_rail_pinned = true",
+      "context_rail_pinned = false",
       'active_context_tab = "providers"',
       'edited_files_dock = "sidebar"',
       "",
@@ -71,8 +73,9 @@ describe("desktop config [ui] section", () => {
     const edits = desktopSettingsPatchToEdits(
       {
         ui: {
+          // Defaults: sidebar shown, rail pinned-open, info tab, dock above.
           sidebarHidden: false,
-          contextRailPinned: false,
+          contextRailPinned: true,
           activeContextTab: "info",
           editedFilesDock: "above",
         },

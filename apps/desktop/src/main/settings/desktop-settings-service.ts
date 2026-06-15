@@ -488,9 +488,12 @@ export class DesktopSettingsService {
           config.ui?.sidebarHidden,
           false,
         ),
+        // Default the context rail to pinned-open so first-run users discover
+        // it exists. An explicit unpin persists `false` (see the inverted
+        // sentinel in desktopSettingsPatchToEdits); absence means "never set".
         contextRailPinned: this.resolveConfigBoolean(
           config.ui?.contextRailPinned,
-          false,
+          true,
         ),
         activeContextTab: {
           value: config.ui?.activeContextTab ?? "info",

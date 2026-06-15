@@ -106,6 +106,12 @@ type ThreadContextPanelProps = {
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
 };
 
+// Clamp bounds for the context-rail width. Shared by the resize math and the
+// resize handle's aria-valuemin / aria-valuemax so the announced range can
+// never drift from the actual clamp.
+const RAIL_MIN_WIDTH = 300;
+const RAIL_MAX_WIDTH = 560;
+
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const railRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -380,7 +386,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   };
 
   const resizeRail = (nextWidth: number): void => {
-    const clampedWidth = Math.min(560, Math.max(300, nextWidth));
+    const clampedWidth = Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, nextWidth));
     props.onWidthChange?.(clampedWidth);
   };
   const startRailResize = (event: PointerEvent<HTMLElement>): void => {
@@ -452,6 +458,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         <div
           aria-label="Resize context rail"
           aria-orientation="vertical"
+          aria-valuenow={railWidth}
+          aria-valuemin={RAIL_MIN_WIDTH}
+          aria-valuemax={RAIL_MAX_WIDTH}
           className="context-rail__resize-handle"
           role="separator"
           tabIndex={0}

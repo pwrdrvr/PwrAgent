@@ -1056,7 +1056,9 @@ export function ThreadView(props: ThreadViewProps) {
   // The context-rail pin is a window-level preference owned by App and
   // toggled from the header chips (no more wide-display force-pin — the
   // user controls it explicitly).
-  const contextRailPinned = props.contextRailPinned ?? false;
+  // Defaults to pinned-open (matches the persisted default) when App hasn't
+  // threaded a value through yet, so the rail is discoverable.
+  const contextRailPinned = props.contextRailPinned ?? true;
   const activeContextTab = props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
