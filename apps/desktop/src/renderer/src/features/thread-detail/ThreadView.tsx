@@ -98,22 +98,6 @@ type LaunchpadEnvironmentSetupProgress = {
 
 const noop = (): void => {};
 
-/** Nearest ancestor that actually scrolls vertically (overflow + overflow). */
-function findScrollableAncestor(element: Element): HTMLElement | null {
-  let current = element.parentElement;
-  while (current) {
-    const style = window.getComputedStyle(current);
-    if (
-      current.scrollHeight > current.clientHeight &&
-      /(auto|scroll)/.test(style.overflowY)
-    ) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return null;
-}
-
 function applyLaunchpadEnvironmentSetupProgress(
   current: LaunchpadEnvironmentSetupProgress | undefined,
   event: CodexEnvironmentSetupProgressEvent,
@@ -1640,27 +1624,11 @@ export function ThreadView(props: ThreadViewProps) {
       if (!target) {
         return;
       }
-      // Center the target by setting the scroll container's `scrollTop`
-      // directly. `scrollIntoView` was observed scrolling the wrong ancestor
-      // (the panel section / document) and leaving the transcript's own
-      // `.transcript-list__items` scroller untouched — this mirrors how
-      // `scrollToBottom` drives that scroller in TranscriptList.
-      const scroller = findScrollableAncestor(target);
-      if (!scroller) {
-        target.scrollIntoView({ block: "center", behavior: "smooth" });
-        return;
-      }
-      const targetRect = target.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      const delta =
-        targetRect.top -
-        scrollerRect.top -
-        scroller.clientHeight / 2 +
-        targetRect.height / 2;
-      scroller.scrollTo({
-        top: scroller.scrollTop + delta,
-        behavior: "smooth",
-      });
+      // The `.transcript-list__item` wrapper is `display: contents` (no box),
+      // so scrolling IT is a no-op and its rect is empty. Scroll a real child
+      // element into view instead — the same approach the find bar uses.
+      const anchor = target.querySelector("*") ?? target;
+      anchor.scrollIntoView({ block: "center", behavior: "smooth" });
     },
     [],
   );
