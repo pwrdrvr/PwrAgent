@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.34 - 2026-06-15
+
+- Added deep-linking from thread search results to the matched message, including loading older history when needed and landing on the highlighted match instead of the bottom of the thread.
+- Improved edited-file rows with a single-row transcript layout, clearer status pills, ignored-file indicators, repo-relative paths, open-in-editor actions, and clickable timestamps that scroll back to the relevant transcript turn.
+- Defaulted the context rail to pinned-open for discoverability while preserving explicit unpin preferences and fixing the rail resize handle accessibility contract.
+- Improved pull-request status freshness by refreshing retained PR chips by URL and fanning out status updates to every matching PR key.
+- Fixed startup blocking by profiling launch work, unblocking startup paths, and keeping Codex shell policy aligned with hydrated environment state.
+- Fixed messaging-launched threads so launchpad environment setup runs before the first turn and environment selections are hydrated before the first prompt.
+- Polished sidebar and thread-list layout with narrower lens labels, a compact "Dirs" label at small widths, flush sub-thread parent rows, standardized disclosure chevrons, and broader thread-list cache reuse.
+- Fixed composer pastes that mix prose and fenced code so paragraph breaks are preserved when rich clipboard HTML is available.
+- Fixed the release workflow's Windows setup path by avoiding the pnpm action setup failure mode on Windows runners.
+
 ## v1.0.0-beta.33 - 2026-06-14
 
 - Added browser-style Back/Forward navigation across threads and search results, including keyboard and mouse navigation shortcuts.
