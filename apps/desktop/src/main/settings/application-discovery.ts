@@ -603,14 +603,6 @@ async function spawnDetached(
 }
 
 async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
-  // Decode the bundle's `.icns` directly with `nativeImage`. Deliberately
-  // NOT `app.getFileIcon()`: on macOS that dispatches to Launch Services'
-  // icon loader (an NSURL effective-icon resource fetch on a Chromium worker
-  // thread), which hard-aborts the entire process on some macOS builds — an
-  // uncatchable SIGTRAP, not a rejected promise (see the v1 beta crash on
-  // macOS 26). `createFromPath` reads + decodes the file in-process, so a
-  // missing or undecodable icon just yields an empty image we can fall back
-  // from.
   const iconPath = findApplicationIconPath(appPath);
   if (!iconPath) {
     log.warn("application-icon-not-found", { appPath });
@@ -619,7 +611,22 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
 
   try {
     const { nativeImage } = await import("electron");
-    const image = nativeImage.createFromPath(iconPath);
+
+    // `nativeImage.createFromPath()` returns an EMPTY image for `.icns`
+    // files, so decode the container ourselves: a modern `.icns` embeds a
+    // PNG per size, and `nativeImage` CAN decode PNG from a buffer. Everything
+    // here is in-process — deliberately NOT `app.getFileIcon()`, which drives
+    // the macOS Launch Services icon loader on a worker thread and hard-aborts
+    // the whole process with an uncatchable SIGTRAP on some OS builds (the v1
+    // beta crash on macOS 26).
+    const fileBytes = fs.readFileSync(iconPath);
+    const source = isIcnsBuffer(fileBytes) ? extractIcnsPng(fileBytes) : fileBytes;
+    if (!source) {
+      log.warn("application-icon-empty", { appPath, iconPath });
+      return undefined;
+    }
+
+    const image = nativeImage.createFromBuffer(source);
     if (image.isEmpty()) {
       log.warn("application-icon-empty", { appPath, iconPath });
       return undefined;
@@ -651,19 +658,28 @@ function findApplicationIconPath(appPath: string): string | undefined {
       : undefined,
     path.join(resourcesPath, "AppIcon.icns"),
   ]
+    // Must be a regular FILE: some bundles (e.g. Ghostty) have a directory
+    // named after `CFBundleIconFile` sitting next to the real `<name>.icns`,
+    // which `fs.existsSync` would wrongly accept.
     .filter((candidate): candidate is string => Boolean(candidate))
-    .find((candidate) => fs.existsSync(candidate));
+    .find(isFilePath);
 
   if (named) {
     return named;
   }
 
-  // Most app bundles ship a BINARY `Info.plist` (so the UTF-8 text match in
-  // `readBundleIconFile` misses) and name their icon something other than
-  // `AppIcon.icns` (e.g. VS Code's `Code.icns`, `Terminal.icns`). That was
-  // why icons never surfaced. Fall back to the largest `.icns` in Resources,
-  // which is reliably the app icon rather than a document-type icon.
+  // Bundles whose `Info.plist` is binary (so the UTF-8 `CFBundleIconFile`
+  // match misses) and whose icon isn't `AppIcon.icns` fall back to the
+  // largest `.icns` in Resources — reliably the app icon, not a doc icon.
   return largestIcnsInResources(resourcesPath);
+}
+
+function isFilePath(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function largestIcnsInResources(resourcesPath: string): string | undefined {
@@ -681,15 +697,62 @@ function largestIcnsInResources(resourcesPath: string): string | undefined {
     }
     const candidate = path.join(resourcesPath, entry);
     try {
-      const { size } = fs.statSync(candidate);
-      if (!best || size > best.size) {
-        best = { path: candidate, size };
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (!best || stat.size > best.size)) {
+        best = { path: candidate, size: stat.size };
       }
     } catch {
       // Skip entries we can't stat.
     }
   }
   return best?.path;
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** True when `buffer` is an Apple `.icns` icon container. */
+export function isIcnsBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.toString("latin1", 0, 4) === "icns";
+}
+
+/**
+ * Pull a usable PNG out of an `.icns` container. The format is a flat list of
+ * entries (4-byte OSType + 4-byte big-endian length-including-header + body);
+ * modern icons store one PNG per size (type codes `ic07`..`ic14`). We pick the
+ * smallest PNG that is still at least 2x the render size so the downscale
+ * stays crisp without decoding the 1024px entry, falling back to the largest
+ * available. Returns `undefined` for legacy `.icns` that only carry
+ * JPEG-2000 / raw bitmap entries (which `nativeImage` can't decode anyway).
+ */
+export function extractIcnsPng(buffer: Buffer): Buffer | undefined {
+  const pngs: Array<{ data: Buffer; width: number }> = [];
+  let offset = 8; // skip the "icns" magic + total-length header
+  while (offset + 8 <= buffer.length) {
+    const entryLength = buffer.readUInt32BE(offset + 4);
+    if (entryLength < 8 || offset + entryLength > buffer.length) {
+      break;
+    }
+    const body = buffer.subarray(offset + 8, offset + entryLength);
+    // PNG IHDR width is the big-endian uint32 at byte 16 (8-byte signature +
+    // 8-byte chunk length/type), so we need at least 20 bytes to read it.
+    if (body.length >= 24 && body.subarray(0, 8).equals(PNG_MAGIC)) {
+      pngs.push({ data: body, width: body.readUInt32BE(16) });
+    }
+    offset += entryLength;
+  }
+
+  if (pngs.length === 0) {
+    return undefined;
+  }
+
+  const minWidth = APPLICATION_ICON_SIZE * 2;
+  const crispEnough = pngs
+    .filter((entry) => entry.width >= minWidth)
+    .sort((a, b) => a.width - b.width);
+  if (crispEnough.length > 0) {
+    return crispEnough[0].data;
+  }
+  return pngs.sort((a, b) => b.width - a.width)[0].data;
 }
 
 function readBundleIconFile(appPath: string): string | undefined {
