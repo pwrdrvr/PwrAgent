@@ -1987,6 +1987,81 @@ describe("app server ipc", () => {
     });
   });
 
+  it("does not publish PR update events when retained PR status is unchanged", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "codex/fix-reel-upload-button-swift",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "codex/fix-reel-upload-button-swift",
+      directoryPaths: ["/repo"],
+    });
+    const unchangedPr = githubPr({
+      number: 255,
+      org: "Giphy",
+      repo: "GifGrabber",
+      title: "[codex] Fix upload button after reel switching",
+      state: "passing",
+      url: "https://github.com/Giphy/GifGrabber/pull/255",
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [unchangedPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([]);
+    fetchPullRequestByUrl.mockResolvedValueOnce(unchangedPr);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    await vi.waitFor(() => {
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
+        cwd: "/repo",
+        url: "https://github.com/Giphy/GifGrabber/pull/255",
+      });
+    });
+    expect(writePrStatusCacheEntries).toHaveBeenCalledWith([
+      {
+        provider: "github.com",
+        prKey: "github.com/giphy/gifgrabber#255",
+        fetchedAt: expect.any(Number),
+        pr: unchangedPr,
+      },
+    ]);
+    expect(publishLocalEvent).not.toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "pullRequest/status/updated",
+        params: {
+          prKey: "github.com/giphy/gifgrabber#255",
+          pr: unchangedPr,
+        },
+      },
+    });
+    expect(publishLocalEvent).not.toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: [unchangedPr],
+        },
+      },
+    });
+  });
+
   it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");

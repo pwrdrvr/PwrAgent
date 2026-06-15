@@ -1660,11 +1660,11 @@ class DesktopAppServerService {
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
     const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
-    this.rememberPrStatuses(statusPrs, fetchedAt);
+    const changedStatusPrs = this.rememberPrStatuses(statusPrs, fetchedAt);
     await this.writePrStatusesToCache(statusPrs, fetchedAt);
     await this.publishPullRequestStatusUpdates({
       backend: params.backend,
-      prs: statusPrs,
+      prs: changedStatusPrs,
     });
     this.rememberPrLookup({
       lookupKey: params.lookupKey,
@@ -1926,12 +1926,16 @@ class DesktopAppServerService {
     return lookupKey;
   }
 
-  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): void {
+  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
+    const changedPrs: PrSummary[] = [];
     for (const pr of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
         continue;
+      }
+      if (!current || !prSummariesEqual([current.pr], [pr])) {
+        changedPrs.push(pr);
       }
       this.prStatusRegistry.set(key, {
         ...current,
@@ -1939,6 +1943,7 @@ class DesktopAppServerService {
         fetchedAt,
       });
     }
+    return changedPrs;
   }
 
   private rememberPrLookup(entry: {
