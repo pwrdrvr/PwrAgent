@@ -22,6 +22,36 @@ describe("ProviderTranscriptThreadSearchAdapter", () => {
     });
   });
 
+  it("captures the matched message's turn id for deep-linking", async () => {
+    const adapter = new ProviderTranscriptThreadSearchAdapter(async () => {
+      const response = readThreadResponse(
+        "We discussed branch drift screenshots in this thread.",
+      );
+      // Plain messages carry no turn; the matching entry does, and the adapter
+      // recovers it so the desktop can scroll to the turn's `data-turn-id`.
+      response.replay.entries = [
+        {
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "We discussed branch drift screenshots in this thread.",
+          turn: { id: "turn-7" },
+        },
+      ];
+      return response;
+    });
+
+    const response = await adapter.searchContent({
+      candidates: [candidate("thread-1")],
+      limit: 5,
+      query: "branch drift",
+    });
+
+    expect(response.results[0]?.snippets).toEqual([
+      expect.objectContaining({ scope: "provider_content", turnId: "turn-7" }),
+    ]);
+  });
+
   it("reports provider read failures as unavailable scopes", async () => {
     const adapter = new ProviderTranscriptThreadSearchAdapter(async () => {
       throw new Error("provider offline");

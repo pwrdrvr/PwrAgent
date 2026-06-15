@@ -69,6 +69,7 @@ export class ProviderTranscriptThreadSearchAdapter {
               field: snippet.field,
               text: snippet.text,
               truncated: snippet.truncated,
+              ...(snippet.turnId ? { turnId: snippet.turnId } : {}),
             },
           ],
         });
@@ -92,12 +93,15 @@ export class ProviderTranscriptThreadSearchAdapter {
 function findTranscriptSnippet(
   response: AppServerReadThreadResponse,
   terms: string[],
-): { field: string; text: string; truncated?: boolean } | undefined {
+): { field: string; text: string; truncated?: boolean; turnId?: string } | undefined {
   for (const message of response.replay.messages) {
     const text = message.text.trim();
     if (text && textMatchesTerms(text, terms)) {
       return {
         field: `message:${message.role}`,
+        // Plain messages carry no turn; recover it from the matching entry so
+        // the desktop can deep-link the result to the turn's `data-turn-id`.
+        turnId: turnIdForMessage(response, message.id),
         ...buildSnippet(text, terms[0] ?? ""),
       };
     }
@@ -120,12 +124,25 @@ function findTranscriptSnippet(
       if (textMatchesTerms(text, terms)) {
         return {
           field: "activity",
+          turnId: entry.turn?.id,
           ...buildSnippet(text, terms[0] ?? ""),
         };
       }
     }
   }
 
+  return undefined;
+}
+
+function turnIdForMessage(
+  response: AppServerReadThreadResponse,
+  messageId: string,
+): string | undefined {
+  for (const entry of response.replay.entries) {
+    if (entry.type === "message" && entry.id === messageId) {
+      return entry.turn?.id;
+    }
+  }
   return undefined;
 }
 

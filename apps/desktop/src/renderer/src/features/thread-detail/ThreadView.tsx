@@ -914,6 +914,10 @@ export type ThreadViewProps = {
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
+  /** Seed query for the find bar when deep-linking from a search result. */
+  findInitialQuery?: string;
+  /** Turn id to load+scroll to when deep-linking a search match. */
+  findTurnId?: string;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -2424,6 +2428,14 @@ export function ThreadView(props: ThreadViewProps) {
             <ThreadFindBar
               containerRef={transcriptPanelRef}
               refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${props.transcriptEntries.length}`}
+              initialQuery={props.findInitialQuery}
+              turnId={props.findTurnId}
+              hasMoreHistory={Boolean(
+                props.transcriptPagination?.supportsPagination &&
+                  props.transcriptPagination.hasPreviousPage,
+              )}
+              loadingMore={props.loadingMore}
+              onLoadOlder={props.onLoadOlder}
               onClose={() => props.onFindOpenChange?.(false)}
             />
           ) : null}
