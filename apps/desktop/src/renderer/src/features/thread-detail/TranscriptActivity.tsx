@@ -42,8 +42,8 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 setIsExpanded((current) => !current);
               }}
             >
-              <span className="transcript-activity__label">{props.entry.summary}</span>
               <span className="transcript-activity__chevron" aria-hidden="true" />
+              <span className="transcript-activity__label">{props.entry.summary}</span>
             </button>
             <span className="transcript-activity__header-actions">
               <TranscriptCopyButton

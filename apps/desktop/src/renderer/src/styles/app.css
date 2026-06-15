@@ -3696,12 +3696,9 @@ textarea,
      padding drop, each directory header now reads ~22px taller
      than the comfortable touch target instead of 54px. */
   min-height: 32px;
-  /* Lateral inset: 4px on the left mirrors the gap from the
-     selected-row border to the folder icon; 10px on the right gives
-     the chevron the same visual breathing room from the
-     selected-row border on the opposite edge (chevron is a
-     rotated-square glyph so it visually crowds its bounding-box
-     right edge more than the folder icon crowds its left). */
+  /* Lateral inset: 4px on the left sits before the disclosure chevron
+     and folder icon; 10px on the right gives the meta block (attention
+     count pill) breathing room from the selected-row border. */
   padding: 4px 10px 4px 4px;
 }
 
@@ -3748,6 +3745,9 @@ textarea,
 }
 
 .directory-row__chevron {
+  /* Standard inline disclosure chevron (see .live-work-rail__chevron):
+     points right when collapsed, rotates 90deg to point down when
+     expanded. Sits at the left of the row, before the folder icon. */
   display: inline-flex;
   flex: 0 0 auto;
   width: 9px;
@@ -3756,11 +3756,11 @@ textarea,
   border-bottom: 1.75px solid var(--text-muted);
   opacity: 0.82;
   transition: transform 120ms ease;
-  transform: rotate(45deg) translateY(-1px);
+  transform: rotate(-45deg);
 }
 
 .directory-row__chevron.is-open {
-  transform: rotate(225deg) translateY(1px);
+  transform: rotate(45deg);
 }
 
 .directory-row__launchpad-button {
@@ -5294,17 +5294,20 @@ textarea,
 }
 
 .settings-section__chevron::before {
+  /* Standard inline disclosure chevron (see .live-work-rail__chevron):
+     down when expanded, right when collapsed. Now left of the section
+     title, so the right-placement translate nudges are dropped. */
   width: 7px;
   height: 7px;
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   content: "";
-  transform: translateY(-1px) rotate(45deg);
+  transform: rotate(45deg);
   transition: transform 120ms ease;
 }
 
 .settings-panel--is-collapsed .settings-section__chevron::before {
-  transform: translateX(-2px) rotate(-45deg);
+  transform: rotate(-45deg);
 }
 
 .settings-section__header-button:hover .settings-section__chevron,
@@ -7972,7 +7975,22 @@ textarea,
 }
 
 .transcript-work-phase-group__chevron {
+  /* Standard inline disclosure chevron (see .live-work-rail__chevron): an
+     unfilled border "V", right when collapsed, down when expanded. Replaces
+     the old "v"/"^" text glyph so it matches every other disclosure. */
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
   color: var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.transcript-work-phase-group__toggle[aria-expanded="true"] .transcript-work-phase-group__chevron {
+  transform: rotate(45deg);
 }
 
 .transcript-work-phase-group__content {
@@ -8571,6 +8589,18 @@ textarea,
 
 .live-work-rail__file-toggle[aria-expanded="false"] .live-work-rail__chevron {
   transform: rotate(-45deg);
+}
+
+/* The committed "Edited files" group toggles reuse .live-work-rail__chevron
+   but sit on .edited-file-groups__group-toggle, so they need their own
+   rotation hooks — without these the chevron was stuck pointing down in
+   both states instead of animating right (collapsed) -> down (expanded). */
+.edited-file-groups__group-toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.edited-file-groups__group-toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(45deg);
 }
 
 .live-work-rail__body {
@@ -9903,8 +9933,8 @@ textarea,
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 8px;
   padding: 4px 12px;
   border: 0;
   border-radius: 4px;
@@ -9947,17 +9977,21 @@ textarea,
 }
 
 .transcript-activity__chevron {
+  /* Standard inline disclosure chevron (see .live-work-rail__chevron): an
+     unfilled border "V" that points right when collapsed and rotates 90deg
+     to point down when expanded. Rendered to the left of the label. */
+  display: inline-block;
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: -2px;
   border-right: 1.5px solid var(--text-muted);
   border-bottom: 1.5px solid var(--text-muted);
-  transform: rotate(45deg);
+  transform: rotate(-45deg);
   transition: transform 120ms ease;
 }
 
 .transcript-activity__toggle[aria-expanded="true"] .transcript-activity__chevron {
-  transform: rotate(225deg);
+  transform: rotate(45deg);
 }
 
 .transcript-activity__details {
@@ -10006,7 +10040,7 @@ textarea,
 }
 
 .transcript-activity__detail-toggle[aria-expanded="true"] .transcript-activity__chevron {
-  transform: rotate(225deg);
+  transform: rotate(45deg);
 }
 
 .transcript-activity__detail-label {

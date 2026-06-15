@@ -395,6 +395,7 @@ export function SettingsSection(props: {
         onClick={handleHeaderClick}
         onKeyDown={handleHeaderKeyDown}
       >
+        <span className="settings-section__chevron" aria-hidden="true" />
         <div className="settings-section__header-main">
           {props.eyebrow ? <p className="eyebrow">{props.eyebrow}</p> : null}
           <h2 id={headingId}>{props.title}</h2>
@@ -404,7 +405,6 @@ export function SettingsSection(props: {
         </div>
         <span className="settings-section__header-actions">
           {props.chip ? <span className={chipClass}>{props.chip}</span> : null}
-          <span className="settings-section__chevron" aria-hidden="true" />
         </span>
       </div>
       <div

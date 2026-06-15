@@ -849,6 +849,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
             })()}
           >
             <span className="directory-row__summary-main">
+              <span
+                aria-hidden="true"
+                className={`directory-row__chevron${expanded ? " is-open" : ""}`}
+              />
               <span aria-hidden="true" className="directory-row__icon">
                 {directory.kind === "workspace" ? (
                   <WorkspaceIcon size={14} />
@@ -869,10 +873,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   {directory.needsAttentionCount}
                 </span>
               ) : null}
-              <span
-                aria-hidden="true"
-                className={`directory-row__chevron${expanded ? " is-open" : ""}`}
-              />
             </span>
           </button>
 
