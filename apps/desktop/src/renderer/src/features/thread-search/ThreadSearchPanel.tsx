@@ -53,6 +53,12 @@ type ThreadSearchPanelProps = {
   }) => Promise<void> | void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   /**
+   * Close the search screen (Escape). App routes this to history back so it
+   * pops the search entry off the stack and returns to wherever you came from,
+   * matching the title-bar Back button. Fires even with a typed query.
+   */
+  onClose?: () => void;
+  /**
    * Window panel toggles + relocated masthead, threaded straight through to
    * the shared {@link ThreadPlaceholderHeader} so search wears the same title
    * bar as the thread view — the MSG status, the sidebar toggle, and the
@@ -257,7 +263,24 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const resultCount = response?.results.length ?? 0;
 
   return (
-    <section className="thread-view thread-search" aria-label="Thread search">
+    <section
+      className="thread-view thread-search"
+      aria-label="Thread search"
+      // Escape closes the search screen from anywhere inside it (the input is
+      // autofocused, so this catches the common "⌘⇧F then Esc" path, and still
+      // fires after typing). Scoped to the panel rather than a window listener
+      // so it won't also dismiss an overlay (e.g. the sidebar quick-search).
+      onKeyDown={(event) => {
+        if (
+          event.key === "Escape" &&
+          !event.defaultPrevented &&
+          props.onClose
+        ) {
+          event.preventDefault();
+          props.onClose();
+        }
+      }}
+    >
       <ThreadPlaceholderHeader
         desktopApi={props.desktopApi}
         title="Search"
