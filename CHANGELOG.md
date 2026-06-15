@@ -7,6 +7,7 @@
 - Fixed pull-request progress chips so merged PR commits count as pushed work.
 - Polished thread hierarchy layout by vertically centering the sub-thread toggle on the title line.
 - Updated production and development dependencies, including Vite, Tiptap/ProseMirror, and Node type definitions.
+- Fixed release packaging after the Vite/Rollup update by pinning Rollup to a mature native-binary set that satisfies the repository's dependency age policy.
 
 ## v1.0.0-beta.34 - 2026-06-15
 
