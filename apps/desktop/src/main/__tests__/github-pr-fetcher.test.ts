@@ -22,6 +22,10 @@ function rawMergedPr() {
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
     mergedAt: "2026-05-05T00:06:31Z",
+    commits: [
+      { oid: "a".repeat(40) },
+      { oid: "b".repeat(40) },
+    ],
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
     headRepositoryOwner: { login: "pwrdrvr" },
@@ -49,6 +53,7 @@ describe("parseGhPrPayload", () => {
       lifecycleState: "merged",
       reviewState: "ready_for_review",
       mergeState: "unknown",
+      commitShas: ["a".repeat(40), "b".repeat(40)],
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
   });
@@ -394,6 +399,7 @@ describe("GithubPrFetcher", () => {
           lifecycleState: "merged",
           reviewState: "ready_for_review",
           mergeState: "unknown",
+          commitShas: ["a".repeat(40), "b".repeat(40)],
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
       ]);
@@ -443,6 +449,7 @@ describe("GithubPrFetcher", () => {
         lifecycleState: "merged",
         reviewState: "ready_for_review",
         mergeState: "unknown",
+        commitShas: ["a".repeat(40), "b".repeat(40)],
         url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
       });
       expect(exec).toHaveBeenCalledWith("/tmp/repo", [

@@ -465,6 +465,7 @@ function prSummariesEqual(
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
+      JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       candidate.url === pr.url
     );
   });

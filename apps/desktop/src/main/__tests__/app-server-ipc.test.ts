@@ -196,7 +196,12 @@ type WorkingStateEntry = {
   };
 };
 const readWorktreeWorkingStateEntries = vi.fn(
-  (worktreePaths: string[]): AsyncGenerator<WorkingStateEntry> =>
+  (
+    worktreePaths: string[],
+    _options?: {
+      acceptedPushedCommitShasByWorktreePath?: Record<string, string[] | undefined>;
+    },
+  ): AsyncGenerator<WorkingStateEntry> =>
     (async function* () {
       for (const worktreePath of worktreePaths) {
         yield { worktreePath } satisfies WorkingStateEntry;
@@ -2765,6 +2770,50 @@ describe("app server ipc", () => {
           gitWorkingState,
         }),
       },
+    });
+  });
+
+  it("passes merged PR commit SHAs into working-state probes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const mergedPrSha = "a".repeat(40);
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+        prs: [
+          githubPr({
+            number: 806,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "PR canonical info store",
+            state: "passing",
+            lifecycleState: "merged",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/806",
+            commitShas: [mergedPrSha],
+          }),
+        ],
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        ["/repo/wt"],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            "/repo/wt": [mergedPrSha],
+          },
+        },
+      );
     });
   });
 

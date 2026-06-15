@@ -234,6 +234,12 @@ export type PrSummary = {
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
+  /**
+   * Commit OIDs attached to this PR when the provider returns them. Used to
+   * keep merged PR commits from reading as local-only after the remote head
+   * branch is deleted.
+   */
+  commitShas?: string[];
   url: string;
 };
 

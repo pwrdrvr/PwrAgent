@@ -84,7 +84,19 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
     reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
     mergeState: pr.mergeState ?? "unknown",
+    commitShas: normalizeCommitShas(pr.commitShas),
   };
+}
+
+function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
+  const normalized = [
+    ...new Set(
+      (commitShas ?? [])
+        .map((sha) => sha.trim().toLowerCase())
+        .filter((sha) => /^[0-9a-f]{40}$/.test(sha)),
+    ),
+  ].sort();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizePrCheckState(
