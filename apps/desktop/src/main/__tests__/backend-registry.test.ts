@@ -5728,6 +5728,12 @@ script = "echo setup"
     });
     await Promise.resolve();
 
+    expect(codexClient.lastListThreadsParams).toMatchObject({
+      enrichDirectories: false,
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
     expect(codexClient.listThreadsCalls).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({

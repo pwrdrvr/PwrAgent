@@ -2558,6 +2558,7 @@ type ThreadListCallerReason =
   | "ipc-list-threads"
   | "messaging-navigation-snapshot"
   | "navigation-snapshot"
+  | "navigation-snapshot:active-recent"
   | "startup-prewarm"
   | "title-generation"
   | "workspace-handoff"
@@ -2588,6 +2589,7 @@ function shouldEnrichThreadDirectories(
     case "branch-drift":
     case "messaging-navigation-snapshot":
     case "navigation-snapshot":
+    case "navigation-snapshot:active-recent":
     case "startup-prewarm":
     case "title-generation":
     case "turn-cwd":
@@ -2604,6 +2606,7 @@ function shouldBackfillCodexDirectoryRelationships(
     case "directory-relationship-reconcile":
     case "messaging-navigation-snapshot":
     case "navigation-snapshot":
+    case "navigation-snapshot:active-recent":
     case "startup-prewarm":
       return true;
     default:
