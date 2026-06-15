@@ -16,6 +16,10 @@ import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import type { AppServerSkillSummary } from "@pwragent/shared";
+import {
+  parseBacktickFenceLine,
+  repairNestedLanguageFences,
+} from "../../lib/markdown-fences";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import type {
   ComposerInputChangeMetadata,
@@ -279,10 +283,6 @@ function parseInlineMarkdownWithMarks(
   return nodes;
 }
 
-function matchMarkdownCodeFence(line: string): RegExpMatchArray | null {
-  return line.match(/^```([A-Za-z0-9_-]*)\s*$/);
-}
-
 function matchMarkdownOrderedListItem(line: string): RegExpMatchArray | null {
   return line.match(/^\s{0,3}(\d+)\.\s+(.+)$/);
 }
@@ -293,7 +293,7 @@ function matchMarkdownBulletListItem(line: string): RegExpMatchArray | null {
 
 function isMarkdownBlockStart(line: string): boolean {
   return (
-    matchMarkdownCodeFence(line) !== null ||
+    parseBacktickFenceLine(line) !== undefined ||
     matchMarkdownOrderedListItem(line) !== null ||
     matchMarkdownBulletListItem(line) !== null
   );
@@ -379,17 +379,32 @@ function buildTiptapContent(
 }
 
 function buildMarkdownTiptapContent(value: string): JSONContent {
-  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  // Repair malformed nested language fences the same way the transcript renderer
+  // does, so a pasted code block that contains an inner ```lang fence parses
+  // into ONE code block on both surfaces instead of splitting at the inner close.
+  const lines = repairNestedLanguageFences(value.replace(/\r\n/g, "\n")).split("\n");
   const content: JSONContent[] = [];
   let index = 0;
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
-    const codeFence = matchMarkdownCodeFence(line);
-    if (codeFence) {
+    const openFence = parseBacktickFenceLine(line);
+    if (openFence) {
       index += 1;
       const codeLines: string[] = [];
-      while (index < lines.length && !/^```\s*$/.test(lines[index] ?? "")) {
+      while (index < lines.length) {
+        const closeFence = parseBacktickFenceLine(lines[index] ?? "");
+        // A closing fence has at least as many backticks as the opener and no
+        // info string. A shorter fence, or one carrying a language, is body
+        // content — this is what keeps an inner ```ts inside a repaired outer
+        // ```` block rather than ending the block early.
+        if (
+          closeFence &&
+          closeFence.length >= openFence.length &&
+          closeFence.info === ""
+        ) {
+          break;
+        }
         codeLines.push(lines[index] ?? "");
         index += 1;
       }
@@ -398,7 +413,7 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       }
       content.push({
         type: "codeBlock",
-        attrs: { language: codeFence[1] || null },
+        attrs: { language: openFence.info.split(/\s+/)[0] || null },
         content: codeLines.length > 0
           ? [{ type: "text", text: codeLines.join("\n") }]
           : undefined,

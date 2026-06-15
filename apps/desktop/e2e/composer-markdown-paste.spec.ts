@@ -534,3 +534,54 @@ test("a bullet list round-trips identically from text/plain and from list HTML",
   expect(plain).toBe(expected);
   expect(html).toBe(plain);
 });
+
+// --- Nested language fences: the composer must agree with the transcript ---
+//
+// An outer ``` block whose body is itself a ```lang block is "malformed"
+// markdown — CommonMark closes the outer block at the inner bare ```. The
+// transcript repairs this (repairNestedLanguageFences) and renders ONE block;
+// the composer used to parse it naively and split into two. Both surfaces now
+// share the repair, so a transcript message copied (raw text/plain) and pasted
+// back reconstructs identically. The value round-trips to itself: the serializer
+// re-emits the 3-backtick outer fence, which the parser repairs again.
+const NESTED_FENCE_MESSAGE = [
+  "Intro line.",
+  "",
+  "```",
+  "Some text.",
+  "",
+  "```ts",
+  "const value = 1;",
+  "```",
+  "```",
+  "",
+  "Outro line.",
+].join("\n");
+
+test("a pasted nested language fence stays one code block (matches the transcript)", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "Reply" }).focus();
+
+    await pasteIntoReply(app.window, { text: NESTED_FENCE_MESSAGE });
+
+    const editor = tiptapInput.locator(".composer-tiptap-input__editor");
+    // The outer block stays ONE <pre>; the bug split it at the inner ``` close
+    // and opened a second, spurious block for the trailing text.
+    await expect(editor.locator("> pre")).toHaveCount(1);
+    // The inner ```ts fence survives as literal content of the outer block.
+    await expect(editor.locator("> pre")).toContainText("```ts");
+    await expect(editor.locator("> pre")).toContainText("const value = 1;");
+    // Text after the outer close stays outside the block, as a paragraph.
+    await expect(editor.locator("> p", { hasText: "Outro line." })).toHaveCount(1);
+    // Stable, lossless round-trip.
+    await expect(tiptapInput).toHaveAttribute("data-value", NESTED_FENCE_MESSAGE);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
