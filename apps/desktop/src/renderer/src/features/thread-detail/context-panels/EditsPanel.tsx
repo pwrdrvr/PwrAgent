@@ -72,6 +72,7 @@ export function EditsPanel(props: EditsPanelProps) {
             worktreeRoot={props.worktreeRoot}
             onOpenFile={props.onOpenFile}
             onScrollToTurn={props.onScrollToTurn}
+            showSingleGroupHeader
           />
         ) : (
           <p className="context-empty">

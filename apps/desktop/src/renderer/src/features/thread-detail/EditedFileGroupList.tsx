@@ -80,6 +80,13 @@ type EditedFileGroupListProps = {
   onOpenFile?: (absolutePath: string) => void;
   /** Scroll the transcript to a group's turn (clickable timestamp). */
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+  /**
+   * Keep the per-turn group header when there is only one group. The
+   * above-composer rail already carries the single-group summary in its outer
+   * header, but the sidebar Edits panel needs the group header for timestamp
+   * and git lifecycle metadata.
+   */
+  showSingleGroupHeader?: boolean;
 };
 
 const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -93,7 +100,8 @@ const groupTimeFormatter = new Intl.DateTimeFormat(undefined, {
  * Accumulated edited files, shared between the LiveWorkRail (above the
  * composer) and the context-rail Edits panel. With multiple turn
  * groups the user can flip between per-turn rounds and the flattened
- * per-file view; a single group renders as a plain file list.
+ * per-file view. A single group defaults to a plain file list unless the
+ * surface needs the group header metadata.
  */
 /**
  * Turn-groups shown in the "By turn" view before the rest collapse behind a
@@ -171,7 +179,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
   }
 
   const content =
-    props.groups.length === 1 ? (
+    props.groups.length === 1 && !props.showSingleGroupHeader ? (
       <EditedFileList details={props.groups[0].details} />
     ) : (
       <div className="edited-file-groups">{renderGroupedOrFlat()}</div>
