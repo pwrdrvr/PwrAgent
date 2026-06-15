@@ -48,6 +48,8 @@ type ThreadSearchPanelProps = {
   onOpenResult: (result: {
     backend: AppServerBackendKind;
     threadId: string;
+    /** Turn of the matched message, for deep-linking to it in the thread. */
+    turnId?: string;
   }) => Promise<void> | void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   /**
@@ -330,6 +332,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
                       void props.onOpenResult({
                         backend: result.backend,
                         threadId: result.threadId,
+                        turnId: result.snippets.find((s) => s.turnId)?.turnId,
                       });
                     }}
                   />

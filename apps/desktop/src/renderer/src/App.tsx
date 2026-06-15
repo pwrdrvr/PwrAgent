@@ -190,6 +190,7 @@ function DesktopAppShell(props: {
   const [findRequest, setFindRequest] = useState<{
     query: string;
     threadKey: string;
+    turnId?: string;
   }>();
   // Thread-list quick-jump popup (⌘F while the sidebar is focused).
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
@@ -520,9 +521,23 @@ function DesktopAppShell(props: {
       setFindRequest(undefined);
     }
   }, [mainView]);
+  // Manual find doesn't follow a thread switch. A deep-link find DOES follow to
+  // its target thread — but once the operator navigates away from that target,
+  // clear the request so returning to the thread later doesn't silently
+  // re-open find with the stale query.
+  const deepLinkLandedRef = useRef(false);
   useEffect(() => {
     setManualFindOpen(false);
-  }, [navigation.selectedThreadKey]);
+    if (!findRequest) {
+      deepLinkLandedRef.current = false;
+      return;
+    }
+    if (navigation.selectedThreadKey === findRequest.threadKey) {
+      deepLinkLandedRef.current = true;
+    } else if (deepLinkLandedRef.current) {
+      setFindRequest(undefined);
+    }
+  }, [navigation.selectedThreadKey, findRequest]);
   // Find bar is open for a manual ⌘F, or for a search deep-link while its
   // target thread is the one on screen.
   const deepLinkFindActive =
@@ -530,6 +545,7 @@ function DesktopAppShell(props: {
     findRequest.threadKey === navigation.selectedThreadKey;
   const threadFindOpen = manualFindOpen || deepLinkFindActive;
   const threadFindInitialQuery = deepLinkFindActive ? findRequest.query : undefined;
+  const threadFindTurnId = deepLinkFindActive ? findRequest.turnId : undefined;
   const historyNav: HistoryNavControls = useMemo(
     () => ({
       canGoBack: history.canGoBack,
@@ -813,6 +829,7 @@ function DesktopAppShell(props: {
     historyNav,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
+    findTurnId: threadFindTurnId,
     onFindOpenChange: (open: boolean) => {
       // The bar only ever calls this to close itself (Escape / ✕). Clear both
       // the manual toggle and any deep-link request so it stays closed.
@@ -1039,6 +1056,7 @@ function DesktopAppShell(props: {
                           result.backend,
                           result.threadId,
                         ),
+                        turnId: result.turnId,
                       }
                     : undefined,
                 );

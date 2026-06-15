@@ -101,6 +101,12 @@ export type ThreadSearchSnippet = {
   field?: string;
   text: string;
   truncated?: boolean;
+  /**
+   * Turn id of the matched message/entry, when known. Lets the desktop
+   * deep-link a search result to the matched turn — load older history until
+   * its `data-turn-id` anchor renders, then scroll to it.
+   */
+  turnId?: string;
 };
 
 export type ThreadSearchUnavailableScope = {

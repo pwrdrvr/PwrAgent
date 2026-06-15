@@ -18,6 +18,10 @@ const HIGHLIGHT_ACTIVE = "thread-find-active";
 // nodes) so we don't keep paging a giant thread forever.
 const MAX_AUTO_LOADS = 60;
 
+// How many animation frames (~2.5s at 60fps) the deep-link landing keeps the
+// match pinned to center while a heavy thread finishes reflowing after load.
+const HOLD_CENTERED_FRAMES = 150;
+
 type ThreadFindBarProps = {
   /** The element whose text content is searched (the transcript). */
   containerRef: RefObject<HTMLElement | null>;
@@ -31,6 +35,13 @@ type ThreadFindBarProps = {
    * auto-load older history until it's found (deep-link to the match).
    */
   initialQuery?: string;
+  /**
+   * Turn id of the matched message, when the search result carried one. The
+   * authoritative deep-link target: auto-load until this turn's `data-turn-id`
+   * anchor renders, then scroll to it (the text highlight is a bonus that can
+   * miss if markdown reflowed the snippet across nodes).
+   */
+  turnId?: string;
   /** Whether older transcript pages remain (drives the deep-link auto-load). */
   hasMoreHistory?: boolean;
   /** Whether an older-page load is in flight. */
@@ -102,6 +113,11 @@ function collectMatchRanges(container: HTMLElement, query: string): Range[] {
 export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<Range[]>([]);
+  // Whether the deep-link target is on screen yet: the matched turn's
+  // `data-turn-id` anchor has rendered, or a text match was found. Drives the
+  // auto-load loop and the landing scroll so a turn that reflowed its snippet
+  // text still stops paging and scrolls into view.
+  const [targetFound, setTargetFound] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // The search-seeded query we're auto-loading toward (deep-link), plus how
@@ -133,12 +149,18 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     const container = props.containerRef.current;
     if (!container || !highlightsSupported()) {
       setMatches([]);
+      setTargetFound(false);
       return;
     }
     const ranges = collectMatchRanges(container, query);
     setMatches(ranges);
     setActiveIndex((current) => (current < ranges.length ? current : 0));
-  }, [query, props.refreshKey, props.containerRef]);
+    const anchorPresent = props.turnId
+      ? container.querySelector(`[data-turn-id="${CSS.escape(props.turnId)}"]`) !==
+        null
+      : false;
+    setTargetFound(anchorPresent || ranges.length > 0);
+  }, [query, props.refreshKey, props.containerRef, props.turnId]);
 
   // Paint the highlights and scroll the active match into view.
   useEffect(() => {
@@ -172,7 +194,7 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   useEffect(() => {
     if (
       !autoLoadActive ||
-      matches.length > 0 ||
+      targetFound ||
       props.loadingMore ||
       !props.hasMoreHistory ||
       autoLoadsRef.current >= MAX_AUTO_LOADS
@@ -183,43 +205,97 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     void props.onLoadOlder?.();
     // props intentionally excluded from deps: the effect re-runs as the
     // transcript/pagination state changes, and reads the latest callbacks.
-  }, [autoLoadActive, matches.length, props.loadingMore, props.hasMoreHistory]);
+  }, [autoLoadActive, targetFound, props.loadingMore, props.hasMoreHistory]);
 
   // Once the seeded deep-link match is found AND older-page loading has
-  // settled, scroll it into view — once per seed, and re-asserted past the
+  // settled, scroll it into view — once per seed, and held centered past the
   // transcript's own post-load scroll restoration (which otherwise snaps the
-  // view back to the bottom). The generic scroll effect above handles manual
-  // ⌘F + match cycling; this one owns the deep-link landing.
+  // view back). The generic scroll effect above handles manual ⌘F + match
+  // cycling; this one owns the deep-link landing.
   useEffect(() => {
     const seed = seededRef.current;
     if (
       !seed ||
       query !== seed ||
-      matches.length === 0 ||
+      !targetFound ||
       props.loadingMore ||
       landedSeedRef.current === seed
     ) {
       return;
     }
-    landedSeedRef.current = seed;
-    const active = matches[activeIndex];
-    const anchor =
-      active?.startContainer instanceof Element
-        ? active.startContainer
-        : active?.startContainer.parentElement;
-    if (!anchor) {
+    const container = props.containerRef.current;
+    // Resolve the scroll target LIVE on every frame, not once. Two reasons:
+    // (1) the matched text often renders a frame or two after its turn anchor,
+    // so a target captured at landing can miss it; (2) the message re-renders
+    // as the heavy thread reflows, detaching any captured node. A turn spans
+    // several transcript items sharing one `data-turn-id` (user prompt +
+    // assistant reply + activities), so we can't just take the first — we scope
+    // the text search to each item and pick the one actually containing the
+    // match (the assistant reply), falling back to the captured text range.
+    const turnId = props.turnId;
+    const fallbackAnchor = ((): Element | null => {
+      const active = matches[activeIndex];
+      if (active?.startContainer instanceof Element) {
+        return active.startContainer;
+      }
+      return active?.startContainer.parentElement ?? null;
+    })();
+    const resolveTarget = (): Element | null => {
+      if (turnId && container) {
+        const items = container.querySelectorAll(
+          `[data-turn-id="${CSS.escape(turnId)}"]`,
+        );
+        for (const item of items) {
+          const ranges = collectMatchRanges(item as HTMLElement, seed);
+          const node = ranges[0]?.startContainer;
+          if (node) {
+            return node instanceof Element ? node : node.parentElement;
+          }
+        }
+        // No text hit in the turn yet (still rendering, or the snippet isn't
+        // plain text e.g. a PR-number deep-link): aim at the last item of the
+        // turn — the assistant reply — rather than the user prompt up top.
+        const last = items[items.length - 1];
+        return last?.querySelector("*") ?? last ?? fallbackAnchor;
+      }
+      return fallbackAnchor;
+    };
+    if (!resolveTarget()) {
       return;
     }
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() =>
-        anchor.scrollIntoView({ block: "center", behavior: "smooth" }),
-      ),
-    );
-    window.setTimeout(
-      () => anchor.scrollIntoView({ block: "center", behavior: "auto" }),
-      300,
-    );
-  }, [matches, activeIndex, props.loadingMore, query]);
+    landedSeedRef.current = seed;
+    // Hold the match centered across the whole settling window. A heavily
+    // paginated thread keeps reflowing in bursts for a couple seconds after the
+    // match renders — older pages just prepended, collapsed turn groups and
+    // lazily loaded edit rows resize, and the transcript's own scroll
+    // restoration tugs back — so a one-shot scroll lands then drifts off as
+    // later content prepends above. Re-center every frame for the window
+    // instead; once content truly stops moving, re-centering an already-
+    // centered anchor is a no-op. Bail the instant the operator scrolls — a
+    // deep-link landing shouldn't fight someone who's taken over.
+    const deadline = HOLD_CENTERED_FRAMES;
+    let frame = 0;
+    let rafId = 0;
+    let takenOver = false;
+    const onUserScroll = (): void => {
+      takenOver = true;
+    };
+    const stop = (): void => {
+      cancelAnimationFrame(rafId);
+      container?.removeEventListener("wheel", onUserScroll);
+    };
+    container?.addEventListener("wheel", onUserScroll, { passive: true });
+    const tick = (): void => {
+      if (takenOver || frame >= deadline) {
+        stop();
+        return;
+      }
+      resolveTarget()?.scrollIntoView({ block: "center", behavior: "auto" });
+      frame += 1;
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+  }, [matches, activeIndex, props.loadingMore, query, targetFound, props.turnId, props.containerRef]);
 
   const step = useCallback(
     (delta: number) => {
@@ -247,7 +323,7 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
 
   const count = matches.length;
   const searchingOlder =
-    autoLoadActive && count === 0 && (props.loadingMore || props.hasMoreHistory);
+    autoLoadActive && !targetFound && (props.loadingMore || props.hasMoreHistory);
   const status =
     query === ""
       ? ""
