@@ -603,49 +603,38 @@ async function spawnDetached(
 }
 
 async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
-  try {
-    const { app, nativeImage } = await import("electron");
-
-    // Primary path: Electron's built-in, cross-platform file-icon API. On
-    // macOS and Windows it asks the OS for the rendered icon of the bundle /
-    // executable at `appPath` — no hand-parsing of CFBundleIconFile + .icns,
-    // which silently failed for most apps and left every icon surface on its
-    // fallback glyph.
-    if (typeof app?.getFileIcon === "function") {
-      const fileIcon = await app.getFileIcon(appPath, { size: "large" });
-      if (!fileIcon.isEmpty()) {
-        return fileIcon
-          .resize({
-            width: APPLICATION_ICON_SIZE,
-            height: APPLICATION_ICON_SIZE,
-            quality: "best",
-          })
-          .toDataURL();
-      }
-    }
-
-    // Secondary fallback: read the bundle's .icns directly. Useful when
-    // getFileIcon is unavailable (e.g. an unexpected runtime) or returns an
-    // empty image for a bundle it can't resolve.
-    const iconPath = findApplicationIconPath(appPath);
-    if (iconPath) {
-      const image = nativeImage.createFromPath(iconPath);
-      if (!image.isEmpty()) {
-        return image
-          .resize({
-            width: APPLICATION_ICON_SIZE,
-            height: APPLICATION_ICON_SIZE,
-            quality: "best",
-          })
-          .toDataURL();
-      }
-    }
-
-    log.warn("application-icon-empty", { appPath });
+  // Decode the bundle's `.icns` directly with `nativeImage`. Deliberately
+  // NOT `app.getFileIcon()`: on macOS that dispatches to Launch Services'
+  // icon loader (an NSURL effective-icon resource fetch on a Chromium worker
+  // thread), which hard-aborts the entire process on some macOS builds — an
+  // uncatchable SIGTRAP, not a rejected promise (see the v1 beta crash on
+  // macOS 26). `createFromPath` reads + decodes the file in-process, so a
+  // missing or undecodable icon just yields an empty image we can fall back
+  // from.
+  const iconPath = findApplicationIconPath(appPath);
+  if (!iconPath) {
+    log.warn("application-icon-not-found", { appPath });
     return undefined;
+  }
+
+  try {
+    const { nativeImage } = await import("electron");
+    const image = nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) {
+      log.warn("application-icon-empty", { appPath, iconPath });
+      return undefined;
+    }
+    return image
+      .resize({
+        width: APPLICATION_ICON_SIZE,
+        height: APPLICATION_ICON_SIZE,
+        quality: "best",
+      })
+      .toDataURL();
   } catch (error) {
     log.warn("application-icon-failed", {
       appPath,
+      iconPath,
       message: error instanceof Error ? error.message : String(error),
     });
     return undefined;
@@ -655,15 +644,52 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
 function findApplicationIconPath(appPath: string): string | undefined {
   const resourcesPath = path.join(appPath, "Contents", "Resources");
   const iconFile = readBundleIconFile(appPath);
-  const candidates = [
+  const named = [
     iconFile ? path.join(resourcesPath, iconFile) : undefined,
     iconFile && !path.extname(iconFile)
       ? path.join(resourcesPath, `${iconFile}.icns`)
       : undefined,
     path.join(resourcesPath, "AppIcon.icns"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  ]
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .find((candidate) => fs.existsSync(candidate));
 
-  return candidates.find((candidate) => fs.existsSync(candidate));
+  if (named) {
+    return named;
+  }
+
+  // Most app bundles ship a BINARY `Info.plist` (so the UTF-8 text match in
+  // `readBundleIconFile` misses) and name their icon something other than
+  // `AppIcon.icns` (e.g. VS Code's `Code.icns`, `Terminal.icns`). That was
+  // why icons never surfaced. Fall back to the largest `.icns` in Resources,
+  // which is reliably the app icon rather than a document-type icon.
+  return largestIcnsInResources(resourcesPath);
+}
+
+function largestIcnsInResources(resourcesPath: string): string | undefined {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resourcesPath);
+  } catch {
+    return undefined;
+  }
+
+  let best: { path: string; size: number } | undefined;
+  for (const entry of entries) {
+    if (!entry.toLowerCase().endsWith(".icns")) {
+      continue;
+    }
+    const candidate = path.join(resourcesPath, entry);
+    try {
+      const { size } = fs.statSync(candidate);
+      if (!best || size > best.size) {
+        best = { path: candidate, size };
+      }
+    } catch {
+      // Skip entries we can't stat.
+    }
+  }
+  return best?.path;
 }
 
 function readBundleIconFile(appPath: string): string | undefined {
