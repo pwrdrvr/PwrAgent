@@ -12348,9 +12348,8 @@ textarea,
   min-height: 26px;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 0 8px;
+  gap: 6px;
+  padding: 0 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-input);
@@ -12388,26 +12387,6 @@ textarea,
   align-items: center;
   color: var(--text-secondary);
   line-height: 1;
-}
-
-/* Quiet affordance: hidden at rest, fades in on hover / focus / open. Its
-   slot stays reserved so the chip width never jumps. The menu opens upward,
-   so the chevron points up. */
-.composer-dropdown__chevron {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.composer-dropdown__button:hover .composer-dropdown__chevron,
-.composer-dropdown__button:focus-visible .composer-dropdown__chevron,
-.composer-dropdown--open .composer-dropdown__chevron {
-  opacity: 1;
-}
-
-.composer-dropdown__button:disabled .composer-dropdown__chevron {
-  opacity: 0;
 }
 
 /* "Full Access" is a permission escalation — it reads as a caution, not a
@@ -12673,25 +12652,6 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Quiet chevron: hidden at rest, fades in on hover / focus / open — and
-   points up, since the popover opens upward (matches the setting chips). */
-.project-picker__chevron {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.project-picker__trigger:hover .project-picker__chevron,
-.project-picker__trigger:focus-visible .project-picker__chevron,
-.project-picker[data-state="open"] .project-picker__chevron {
-  opacity: 1;
-}
-
-.project-picker__trigger:disabled .project-picker__chevron {
-  opacity: 0;
 }
 
 /* The popover itself is a fixed-size flex column. The search row +

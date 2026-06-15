@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
-import { ChevronUpIcon, FolderIcon } from "../../icons";
+import { FolderIcon } from "../../icons";
 
 /**
  * Project-directory picker for the new-thread composer (issue #223).
@@ -137,11 +137,6 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
       >
         <FolderIcon size={13} />
         <span className="project-picker__label">{buttonLabel}</span>
-        <ChevronUpIcon
-          className="project-picker__chevron"
-          size={13}
-          aria-hidden="true"
-        />
       </button>
 
       {open ? (

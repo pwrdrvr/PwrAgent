@@ -36,7 +36,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
-import { ChevronUpIcon, CloseIcon, FileCodeIcon, LightningIcon, PlanIcon, PlayIcon } from "../../icons";
+import { CloseIcon, FileCodeIcon, LightningIcon, PlanIcon, PlayIcon } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -1331,11 +1331,6 @@ function ComposerDropdown(props: {
         <span className="composer-dropdown__label">
           {selectedOption?.label ?? props.value}
         </span>
-        <ChevronUpIcon
-          aria-hidden="true"
-          className="composer-dropdown__chevron"
-          size={13}
-        />
       </button>
       {open ? (
         <div className="composer-dropdown__menu" id={listboxId} role="listbox">
@@ -5729,11 +5724,6 @@ export function Composer(props: ComposerProps) {
                 onClick={() => setWorkspaceMenuOpen((open) => !open)}
               >
                 <span className="composer-dropdown__label">{workspaceLabel}</span>
-                <ChevronUpIcon
-                  aria-hidden="true"
-                  className="composer-dropdown__chevron"
-                  size={13}
-                />
               </button>
               {workspaceMenuOpen ? (
                 <div className="composer-dropdown__menu" role="menu">
