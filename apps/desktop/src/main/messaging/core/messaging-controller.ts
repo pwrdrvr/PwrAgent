@@ -12149,8 +12149,11 @@ function reviewArtifactForBackendEvent(
     return undefined;
   }
   const item = params.item as {
+    data?: unknown;
     id?: unknown;
     review?: unknown;
+    review_output?: unknown;
+    reviewOutput?: unknown;
     text?: unknown;
     type?: unknown;
   };
@@ -12165,8 +12168,11 @@ function reviewArtifactForBackendEvent(
   ) {
     return undefined;
   }
+  const reviewOutput = normalizeStructuredReviewOutput(item as Record<string, unknown>);
   const review = (typeof item.review === "string" ? item.review.trim() : "") ||
-    (typeof item.text === "string" ? item.text.trim() : "");
+    (typeof item.text === "string" ? item.text.trim() : "") ||
+    reviewOutput?.overall_explanation.trim() ||
+    "";
   if (!review) {
     return undefined;
   }
@@ -12176,6 +12182,7 @@ function reviewArtifactForBackendEvent(
     createdAt,
     review,
     displayText: "Code review completed",
+    ...(reviewOutput ? { output: reviewOutput } : {}),
     ...(typeof params.turnId === "string"
       ? {
           turn: {
@@ -12183,6 +12190,38 @@ function reviewArtifactForBackendEvent(
           },
         }
       : {}),
+  };
+}
+
+function normalizeStructuredReviewOutput(
+  item: Record<string, unknown>,
+): AppServerThreadReviewEntry["output"] | undefined {
+  const data = asPlainRecord(item.data);
+  const reviewOutput =
+    asPlainRecord(data?.reviewOutput) ??
+    asPlainRecord(data?.review_output) ??
+    asPlainRecord(item.reviewOutput) ??
+    asPlainRecord(item.review_output);
+  const findings = Array.isArray(reviewOutput?.findings)
+    ? reviewOutput.findings
+    : undefined;
+
+  if (
+    !reviewOutput ||
+    !findings ||
+    (reviewOutput.overall_correctness !== "patch is correct" &&
+      reviewOutput.overall_correctness !== "patch is incorrect") ||
+    typeof reviewOutput.overall_explanation !== "string" ||
+    typeof reviewOutput.overall_confidence_score !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    overall_correctness: reviewOutput.overall_correctness,
+    overall_explanation: reviewOutput.overall_explanation,
+    overall_confidence_score: reviewOutput.overall_confidence_score,
   };
 }
 

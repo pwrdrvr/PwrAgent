@@ -3055,6 +3055,71 @@ describe("MessagingController", () => {
     });
   });
 
+  it("delivers review artifacts from structured review output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "review-structured-1",
+            type: "exited_review_mode",
+            data: {
+              reviewOutput: {
+                findings: [
+                  {
+                    title: "Missing validation",
+                    body: "The input is not validated.",
+                    confidence_score: 0.91,
+                    priority: 1,
+                    code_location: {
+                      absolute_file_path: "/repo/src/index.ts",
+                      line_range: {
+                        start: 12,
+                        end: 12,
+                      },
+                    },
+                  },
+                ],
+                overall_correctness: "patch is incorrect",
+                overall_explanation: "The patch has one validation issue.",
+                overall_confidence_score: 0.87,
+              },
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactIntent = harness.delivered.find(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "review"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactIntent).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "review",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("The patch has one validation issue."),
+        }),
+      ],
+    });
+    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    expect(textPart).toEqual(expect.objectContaining({
+      text: expect.stringContaining("Missing validation"),
+    }));
+  });
+
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {
     const harness = await createHarness();
     await bindThread(harness);
