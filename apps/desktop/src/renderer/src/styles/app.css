@@ -11689,13 +11689,16 @@ textarea,
   margin: 0;
 }
 
-.composer-tiptap-input__editor > p + p,
-.composer-tiptap-input__editor > p + pre,
-.composer-tiptap-input__editor > pre + p,
-.composer-tiptap-input__editor > p + ul,
-.composer-tiptap-input__editor > p + ol,
-.composer-tiptap-input__editor > ul + p,
-.composer-tiptap-input__editor > ol + p {
+/* Paragraph-break spacing: any two adjacent top-level blocks get a gap so a
+ * markdown paragraph separator reads as a blank line. Enumerating every
+ * adjacent-sibling pair (the original p+p, p+pre, … list) silently skipped
+ * headings, blockquotes, and like-block runs (pre+pre, ul+ul). The :is() pair
+ * covers every block transition uniformly; listing the element names (rather
+ * than `*`) keeps specificity at (0,1,2) so it still wins over the per-element
+ * `pre`/`ul`/`ol`/`blockquote` margin rules below regardless of source order. */
+.composer-tiptap-input__editor
+  > :is(p, pre, ul, ol, blockquote, h1, h2, h3, h4, h5, h6)
+  + :is(p, pre, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
   margin-top: 0.85em;
 }
 
