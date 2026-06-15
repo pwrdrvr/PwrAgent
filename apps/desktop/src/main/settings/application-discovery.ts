@@ -14,8 +14,17 @@ import type {
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 
 const execFile = promisify(execFileCallback);
+
+const log = getMainLogger("pwragent:application-discovery");
+
+// App-bundle icons are rendered at this many logical pixels. The largest
+// on-screen consumer is the Settings → Applications row at ~20px, so 48px
+// keeps it crisp on 2x retina displays without bloating the settings IPC
+// payload with a full-resolution icon.
+const APPLICATION_ICON_SIZE = 48;
 
 type KnownApplication = {
   id: string;
@@ -594,19 +603,51 @@ async function spawnDetached(
 }
 
 async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
-  const iconPath = findApplicationIconPath(appPath);
-  if (!iconPath) {
-    return undefined;
-  }
-
   try {
-    const { nativeImage } = await import("electron");
-    const image = nativeImage.createFromPath(iconPath);
-    if (image.isEmpty()) {
-      return undefined;
+    const { app, nativeImage } = await import("electron");
+
+    // Primary path: Electron's built-in, cross-platform file-icon API. On
+    // macOS and Windows it asks the OS for the rendered icon of the bundle /
+    // executable at `appPath` — no hand-parsing of CFBundleIconFile + .icns,
+    // which silently failed for most apps and left every icon surface on its
+    // fallback glyph.
+    if (typeof app?.getFileIcon === "function") {
+      const fileIcon = await app.getFileIcon(appPath, { size: "large" });
+      if (!fileIcon.isEmpty()) {
+        return fileIcon
+          .resize({
+            width: APPLICATION_ICON_SIZE,
+            height: APPLICATION_ICON_SIZE,
+            quality: "best",
+          })
+          .toDataURL();
+      }
     }
-    return image.resize({ width: 32, height: 32 }).toDataURL();
-  } catch {
+
+    // Secondary fallback: read the bundle's .icns directly. Useful when
+    // getFileIcon is unavailable (e.g. an unexpected runtime) or returns an
+    // empty image for a bundle it can't resolve.
+    const iconPath = findApplicationIconPath(appPath);
+    if (iconPath) {
+      const image = nativeImage.createFromPath(iconPath);
+      if (!image.isEmpty()) {
+        return image
+          .resize({
+            width: APPLICATION_ICON_SIZE,
+            height: APPLICATION_ICON_SIZE,
+            quality: "best",
+          })
+          .toDataURL();
+      }
+    }
+
+    log.warn("application-icon-empty", { appPath });
+    return undefined;
+  } catch (error) {
+    log.warn("application-icon-failed", {
+      appPath,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }

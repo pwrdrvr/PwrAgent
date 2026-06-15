@@ -46,6 +46,7 @@ import {
   formatExecutionModeLabel,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
+import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
@@ -1563,15 +1564,13 @@ export function ThreadView(props: ThreadViewProps) {
   const editedFilesWorktreeRoot = selectedThread?.projectKey;
   const applications = props.applications;
   const desktopApi = props.desktopApi;
+  const preferredEditor = useMemo(
+    () => resolvePreferredEditor(applications),
+    [applications],
+  );
   const handleOpenEditedFile = useCallback(
     (absolutePath: string) => {
-      const editor =
-        applications?.editors.find(
-          (application) =>
-            application.canOpenWorkspace &&
-            application.id === applications?.preferredEditorId.value,
-        ) ??
-        applications?.editors.find((application) => application.canOpenWorkspace);
+      const editor = resolvePreferredEditor(applications);
       if (editor && desktopApi?.openApplication) {
         void desktopApi
           .openApplication({
@@ -2585,6 +2584,7 @@ export function ThreadView(props: ThreadViewProps) {
           editedFileCommitStates={editedFileCommitStates}
           editedFilesWorktreeRoot={editedFilesWorktreeRoot}
           onOpenEditedFile={handleOpenEditedFile}
+          preferredEditor={preferredEditor}
           onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}

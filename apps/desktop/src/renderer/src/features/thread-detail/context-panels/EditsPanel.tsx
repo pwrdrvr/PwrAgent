@@ -1,5 +1,8 @@
 import { useState } from "react";
-import type { EditGroupCommitState } from "@pwragent/shared";
+import type {
+  DesktopApplicationDiscoveryCandidate,
+  EditGroupCommitState,
+} from "@pwragent/shared";
 import {
   EditedFileGroupList,
   EditedFileViewToggle,
@@ -17,6 +20,8 @@ type EditsPanelProps = {
   worktreeRoot?: string;
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
+  /** Resolved preferred editor, for the per-row open-in-editor icon. */
+  preferredEditor?: DesktopApplicationDiscoveryCandidate;
   /** Scroll the transcript to a group's turn position (timestamp click). */
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   dock: EditedFilesDock;
@@ -71,6 +76,7 @@ export function EditsPanel(props: EditsPanelProps) {
             view={view}
             worktreeRoot={props.worktreeRoot}
             onOpenFile={props.onOpenFile}
+            preferredEditor={props.preferredEditor}
             onScrollToTurn={props.onScrollToTurn}
             showSingleGroupHeader
           />

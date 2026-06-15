@@ -8,6 +8,7 @@ import type {
   GhStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { AppIcon } from "../../components/AppIcon";
 import { copyText } from "../../lib/copy-text";
 import {
   SettingsField,
@@ -598,18 +599,5 @@ function ApplicationPathRow(props: {
 function ApplicationIcon(props: {
   application: DesktopApplicationDiscoveryCandidate;
 }) {
-  if (props.application.iconDataUrl) {
-    return (
-      <img
-        alt=""
-        src={props.application.iconDataUrl}
-      />
-    );
-  }
-
-  return (
-    <span aria-hidden="true">
-      {props.application.name.slice(0, 1)}
-    </span>
-  );
+  return <AppIcon application={props.application} size={16} />;
 }

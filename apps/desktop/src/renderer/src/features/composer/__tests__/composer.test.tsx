@@ -776,7 +776,9 @@ describe("Composer", () => {
 
     const secondRunButton = screen.getByRole("button", { name: "Run" });
     expect(secondRunButton).not.toBeDisabled();
-    expect(secondRunButton).toHaveTextContent("Run");
+    expect(
+      secondRunButton.querySelector(".composer__action-button-spinner"),
+    ).toBeNull();
 
     await act(async () => {
       startDeferred.resolve({
@@ -4062,7 +4064,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByText("Fast mode")).toBeInTheDocument();
+    expect(screen.getByLabelText("Fast mode")).toBeInTheDocument();
 
     chooseDropdownOption("Model", "GPT-5.2");
 
@@ -9495,7 +9497,10 @@ describe("Composer", () => {
     });
     expect(onPendingStatusChange).toHaveBeenCalledWith("Planning");
     await waitFor(() => {
-      expect(screen.getByLabelText("Plan mode")).not.toBeChecked();
+      expect(screen.getByLabelText("Plan mode")).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
     });
   });
 
