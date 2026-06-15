@@ -1251,6 +1251,8 @@ function pendingRequestDecisionFromMessagingApproval(
   switch (decision) {
     case "accept":
     case "accept_for_session":
+    case "accept_with_execpolicy_amendment":
+    case "apply_network_policy_amendment":
       return "approve";
     case "decline":
       return "decline";

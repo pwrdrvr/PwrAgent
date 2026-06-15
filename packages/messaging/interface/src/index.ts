@@ -646,6 +646,8 @@ export type MessagingQuestionnaireQuestion = {
 export type MessagingApprovalDecision =
   | "accept"
   | "accept_for_session"
+  | "accept_with_execpolicy_amendment"
+  | "apply_network_policy_amendment"
   | "decline"
   | "cancel";
 
@@ -772,7 +774,12 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   kind: "approval";
   title: string;
   body: string;
-  decisions: Array<MessagingSurfaceAction & { decision: MessagingApprovalDecision }>;
+  decisions: Array<
+    MessagingSurfaceAction & {
+      decision: MessagingApprovalDecision;
+      response?: { decision: unknown };
+    }
+  >;
 };
 
 export type MessagingConfirmationIntent = MessagingBaseSurfaceIntent & {

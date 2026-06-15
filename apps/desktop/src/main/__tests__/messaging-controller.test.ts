@@ -9746,6 +9746,7 @@ describe("MessagingController", () => {
         requestId: "approval-1",
         prompt: "Run tests?",
         command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+        availableDecisions: ["accept", "acceptForSession", "cancel"],
       },
     });
 
@@ -9762,7 +9763,7 @@ describe("MessagingController", () => {
       turnId: "turn-1",
       requestId: "approval-1",
       response: {
-        decision: "accept_for_session",
+        decision: "acceptForSession",
       },
     });
     expect(
@@ -9898,6 +9899,49 @@ describe("MessagingController", () => {
       },
       targetSurface: {
         id: `surface:${approvalIntent?.id}`,
+      },
+    });
+  });
+
+  it("submits structured approval decisions from messaging callbacks", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    const structuredDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "test"],
+      },
+    };
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-prefix",
+        prompt: "Run tests?",
+        command: "pnpm test",
+        availableDecisions: ["accept", structuredDecision, "cancel"],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-prefix",
+      response: {
+        decision: structuredDecision,
       },
     });
   });

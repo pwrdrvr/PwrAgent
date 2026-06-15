@@ -2269,8 +2269,9 @@ export class MessagingController {
     actionId: string,
   ): Promise<MessagingApprovalDecision | undefined> {
     const requestContext = intent.requestContext;
-    const decision = intent.decisions.find((action) => action.id === actionId)?.decision;
-    if (!requestContext || !decision || !this.options.backend.submitServerRequest) {
+    const action = intent.decisions.find((candidate) => candidate.id === actionId);
+    const decision = action?.decision;
+    if (!requestContext || !action || !this.options.backend.submitServerRequest) {
       return decision;
     }
 
@@ -2279,9 +2280,7 @@ export class MessagingController {
       threadId: requestContext.threadId,
       turnId: requestContext.turnId,
       requestId: requestContext.requestId,
-      response: {
-        decision,
-      },
+      response: action.response ?? { decision },
     });
     return decision;
   }
@@ -12624,6 +12623,10 @@ function approvalResponseLabel(
       return "Approved";
     case "accept_for_session":
       return "Approved for Session";
+    case "accept_with_execpolicy_amendment":
+      return "Approved and Remembered";
+    case "apply_network_policy_amendment":
+      return "Network Rule Applied";
     case "decline":
       return "Declined";
     case "cancel":

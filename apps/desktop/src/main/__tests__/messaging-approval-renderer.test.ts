@@ -14,6 +14,7 @@ describe("buildApprovalIntent", () => {
           requestId: "request-1",
           prompt: "Run the focused tests?",
           command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+          availableDecisions: ["accept", "acceptForSession", "cancel"],
         },
       },
     });
@@ -29,6 +30,7 @@ describe("buildApprovalIntent", () => {
         expect.objectContaining({
           decision: "accept_for_session",
           fallbackText: "2",
+          response: { decision: "acceptForSession" },
         }),
       ]),
     });
@@ -104,6 +106,42 @@ describe("buildApprovalIntent", () => {
         label: "Cancel",
         decision: "cancel",
         fallbackText: "2",
+      }),
+    ]);
+  });
+
+  it("renders structured backend decisions as generic approval actions", () => {
+    const structuredDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "test"],
+      },
+    };
+    const intent = buildApprovalIntent({
+      id: "approval-prefix",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-prefix",
+          prompt: "Run tests?",
+          availableDecisions: ["accept", structuredDecision, "cancel"],
+        },
+      },
+    });
+
+    expect(intent.decisions).toEqual([
+      expect.objectContaining({
+        decision: "accept",
+        label: "Approve Once",
+      }),
+      expect.objectContaining({
+        decision: "accept_with_execpolicy_amendment",
+        label: "Approve Prefix: pnpm test",
+        response: { decision: structuredDecision },
+      }),
+      expect.objectContaining({
+        decision: "cancel",
       }),
     ]);
   });

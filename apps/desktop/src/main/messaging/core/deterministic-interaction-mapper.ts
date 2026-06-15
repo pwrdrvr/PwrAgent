@@ -159,6 +159,16 @@ function matchApprovalSynonym(
   ) {
     return intent.decisions.find((action) => action.decision === "accept_for_session");
   }
+  if (
+    normalized === "approve and remember" ||
+    normalized === "remember" ||
+    normalized === "approve prefix" ||
+    normalized === "allow prefix"
+  ) {
+    return intent.decisions.find(
+      (action) => action.decision === "accept_with_execpolicy_amendment",
+    );
+  }
   if (YES_SYNONYMS.has(normalized)) {
     return intent.decisions.find((action) => action.decision === "accept");
   }

@@ -2436,7 +2436,7 @@ describe("ThreadView", () => {
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve Once" }));
 
     await waitFor(() => {
       expect(submitServerRequest).toHaveBeenCalledWith({
