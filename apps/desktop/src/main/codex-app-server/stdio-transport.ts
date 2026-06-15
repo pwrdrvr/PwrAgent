@@ -25,6 +25,7 @@ export type StdioJsonRpcTransportOptions = {
   command: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 };
 
@@ -53,6 +54,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     const env = this.options.resolveEnv
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
+    const args = this.options.resolveArgs
+      ? await this.options.resolveArgs(env)
+      : this.options.args ?? [];
     const command = await resolveCodexCommand({
       command: this.options.command,
       env,
@@ -63,7 +67,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       version: command.version ?? null,
     });
 
-    const child = spawn(command.command, ["app-server", ...(this.options.args ?? [])], {
+    const child = spawn(command.command, ["app-server", ...args], {
       stdio: ["pipe", "pipe", "pipe"],
       env,
     });
