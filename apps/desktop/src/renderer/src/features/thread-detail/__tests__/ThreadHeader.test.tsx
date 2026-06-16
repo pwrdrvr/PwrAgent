@@ -83,7 +83,7 @@ describe("ThreadHeader", () => {
       />,
     );
 
-    const toggle = screen.getByTitle("Open integrated terminal");
+    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(toggle).toHaveTextContent("");
   });

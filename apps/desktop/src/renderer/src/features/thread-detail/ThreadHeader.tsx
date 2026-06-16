@@ -7,6 +7,7 @@ import {
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
 import {
@@ -78,6 +79,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // here (macOS/Linux only — Windows keeps them in the title bar).
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
   const showMasthead = sidebarHidden && !isWindows && Boolean(props.masthead);
+  // Custom viewport tooltip for the terminal toggle, so it matches the
+  // sidebar/rail toggles sitting right beside it instead of falling back to the
+  // slow, edge-clipping native `title`.
+  const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const terminalLabel = props.layout?.terminalOpen
+    ? "Hide integrated terminal"
+    : "Open integrated terminal";
 
   return (
     <header className="thread-header">
@@ -157,17 +165,25 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               className={`thread-header__terminal-toggle${
                 props.layout.terminalOpen ? " is-open" : ""
               }`}
+              aria-label={terminalLabel}
               aria-pressed={props.layout.terminalOpen}
-              title={
-                props.layout.terminalOpen
-                  ? "Hide integrated terminal"
-                  : "Open integrated terminal"
+              onClick={() => {
+                terminalTooltip.hide();
+                props.layout?.onToggleTerminal();
+              }}
+              onMouseEnter={(event) =>
+                terminalTooltip.show(event.currentTarget, terminalLabel)
               }
-              onClick={props.layout.onToggleTerminal}
+              onMouseLeave={terminalTooltip.hide}
+              onFocus={(event) =>
+                terminalTooltip.show(event.currentTarget, terminalLabel)
+              }
+              onBlur={terminalTooltip.hide}
             >
               <TerminalIcon size={14} />
             </button>
           ) : null}
+          {terminalTooltip.tooltipNode}
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}

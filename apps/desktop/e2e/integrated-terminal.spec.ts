@@ -19,8 +19,8 @@ async function openSmokeThread(page: Page) {
 }
 
 async function openIntegratedTerminal(page: Page) {
-  await page.getByTitle("Open integrated terminal").click();
-  await expect(page.getByLabel("Integrated terminal")).toBeVisible();
+  await page.getByRole("button", { name: "Open integrated terminal" }).click();
+  await expect(page.getByLabel("Integrated terminal", { exact: true })).toBeVisible();
   await expect(page.locator(".integrated-terminal .xterm")).toBeVisible();
   await expect(page.locator(".integrated-terminal__status")).not.toHaveText(
     "Starting shell...",
@@ -53,10 +53,10 @@ test("keeps a per-thread integrated terminal alive while hidden", async () => {
       app.window,
       'node -e "setTimeout(() => console.log(\'PWRAGENT_TERMINAL_HIDDEN_DONE\'), 500)"',
     );
-    await app.window.getByTitle("Hide integrated terminal").click();
-    await expect(app.window.getByLabel("Integrated terminal")).toHaveCount(0);
+    await app.window.getByRole("button", { name: "Hide integrated terminal" }).click();
+    await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toHaveCount(0);
 
-    await app.window.getByTitle("Open integrated terminal").click();
+    await app.window.getByRole("button", { name: "Open integrated terminal" }).click();
 
     await expect(terminalRows(app.window)).toContainText(
       "PWRAGENT_TERMINAL_HIDDEN_DONE",
@@ -86,10 +86,10 @@ test("removes the integrated terminal pane when the shell exits", async () => {
     );
     await typeTerminalCommand(app.window, "exit");
 
-    await expect(app.window.getByLabel("Integrated terminal")).toHaveCount(0, {
+    await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toHaveCount(0, {
       timeout: 10_000,
     });
-    await expect(app.window.getByTitle("Open integrated terminal")).toHaveAttribute(
+    await expect(app.window.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );

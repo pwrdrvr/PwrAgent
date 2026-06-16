@@ -977,14 +977,18 @@ textarea,
   gap: 8px;
 }
 
-/* The action buttons are load-bearing chrome and keep a comfortable size; the
-   decorative wordmark is what yields when the rail gets narrow. Below the width
-   where both fit beside the macOS stoplight reserve, the wordmark is hidden
-   outright (not squashed or ellipsized). `.sidebar` is the width-query
-   container — the same mechanism the lens switch uses to swap
-   "Directories" → "Dirs". */
-@container (max-width: 301px) {
-  .sidebar__masthead > .sidebar__brand {
+/* When the rail gets too narrow for the wordmark + all four actions, the
+   Settings gear drops out — it's the one masthead action reachable elsewhere
+   (app menu → Settings…, ⌘,), so it's the safe one to shed. That alone frees
+   enough room for the wordmark + the remaining three buttons to coexist all the
+   way down to the minimum rail width, so the wordmark itself never has to hide.
+   `.sidebar` is the width-query container — the same mechanism the lens switch
+   uses to swap "Directories" → "Dirs". */
+@container (max-width: 282px) {
+  /* Compound selector (.0,2,0) so this beats `.sidebar__icon-button`'s own
+     `display: inline-flex` (.0,1,0), which is declared later in the file and
+     would otherwise win the cascade and keep the gear visible. */
+  .sidebar__icon-button.sidebar__masthead-settings {
     display: none;
   }
 }
@@ -1008,7 +1012,9 @@ textarea,
 .sidebar__masthead-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  /* Tight, even spacing — the icons read as one toolbar cluster, not four
+     separate framed controls. */
+  gap: 2px;
   /* Pinned to the trailing edge whether or not the wordmark is present, so the
      buttons don't jump left when it hides. Never shrink. */
   margin-left: auto;
@@ -12518,14 +12524,15 @@ textarea,
 }
 
 .composer__lightbox-close {
-  /* Anchored just inside the image's top-right corner (not floating outside at
-     a negative offset, which for a large image drifts to the window edge /
-     title-bar strip where the click never lands). `z-index` keeps it above the
-     image so the X is always the topmost, clickable element. */
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1;
+  /* Pinned to the overlay's top-right corner via `fixed` (viewport-relative),
+     not the image box. An image-relative `absolute` X can land off-screen or
+     lose a stacking fight for large/odd-aspect images; a viewport-fixed button
+     above the scrim (z-index over the z:60 overlay) is always visible and
+     always the topmost click target. */
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 61;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -12538,6 +12545,7 @@ textarea,
   color: var(--text-primary);
   box-shadow: 0 1px 3px var(--shadow-tint-soft);
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .composer__lightbox-close:hover {
