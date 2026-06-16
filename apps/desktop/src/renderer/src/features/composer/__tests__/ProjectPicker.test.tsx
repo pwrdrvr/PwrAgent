@@ -148,7 +148,7 @@ describe("ProjectPicker", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
-    const search = screen.getByPlaceholderText("Search directories");
+    const search = screen.getByPlaceholderText("Find a directory");
     fireEvent.change(search, { target: { value: "snap" } });
 
     const list = screen.getByRole("listbox", { name: /tracked directories/i });

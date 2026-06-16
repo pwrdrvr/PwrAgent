@@ -149,7 +149,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
             <input
               type="text"
               autoFocus
-              placeholder="Search directories"
+              placeholder="Find a directory"
               className="project-picker__search-input"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
