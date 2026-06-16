@@ -11,7 +11,8 @@
 //
 // To extend: add another entry to SURFACES below, or a separate
 // `test(...)` block that drives the renderer into a state (open a
-// dialog, switch a tab) and then calls `runAxe(window)`.
+// dialog, switch a tab) and then calls `runAxe(window)`. Launch via
+// `launchAuditApp()` so the surface is audited at rest (see below).
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -19,6 +20,29 @@ import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+// Audit the settled, at-rest visual state. Several surfaces play a brief
+// mount/enter animation — e.g. the pinned context rail's `.context-panel`
+// runs a 220ms `context-panel-in` opacity 0 -> 1 fade — and these are all
+// already disabled under `@media (prefers-reduced-motion: reduce)`. While
+// such a fade is in flight, axe-core blends a partially transparent
+// element's text toward its background and reports a transient
+// color-contrast miss on text that comfortably passes AA at rest. The
+// empty-thread shell's six `.context-grid dt` labels (`--text-muted`,
+// ~5.4:1 on the panel — just above the 4.5:1 line) are the first to dip
+// under mid-fade, which is exactly the intermittent
+// `div:nth-child(1..6) > dt` failure this gate used to flake on. Emulating
+// reduced motion makes every audited surface paint its non-animating
+// state, so the gate measures real, persistent contrast instead of a
+// sub-second animation frame. No renderer JS branches on reduced motion,
+// so this only settles CSS animation — it never changes what renders.
+async function launchAuditApp() {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+  await app.window.emulateMedia({ reducedMotion: "reduce" });
+  return app;
+}
 
 const WCAG_AA_TAGS = [
   "wcag2a",
@@ -81,9 +105,7 @@ async function runAxe(window: Page): Promise<void> {
 
 test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
   test("sidebar + empty-thread shell has no violations", async () => {
-    const app = await launchElectronApp({
-      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    });
+    const app = await launchAuditApp();
     try {
       // Wait for first paint of the inbox lens — the "Replay smoke
       // thread" row is the proxy for "renderer has hydrated".
@@ -97,9 +119,7 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
   });
 
   test("open thread view has no violations", async () => {
-    const app = await launchElectronApp({
-      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    });
+    const app = await launchAuditApp();
     try {
       await app.window
         .getByRole("button", { name: /Replay smoke thread/i })
@@ -119,9 +139,7 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
   });
 
   test("settings overlay has no violations", async () => {
-    const app = await launchElectronApp({
-      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    });
+    const app = await launchAuditApp();
     try {
       await expect(
         app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
@@ -140,9 +158,7 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
   });
 
   test("thread search has no violations", async () => {
-    const app = await launchElectronApp({
-      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    });
+    const app = await launchAuditApp();
     try {
       await expect(
         app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
@@ -162,9 +178,7 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
   });
 
   test("settings → messaging has no violations", async () => {
-    const app = await launchElectronApp({
-      fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    });
+    const app = await launchAuditApp();
     try {
       await expect(
         app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
