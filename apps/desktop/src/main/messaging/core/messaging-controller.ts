@@ -79,6 +79,7 @@ import type {
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingQuestionnaireAnswerComplete,
+  normalizeMessagingQuestionnaireIntent,
 } from "@pwragent/messaging-interface";
 import {
   buildHelpActions,
@@ -2303,7 +2304,7 @@ export class MessagingController {
       return false;
     }
 
-    const intent = pendingIntent.intent;
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
     const question = intent.questions[intent.currentIndex];
     const value = event.text.trim();
     if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
@@ -2327,7 +2328,7 @@ export class MessagingController {
       return;
     }
 
-    const intent = pendingIntent.intent;
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
     if (action.id === "questionnaire:back") {
       await this.updateQuestionnairePendingIntent(
         pendingIntent,

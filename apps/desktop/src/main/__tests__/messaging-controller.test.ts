@@ -9740,6 +9740,58 @@ describe("MessagingController", () => {
     });
   });
 
+  it("normalizes legacy persisted questionnaire intents when answering", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildTextEvent("").channel,
+    );
+    expect(binding).toBeDefined();
+    await harness.store.upsertPendingIntent({
+      id: "legacy-questionnaire",
+      bindingId: binding!.id,
+      channel: binding!.channel,
+      intent: {
+        id: "legacy-questionnaire",
+        kind: "questionnaire",
+        createdAt: 1000,
+        currentIndex: 0,
+        requestContext: {
+          backend: "codex",
+          method: "item/tool/requestUserInput",
+          requestId: "request-legacy",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        questions: [
+          {
+            id: "q1",
+            question: "Legacy freeform?",
+            allowFreeform: true,
+            options: [],
+          },
+        ],
+      } as unknown as MessagingSurfaceIntent,
+      allowedActorIds: ["user-1"],
+      createdAt: 1000,
+      expiresAt: 2000,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Recovered answer."));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "review",
+      answers: [
+        {
+          kind: "custom",
+          value: "Recovered answer.",
+        },
+      ],
+    });
+  });
+
   it("does not resurrect waiting when a delayed approval arrives after the backend is idle", async () => {
     const harness = await createHarness();
     harness.startTurn

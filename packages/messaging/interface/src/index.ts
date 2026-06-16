@@ -785,14 +785,38 @@ export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
   questions: MessagingQuestionnaireQuestion[];
 };
 
+export function normalizeMessagingQuestionnaireIntent(
+  intent: MessagingQuestionnaireIntent,
+): MessagingQuestionnaireIntent {
+  const questions = Array.isArray(intent.questions) ? intent.questions : [];
+  const rawAnswers = Array.isArray(intent.answers) ? intent.answers : [];
+  const answers = questions.map((_, index) => rawAnswers[index] ?? null);
+  const currentIndex =
+    Number.isInteger(intent.currentIndex) && intent.currentIndex >= 0
+      ? Math.min(intent.currentIndex, Math.max(0, questions.length - 1))
+      : 0;
+  const phase = isMessagingQuestionnairePhase(intent.phase)
+    ? intent.phase
+    : "answering";
+
+  return {
+    ...intent,
+    answers,
+    currentIndex,
+    phase,
+    questions,
+  };
+}
+
 export function messagingQuestionnaireActions(
   intent: MessagingQuestionnaireIntent,
 ): MessagingSurfaceAction[] {
-  if (intent.phase === "submitted") {
+  const normalized = normalizeMessagingQuestionnaireIntent(intent);
+  if (normalized.phase === "submitted") {
     return [];
   }
 
-  if (intent.phase === "review") {
+  if (normalized.phase === "review") {
     return [
       {
         id: "questionnaire:back",
@@ -809,8 +833,8 @@ export function messagingQuestionnaireActions(
     ];
   }
 
-  const question = intent.questions[intent.currentIndex];
-  const answer = intent.answers[intent.currentIndex];
+  const question = normalized.questions[normalized.currentIndex];
+  const answer = normalized.answers[normalized.currentIndex];
   const actions: MessagingSurfaceAction[] = (question?.options ?? []).map(
     (option) => ({
       ...option,
@@ -821,7 +845,7 @@ export function messagingQuestionnaireActions(
     }),
   );
 
-  if (intent.currentIndex > 0) {
+  if (normalized.currentIndex > 0) {
     actions.push({
       id: "questionnaire:back",
       label: "Back",
@@ -830,7 +854,7 @@ export function messagingQuestionnaireActions(
     });
   }
   if (messagingQuestionnaireAnswerComplete(answer)) {
-    const isFinalQuestion = intent.currentIndex >= intent.questions.length - 1;
+    const isFinalQuestion = normalized.currentIndex >= normalized.questions.length - 1;
     actions.push({
       id: "questionnaire:next",
       label: isFinalQuestion ? "Review" : "Next",
@@ -850,6 +874,7 @@ export function messagingQuestionnaireAnswerComplete(
 
 export function messagingQuestionnaireAnswerDisplay(
   answer: MessagingQuestionnaireAnswer | null | undefined,
+  options: { secret?: boolean } = {},
 ): string {
   if (!answer) {
     return "";
@@ -858,41 +883,48 @@ export function messagingQuestionnaireAnswerDisplay(
   if (!value) {
     return "";
   }
+  if (options.secret) {
+    return "Secret answer provided";
+  }
   return answer.kind === "custom" ? `Custom: ${value}` : value;
 }
 
 export function formatMessagingQuestionnaireText(
   intent: MessagingQuestionnaireIntent,
 ): string {
-  if (intent.phase === "review" || intent.phase === "submitted") {
+  const normalized = normalizeMessagingQuestionnaireIntent(intent);
+  if (normalized.phase === "review" || normalized.phase === "submitted") {
     const lines = [
-      intent.phase === "submitted" ? "Submitted answers" : "Review answers",
+      normalized.phase === "submitted" ? "Submitted answers" : "Review answers",
       "",
     ];
-    intent.questions.forEach((question, index) => {
+    normalized.questions.forEach((question, index) => {
       const title = [question.header, question.question]
         .filter(Boolean)
         .join(question.header && question.question ? ": " : "");
       lines.push(`${index + 1}. ${title}`);
       lines.push(
         `Answer: ${
-          messagingQuestionnaireAnswerDisplay(intent.answers[index]) || "No answer"
+          messagingQuestionnaireAnswerDisplay(normalized.answers[index], {
+            secret: question.secret,
+          }) || "No answer"
         }`,
       );
-      if (index < intent.questions.length - 1) {
+      if (index < normalized.questions.length - 1) {
         lines.push("");
       }
     });
     return lines.join("\n");
   }
 
-  const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
+  const question =
+    normalized.questions[normalized.currentIndex] ?? normalized.questions[0];
   if (!question) {
     return "Input needed.";
   }
 
   const lines = [
-    `Question ${intent.currentIndex + 1} of ${intent.questions.length}`,
+    `Question ${normalized.currentIndex + 1} of ${normalized.questions.length}`,
     "",
   ];
   if (question.header) {
@@ -900,7 +932,7 @@ export function formatMessagingQuestionnaireText(
   }
   lines.push(question.question);
 
-  const answer = intent.answers[intent.currentIndex];
+  const answer = normalized.answers[normalized.currentIndex];
   question.options.forEach((option, index) => {
     const selected = answer?.kind === "option" && answer.optionId === option.id;
     lines.push("");
@@ -915,13 +947,20 @@ export function formatMessagingQuestionnaireText(
   }
 
   const currentAnswer = messagingQuestionnaireAnswerDisplay(
-    intent.answers[intent.currentIndex],
+    normalized.answers[normalized.currentIndex],
+    { secret: question.secret },
   );
   if (currentAnswer) {
     lines.push("", `Current answer: ${currentAnswer}`);
   }
 
   return lines.join("\n");
+}
+
+function isMessagingQuestionnairePhase(
+  value: unknown,
+): value is MessagingQuestionnairePhase {
+  return value === "answering" || value === "review" || value === "submitted";
 }
 
 export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
