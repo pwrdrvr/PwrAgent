@@ -403,6 +403,66 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
+  it("dismisses the PR tooltip on window blur (cmd-tab away leaves no mouseleave)", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    fireEvent.mouseEnter(prChip);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    // Switching apps never fires mouseleave on the chip, so the tooltip
+    // would otherwise linger. Window blur must tear it down.
+    fireEvent.blur(window);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("dismisses the PR tooltip when the thread list scrolls", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    fireEvent.mouseEnter(prChip);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    // The portal is position:fixed, so it detaches from its target on scroll.
+    // A capture-phase scroll listener must dismiss it.
+    fireEvent.scroll(container);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("renders merged PRs as terminal purple chips without unknown check status", () => {
     renderRow({
       thread: {
