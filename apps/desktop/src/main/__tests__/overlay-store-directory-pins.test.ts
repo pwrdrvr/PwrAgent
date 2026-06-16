@@ -1,23 +1,22 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-directory-pins-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 /**
@@ -119,20 +118,37 @@ describe("SqliteOverlayStore — directory pins", () => {
   });
 
   it("persists pin state across sqlite handles", async () => {
-    await store.setDirectoryPin({
-      directoryKey: "directory:/Users/me/code/PwrAgent",
-      pinnedRank: "1024",
-    });
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-directory-pins-test-",
+    );
     stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
 
-    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
-    const reopenedStore = new SqliteOverlayStore(reopenedDb);
-    await expect(
-      reopenedStore.getDirectoryOverlayState({
+    try {
+      await store.setDirectoryPin({
         directoryKey: "directory:/Users/me/code/PwrAgent",
-      }),
-    ).resolves.toMatchObject({ pinnedRank: "1024" });
-    reopenedDb.close();
+        pinnedRank: "1024",
+      });
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      const reopenedStore = new SqliteOverlayStore(reopenedDb);
+      try {
+        await expect(
+          reopenedStore.getDirectoryOverlayState({
+            directoryKey: "directory:/Users/me/code/PwrAgent",
+          }),
+        ).resolves.toMatchObject({ pinnedRank: "1024" });
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
   });
 
   it("readAllDirectoryOverlays returns every persisted row keyed by directoryKey", async () => {
