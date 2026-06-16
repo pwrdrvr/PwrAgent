@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +8,14 @@ import {
 } from "../app-server/git-working-state-service";
 
 type GitCall = { cwd: string; args: string[] };
+
+function makeTempPrefix(): string {
+  return path.join(os.tmpdir(), "pwragent-git-working-state-");
+}
+
+function normalizeTestPath(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
 
 function fakeGit(
   responder: (args: string[]) => string | undefined,
@@ -106,10 +116,10 @@ describe("probeWorktreeWorkingState", () => {
   });
 
   it("includes cheap untracked text additions in the dirty working-state totals", async () => {
-    const tmpRoot = await mkdtemp("/tmp/pwragent-git-working-state-");
+    const tmpRoot = await mkdtemp(makeTempPrefix());
     try {
-      await writeFile(`${tmpRoot}/note.txt`, "alpha\nbeta\n", "utf8");
-      await writeFile(`${tmpRoot}/archive.zip`, Buffer.from([0, 1, 2, 3]));
+      await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
+      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
       const { runGit } = fakeGit((args) => {
         if (args.includes("--numstat")) return "3\t1\tsrc/a.ts\n";
         if (args.includes("status")) {
@@ -183,6 +193,7 @@ describe("GitWorkingStateService", () => {
   });
 
   it("lists other worktree changes with excluded turn paths filtered before the cap", async () => {
+    const worktreePath = "/repo/wt";
     const { runGit } = fakeGit((args) => {
       if (args.includes("status")) {
         return [
@@ -200,15 +211,15 @@ describe("GitWorkingStateService", () => {
     });
     const service = new GitWorkingStateService({ runGit });
 
-    const response = await service.listOtherChanges("/repo/wt", {
-      excludePaths: ["/repo/wt/src/turn.ts"],
+    const response = await service.listOtherChanges(worktreePath, {
+      excludePaths: [`${worktreePath}/src/turn.ts`],
       maxFiles: 2,
     });
 
     expect(response).toEqual({
       changes: [
         {
-          path: "/repo/wt/docs/PwrAgnt v2.html",
+          path: normalizeTestPath(`${worktreePath}/docs/PwrAgnt v2.html`),
           repoPath: "docs/PwrAgnt v2.html",
           status: "modified",
           staged: false,
@@ -217,7 +228,7 @@ describe("GitWorkingStateService", () => {
           removals: 1,
         },
         {
-          path: "/repo/wt/src/other-b.ts",
+          path: normalizeTestPath(`${worktreePath}/src/other-b.ts`),
           repoPath: "src/other-b.ts",
           status: "added",
           staged: true,
@@ -255,10 +266,10 @@ describe("GitWorkingStateService", () => {
   });
 
   it("reports added-line totals for small untracked text files and byte sizes for binary files", async () => {
-    const tmpRoot = await mkdtemp("/tmp/pwragent-git-working-state-");
+    const tmpRoot = await mkdtemp(makeTempPrefix());
     try {
-      await writeFile(`${tmpRoot}/note.txt`, "alpha\nbeta\n", "utf8");
-      await writeFile(`${tmpRoot}/archive.zip`, Buffer.from([0, 1, 2, 3]));
+      await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
+      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
       const { runGit } = fakeGit((args) => {
         if (args.includes("status")) return "?? note.txt\0?? archive.zip\0";
         if (args.includes("--numstat")) return "";
@@ -270,7 +281,7 @@ describe("GitWorkingStateService", () => {
 
       expect(response.changes).toEqual([
         {
-          path: `${tmpRoot}/note.txt`,
+          path: normalizeTestPath(path.join(tmpRoot, "note.txt")),
           repoPath: "note.txt",
           status: "untracked",
           staged: false,
@@ -280,7 +291,7 @@ describe("GitWorkingStateService", () => {
           removals: 0,
         },
         {
-          path: `${tmpRoot}/archive.zip`,
+          path: normalizeTestPath(path.join(tmpRoot, "archive.zip")),
           repoPath: "archive.zip",
           status: "untracked",
           staged: false,
@@ -295,9 +306,9 @@ describe("GitWorkingStateService", () => {
   });
 
   it("does not report line totals for tracked binary changes", async () => {
-    const tmpRoot = await mkdtemp("/tmp/pwragent-git-working-state-");
+    const tmpRoot = await mkdtemp(makeTempPrefix());
     try {
-      await writeFile(`${tmpRoot}/asset.png`, Buffer.from([0, 1, 2]));
+      await writeFile(path.join(tmpRoot, "asset.png"), Buffer.from([0, 1, 2]));
       const { runGit } = fakeGit((args) => {
         if (args.includes("status")) return " M asset.png\0";
         if (args.includes("--numstat")) return "-\t-\tasset.png\n";
@@ -309,7 +320,7 @@ describe("GitWorkingStateService", () => {
 
       expect(response.changes).toEqual([
         {
-          path: `${tmpRoot}/asset.png`,
+          path: normalizeTestPath(path.join(tmpRoot, "asset.png")),
           repoPath: "asset.png",
           status: "modified",
           staged: false,
@@ -324,8 +335,8 @@ describe("GitWorkingStateService", () => {
   });
 
   it("builds a single-file diff on demand for an untracked file", async () => {
-    const tmpRoot = await mkdtemp("/tmp/pwragent-git-working-state-");
-    const filePath = `${tmpRoot}/note.txt`;
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    const filePath = path.join(tmpRoot, "note.txt");
     await writeFile(filePath, "hello\nworld\n", "utf8");
     const { runGit } = fakeGit((args) => {
       if (args.includes("status")) return "?? note.txt";
