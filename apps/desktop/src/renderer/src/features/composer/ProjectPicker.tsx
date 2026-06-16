@@ -135,11 +135,8 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
         disabled={props.disabled}
         onClick={() => setOpen((current) => !current)}
       >
-        <FolderIcon size={11} />
+        <FolderIcon size={13} />
         <span className="project-picker__label">{buttonLabel}</span>
-        <span className="project-picker__chevron" aria-hidden="true">
-          ⌄
-        </span>
       </button>
 
       {open ? (
