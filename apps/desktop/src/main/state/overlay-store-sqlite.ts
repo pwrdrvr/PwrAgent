@@ -17,8 +17,10 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
+  ThreadPricingSummary,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
+  ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
@@ -502,6 +504,200 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return { overlay: nextState, persisted: true };
+  }
+
+  async upsertThreadUsageLine(params: {
+    line: ThreadUsageLineRecord;
+  }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
+    const now = Date.now();
+    const line = normalizeThreadUsageLine(params.line, now);
+    const upsert = this.stateDb.raw.transaction(() => {
+      const existing = this.readThreadUsageLineSync(line.usageLineId);
+      if (
+        (line.source === "hydration" || line.source === "backfill") &&
+        line.turnId
+      ) {
+        this.stateDb.raw
+          .prepare(
+            `UPDATE thread_usage_lines
+             SET status = 'superseded', updated_at = ?
+             WHERE backend = ?
+               AND thread_id = ?
+               AND turn_id = ?
+               AND source = 'live'
+               AND usage_line_id != ?`,
+          )
+          .run(
+            now,
+            line.backend,
+            line.threadId,
+            line.turnId,
+            line.usageLineId,
+          );
+      }
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO thread_usage_lines (
+            usage_line_id,
+            backend,
+            thread_id,
+            parent_thread_id,
+            turn_id,
+            source,
+            source_item_id,
+            scope,
+            status,
+            created_at,
+            completed_at,
+            model,
+            reasoning_effort,
+            service_tier,
+            fast_mode,
+            settings_source,
+            settings_confidence,
+            input_tokens,
+            cached_input_tokens,
+            uncached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            total_tokens,
+            price_status,
+            price_unavailable_reason,
+            currency,
+            pricing_catalog_id,
+            pricing_catalog_version,
+            pricing_rate_id,
+            uncached_input_cost_micros,
+            cached_input_cost_micros,
+            output_cost_micros,
+            total_cost_micros,
+            updated_at
+          ) VALUES (
+            @usageLineId,
+            @backend,
+            @threadId,
+            @parentThreadId,
+            @turnId,
+            @source,
+            @sourceItemId,
+            @scope,
+            @status,
+            @createdAt,
+            @completedAt,
+            @model,
+            @reasoningEffort,
+            @serviceTier,
+            @fastMode,
+            @settingsSource,
+            @settingsConfidence,
+            @inputTokens,
+            @cachedInputTokens,
+            @uncachedInputTokens,
+            @outputTokens,
+            @reasoningOutputTokens,
+            @totalTokens,
+            @priceStatus,
+            @priceUnavailableReason,
+            @currency,
+            @pricingCatalogId,
+            @pricingCatalogVersion,
+            @pricingRateId,
+            @uncachedInputCostMicros,
+            @cachedInputCostMicros,
+            @outputCostMicros,
+            @totalCostMicros,
+            @updatedAt
+          )
+          ON CONFLICT(usage_line_id) DO UPDATE SET
+            backend = excluded.backend,
+            thread_id = excluded.thread_id,
+            parent_thread_id = excluded.parent_thread_id,
+            turn_id = excluded.turn_id,
+            source = excluded.source,
+            source_item_id = excluded.source_item_id,
+            scope = excluded.scope,
+            status = excluded.status,
+            created_at = excluded.created_at,
+            completed_at = excluded.completed_at,
+            model = excluded.model,
+            reasoning_effort = excluded.reasoning_effort,
+            service_tier = excluded.service_tier,
+            fast_mode = excluded.fast_mode,
+            settings_source = excluded.settings_source,
+            settings_confidence = excluded.settings_confidence,
+            input_tokens = excluded.input_tokens,
+            cached_input_tokens = excluded.cached_input_tokens,
+            uncached_input_tokens = excluded.uncached_input_tokens,
+            output_tokens = excluded.output_tokens,
+            reasoning_output_tokens = excluded.reasoning_output_tokens,
+            total_tokens = excluded.total_tokens,
+            price_status = excluded.price_status,
+            price_unavailable_reason = excluded.price_unavailable_reason,
+            currency = excluded.currency,
+            pricing_catalog_id = excluded.pricing_catalog_id,
+            pricing_catalog_version = excluded.pricing_catalog_version,
+            pricing_rate_id = excluded.pricing_rate_id,
+            uncached_input_cost_micros = excluded.uncached_input_cost_micros,
+            cached_input_cost_micros = excluded.cached_input_cost_micros,
+            output_cost_micros = excluded.output_cost_micros,
+            total_cost_micros = excluded.total_cost_micros,
+            updated_at = excluded.updated_at`,
+        )
+        .run(toThreadUsageLineRowParams(line));
+
+      if (existing) {
+        const existingRollupThreadId = existing.parentThreadId ?? existing.threadId;
+        const nextRollupThreadId = line.parentThreadId ?? line.threadId;
+        if (
+          existing.backend !== line.backend ||
+          existingRollupThreadId !== nextRollupThreadId ||
+          existing.currency !== line.currency
+        ) {
+          this.recomputeThreadPricingSummarySync({
+            backend: existing.backend,
+            currency: existing.currency,
+            threadId: existingRollupThreadId,
+            updatedAt: now,
+          });
+        }
+      }
+
+      return this.recomputeThreadPricingSummarySync({
+        backend: line.backend,
+        currency: line.currency,
+        threadId: line.parentThreadId ?? line.threadId,
+        updatedAt: now,
+      });
+    });
+
+    return { line, summary: upsert() };
+  }
+
+  async readThreadPricing(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<{ lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] }> {
+    const lineRows = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM thread_usage_lines
+         WHERE backend = ?
+           AND status != 'superseded'
+           AND (thread_id = ? OR parent_thread_id = ?)
+         ORDER BY created_at DESC, usage_line_id DESC`,
+      )
+      .all(params.backend, params.threadId, params.threadId) as ThreadUsageLineRow[];
+    const summaryRows = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM thread_pricing_summaries
+         WHERE backend = ? AND thread_id = ?
+         ORDER BY currency ASC`,
+      )
+      .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
+
+    return {
+      lines: lineRows.map(threadUsageLineFromRow),
+      summaries: summaryRows.map(threadPricingSummaryFromRow),
+    };
   }
 
   async upsertThreadSubAgent(params: {
@@ -1570,6 +1766,126 @@ export class SqliteOverlayStore {
       rows.map((r) => [r.directory_key, JSON.parse(r.payload) as DirectoryOverlayState]),
     );
   }
+
+  private readThreadUsageLineSync(
+    usageLineId: string,
+  ): ThreadUsageLineRecord | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT * FROM thread_usage_lines WHERE usage_line_id = ?")
+      .get(usageLineId) as ThreadUsageLineRow | undefined;
+    return row ? threadUsageLineFromRow(row) : undefined;
+  }
+
+  private recomputeThreadPricingSummarySync(params: {
+    backend: string;
+    currency: string;
+    threadId: string;
+    updatedAt: number;
+  }): ThreadPricingSummary {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT
+           COUNT(*) AS usage_line_count,
+           SUM(CASE WHEN price_status = 'priced' THEN 1 ELSE 0 END) AS priced_usage_line_count,
+           SUM(CASE WHEN price_status != 'priced' THEN 1 ELSE 0 END) AS unpriced_usage_line_count,
+           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+           COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+           COALESCE(SUM(total_tokens), 0) AS total_tokens,
+           COALESCE(SUM(CASE WHEN price_status = 'priced' THEN total_cost_micros ELSE 0 END), 0)
+             AS total_cost_micros
+         FROM thread_usage_lines
+         WHERE backend = ?
+           AND currency = ?
+           AND status != 'superseded'
+           AND (thread_id = ? OR parent_thread_id = ?)`,
+      )
+      .get(
+        params.backend,
+        params.currency,
+        params.threadId,
+        params.threadId,
+      ) as ThreadPricingAggregateRow;
+
+    const summary: ThreadPricingSummary = {
+      backend: params.backend,
+      cachedInputTokens: row.cached_input_tokens ?? 0,
+      currency: params.currency,
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      pricedUsageLineCount: row.priced_usage_line_count ?? 0,
+      reasoningOutputTokens: row.reasoning_output_tokens ?? 0,
+      threadId: params.threadId,
+      totalCostMicros: row.total_cost_micros ?? 0,
+      totalTokens: row.total_tokens ?? 0,
+      uncachedInputTokens: row.uncached_input_tokens ?? 0,
+      unpricedUsageLineCount: row.unpriced_usage_line_count ?? 0,
+      updatedAt: params.updatedAt,
+      usageLineCount: row.usage_line_count ?? 0,
+    };
+
+    if (summary.usageLineCount === 0) {
+      this.stateDb.raw
+        .prepare(
+          `DELETE FROM thread_pricing_summaries
+           WHERE backend = ? AND thread_id = ? AND currency = ?`,
+        )
+        .run(params.backend, params.threadId, params.currency);
+      return summary;
+    }
+
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_pricing_summaries (
+          backend,
+          thread_id,
+          currency,
+          usage_line_count,
+          priced_usage_line_count,
+          unpriced_usage_line_count,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          @backend,
+          @threadId,
+          @currency,
+          @usageLineCount,
+          @pricedUsageLineCount,
+          @unpricedUsageLineCount,
+          @inputTokens,
+          @cachedInputTokens,
+          @uncachedInputTokens,
+          @outputTokens,
+          @reasoningOutputTokens,
+          @totalTokens,
+          @totalCostMicros,
+          @updatedAt
+        )
+        ON CONFLICT(backend, thread_id, currency) DO UPDATE SET
+          usage_line_count = excluded.usage_line_count,
+          priced_usage_line_count = excluded.priced_usage_line_count,
+          unpriced_usage_line_count = excluded.unpriced_usage_line_count,
+          input_tokens = excluded.input_tokens,
+          cached_input_tokens = excluded.cached_input_tokens,
+          uncached_input_tokens = excluded.uncached_input_tokens,
+          output_tokens = excluded.output_tokens,
+          reasoning_output_tokens = excluded.reasoning_output_tokens,
+          total_tokens = excluded.total_tokens,
+          total_cost_micros = excluded.total_cost_micros,
+          updated_at = excluded.updated_at`,
+      )
+      .run(summary);
+
+    return summary;
+  }
 }
 
 /** Check whether a linked directory was created by the handoff service. */
@@ -1600,6 +1916,203 @@ function normalizeThreadAgent(
   };
 }
 
+type ThreadUsageLineRow = {
+  usage_line_id: string;
+  backend: string;
+  thread_id: string;
+  parent_thread_id: string | null;
+  turn_id: string | null;
+  source: ThreadUsageLineRecord["source"];
+  source_item_id: string | null;
+  scope: ThreadUsageLineRecord["scope"];
+  status: ThreadUsageLineRecord["status"];
+  created_at: number;
+  completed_at: number | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  service_tier: string | null;
+  fast_mode: number | null;
+  settings_source: ThreadUsageLineRecord["settingsSource"] | null;
+  settings_confidence: ThreadUsageLineRecord["settingsConfidence"] | null;
+  input_tokens: number;
+  cached_input_tokens: number;
+  uncached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+  price_status: ThreadUsageLineRecord["priceStatus"];
+  price_unavailable_reason: ThreadUsageLineRecord["priceUnavailableReason"] | null;
+  currency: string;
+  pricing_catalog_id: string | null;
+  pricing_catalog_version: string | null;
+  pricing_rate_id: string | null;
+  uncached_input_cost_micros: number;
+  cached_input_cost_micros: number;
+  output_cost_micros: number;
+  total_cost_micros: number;
+  updated_at: number;
+};
+
+type ThreadPricingSummaryRow = {
+  backend: string;
+  thread_id: string;
+  currency: string;
+  usage_line_count: number;
+  priced_usage_line_count: number;
+  unpriced_usage_line_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  uncached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+  total_cost_micros: number;
+  updated_at: number;
+};
+
+type ThreadPricingAggregateRow = Omit<
+  ThreadPricingSummaryRow,
+  "backend" | "thread_id" | "currency" | "updated_at"
+>;
+
+function normalizeThreadUsageLine(
+  line: ThreadUsageLineRecord,
+  updatedAt: number,
+): ThreadUsageLineRecord {
+  const inputTokens = clampTokenCount(line.inputTokens);
+  const cachedInputTokens = Math.min(inputTokens, clampTokenCount(line.cachedInputTokens));
+  const uncachedInputTokens = Math.max(
+    0,
+    line.uncachedInputTokens ?? inputTokens - cachedInputTokens,
+  );
+  const outputTokens = clampTokenCount(line.outputTokens);
+  const reasoningOutputTokens = clampTokenCount(line.reasoningOutputTokens);
+  const totalTokens =
+    line.totalTokens > 0
+      ? clampTokenCount(line.totalTokens)
+      : inputTokens + outputTokens + reasoningOutputTokens;
+  return {
+    ...line,
+    cachedInputTokens,
+    completedAt: line.completedAt,
+    createdAt: line.createdAt || updatedAt,
+    currency: line.currency || "USD",
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
+  };
+}
+
+function clampTokenCount(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string, unknown> {
+  return {
+    backend: line.backend,
+    cachedInputCostMicros: line.cachedInputCostMicros,
+    cachedInputTokens: line.cachedInputTokens,
+    completedAt: line.completedAt ?? null,
+    createdAt: line.createdAt,
+    currency: line.currency,
+    fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
+    inputTokens: line.inputTokens,
+    model: line.model ?? null,
+    outputCostMicros: line.outputCostMicros,
+    outputTokens: line.outputTokens,
+    parentThreadId: line.parentThreadId ?? null,
+    priceStatus: line.priceStatus,
+    priceUnavailableReason: line.priceUnavailableReason ?? null,
+    pricingCatalogId: line.pricingCatalogId ?? null,
+    pricingCatalogVersion: line.pricingCatalogVersion ?? null,
+    pricingRateId: line.pricingRateId ?? null,
+    reasoningEffort: line.reasoningEffort ?? null,
+    reasoningOutputTokens: line.reasoningOutputTokens,
+    scope: line.scope,
+    serviceTier: line.serviceTier ?? null,
+    settingsConfidence: line.settingsConfidence ?? null,
+    settingsSource: line.settingsSource ?? null,
+    source: line.source,
+    sourceItemId: line.sourceItemId ?? null,
+    status: line.status,
+    threadId: line.threadId,
+    totalCostMicros: line.totalCostMicros,
+    totalTokens: line.totalTokens,
+    turnId: line.turnId ?? null,
+    uncachedInputCostMicros: line.uncachedInputCostMicros,
+    uncachedInputTokens: line.uncachedInputTokens,
+    updatedAt: Date.now(),
+    usageLineId: line.usageLineId,
+  };
+}
+
+function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
+  return {
+    backend: row.backend,
+    cachedInputCostMicros: row.cached_input_cost_micros,
+    cachedInputTokens: row.cached_input_tokens,
+    ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
+    createdAt: row.created_at,
+    currency: row.currency,
+    ...(row.fast_mode !== null ? { fastMode: Boolean(row.fast_mode) } : {}),
+    inputTokens: row.input_tokens,
+    ...(row.model ? { model: row.model } : {}),
+    outputCostMicros: row.output_cost_micros,
+    outputTokens: row.output_tokens,
+    ...(row.parent_thread_id ? { parentThreadId: row.parent_thread_id } : {}),
+    priceStatus: row.price_status,
+    ...(row.price_unavailable_reason
+      ? { priceUnavailableReason: row.price_unavailable_reason }
+      : {}),
+    ...(row.pricing_catalog_id ? { pricingCatalogId: row.pricing_catalog_id } : {}),
+    ...(row.pricing_catalog_version
+      ? { pricingCatalogVersion: row.pricing_catalog_version }
+      : {}),
+    ...(row.pricing_rate_id ? { pricingRateId: row.pricing_rate_id } : {}),
+    ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
+    reasoningOutputTokens: row.reasoning_output_tokens,
+    scope: row.scope,
+    ...(row.service_tier ? { serviceTier: row.service_tier } : {}),
+    ...(row.settings_confidence
+      ? { settingsConfidence: row.settings_confidence }
+      : {}),
+    ...(row.settings_source ? { settingsSource: row.settings_source } : {}),
+    source: row.source,
+    ...(row.source_item_id ? { sourceItemId: row.source_item_id } : {}),
+    status: row.status,
+    threadId: row.thread_id,
+    totalCostMicros: row.total_cost_micros,
+    totalTokens: row.total_tokens,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
+    uncachedInputCostMicros: row.uncached_input_cost_micros,
+    uncachedInputTokens: row.uncached_input_tokens,
+    usageLineId: row.usage_line_id,
+  };
+}
+
+function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricingSummary {
+  return {
+    backend: row.backend,
+    cachedInputTokens: row.cached_input_tokens,
+    currency: row.currency,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    pricedUsageLineCount: row.priced_usage_line_count,
+    reasoningOutputTokens: row.reasoning_output_tokens,
+    threadId: row.thread_id,
+    totalCostMicros: row.total_cost_micros,
+    totalTokens: row.total_tokens,
+    uncachedInputTokens: row.uncached_input_tokens,
+    unpricedUsageLineCount: row.unpriced_usage_line_count,
+    updatedAt: row.updated_at,
+    usageLineCount: row.usage_line_count,
+  };
+}
+
 export type OverlayStoreLike = Pick<
   SqliteOverlayStore,
   | "reconcileNavigationSnapshot"
@@ -1611,6 +2124,8 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayStates"
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
+  | "upsertThreadUsageLine"
+  | "readThreadPricing"
   | "upsertThreadSubAgent"
   | "setThreadReaction"
   | "setThreadPin"

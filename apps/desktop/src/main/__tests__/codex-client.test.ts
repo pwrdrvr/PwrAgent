@@ -3330,6 +3330,78 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("prices Codex rollout token_count events from turn_context model metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-token-count-priced", {
+      events: [
+        {
+          type: "turn_context",
+          timestamp: "2026-06-16T13:26:02.690Z",
+          payload: {
+            turn_id: "turn-1",
+            model: "gpt-5.5",
+            collaboration_mode: {
+              mode: "default",
+              settings: {
+                model: "gpt-5.5",
+                reasoning_effort: "high",
+              },
+            },
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-06-16T13:26:25.826Z",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: 40_740,
+                cached_input_tokens: 39_808,
+                output_tokens: 27,
+                reasoning_output_tokens: 0,
+                total_tokens: 40_767,
+              },
+              total_token_usage: {
+                input_tokens: 80_972,
+                cached_input_tokens: 42_240,
+                output_tokens: 515,
+                reasoning_output_tokens: 339,
+                total_tokens: 81_487,
+              },
+              model_context_window: 258_400,
+            },
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-token-count-priced",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "activity",
+        id: "live-token-usage-1781616385826",
+        summary:
+          "Latest request usage: 932 uncached in · 39,808 cached · 27 out · $0.026 list price",
+        status: "completed",
+      },
+    ]);
+    const usage = replay.entries[0];
+    expect(usage?.type === "activity" ? usage.details.at(-1)?.label : undefined).toBe(
+      "Cost: $0.026 list price for GPT-5.5 Standard",
+    );
+
+    await client.close();
+  });
+
   it("preserves local image fields from durable user message records", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-local-image-records", {

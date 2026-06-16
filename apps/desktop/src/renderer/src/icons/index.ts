@@ -18,6 +18,7 @@ export { NewThreadIcon } from "./NewThreadIcon";
 export { PinIcon } from "./PinIcon";
 export { PlanIcon } from "./PlanIcon";
 export { PlayIcon } from "./PlayIcon";
+export { PricingIcon } from "./PricingIcon";
 export { ProjectsIcon } from "./ProjectsIcon";
 export { PullRequestIcon } from "./PullRequestIcon";
 export { ServerIcon } from "./ServerIcon";

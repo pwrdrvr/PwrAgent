@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 16;
+export const CURRENT_STATE_DB_USER_VERSION = 17;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -475,6 +475,102 @@ CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
   ON pr_lookup_cache(fetched_at DESC);
 `;
 
+const THREAD_USAGE_PRICING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
+  catalog_id      TEXT NOT NULL,
+  catalog_version TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  currency        TEXT NOT NULL,
+  effective_from  INTEGER NOT NULL,
+  effective_to    INTEGER,
+  source_label    TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (catalog_id, catalog_version)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_rates (
+  rate_id                         TEXT PRIMARY KEY,
+  catalog_id                      TEXT NOT NULL,
+  catalog_version                 TEXT NOT NULL,
+  provider                        TEXT NOT NULL,
+  currency                        TEXT NOT NULL,
+  model                           TEXT NOT NULL,
+  service_tier                    TEXT NOT NULL,
+  input_micros_per_million        INTEGER NOT NULL,
+  cached_input_micros_per_million INTEGER NOT NULL,
+  output_micros_per_million       INTEGER NOT NULL,
+  display_name                    TEXT NOT NULL,
+  FOREIGN KEY (catalog_id, catalog_version)
+    REFERENCES pricing_catalog_versions(catalog_id, catalog_version)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pricing_rates_lookup
+  ON pricing_rates(provider, model, service_tier, currency);
+
+CREATE TABLE IF NOT EXISTS thread_usage_lines (
+  usage_line_id              TEXT PRIMARY KEY,
+  backend                    TEXT NOT NULL,
+  thread_id                  TEXT NOT NULL,
+  parent_thread_id           TEXT,
+  turn_id                    TEXT,
+  source                     TEXT NOT NULL,
+  source_item_id             TEXT,
+  scope                      TEXT NOT NULL,
+  status                     TEXT NOT NULL,
+  created_at                 INTEGER NOT NULL,
+  completed_at               INTEGER,
+  model                      TEXT,
+  reasoning_effort           TEXT,
+  service_tier               TEXT,
+  fast_mode                  INTEGER,
+  settings_source            TEXT,
+  settings_confidence        TEXT,
+  input_tokens               INTEGER NOT NULL,
+  cached_input_tokens        INTEGER NOT NULL,
+  uncached_input_tokens      INTEGER NOT NULL,
+  output_tokens              INTEGER NOT NULL,
+  reasoning_output_tokens    INTEGER NOT NULL,
+  total_tokens               INTEGER NOT NULL,
+  price_status               TEXT NOT NULL,
+  price_unavailable_reason   TEXT,
+  currency                   TEXT NOT NULL,
+  pricing_catalog_id         TEXT,
+  pricing_catalog_version    TEXT,
+  pricing_rate_id            TEXT,
+  uncached_input_cost_micros INTEGER NOT NULL,
+  cached_input_cost_micros   INTEGER NOT NULL,
+  output_cost_micros         INTEGER NOT NULL,
+  total_cost_micros          INTEGER NOT NULL,
+  updated_at                 INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
+  ON thread_usage_lines(backend, thread_id, turn_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
+  ON thread_usage_lines(backend, thread_id, source, source_item_id);
+
+CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (backend, thread_id, currency)
+);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -617,6 +713,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 16) {
       db.transaction(() => {
         db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
+        db.pragma("user_version = 16");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 17) {
+      db.transaction(() => {
+        db.exec(THREAD_USAGE_PRICING_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -769,6 +871,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
     ensurePullRequestProviderColumns(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");

@@ -4091,6 +4091,7 @@ script = "echo setup"
     });
     await vi.waitFor(() => {
       expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+      expect(sessions[0]?.executionMode).toBe("full-access");
     });
 
     expect(sessions[0]?.executionMode).toBe("full-access");

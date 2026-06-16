@@ -11270,6 +11270,10 @@ textarea,
   color: var(--danger-text);
 }
 
+.context-empty--warning {
+  color: var(--status-warning);
+}
+
 .backend-status-list {
   display: flex;
   flex-direction: column;

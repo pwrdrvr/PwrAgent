@@ -10,7 +10,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  BackendSummary,
+  NavigationThreadSummary,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
@@ -111,6 +116,7 @@ type PanelOverrides = Partial<
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
+    | "pricing"
   >
 >;
 
@@ -345,6 +351,75 @@ describe("ThreadContextPanel", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("tab", { name: "Provider status" }),
     );
+  });
+
+  it("renders cached pricing totals and per-turn model settings", () => {
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      totalCostMicros: 9_500,
+      usageLineCount: 1,
+      pricedUsageLineCount: 1,
+      unpricedUsageLineCount: 0,
+      updatedAt: 1_800_000_000_000,
+    };
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "codex:thread-1:turn-1:turn:item-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      scope: "turn",
+      source: "hydration",
+      sourceItemId: "item-1",
+      status: "finalized",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+      settingsSource: "turn-context",
+      settingsConfidence: "exact",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 7_500,
+      cachedInputCostMicros: 500,
+      outputCostMicros: 1_500,
+      totalCostMicros: 9_500,
+      pricingCatalogId: "openai-api",
+      pricingCatalogVersion: "2026-06-16",
+      pricingRateId: "openai-api:2026-06-16:gpt-5.5:priority",
+      createdAt: 1_800_000_000_000,
+      completedAt: 1_800_000_001_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [summary],
+      },
+    });
+
+    expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
+    expect(screen.getAllByText("$0.010")[0]).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.5 · high · Fast · priority")).toBeInTheDocument();
+    expect(
+      screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("$0.010 list price")).toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

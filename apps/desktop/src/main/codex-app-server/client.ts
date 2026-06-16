@@ -1,8 +1,15 @@
 import path from "node:path";
 import {
+  estimateOpenAiTokenUsageCost,
+  formatTokenUsagePriceFactor,
+  formatTokenUsageStandardRateSuffix,
+  formatTokenUsageUsd,
+  formatTokenUsageUsdPerMillion,
   isToolManagedWorktreePath,
   parseCodexTurnErrorMessage,
+  resolveOpenAiPricingServiceTier,
   shortenDerivedThreadTitle,
+  type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type {
   AppServerAvailableCommandSummary,
@@ -2638,6 +2645,12 @@ type NormalizedTokenUsage = {
   tokens: TokenUsageBreakdown;
 };
 
+type TokenUsagePricingContext = {
+  fastMode?: boolean;
+  model?: string;
+  serviceTier?: string;
+};
+
 function readTokenUsageBreakdown(
   record: Record<string, unknown>
 ): TokenUsageBreakdown | undefined {
@@ -2705,10 +2718,88 @@ function formatTokenCount(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
+function readTokenUsageFastMode(record: Record<string, unknown>): boolean | undefined {
+  const value = record.fastMode ?? record.fast_mode;
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readTokenUsagePricingContext(
+  record: Record<string, unknown>
+): TokenUsagePricingContext {
+  const payload = asRecord(record.payload);
+  const settings =
+    asRecord(asRecord(record.collaboration_mode)?.settings) ??
+    asRecord(asRecord(payload?.collaboration_mode)?.settings);
+  return {
+    fastMode:
+      readTokenUsageFastMode(record) ??
+      readTokenUsageFastMode(payload ?? {}) ??
+      readTokenUsageFastMode(settings ?? {}),
+    model:
+      pickString(record, ["model", "modelId", "model_id"]) ??
+      pickString(payload ?? {}, ["model", "modelId", "model_id"]) ??
+      pickString(settings ?? {}, ["model", "modelId", "model_id"]),
+    serviceTier:
+      pickString(record, ["serviceTier", "service_tier"]) ??
+      pickString(payload ?? {}, ["serviceTier", "service_tier"]) ??
+      pickString(settings ?? {}, ["serviceTier", "service_tier"]),
+  };
+}
+
+function mergeTokenUsagePricingContext(
+  primary: TokenUsagePricingContext,
+  fallback?: TokenUsagePricingContext
+): TokenUsagePricingContext {
+  return {
+    fastMode: primary.fastMode ?? fallback?.fastMode,
+    model: primary.model ?? fallback?.model,
+    serviceTier: primary.serviceTier ?? fallback?.serviceTier,
+  };
+}
+
+function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingContext | undefined {
+  const visit = (node: unknown): TokenUsagePricingContext | undefined => {
+    if (Array.isArray(node)) {
+      for (const entry of node) {
+        const context = visit(entry);
+        if (context) {
+          return context;
+        }
+      }
+      return undefined;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return undefined;
+    }
+
+    const normalizedType = normalizeItemType(pickString(record, ["type"]));
+    if (normalizedType === "turncontext") {
+      const context = readTokenUsagePricingContext(record);
+      if (context.model || context.serviceTier || context.fastMode !== undefined) {
+        return context;
+      }
+    }
+
+    for (const key of ["events", "payload", "item", "data", "thread", "response", "result"]) {
+      const context = visit(record[key]);
+      if (context) {
+        return context;
+      }
+    }
+    return undefined;
+  };
+
+  return visit(value);
+}
+
 function summarizeTokenUsageActivity(
   record: Record<string, unknown>,
   createdAt?: number,
-  turn?: AppServerThreadTurnMetadata
+  turn?: AppServerThreadTurnMetadata,
+  pricingContext?: TokenUsagePricingContext,
+  threadId?: string
 ): AppServerThreadActivityEntry | undefined {
   const normalizedType = normalizeItemType(pickString(record, ["type"]));
   if (normalizedType !== "tokencount" && normalizedType !== "tokenusage") {
@@ -2726,6 +2817,19 @@ function summarizeTokenUsageActivity(
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const resolvedPricingContext = mergeTokenUsagePricingContext(
+    readTokenUsagePricingContext(record),
+    pricingContext
+  );
+  const cost = estimateOpenAiTokenUsageCost({
+    cachedInputTokens,
+    at: createdAt,
+    fastMode: resolvedPricingContext.fastMode,
+    model: resolvedPricingContext.model,
+    outputTokens,
+    serviceTier: resolvedPricingContext.serviceTier,
+    uncachedInputTokens,
+  });
   const idSuffix = typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
   const summaryParts = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
@@ -2733,37 +2837,173 @@ function summarizeTokenUsageActivity(
     reasoningOutputTokens > 0
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
       : `${formatTokenCount(outputTokens)} out`,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
   ];
   const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  const sourceItemId =
+    pickString(record, ["id", "itemId", "item_id", "callId", "call_id"]) ??
+    `${idSuffix}`;
+  const pricingServiceTier = resolveOpenAiPricingServiceTier(resolvedPricingContext);
+  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
+    cost
+      ? undefined
+      : !resolvedPricingContext.model
+        ? "missing-model"
+        : pricingServiceTier === undefined
+          ? "unsupported-service-tier"
+          : "missing-rate";
+  const usageLine: ThreadUsageLineRecord | undefined = threadId
+    ? {
+        backend: "codex",
+        cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+        cachedInputTokens,
+        ...(typeof turn?.completedAt === "number" ? { completedAt: turn.completedAt } : {}),
+        createdAt: createdAt ?? turn?.completedAt ?? Date.now(),
+        currency: cost?.currency ?? "USD",
+        ...(resolvedPricingContext.fastMode !== undefined
+          ? { fastMode: resolvedPricingContext.fastMode }
+          : {}),
+        inputTokens,
+        ...(resolvedPricingContext.model ? { model: resolvedPricingContext.model } : {}),
+        outputCostMicros: cost?.outputCostMicros ?? 0,
+        outputTokens,
+        priceStatus: cost ? "priced" : "unpriced",
+        ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+        ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
+        ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+        ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+        reasoningOutputTokens,
+        scope: scope === "latest-request" ? "latest-request" : "total",
+        ...(resolvedPricingContext.serviceTier
+          ? { serviceTier: resolvedPricingContext.serviceTier }
+          : pricingServiceTier
+            ? { serviceTier: pricingServiceTier }
+            : {}),
+        settingsConfidence: resolvedPricingContext.model ? "exact" : "unknown",
+        settingsSource: "turn-context",
+        source: "hydration",
+        sourceItemId,
+        status: "finalized",
+        threadId,
+        totalCostMicros: cost?.totalCostMicros ?? 0,
+        totalTokens,
+        ...(turn?.id ? { turnId: turn.id } : {}),
+        uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+        uncachedInputTokens,
+        usageLineId: [
+          "codex",
+          threadId,
+          turn?.id ?? "no-turn",
+          scope,
+          sourceItemId,
+        ].join(":"),
+      }
+    : undefined;
+  const details: AppServerThreadActivityDetail[] = [
+    {
+      id: `token-usage-${idSuffix}-input`,
+      kind: "read",
+      label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
+        uncachedInputTokens
+      )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
+      status: "completed",
+    },
+    {
+      id: `token-usage-${idSuffix}-output`,
+      kind: "read",
+      label: `Output: ${formatTokenCount(outputTokens)} tokens${
+        reasoningOutputTokens > 0
+          ? `, including ${formatTokenCount(reasoningOutputTokens)} reasoning`
+          : ""
+      }`,
+      status: "completed",
+    },
+  ];
+  if (cost) {
+    details.push(
+      {
+        id: `token-usage-${idSuffix}-uncached-input-cost`,
+        kind: "read",
+        label: `Uncached input cost: ${formatTokenCount(
+          uncachedInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.inputUsdPerMillion
+        )}/M${formatTokenUsageStandardRateSuffix(
+          cost.standardInputRateMultiplier
+        )} = ${formatTokenUsageUsd(cost.uncachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-cached-input-cost`,
+        kind: "read",
+        label: `Cached input cost: ${formatTokenCount(
+          cachedInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.cachedInputUsdPerMillion
+        )}/M (${formatTokenUsagePriceFactor(
+          cost.cachedInputUsdPerMillion,
+          cost.inputUsdPerMillion
+        )} uncached${formatTokenUsageStandardRateSuffix(
+          cost.standardCachedInputRateMultiplier,
+          ", "
+        )}) = ${formatTokenUsageUsd(cost.cachedInputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-output-cost`,
+        kind: "read",
+        label: `Output cost: ${formatTokenCount(outputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.outputUsdPerMillion
+        )}/M${formatTokenUsageStandardRateSuffix(
+          cost.standardOutputRateMultiplier
+        )} = ${formatTokenUsageUsd(cost.outputUsd)}`,
+        status: "completed",
+      },
+      {
+        id: `token-usage-${idSuffix}-cost`,
+        kind: "read",
+        label: `Cost: ${formatTokenUsageUsd(cost.totalUsd)} list price for ${cost.displayName}`,
+        status: "completed",
+      }
+    );
+  } else if (resolvedPricingContext.model) {
+    details.push({
+      id: `token-usage-${idSuffix}-cost-unavailable`,
+      kind: "read",
+      label: `Cost unavailable: no local pricing entry for ${formatUnpricedTokenUsageModelName(
+        resolvedPricingContext
+      )}`,
+      status: "completed",
+    });
+  }
 
   return {
     type: "activity",
     id: `live-token-usage-${turn?.id ?? idSuffix}`,
     createdAt,
-    summary: `${summaryPrefix}: ${summaryParts.join(" · ")}`,
+    summary: `${summaryPrefix}: ${summaryParts.filter(Boolean).join(" · ")}`,
     status: "completed",
-    details: [
-      {
-        id: `token-usage-${idSuffix}-input`,
-        kind: "read",
-        label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
-          uncachedInputTokens
-        )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
-        status: "completed",
-      },
-      {
-        id: `token-usage-${idSuffix}-output`,
-        kind: "read",
-        label: `Output: ${formatTokenCount(outputTokens)} tokens${
-          reasoningOutputTokens > 0
-            ? `, including ${formatTokenCount(reasoningOutputTokens)} reasoning`
-            : ""
-        }`,
-        status: "completed",
-      },
-    ],
+    details,
     ...(turn ? { turn } : {}),
+    ...(usageLine ? { usageLine } : {}),
   };
+}
+
+function formatUnpricedTokenUsageModelName(context: TokenUsagePricingContext): string {
+  const serviceTier = resolveOpenAiPricingServiceTier(context);
+  return [
+    context.model,
+    serviceTier === "priority" ? "Fast/Priority" : undefined,
+    serviceTier === undefined && context.serviceTier
+      ? `service tier ${context.serviceTier}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function readActivityElapsedMs(item: Record<string, unknown>): number | undefined {
@@ -3378,7 +3618,11 @@ function truncateActivityText(text: string, maxLength: number): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
-function extractTokenUsageEntries(value: unknown): AppServerThreadActivityEntry[] {
+function extractTokenUsageEntries(
+  value: unknown,
+  pricingContext?: TokenUsagePricingContext,
+  threadId?: string
+): AppServerThreadActivityEntry[] {
   const output: AppServerThreadActivityEntry[] = [];
 
   const visit = (node: unknown, inheritedCreatedAt?: number): void => {
@@ -3396,7 +3640,13 @@ function extractTokenUsageEntries(value: unknown): AppServerThreadActivityEntry[
       pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
     );
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
-    const tokenUsageActivity = summarizeTokenUsageActivity(record, createdAt);
+    const tokenUsageActivity = summarizeTokenUsageActivity(
+      record,
+      createdAt,
+      undefined,
+      pricingContext,
+      threadId
+    );
     if (tokenUsageActivity) {
       output.push(tokenUsageActivity);
     }
@@ -3443,6 +3693,8 @@ function timestampFromRecord(record: Record<string, unknown>): number | undefine
 function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
   const record = asRecord(value);
   const thread = asRecord(record?.thread);
+  const pricingContext = extractTokenUsagePricingContext(value);
+  const threadId = extractThreadIdFromValue(value);
   const turns = Array.isArray(thread?.turns)
     ? thread.turns
         .map((entry) => asRecord(entry))
@@ -3457,7 +3709,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           ...message
         }),
       ),
-      ...extractTokenUsageEntries(value),
+      ...extractTokenUsageEntries(value, pricingContext, threadId),
     ]);
   }
 
@@ -3564,7 +3816,9 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const tokenUsageActivity = summarizeTokenUsageActivity(
         item,
         itemCreatedAt ?? turnMetadata?.completedAt ?? createdAt,
-        turnMetadata
+        turnMetadata,
+        pricingContext,
+        threadId
       );
       if (tokenUsageActivity) {
         flushActivityItems();

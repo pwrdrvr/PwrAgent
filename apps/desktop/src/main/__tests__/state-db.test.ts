@@ -58,6 +58,26 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates thread usage pricing ledger tables", () => {
+    const tables = stateDb.raw
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?) ORDER BY name`,
+      )
+      .all(
+        "pricing_catalog_versions",
+        "pricing_rates",
+        "thread_pricing_summaries",
+        "thread_usage_lines",
+      ) as Array<{ name: string }>;
+
+    expect(tables.map((table) => table.name)).toEqual([
+      "pricing_catalog_versions",
+      "pricing_rates",
+      "thread_pricing_summaries",
+      "thread_usage_lines",
+    ]);
+  });
+
   it("repairs databases that used version 13 for the old PR cache migration", () => {
     stateDb.close();
 

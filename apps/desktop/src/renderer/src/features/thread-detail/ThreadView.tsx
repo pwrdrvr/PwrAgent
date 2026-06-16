@@ -35,6 +35,8 @@ import type {
   NavigationThreadSummary,
   PendingRequestAction,
   ThreadExecutionMode,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
@@ -841,6 +843,10 @@ export type ThreadViewProps = {
   loadingMore: boolean;
   messageCount: number;
   contextWindow?: ThreadContextWindowState;
+  pricing?: {
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  };
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -2660,6 +2666,7 @@ export function ThreadView(props: ThreadViewProps) {
           pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}
+          pricing={props.pricing}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}
         />
