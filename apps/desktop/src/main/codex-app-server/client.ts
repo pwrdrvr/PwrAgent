@@ -2757,6 +2757,10 @@ function mergeTokenUsagePricingContext(
   };
 }
 
+function hasTokenUsagePricingContext(context: TokenUsagePricingContext): boolean {
+  return Boolean(context.model || context.serviceTier || context.fastMode !== undefined);
+}
+
 function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingContext | undefined {
   const visit = (node: unknown): TokenUsagePricingContext | undefined => {
     if (Array.isArray(node)) {
@@ -2777,12 +2781,21 @@ function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingConte
     const normalizedType = normalizeItemType(pickString(record, ["type"]));
     if (normalizedType === "turncontext") {
       const context = readTokenUsagePricingContext(record);
-      if (context.model || context.serviceTier || context.fastMode !== undefined) {
+      if (hasTokenUsagePricingContext(context)) {
         return context;
       }
     }
 
-    for (const key of ["events", "payload", "item", "data", "thread", "response", "result"]) {
+    for (const key of [
+      "events",
+      "items",
+      "payload",
+      "item",
+      "data",
+      "thread",
+      "response",
+      "result",
+    ]) {
       const context = visit(record[key]);
       if (context) {
         return context;
@@ -3625,38 +3638,68 @@ function extractTokenUsageEntries(
 ): AppServerThreadActivityEntry[] {
   const output: AppServerThreadActivityEntry[] = [];
 
-  const visit = (node: unknown, inheritedCreatedAt?: number): void => {
+  const visit = (
+    node: unknown,
+    inheritedCreatedAt?: number,
+    inheritedPricingContext?: TokenUsagePricingContext
+  ): TokenUsagePricingContext | undefined => {
     if (Array.isArray(node)) {
-      node.forEach((entry) => visit(entry, inheritedCreatedAt));
-      return;
+      let activePricingContext = inheritedPricingContext;
+      for (const entry of node) {
+        activePricingContext =
+          visit(entry, inheritedCreatedAt, activePricingContext) ??
+          activePricingContext;
+      }
+      return activePricingContext;
     }
 
     const record = asRecord(node);
     if (!record) {
-      return;
+      return inheritedPricingContext;
     }
 
     const recordCreatedAt = normalizeEpochTimestamp(
       pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
     );
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
+    const normalizedType = normalizeItemType(pickString(record, ["type"]));
+    const recordPricingContext =
+      normalizedType === "turncontext"
+        ? mergeTokenUsagePricingContext(
+            readTokenUsagePricingContext(record),
+            inheritedPricingContext
+          )
+        : inheritedPricingContext;
     const tokenUsageActivity = summarizeTokenUsageActivity(
       record,
       createdAt,
       undefined,
-      pricingContext,
+      recordPricingContext,
       threadId
     );
     if (tokenUsageActivity) {
       output.push(tokenUsageActivity);
     }
 
-    for (const key of ["events", "payload", "item", "data", "thread", "response", "result"]) {
-      visit(record[key], createdAt);
+    let activePricingContext = recordPricingContext;
+    for (const key of [
+      "events",
+      "items",
+      "payload",
+      "item",
+      "data",
+      "thread",
+      "response",
+      "result",
+    ]) {
+      activePricingContext =
+        visit(record[key], createdAt, activePricingContext) ??
+        activePricingContext;
     }
+    return activePricingContext;
   };
 
-  visit(value);
+  visit(value, undefined, pricingContext);
   return output;
 }
 
@@ -3690,11 +3733,14 @@ function timestampFromRecord(record: Record<string, unknown>): number | undefine
   );
 }
 
-function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
+function extractThreadEntries(
+  value: unknown,
+  options: { threadId?: string } = {}
+): AppServerThreadEntry[] {
   const record = asRecord(value);
   const thread = asRecord(record?.thread);
   const pricingContext = extractTokenUsagePricingContext(value);
-  const threadId = extractThreadIdFromValue(value);
+  const threadId = extractThreadIdFromValue(value) ?? options.threadId;
   const turns = Array.isArray(thread?.turns)
     ? thread.turns
         .map((entry) => asRecord(entry))
@@ -3717,6 +3763,8 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
 
   for (const turn of turns) {
     const turnMetadata = extractTurnMetadata(turn);
+    const turnPricingContext =
+      extractTokenUsagePricingContext(turn) ?? pricingContext;
     const createdAt = normalizeEpochTimestamp(
       pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
     );
@@ -3817,7 +3865,10 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         item,
         itemCreatedAt ?? turnMetadata?.completedAt ?? createdAt,
         turnMetadata,
-        pricingContext,
+        mergeTokenUsagePricingContext(
+          readTokenUsagePricingContext(item),
+          turnPricingContext
+        ),
         threadId
       );
       if (tokenUsageActivity) {
@@ -3867,8 +3918,11 @@ function extractReplayPagination(value: unknown): AppServerThreadReplayPaginatio
   };
 }
 
-export function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
-  const entries = extractThreadEntries(value);
+export function extractThreadReplayFromReadResult(
+  value: unknown,
+  options: { threadId?: string } = {}
+): AppServerThreadReplay {
+  const entries = extractThreadEntries(value, options);
   const messages = extractConversationMessages(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
@@ -5884,7 +5938,7 @@ export class CodexAppServerClient {
       };
     }
 
-    return extractThreadReplayFromReadResult(result);
+    return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
   }
 
   async injectThreadItems(params: {

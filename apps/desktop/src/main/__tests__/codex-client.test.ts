@@ -3326,6 +3326,12 @@ describe("CodexAppServerClient", () => {
         status: "completed",
       },
     ]);
+    const usage = replay.entries[1];
+    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+      threadId: "thread-token-count-events",
+      priceStatus: "unpriced",
+      priceUnavailableReason: "missing-model",
+    });
 
     await client.close();
   });
@@ -3398,6 +3404,98 @@ describe("CodexAppServerClient", () => {
     expect(usage?.type === "activity" ? usage.details.at(-1)?.label : undefined).toBe(
       "Cost: $0.026 list price for GPT-5.5 Standard",
     );
+    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+      threadId: "thread-token-count-priced",
+      model: "gpt-5.5",
+      priceStatus: "priced",
+    });
+
+    await client.close();
+  });
+
+  it("prices token_count entries with each turn's own model metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-token-count-model-switch", {
+      thread: {
+        id: "thread-token-count-model-switch",
+        turns: [
+          {
+            id: "turn-gpt-55",
+            status: "completed",
+            startedAt: 1_781_616_000,
+            items: [
+              {
+                type: "turn_context",
+                id: "context-gpt-55",
+                model: "gpt-5.5",
+              },
+              {
+                type: "token_count",
+                id: "usage-gpt-55",
+                info: {
+                  last_token_usage: {
+                    input_tokens: 1_000_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 1_000_000,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            id: "turn-gpt-54",
+            status: "completed",
+            startedAt: 1_781_616_060,
+            items: [
+              {
+                type: "turn_context",
+                id: "context-gpt-54",
+                model: "gpt-5.4",
+              },
+              {
+                type: "token_count",
+                id: "usage-gpt-54",
+                info: {
+                  last_token_usage: {
+                    input_tokens: 1_000_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 1_000_000,
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-token-count-model-switch",
+    });
+
+    const usageEntries = replay.entries.filter(
+      (entry): entry is Extract<typeof entry, { type: "activity" }> =>
+        entry.type === "activity" && entry.usageLine !== undefined,
+    );
+    expect(usageEntries.map((entry) => entry.usageLine?.model)).toEqual([
+      "gpt-5.5",
+      "gpt-5.4",
+    ]);
+    expect(usageEntries.map((entry) => entry.usageLine?.totalCostMicros)).toEqual([
+      5_000_000,
+      2_500_000,
+    ]);
+    expect(usageEntries.map((entry) => entry.details.at(-1)?.label)).toEqual([
+      "Cost: $5.00 list price for GPT-5.5 Standard",
+      "Cost: $2.50 list price for GPT-5.4 Standard",
+    ]);
 
     await client.close();
   });

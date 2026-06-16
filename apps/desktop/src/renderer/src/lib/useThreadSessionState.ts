@@ -3041,6 +3041,43 @@ export function useThreadSessionState(params: {
     ]
   );
 
+  const refreshThreadPricing = useCallback(
+    async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }): Promise<void> => {
+      const readThread = desktopApi?.readThread;
+      if (!readThread) {
+        return;
+      }
+
+      const targetThreadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      try {
+        const response = normalizeResponseImageBoundaryText(await readThread({
+          backend: params.backend,
+          threadId: params.threadId,
+        }));
+        updateSession(targetThreadKey, (current) => {
+          if (!current.response) {
+            return current;
+          }
+          return {
+            ...current,
+            lastTouchedAt: Date.now(),
+            response: {
+              ...current.response,
+              pricing: response.pricing,
+            },
+          };
+        });
+      } catch {
+        // Pricing refresh is opportunistic; transcript hydration remains the
+        // authoritative error surface for read failures.
+      }
+    },
+    [desktopApi?.readThread, updateSession]
+  );
+
   useEffect(() => {
     if (!threadKey) {
       return;
@@ -4197,6 +4234,10 @@ export function useThreadSessionState(params: {
           );
           const suppressUsageEntry =
             usageEntry && shouldSuppressLiveUsageEntry(current, usageEntry);
+          const shouldRefreshPricing =
+            Boolean(current.response?.pricing) &&
+            usageEntry !== undefined &&
+            !current.optimisticEntries.some((entry) => entry.id === usageEntry.id);
           if (usageEntry && !holdUsageUntilTurnCompletes) {
             persistFinalizedUsageEntry({
               backend: event.backend,
@@ -4204,6 +4245,12 @@ export function useThreadSessionState(params: {
               entry: suppressUsageEntry ? undefined : usageEntry,
               threadId: notificationThreadId,
             });
+            if (shouldRefreshPricing) {
+              void refreshThreadPricing({
+                backend: event.backend,
+                threadId: notificationThreadId,
+              });
+            }
           }
 
           return {
@@ -4235,7 +4282,14 @@ export function useThreadSessionState(params: {
         return current;
       });
     });
-  }, [desktopApi, liveTranscriptEventFiltering, thread, threadKey, updateSession]);
+  }, [
+    desktopApi,
+    liveTranscriptEventFiltering,
+    refreshThreadPricing,
+    thread,
+    threadKey,
+    updateSession,
+  ]);
 
   const selectedSession = threadKey ? sessions[threadKey] : undefined;
 

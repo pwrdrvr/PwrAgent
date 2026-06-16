@@ -4070,6 +4070,110 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("refreshes pricing after finalized live token usage updates", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const readThread = vi
+      .fn<NonNullable<DesktopApi["readThread"]>>()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        pricing: {
+          lines: [],
+          summaries: [],
+        },
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementation(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        pricing: {
+          lines: [],
+          summaries: [
+            {
+              backend: "codex",
+              threadId,
+              currency: "USD",
+              inputTokens: 1_200,
+              uncachedInputTokens: 1_000,
+              cachedInputTokens: 200,
+              outputTokens: 50,
+              reasoningOutputTokens: 10,
+              totalTokens: 1_260,
+              totalCostMicros: 7_250,
+              usageLineCount: 1,
+              pricedUsageLineCount: 1,
+              unpricedUsageLineCount: 0,
+              updatedAt: Date.now(),
+            },
+          ],
+        },
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.response?.pricing?.summaries).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                reasoning_output_tokens: 10,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.response?.pricing?.summaries[0]).toMatchObject({
+        threadId: "thread-1",
+        totalCostMicros: 7_250,
+        usageLineCount: 1,
+      });
+    });
+    expect(readThread).toHaveBeenCalledTimes(2);
+  });
+
   it("finalizes active-turn usage from cumulative token deltas", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
