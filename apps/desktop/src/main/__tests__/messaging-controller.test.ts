@@ -9608,6 +9608,133 @@ describe("MessagingController", () => {
     });
   });
 
+  it("records questionnaire answers, navigates review, and submits through messaging", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-questions",
+        questions: [
+          {
+            id: "breakfast",
+            header: "Breakfast",
+            question: "What's for breakfast?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              {
+                label: "Pancakes (Recommended)",
+                description: "A funny baseline.",
+              },
+            ],
+          },
+          {
+            id: "tone",
+            header: "Tone",
+            question: "How silly should it be?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Dry",
+                description: "Small smile.",
+              },
+              {
+                label: "Extremely silly",
+                description: "Maximum breakfast chaos.",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    expect(harness.delivered.at(-3)).toMatchObject({
+      kind: "questionnaire",
+      phase: "answering",
+      currentIndex: 0,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("A tiny waffle with a serious hat."),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "answering",
+      currentIndex: 1,
+      answers: [
+        {
+          kind: "custom",
+          value: "A tiny waffle with a serious hat.",
+        },
+        null,
+      ],
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "tone:option:1" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "review",
+      answers: [
+        {
+          kind: "custom",
+          value: "A tiny waffle with a serious hat.",
+        },
+        {
+          kind: "option",
+          optionId: "tone:option:1",
+          value: "Dry",
+        },
+      ],
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "questionnaire:back" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "answering",
+      currentIndex: 1,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "tone:option:2" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "questionnaire:submit" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "request-questions",
+      response: {
+        answers: {
+          breakfast: {
+            answers: ["A tiny waffle with a serious hat."],
+          },
+          tone: {
+            answers: ["Extremely silly"],
+          },
+        },
+      },
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "questionnaire",
+      phase: "submitted",
+    });
+  });
+
   it("does not resurrect waiting when a delayed approval arrives after the backend is idle", async () => {
     const harness = await createHarness();
     harness.startTurn

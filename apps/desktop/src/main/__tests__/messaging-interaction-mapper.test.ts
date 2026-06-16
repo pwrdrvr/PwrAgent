@@ -97,7 +97,9 @@ describe("DeterministicInteractionMapper", () => {
       id: "intent-questionnaire",
       kind: "questionnaire",
       createdAt: 1000,
+      answers: [{ kind: "custom", value: "Ready." }, null],
       currentIndex: 0,
+      phase: "answering",
       questions: [
         {
           id: "q1",

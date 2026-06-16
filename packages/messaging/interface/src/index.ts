@@ -643,6 +643,19 @@ export type MessagingQuestionnaireQuestion = {
   secret?: boolean;
 };
 
+export type MessagingQuestionnaireAnswer =
+  | {
+      kind: "option";
+      optionId: string;
+      value: string;
+    }
+  | {
+      kind: "custom";
+      value: string;
+    };
+
+export type MessagingQuestionnairePhase = "answering" | "review" | "submitted";
+
 export type MessagingApprovalDecision =
   | "accept"
   | "accept_for_session"
@@ -766,9 +779,152 @@ export type MessagingMultiSelectIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
   kind: "questionnaire";
+  answers: Array<MessagingQuestionnaireAnswer | null>;
   currentIndex: number;
+  phase: MessagingQuestionnairePhase;
   questions: MessagingQuestionnaireQuestion[];
 };
+
+export function messagingQuestionnaireActions(
+  intent: MessagingQuestionnaireIntent,
+): MessagingSurfaceAction[] {
+  if (intent.phase === "submitted") {
+    return [];
+  }
+
+  if (intent.phase === "review") {
+    return [
+      {
+        id: "questionnaire:back",
+        label: "Back",
+        style: "navigation",
+        fallbackText: "back",
+      },
+      {
+        id: "questionnaire:submit",
+        label: "Submit",
+        style: "primary",
+        fallbackText: "submit",
+      },
+    ];
+  }
+
+  const question = intent.questions[intent.currentIndex];
+  const answer = intent.answers[intent.currentIndex];
+  const actions: MessagingSurfaceAction[] = (question?.options ?? []).map(
+    (option) => ({
+      ...option,
+      label:
+        answer?.kind === "option" && answer.optionId === option.id
+          ? `Selected: ${option.label}`
+          : option.label,
+    }),
+  );
+
+  if (intent.currentIndex > 0) {
+    actions.push({
+      id: "questionnaire:back",
+      label: "Back",
+      style: "navigation",
+      fallbackText: "back",
+    });
+  }
+  if (
+    intent.currentIndex < intent.questions.length - 1 &&
+    messagingQuestionnaireAnswerComplete(answer)
+  ) {
+    actions.push({
+      id: "questionnaire:next",
+      label: "Next",
+      style: "navigation",
+      fallbackText: "next",
+    });
+  }
+
+  return actions;
+}
+
+export function messagingQuestionnaireAnswerComplete(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+): boolean {
+  return Boolean(answer?.value.trim());
+}
+
+export function messagingQuestionnaireAnswerDisplay(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+): string {
+  if (!answer) {
+    return "";
+  }
+  const value = answer.value.trim();
+  if (!value) {
+    return "";
+  }
+  return answer.kind === "custom" ? `Custom: ${value}` : value;
+}
+
+export function formatMessagingQuestionnaireText(
+  intent: MessagingQuestionnaireIntent,
+): string {
+  if (intent.phase === "review" || intent.phase === "submitted") {
+    const lines = [
+      intent.phase === "submitted" ? "Submitted answers" : "Review answers",
+      "",
+    ];
+    intent.questions.forEach((question, index) => {
+      const title = [question.header, question.question]
+        .filter(Boolean)
+        .join(question.header && question.question ? ": " : "");
+      lines.push(`${index + 1}. ${title}`);
+      lines.push(
+        `Answer: ${
+          messagingQuestionnaireAnswerDisplay(intent.answers[index]) || "No answer"
+        }`,
+      );
+      if (index < intent.questions.length - 1) {
+        lines.push("");
+      }
+    });
+    return lines.join("\n");
+  }
+
+  const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
+  if (!question) {
+    return "Input needed.";
+  }
+
+  const lines = [
+    `Question ${intent.currentIndex + 1} of ${intent.questions.length}`,
+    "",
+  ];
+  if (question.header) {
+    lines.push(question.header);
+  }
+  lines.push(question.question);
+
+  const answer = intent.answers[intent.currentIndex];
+  question.options.forEach((option, index) => {
+    const selected = answer?.kind === "option" && answer.optionId === option.id;
+    lines.push("");
+    lines.push(`${selected ? "[selected] " : ""}${index + 1}. ${option.label}`);
+    if (option.description) {
+      lines.push(`   ${option.description}`);
+    }
+  });
+
+  if (question.allowFreeform) {
+    lines.push("", "Other: reply with a free-form answer.");
+  }
+
+  const currentAnswer = messagingQuestionnaireAnswerDisplay(
+    intent.answers[intent.currentIndex],
+  );
+  if (currentAnswer) {
+    lines.push("", `Current answer: ${currentAnswer}`);
+  }
+
+  return lines.join("\n");
+}
 
 export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   kind: "approval";
