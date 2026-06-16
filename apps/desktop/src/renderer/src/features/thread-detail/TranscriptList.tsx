@@ -28,6 +28,10 @@ import { injectMessagingBindingTransitions } from "./messaging-binding-transitio
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  isSidebarResizing,
+  subscribeSidebarResizing,
+} from "../../lib/sidebar-resize-signal";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { PendingMcpInteraction } from "./PendingMcpInteraction";
@@ -806,6 +810,13 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     const observer = new ResizeObserver(() => {
+      // While the sidebar is being dragged the main pane reflows every frame.
+      // Reading/writing scroll geometry + re-rendering on each of those frames
+      // is a layout-thrash amplifier; skip it here and re-sync once when the
+      // drag ends (see the subscribeSidebarResizing effect below).
+      if (isSidebarResizing()) {
+        return;
+      }
       if (isGluedToBottomRef.current) {
         scrollToBottom();
       } else {
@@ -817,6 +828,22 @@ export function TranscriptList(props: TranscriptListProps) {
     return () => {
       observer.disconnect();
     };
+  }, [scrollToBottom, syncScrollState]);
+
+  // When a sidebar drag ends, the pane has settled at its final width but the
+  // ResizeObserver/onScroll handlers were paused throughout — re-sync the
+  // scroll state once so glue-to-bottom and the scroll-edge fades are correct.
+  useEffect(() => {
+    return subscribeSidebarResizing((active) => {
+      if (active) {
+        return;
+      }
+      if (isGluedToBottomRef.current) {
+        scrollToBottom();
+      } else {
+        syncScrollState({ preserveGlueOnResize: true });
+      }
+    });
   }, [scrollToBottom, syncScrollState]);
 
   if (props.loading && !hasTranscriptContent && !hasPendingContent) {
@@ -868,6 +895,12 @@ export function TranscriptList(props: TranscriptListProps) {
           }
         }}
         onScroll={() => {
+          // A sidebar drag can shift scrollTop via reflow/scroll-anchoring;
+          // those aren't real navigations, so skip the re-sync until the drag
+          // ends (the user can't scroll while holding the resize handle).
+          if (isSidebarResizing()) {
+            return;
+          }
           syncScrollState({ preserveGlueOnResize: true });
         }}
       >
