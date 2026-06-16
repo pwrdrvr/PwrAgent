@@ -3,7 +3,7 @@ import {
   spawn as spawnProcess,
 } from "node:child_process";
 import fs from "node:fs";
-import { access, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -619,7 +619,7 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
     // the macOS Launch Services icon loader on a worker thread and hard-aborts
     // the whole process with an uncatchable SIGTRAP on some OS builds (the v1
     // beta crash on macOS 26).
-    const fileBytes = fs.readFileSync(iconPath);
+    const fileBytes = await readFile(iconPath);
     const source = isIcnsBuffer(fileBytes) ? extractIcnsPng(fileBytes) : fileBytes;
     if (!source) {
       log.warn("application-icon-empty", { appPath, iconPath });

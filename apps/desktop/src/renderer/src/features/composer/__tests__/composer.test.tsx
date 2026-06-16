@@ -493,6 +493,95 @@ describe("Composer", () => {
     });
   });
 
+  it("collapses a launcher to an icon-only chip when the app has a real icon", () => {
+    render(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              iconDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Icon only",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    // Accessible name comes from aria-label; the visible text label is dropped
+    // in favor of the real logo.
+    const button = screen.getByRole("button", { name: "VS Code" });
+    expect(button).toHaveClass("composer__application-button--icon-only");
+    expect(button.querySelector("img")).not.toBeNull();
+    expect(button).not.toHaveTextContent("VS Code");
+  });
+
+  it("flags the access-mode chip as danger when full access is selected", () => {
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("codex"),
+            executionModes: [
+              { mode: "default", label: "Default Access", available: true, isDefault: true },
+              { mode: "full-access", label: "Full Access", available: true },
+            ],
+          },
+        ]}
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Full access",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "full-access",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText("Access mode").closest(".composer-dropdown"),
+    ).toHaveClass("composer-dropdown--danger");
+  });
+
   it("does not show workspace application buttons on a launchpad before the thread exists", () => {
     render(
       <Composer

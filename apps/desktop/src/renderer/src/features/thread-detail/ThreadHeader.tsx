@@ -5,7 +5,7 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { formatAccessModeLabel } from "../../lib/execution-mode";
+import { accessModeChipClassName, formatAccessModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
@@ -125,7 +125,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>
-            <span className="chip chip--mode">
+            <span className={accessModeChipClassName(props.thread.executionMode)}>
               {formatAccessModeLabel(
                 props.thread,
                 props.backends?.find((backend) => backend.kind === props.thread.source),

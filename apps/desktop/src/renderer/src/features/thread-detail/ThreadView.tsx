@@ -42,6 +42,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import {
+  accessModeChipClassName,
   formatAccessModeLabel,
   formatExecutionModeLabel,
 } from "../../lib/execution-mode";
@@ -2187,7 +2188,7 @@ export function ThreadView(props: ThreadViewProps) {
               <span className="chip chip--backend">
                 {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
               </span>
-              <span className="chip chip--mode">
+              <span className={accessModeChipClassName(selectedLaunchpad.executionMode)}>
                 {formatAccessModeLabel(
                   selectedLaunchpad,
                   props.backends.find(

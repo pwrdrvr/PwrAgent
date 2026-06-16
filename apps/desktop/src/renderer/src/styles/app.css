@@ -3323,6 +3323,16 @@ textarea,
   font-weight: 600;
 }
 
+/* Full access is the one elevated/dangerous access mode, so its chip carries
+   the danger tone (same tokens as the composer access chip) — orange alone
+   doesn't distinguish it from default access. Defined after `.chip--mode` so
+   it wins on source order at equal specificity. */
+.chip--mode--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+  color: var(--danger-text);
+}
+
 /* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
    tint carry the "pinned" signal without spending a word of row width;
    the literal label lives in aria-label / title for assistive tech and

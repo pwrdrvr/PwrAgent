@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared";
 import { EditorIcon, TerminalIcon } from "../icons";
 
@@ -10,7 +11,9 @@ import { EditorIcon, TerminalIcon } from "../icons";
  * Used by the composer launcher buttons, the Settings → Applications rows,
  * and the edited-file "open in editor" affordance so the same resolution
  * isn't reimplemented per surface. `className` is applied to whichever
- * element renders and `size` sizes both the `<img>` and the glyph.
+ * element renders and `size` sizes both the `<img>` and the glyph. If the
+ * data URL ever fails to decode in the browser, `onError` drops to the glyph
+ * fallback rather than showing a broken image.
  */
 export function AppIcon(props: {
   application: DesktopApplicationDiscoveryCandidate;
@@ -19,8 +22,11 @@ export function AppIcon(props: {
 }) {
   const size = props.size ?? 18;
   const { application, className } = props;
+  // Track the specific src that failed, so swapping to a different app (new
+  // iconDataUrl) re-attempts the image instead of staying on the fallback.
+  const [failedSrc, setFailedSrc] = useState<string | undefined>(undefined);
 
-  if (application.iconDataUrl) {
+  if (application.iconDataUrl && failedSrc !== application.iconDataUrl) {
     return (
       <img
         alt=""
@@ -28,6 +34,7 @@ export function AppIcon(props: {
         height={size}
         src={application.iconDataUrl}
         width={size}
+        onError={() => setFailedSrc(application.iconDataUrl)}
       />
     );
   }

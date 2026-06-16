@@ -9,6 +9,18 @@ export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "full-access" ? "Full Access" : "Default Access";
 }
 
+/**
+ * Class names for the access-mode `.chip--mode`. Full access is the one
+ * elevated/dangerous mode, so it carries the danger tone (matching the
+ * composer access chip) wherever the access mode is shown; every other mode
+ * keeps the neutral accent chip.
+ */
+export function accessModeChipClassName(mode?: ThreadExecutionMode): string {
+  return mode === "full-access"
+    ? "chip chip--mode chip--mode--danger"
+    : "chip chip--mode";
+}
+
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
   // Auto/Auto-Edit are provider-managed ACP modes, not PwrAgent full access.
   return value.trim().replace(/[-\s]+/g, "_").toLowerCase() === "yolo";
