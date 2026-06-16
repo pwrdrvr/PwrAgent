@@ -1122,7 +1122,7 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Expanded transcript image" });
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByAltText("Transcript screenshot")).toHaveAttribute(
       "src",
@@ -1132,7 +1132,7 @@ describe("ThreadView", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+      screen.queryByRole("dialog", { name: "Expanded image" })
     ).not.toBeInTheDocument();
   });
 
@@ -1219,7 +1219,7 @@ describe("ThreadView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
-    expect(screen.getByRole("dialog", { name: "Expanded transcript image" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
 
     rerender(
       <ThreadView
@@ -1239,7 +1239,7 @@ describe("ThreadView", () => {
     );
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+      screen.queryByRole("dialog", { name: "Expanded image" })
     ).not.toBeInTheDocument();
   });
 

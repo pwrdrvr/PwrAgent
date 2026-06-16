@@ -9787,38 +9787,6 @@ textarea,
   background: var(--bg-row-active);
 }
 
-.transcript-image-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--scrim-opaque);
-}
-
-.transcript-image-lightbox__content {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  max-width: min(100%, 960px);
-}
-
-.transcript-image-lightbox__close {
-  align-self: flex-end;
-}
-
-.transcript-image-lightbox__image {
-  display: block;
-  max-width: min(100vw - 48px, 960px);
-  max-height: min(100vh - 120px, 800px);
-  border-radius: 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-}
-
 .transcript-request__header,
 .transcript-request__actions,
 .transcript-questionnaire__header,
@@ -12498,10 +12466,10 @@ textarea,
   white-space: nowrap;
 }
 
-/* Full-size preview overlay. Click the scrim or the X to close (Escape too).
-   Mirrors the transcript image lightbox, with a circular X like the
-   thumbnail remove control. */
-.composer__lightbox {
+/* The single full-size image viewer (`ImageLightbox`) — used for both pasted
+   composer attachments and sent transcript images. Click the scrim, the close
+   cookie, or Escape to dismiss. */
+.image-lightbox {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -12511,53 +12479,53 @@ textarea,
   padding: 24px;
   background: var(--scrim-opaque);
   cursor: zoom-out;
-  /* The overlay is portaled to <body>, but assert no-drag explicitly so the X
-     can never be swallowed by an OS window-drag region it floats over. */
+  /* Portaled to <body>, but assert no-drag explicitly so the close cookie can
+     never be swallowed by an OS window-drag region it floats over. */
   -webkit-app-region: no-drag;
 }
 
-.composer__lightbox-content {
+.image-lightbox__content {
   position: relative;
   display: flex;
   max-width: min(100%, 1100px);
   cursor: default;
 }
 
-.composer__lightbox-close {
-  /* Pinned to the overlay's top-right corner via `fixed` (viewport-relative),
-     not the image box. An image-relative `absolute` X can land off-screen or
-     lose a stacking fight for large/odd-aspect images; a viewport-fixed button
-     above the scrim (z-index over the z:60 overlay) is always visible and
-     always the topmost click target. */
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 61;
+/* Close affordance: an accent "cookie" — same treatment as the scroll-to-bottom
+   CTA — floating just off the image's top-right corner, so it reads as an
+   unmistakable high-contrast control instead of blending into the scrim. The
+   content is `position: relative`, so this anchors to the image box. */
+.image-lightbox__close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: var(--bg-panel-elevated);
-  color: var(--text-primary);
-  box-shadow: 0 1px 3px var(--shadow-tint-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--button-text);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
 
-.composer__lightbox-close:hover {
-  background: var(--bg-panel-hover);
+.image-lightbox__close:hover {
+  background: var(--accent-strong);
+  color: var(--button-text);
 }
 
-.composer__lightbox-close:focus-visible {
-  outline: 2px solid var(--focus-ring);
+.image-lightbox__close:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.composer__lightbox-image {
+.image-lightbox__image {
   display: block;
   max-width: min(100vw - 48px, 1100px);
   max-height: min(100vh - 48px, 900px);

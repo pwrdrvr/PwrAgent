@@ -67,7 +67,7 @@ import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
-import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
+import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptList } from "./TranscriptList";
 import { LiveWorkRail } from "./LiveWorkRail";
 import {
@@ -2684,8 +2684,9 @@ export function ThreadView(props: ThreadViewProps) {
       </div>
 
       {expandedImage ? (
-        <TranscriptImageLightbox
-          image={expandedImage}
+        <ImageLightbox
+          src={expandedImage.url}
+          alt={expandedImage.alt ?? "Expanded image"}
           onClose={() => {
             setExpandedImage(undefined);
           }}
