@@ -780,6 +780,8 @@ function DesktopAppShell(props: {
     messageCount: session.messages.length,
     contextWindow: session.contextWindow,
     pricing: session.response?.pricing,
+    threadPricingSummaryEnabled:
+      settings.snapshot?.experimental.threadPricingSummary?.value ?? false,
     pendingAssistantMessage: session.pendingAssistantMessage,
     pendingMcpInteraction: session.pendingMcpInteraction,
     pendingRequest: session.pendingRequest,

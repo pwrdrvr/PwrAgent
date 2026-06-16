@@ -97,6 +97,7 @@ type ThreadContextPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  threadPricingSummaryEnabled?: boolean;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
   onRestoreWorktree?: (
@@ -149,9 +150,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
 
-  const activeTab = props.activeTab;
-  const topTabs = CONTEXT_TABS.filter((tab) => !tab.bottom);
-  const bottomTabs = CONTEXT_TABS.filter((tab) => tab.bottom);
+  const activeTab =
+    props.activeTab === "pricing" && !props.threadPricingSummaryEnabled
+      ? "info"
+      : props.activeTab;
+  const visibleTabs = CONTEXT_TABS.filter(
+    (tab) => tab.id !== "pricing" || props.threadPricingSummaryEnabled,
+  );
+  const topTabs = visibleTabs.filter((tab) => !tab.bottom);
+  const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
 
   const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
     lastMousePositionRef.current = {

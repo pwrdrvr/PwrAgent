@@ -97,6 +97,7 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    threadPricingSummary?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -626,6 +627,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
+    );
+  }
+  if (patch.experimental?.threadPricingSummary !== undefined) {
+    set(
+      ["experimental", "thread_pricing_summary"],
+      patch.experimental.threadPricingSummary,
     );
   }
   if (patch.experimental?.diffCondensation?.model !== undefined) {
@@ -1214,6 +1221,7 @@ function normalizeDesktopConfig(
       liveTranscriptEventFiltering: readBoolean(
         experimental?.live_transcript_event_filtering,
       ),
+      threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),

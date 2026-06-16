@@ -124,6 +124,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      threadPricingSummary: {
+        value: false,
+        source: "default",
+      },
       diffCondensation: {
         enabled: { value: false, source: "default" },
         model: { value: "auto", source: "default" },
@@ -601,6 +605,17 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { liveTranscriptEventFiltering: true },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Enable thread pricing summary",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { threadPricingSummary: true },
       });
     });
 

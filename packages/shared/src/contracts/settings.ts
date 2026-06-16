@@ -460,6 +460,12 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
+     * Gates the thread context-rail Pricing tab. The pricing ledger may still
+     * collect data for validation, but the user-visible summary stays hidden
+     * while this experimental setting is disabled.
+     */
+    threadPricingSummary?: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether we send
      * focused-diff requests to xAI. When enabled, less-relevant diff
      * hunks are hidden via an xAI judgment call. When disabled, every
@@ -680,6 +686,7 @@ export type DesktopSettingsConfigPatch = {
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    threadPricingSummary?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -14,6 +15,16 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     windowSize: {
       width: 1280,
       height: 820,
+    },
+    preLaunchHook: (homeRoot) => {
+      applyDesktopSettingsPatch(
+        path.join(homeRoot, ".pwragent/profiles/default/config.toml"),
+        {
+          experimental: {
+            threadPricingSummary: true,
+          },
+        },
+      );
     },
   });
 

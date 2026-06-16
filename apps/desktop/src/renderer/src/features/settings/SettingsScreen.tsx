@@ -409,6 +409,11 @@ function SettingsSectionBody(props: {
             experimental: { liveTranscriptEventFiltering: enabled },
           });
         }}
+        onThreadPricingSummaryChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingSummary: enabled },
+          });
+        }}
         onAgentCoreGrokChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { agentCoreGrok: enabled },

@@ -36,18 +36,27 @@ const DEFAULT_AGENT_CORE_GROK = {
   source: "default" as const,
 };
 
+const DEFAULT_THREAD_PRICING_SUMMARY = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+  const threadPricingSummary =
+    props.snapshot.experimental.threadPricingSummary ??
+    DEFAULT_THREAD_PRICING_SUMMARY;
   const agentCoreGrok =
     props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
@@ -126,6 +135,32 @@ export function ExperimentalSettings(props: {
                   </button>
                 ) : null}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Thread Pricing Summary"
+        description="Show list-price usage totals in the thread context rail. Disabled by default while pricing reconstruction and provider coverage are being validated."
+        chip={threadPricingSummary.value ? "On" : "Off"}
+        chipKind={threadPricingSummary.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable thread pricing summary"
+            sub="When on, the Pricing tab appears in the thread context rail with list-price totals and per-turn usage rows."
+            source={sourceBadge(threadPricingSummary)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingSummary.value}
+                disabled={props.saving}
+                label="Enable thread pricing summary"
+                onChange={(enabled) => {
+                  void props.onThreadPricingSummaryChange(enabled);
+                }}
+              />
             }
           />
         </div>

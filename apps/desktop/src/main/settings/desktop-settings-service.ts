@@ -555,6 +555,10 @@ export class DesktopSettingsService {
           config.experimental?.liveTranscriptEventFiltering,
           false,
         ),
+        threadPricingSummary: this.resolveConfigBoolean(
+          config.experimental?.threadPricingSummary,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,

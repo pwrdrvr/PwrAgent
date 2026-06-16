@@ -117,6 +117,7 @@ type PanelOverrides = Partial<
     | "editedFilesDock"
     | "onEditedFilesDockChange"
     | "pricing"
+    | "threadPricingSummaryEnabled"
   >
 >;
 
@@ -353,6 +354,17 @@ describe("ThreadContextPanel", () => {
     );
   });
 
+  it("hides the Pricing tab by default while the experimental flag is off", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+    });
+
+    expect(screen.queryByRole("tab", { name: "Pricing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+  });
+
   it("renders cached pricing totals and per-turn model settings", () => {
     const summary: ThreadPricingSummary = {
       backend: "codex",
@@ -413,6 +425,7 @@ describe("ThreadContextPanel", () => {
         lines: [line],
         summaries: [summary],
       },
+      threadPricingSummaryEnabled: true,
     });
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();

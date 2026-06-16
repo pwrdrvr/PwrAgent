@@ -124,6 +124,22 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       },
     ]);
   });
+
+  it("writes the thread pricing summary flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        threadPricingSummary: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_summary"],
+        value: true,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — image uploads", () => {

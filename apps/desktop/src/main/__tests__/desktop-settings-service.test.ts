@@ -1648,6 +1648,37 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults thread pricing summary to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.threadPricingSummary).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        threadPricingSummary: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.threadPricingSummary).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_summary = true",
+    );
+  });
+
   it("preserves unknown sections written by other builds when saving a patch", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
