@@ -1401,8 +1401,10 @@ function BranchPicker(props: {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [menuShift, setMenuShift] = useState(0);
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -1424,6 +1426,39 @@ function BranchPicker(props: {
     setActiveIndex(0);
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  // The popover is anchored to the trigger, which sits near the right edge of
+  // the composer toolbar — keep it inside the viewport by nudging it back in
+  // when it would overflow either gutter. Runs before paint so there's no
+  // visible jump, and re-clamps on resize while open.
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuShift(0);
+      return;
+    }
+    const clamp = (): void => {
+      const menu = menuRef.current;
+      if (!menu) {
+        return;
+      }
+      const gutter = 12;
+      const rect = menu.getBoundingClientRect();
+      const overflowRight = rect.right - (window.innerWidth - gutter);
+      const overflowLeft = gutter - rect.left;
+      setMenuShift((current) => {
+        if (overflowRight > 0) {
+          return current - overflowRight;
+        }
+        if (overflowLeft > 0) {
+          return current + overflowLeft;
+        }
+        return current;
+      });
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
   }, [open]);
 
   const nowMs = Date.now();
@@ -1488,7 +1523,13 @@ function BranchPicker(props: {
         </span>
       </button>
       {open ? (
-        <div className="branch-picker__menu">
+        <div
+          className="branch-picker__menu"
+          ref={menuRef}
+          style={
+            menuShift ? { transform: `translateX(${menuShift}px)` } : undefined
+          }
+        >
           <div className="branch-picker__search">
             <span aria-hidden="true" className="branch-picker__search-icon">
               <SearchIcon size={13} />

@@ -12473,7 +12473,11 @@ textarea,
   position: absolute;
   z-index: 30;
   bottom: calc(100% + 8px);
-  left: 0;
+  /* Anchor to the trigger's right edge so the panel opens leftward — the
+     branch chip lives near the right of the composer toolbar. A viewport
+     clamp in BranchPicker nudges it back in on narrow windows. */
+  right: 0;
+  left: auto;
   display: flex;
   flex-direction: column;
   min-width: max(100%, 340px);
