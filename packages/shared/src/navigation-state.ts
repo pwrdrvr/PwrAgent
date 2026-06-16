@@ -260,6 +260,7 @@ export function materializeNavigationThreads(params: {
       permissionTransitionLog: overlay?.permissionTransitionLog,
       messagingBindingTransitionLog: overlay?.messagingBindingTransitionLog,
       turnFailureLog: overlay?.turnFailureLog,
+      questionnaireActivityLog: overlay?.questionnaireActivityLog,
       model: overlay?.model ?? thread.model,
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
       modelMigrationRevision: overlay?.modelMigrationRevision,
@@ -465,6 +466,39 @@ export function buildNavigationSnapshotHash(params: {
             }
           : null,
       })),
+      questionnaireActivityLog: (thread.questionnaireActivityLog ?? []).map(
+        (entry) => ({
+          id: entry.id,
+          requestId: entry.requestId,
+          threadId: entry.threadId,
+          turnId: entry.turnId ?? null,
+          itemId: entry.itemId ?? null,
+          status: entry.status,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+          questions: entry.questions.map((question) => ({
+            id: question.id,
+            header: question.header,
+            question: question.question,
+            isOther: question.isOther,
+            isSecret: question.isSecret ?? null,
+            options: (question.options ?? []).map((option) => ({
+              label: option.label,
+              description: option.description ?? null,
+            })),
+          })),
+          answers: Object.fromEntries(
+            Object.entries(entry.answers ?? {}).map(([questionId, answer]) => [
+              questionId,
+              answer
+                ? {
+                    answers: answer.answers,
+                  }
+                : null,
+            ]),
+          ),
+        }),
+      ),
       model: thread.model ?? null,
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,

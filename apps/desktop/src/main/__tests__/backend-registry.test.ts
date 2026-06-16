@@ -1307,6 +1307,40 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    appendQuestionnaireActivity: async ({
+      backend,
+      threadId,
+      activity,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      activity: NonNullable<ThreadOverlayState["questionnaireActivityLog"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current: ThreadOverlayState = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (
+        (current.questionnaireActivityLog ?? []).some(
+          (entry) => entry.requestId === activity.requestId,
+        )
+      ) {
+        return current;
+      }
+      const nextLog = [
+        ...(current.questionnaireActivityLog ?? []),
+        activity,
+      ].sort((left, right) => left.createdAt - right.createdAt);
+      const next = {
+        ...current,
+        questionnaireActivityLog: nextLog,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as OverlayStoreLike;
 }
 
@@ -22184,6 +22218,113 @@ command = "pnpm dev"
           requestId: "approval-1",
         },
       },
+    });
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("persists completed questionnaire answers with secret values redacted", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const request: AppServerPendingRequestNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "input-1",
+        requestId: "input-1",
+        questions: [
+          {
+            id: "public",
+            header: "Public",
+            question: "Breakfast?",
+            isOther: true,
+            options: null,
+          },
+          {
+            id: "secret",
+            header: "Secret",
+            question: "Token?",
+            isOther: true,
+            isSecret: true,
+            options: null,
+          },
+        ],
+      },
+    } as AppServerPendingRequestNotification;
+    const responsePromise = codexClient.emitRequest(request);
+    await waitForCondition(() => events.length === 1);
+
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "input-1",
+      response: {
+        answers: {
+          public: {
+            answers: ["Moon Waffles"],
+          },
+          secret: {
+            answers: ["sk-secret"],
+          },
+        },
+      },
+    });
+
+    await expect(responsePromise).resolves.toEqual({
+      answers: {
+        public: {
+          answers: ["Moon Waffles"],
+        },
+        secret: {
+          answers: ["sk-secret"],
+        },
+      },
+    });
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "item/tool/requestUserInput",
+      "serverRequest/resolved",
+      "thread/questionnaireActivity/updated",
+    ]);
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      questionnaireActivityLog: [
+        {
+          requestId: "input-1",
+          status: "submitted",
+          questions: [
+            {
+              id: "public",
+            },
+            {
+              id: "secret",
+              isSecret: true,
+            },
+          ],
+          answers: {
+            public: {
+              answers: ["Moon Waffles"],
+            },
+            secret: {
+              answers: ["[REDACTED]"],
+            },
+          },
+        },
+      ],
     });
 
     unsubscribe();

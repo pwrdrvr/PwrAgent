@@ -13,6 +13,13 @@
     "rowsChanged": 49,
     "statements": 45
   },
+  "completed-questionnaire-transcript": {
+    "commits": 1,
+    "note": "persist one completed questionnaire transcript summary",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "composer-draft-typing": {
     "commits": 70,
     "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence \u2014 the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",

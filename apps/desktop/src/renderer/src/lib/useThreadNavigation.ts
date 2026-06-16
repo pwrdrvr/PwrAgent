@@ -747,6 +747,13 @@ function messagingBindingTransitionLogsEqual(
   });
 }
 
+function questionnaireActivityLogsEqual(
+  left: NavigationThreadSummary["questionnaireActivityLog"],
+  right: NavigationThreadSummary["questionnaireActivityLog"]
+): boolean {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -825,6 +832,10 @@ function threadSummariesEqual(
     messagingBindingTransitionLogsEqual(
       left.messagingBindingTransitionLog,
       right.messagingBindingTransitionLog
+    ) &&
+    questionnaireActivityLogsEqual(
+      left.questionnaireActivityLog,
+      right.questionnaireActivityLog
     )
   );
 }
@@ -4135,6 +4146,14 @@ export function useThreadNavigation(
         // thread overlay before broadcasting this event. Refresh so the
         // navigation snapshot carries `turnFailureLog` into the transcript;
         // without it the failure would never surface as a durable entry.
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/questionnaireActivity/updated") {
+        // Completed questionnaire answers are persisted in the thread overlay
+        // because App Server replay does not include request-user-input items.
+        // Refresh so the sanitized Q/A summary appears in the transcript now.
         scheduleRefresh();
         return;
       }
