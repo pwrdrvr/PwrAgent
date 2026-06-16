@@ -12726,9 +12726,6 @@ textarea,
   background: var(--border-subtle);
 }
 
-/* Branch picker — searchable launchpad base-branch list. Reuses the
-   `.composer-dropdown` trigger (so the `Base branch` button keeps its
-   label/value contract); the open panel is its own filterable surface. */
 /* ============================================================
    Composer pickers — shared popover language
 
