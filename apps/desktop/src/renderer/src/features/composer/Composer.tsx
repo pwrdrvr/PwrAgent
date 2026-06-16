@@ -4567,9 +4567,16 @@ export function Composer(props: ComposerProps) {
     launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
       ? props.launchpad.workMode
       : "local";
-  const launchpadBranchPickerOptions = props.launchpad
-    ? buildLaunchpadBranchPickerOptions(props.launchpad, props.directory)
-    : [];
+  // Pure function of the launchpad draft + directory git status; memoize so
+  // typing in the prompt (which re-renders the composer) doesn't rebuild the
+  // branch option list every keystroke.
+  const launchpadBranchPickerOptions = useMemo(
+    () =>
+      props.launchpad
+        ? buildLaunchpadBranchPickerOptions(props.launchpad, props.directory)
+        : [],
+    [props.launchpad, props.directory],
+  );
   const launchpadCodexEnvironmentOptions =
     props.launchpad?.codexEnvironmentOptions ?? [];
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(

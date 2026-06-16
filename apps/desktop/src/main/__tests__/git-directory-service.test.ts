@@ -13,6 +13,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GitDirectoryService,
+  MAX_TRACKED_BRANCHES,
+  capRecentBranchDetails,
   computeWorktreePath,
 } from "../app-server/git-directory-service";
 
@@ -44,6 +46,43 @@ async function createFixtureRepo(): Promise<string> {
   execFileSync("git", ["-C", rootDir, "branch", "release"], { stdio: "ignore" });
   return rootDir;
 }
+
+describe("capRecentBranchDetails", () => {
+  const makeDetails = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      name: `branch-${index}`,
+      lastCommitAt: 2_000_000 - index,
+    }));
+
+  it("returns the input unchanged when at or below the limit", () => {
+    const details = makeDetails(MAX_TRACKED_BRANCHES);
+    expect(capRecentBranchDetails(details, { keep: [], limit: MAX_TRACKED_BRANCHES })).toBe(
+      details,
+    );
+  });
+
+  it("keeps only the most recent `limit` branches when over the cap", () => {
+    const details = makeDetails(MAX_TRACKED_BRANCHES + 25);
+    const capped = capRecentBranchDetails(details, {
+      keep: [],
+      limit: MAX_TRACKED_BRANCHES,
+    });
+    expect(capped).toHaveLength(MAX_TRACKED_BRANCHES);
+    expect(capped[0]?.name).toBe("branch-0");
+    expect(capped.at(-1)?.name).toBe(`branch-${MAX_TRACKED_BRANCHES - 1}`);
+  });
+
+  it("retains anchor branches that fall outside the recency cutoff", () => {
+    const details = makeDetails(MAX_TRACKED_BRANCHES + 25);
+    const staleAnchor = details.at(-1)!.name; // oldest, well outside the cutoff
+    const capped = capRecentBranchDetails(details, {
+      keep: [undefined, staleAnchor],
+      limit: MAX_TRACKED_BRANCHES,
+    });
+    expect(capped).toHaveLength(MAX_TRACKED_BRANCHES + 1);
+    expect(capped.map((detail) => detail.name)).toContain(staleAnchor);
+  });
+});
 
 describe("GitDirectoryService", () => {
   const cleanupPaths: string[] = [];

@@ -302,6 +302,44 @@ function parseGitBranchDetails(
   return details;
 }
 
+/**
+ * Upper bound on how many branches we enrich, hold in the navigation
+ * snapshot, and persist to the directory git-status cache. Repos can have
+ * thousands of branches; the picker (and the messaging / PR-status surfaces
+ * that read `branches`) only ever need the most recently touched ones. The
+ * git enumeration itself still walks every ref — that cost is transient — but
+ * nothing past this many branches is retained or written to disk.
+ */
+export const MAX_TRACKED_BRANCHES = 100;
+
+/**
+ * Keeps the most recently touched `limit` branches, always retaining the
+ * `keep` anchors (current / default) even when they fall outside the cutoff,
+ * so pinned anchors and default resolution keep working on busy repos.
+ * Input is assumed sorted most-recent-first.
+ */
+export function capRecentBranchDetails(
+  details: { name: string; lastCommitAt?: number }[],
+  options: { keep: Array<string | undefined>; limit: number },
+): { name: string; lastCommitAt?: number }[] {
+  if (details.length <= options.limit) {
+    return details;
+  }
+  const kept = details.slice(0, options.limit);
+  const keptNames = new Set(kept.map((detail) => detail.name));
+  for (const name of options.keep) {
+    if (!name || keptNames.has(name)) {
+      continue;
+    }
+    const detail = details.find((entry) => entry.name === name);
+    if (detail) {
+      keptNames.add(name);
+      kept.push(detail);
+    }
+  }
+  return kept;
+}
+
 function resolveDefaultBranch(params: {
   branches: string[];
   remoteHead: string;
@@ -650,9 +688,18 @@ export class GitDirectoryService {
       ],
       gitEnv,
     ).catch(() => "");
-    const parsedBranchDetails = parseGitBranchDetails(branchesOutput);
+    const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
+    // Resolve the default branch against the FULL list so a rarely-committed
+    // `main` is still found, then cap everything we hold/persist downstream.
+    const defaultBranch = resolveDefaultBranch({
+      branches: parsedBranchDetailsAll.map((detail) => detail.name),
+      remoteHead,
+    });
+    const parsedBranchDetails = capRecentBranchDetails(parsedBranchDetailsAll, {
+      keep: [currentBranch, defaultBranch],
+      limit: MAX_TRACKED_BRANCHES,
+    });
     const branches = parsedBranchDetails.map((detail) => detail.name);
-    const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
     const worktreeBranchNames = new Set(
       parseGitWorktreeEntries(worktreeList)
         .map((entry) => entry.branch)
