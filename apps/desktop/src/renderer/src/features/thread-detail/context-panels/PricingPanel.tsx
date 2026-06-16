@@ -90,7 +90,7 @@ export function PricingPanel(props: PricingPanelProps) {
           {lines.map((line) => (
             <li key={line.usageLineId} className="rail-card pricing-usage-row">
               <p className="rail-card__title">
-                {line.scope === "monitor" ? "Sub-agent usage" : "Turn usage"}
+                {formatUsageLineTitle(line)}
               </p>
               <p className="rail-card__model">
                 {line.model ?? "Unknown model"}
@@ -112,7 +112,7 @@ export function PricingPanel(props: PricingPanelProps) {
               />
               <p className="rail-card__usage">
                 {line.priceStatus === "priced"
-                  ? `${formatMoney(line.totalCostMicros, line.currency)} list price this turn`
+                  ? `${formatMoney(line.totalCostMicros, line.currency)} ${formatUsageLineCostSuffix(line)}`
                   : `Unpriced: ${formatUnpricedReason(line.priceUnavailableReason)}`}
               </p>
               {line.cumulativeTotalCostMicros !== undefined ? (
@@ -127,6 +127,41 @@ export function PricingPanel(props: PricingPanelProps) {
         </ul>
       ) : null}
     </section>
+  );
+}
+
+function formatUsageLineTitle(line: ThreadUsageLineRecord): string {
+  if (line.scope === "monitor") {
+    return "Sub-agent usage";
+  }
+  if (isHistoricalUsageSummary(line)) {
+    return "Historical usage summary";
+  }
+  if (line.scope === "latest-request") {
+    return "Latest request usage";
+  }
+  return "Turn usage";
+}
+
+function formatUsageLineCostSuffix(line: ThreadUsageLineRecord): string {
+  if (line.scope === "latest-request") {
+    return "list price this request";
+  }
+  if (line.scope === "turn" && !isHistoricalUsageSummary(line)) {
+    return "list price this turn";
+  }
+  return "list price";
+}
+
+function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
+  if (line.scope === "total" || line.scope === "backfill") {
+    return true;
+  }
+  return (
+    line.source === "live" &&
+    line.status === "pending" &&
+    line.cumulativeTotalTokens === undefined &&
+    line.totalTokens >= 1_000_000
   );
 }
 

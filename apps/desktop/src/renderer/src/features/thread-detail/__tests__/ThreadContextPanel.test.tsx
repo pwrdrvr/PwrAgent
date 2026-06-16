@@ -511,6 +511,65 @@ describe("ThreadContextPanel", () => {
     expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
+  it("labels legacy live rows without cumulative context as historical summaries", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 7_000_000,
+            cachedInputTokens: 70_463_104,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            model: "gpt-5.5",
+            outputCostMicros: 42_000_000,
+            outputTokens: 221_675,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            scope: "turn",
+            source: "live",
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            turnId: "turn-legacy",
+            uncachedInputCostMicros: 6_830_000,
+            uncachedInputTokens: 2_788_759,
+            usageLineId: "line-legacy",
+          },
+        ],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 70_463_104,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            outputTokens: 221_675,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            uncachedInputTokens: 2_788_759,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_000,
+            usageLineCount: 1,
+          },
+        ],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
+    expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
+    expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+  });
+
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
     vi.useFakeTimers();
     renderPanel();

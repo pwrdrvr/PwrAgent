@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 19;
+export const CURRENT_STATE_DB_USER_VERSION = 20;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -764,6 +764,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 19) {
       db.transaction(() => {
         ensureThreadUsagePricingCumulativeColumns(db);
+        db.pragma("user_version = 19");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 20) {
+      db.transaction(() => {
+        repairThreadUsageLineCreatedAt(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1068,7 +1074,7 @@ ON CONFLICT(usage_turn_id) DO UPDATE SET
   settings_confidence = excluded.settings_confidence,
   started_at = excluded.started_at,
   completed_at = excluded.completed_at,
-  observed_at = excluded.observed_at,
+  observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
   updated_at = excluded.updated_at
 `);
 
@@ -1164,6 +1170,33 @@ function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): 
       db.exec(column.sql);
     }
   }
+}
+
+function repairThreadUsageLineCreatedAt(db: BetterSqlite3.Database): void {
+  if (
+    !tableExists(db, "thread_usage_lines") ||
+    !tableExists(db, "thread_usage_turns") ||
+    !tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+  ) {
+    return;
+  }
+
+  db.exec(`
+UPDATE thread_usage_lines
+SET created_at = (
+  SELECT MIN(thread_usage_lines.created_at, thread_usage_turns.observed_at)
+  FROM thread_usage_turns
+  WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+)
+WHERE source = 'live'
+  AND usage_turn_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM thread_usage_turns
+    WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+      AND thread_usage_turns.observed_at < thread_usage_lines.created_at
+  )
+`);
 }
 
 function tableExists(

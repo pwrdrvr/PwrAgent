@@ -290,6 +290,114 @@ describe("StateDb", () => {
     });
   });
 
+  it("repairs live usage line timestamps that were overwritten by streaming updates", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "live-usage-created-at-repair-state.db");
+    stateDb = StateDb.open(dbPath);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          source,
+          source_item_id,
+          scope,
+          status,
+          created_at,
+          model,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'live-line-1',
+          'openai:codex:thread-1:turn-1',
+          'openai',
+          'codex',
+          'thread-1',
+          'turn-1',
+          'live',
+          'thread-token-usage',
+          'turn',
+          'pending',
+          2000,
+          'gpt-5.5',
+          1000,
+          200,
+          800,
+          300,
+          100,
+          1300,
+          'priced',
+          'USD',
+          900,
+          100,
+          4000,
+          5000,
+          2000
+        )`,
+      )
+      .run();
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_turns (
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          model,
+          settings_source,
+          settings_confidence,
+          observed_at,
+          updated_at
+        ) VALUES (
+          'openai:codex:thread-1:turn-1',
+          'openai',
+          'codex',
+          'thread-1',
+          'turn-1',
+          'gpt-5.5',
+          'thread-overlay',
+          'fallback',
+          1000,
+          2000
+        )`,
+      )
+      .run();
+    stateDb.raw.pragma("user_version = 19");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+    expect(
+      (
+        stateDb.raw
+          .prepare(
+            "SELECT created_at FROM thread_usage_lines WHERE usage_line_id = 'live-line-1'",
+          )
+          .get() as { created_at: number }
+      ).created_at,
+    ).toBe(1000);
+  });
+
   it("repairs databases that used version 13 for the old PR cache migration", () => {
     stateDb.close();
 

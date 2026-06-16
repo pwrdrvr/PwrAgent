@@ -98,6 +98,39 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("keeps the original usage line timestamp when live usage is updated", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: 1_000,
+        source: "live",
+        status: "pending",
+        totalCostMicros: 4_000,
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: 2_000,
+        inputTokens: 1_400,
+        source: "live",
+        status: "pending",
+        totalCostMicros: 6_000,
+        totalTokens: 1_700,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      createdAt: 1_000,
+      inputTokens: 1_400,
+      totalCostMicros: 6_000,
+      totalTokens: 1_700,
+    });
+  });
+
   it("excludes superseded rows from active summaries while preserving diagnostics", async () => {
     await store.upsertThreadUsageLine({ line: buildUsageLine() });
     await store.upsertThreadUsageLine({

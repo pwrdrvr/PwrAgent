@@ -695,7 +695,7 @@ export class SqliteOverlayStore {
             source_item_id = excluded.source_item_id,
             scope = excluded.scope,
             status = excluded.status,
-            created_at = excluded.created_at,
+            created_at = MIN(thread_usage_lines.created_at, excluded.created_at),
             completed_at = excluded.completed_at,
             model = excluded.model,
             reasoning_effort = excluded.reasoning_effort,
