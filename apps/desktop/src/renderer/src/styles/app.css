@@ -24,6 +24,32 @@
   --text-primary: #f7f3eb;
   --text-secondary: #b8b0a5;
   --text-muted: #8c857a;
+
+  /* Integrated terminals use their own canvas colors. The ANSI values mirror
+     VS Code's light/dark defaults so tools that emit indexed terminal colors
+     remain readable across themes. */
+  --terminal-bg: #000000;
+  --terminal-fg: #cccccc;
+  --terminal-cursor: #ffb35c;
+  --terminal-cursor-accent: #160a00;
+  --terminal-ansi-black: #000000;
+  --terminal-ansi-red: #cd3131;
+  --terminal-ansi-green: #0dbc79;
+  --terminal-ansi-yellow: #e5e510;
+  --terminal-ansi-blue: #2472c8;
+  --terminal-ansi-magenta: #bc3fbc;
+  --terminal-ansi-cyan: #11a8cd;
+  --terminal-ansi-white: #e5e5e5;
+  --terminal-ansi-bright-black: #666666;
+  --terminal-ansi-bright-red: #f14c4c;
+  --terminal-ansi-bright-green: #23d18b;
+  --terminal-ansi-bright-yellow: #f5f543;
+  --terminal-ansi-bright-blue: #3b8eea;
+  --terminal-ansi-bright-magenta: #d670d6;
+  --terminal-ansi-bright-cyan: #29b8db;
+  --terminal-ansi-bright-white: #e5e5e5;
+  --terminal-scrollbar-thumb: color-mix(in srgb, var(--terminal-fg) 34%, transparent);
+
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
@@ -217,6 +243,29 @@
   /* Light foreground on the darker light-theme accent fill. */
   --accent-on: #ffffff;
   --focus-ring: var(--accent);
+
+  /* Light terminal chrome follows VS Code's readable light ANSI palette:
+     ANSI white is gray, not white-on-white. */
+  --terminal-bg: #ffffff;
+  --terminal-fg: #333333;
+  --terminal-cursor: #d96d00;
+  --terminal-cursor-accent: #ffffff;
+  --terminal-ansi-black: #000000;
+  --terminal-ansi-red: #cd3131;
+  --terminal-ansi-green: #107c10;
+  --terminal-ansi-yellow: #949800;
+  --terminal-ansi-blue: #0451a5;
+  --terminal-ansi-magenta: #bc05bc;
+  --terminal-ansi-cyan: #0598bc;
+  --terminal-ansi-white: #555555;
+  --terminal-ansi-bright-black: #666666;
+  --terminal-ansi-bright-red: #cd3131;
+  --terminal-ansi-bright-green: #14ce14;
+  --terminal-ansi-bright-yellow: #b5ba00;
+  --terminal-ansi-bright-blue: #0451a5;
+  --terminal-ansi-bright-magenta: #bc05bc;
+  --terminal-ansi-bright-cyan: #0598bc;
+  --terminal-ansi-bright-white: #a5a5a5;
 
   /* Semantic — darker bases for contrast. */
   --danger-soft: rgba(138, 31, 18, 0.12);
@@ -11801,20 +11850,35 @@ textarea,
   flex: 1;
   min-height: 0;
   padding: 10px 10px 8px;
+  background: var(--terminal-bg);
+  overflow: hidden;
 }
 
 .integrated-terminal__viewport {
+  position: relative;
   width: 100%;
   height: 100%;
+  background: var(--terminal-bg);
+  overflow: hidden;
 }
 
 .integrated-terminal .xterm {
-  height: 100%;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--terminal-bg);
   padding: 0;
 }
 
-.integrated-terminal .xterm-viewport {
-  background: transparent;
+.integrated-terminal .xterm .xterm-viewport,
+.integrated-terminal .xterm .xterm-screen {
+  background: var(--terminal-bg);
+}
+
+.integrated-terminal .xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--terminal-scrollbar-thumb) var(--terminal-bg);
 }
 
 .composer__input {
