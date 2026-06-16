@@ -19,7 +19,7 @@ type PricingPanelProps = {
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
   const lines = props.pricing?.lines ?? [];
-  const summary = aggregateSummaries(summaries);
+  const summary = aggregateSummaries(summaries) ?? aggregateUsageLines(lines);
 
   return (
     <section className="context-panel__section">
@@ -81,9 +81,9 @@ export function PricingPanel(props: PricingPanelProps) {
             </ul>
           ) : null}
         </>
-      ) : (
+      ) : lines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
-      )}
+      ) : null}
 
       {lines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
@@ -137,6 +137,52 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
     return "";
   }
   return ` · ${line.serviceTier}`;
+}
+
+function aggregateUsageLines(lines: ThreadUsageLineRecord[]): ThreadPricingSummary | undefined {
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const firstLine = lines[0];
+  return lines.reduce<ThreadPricingSummary>(
+    (summary, line) => ({
+      backend: summary.backend,
+      cachedInputTokens: summary.cachedInputTokens + line.cachedInputTokens,
+      currency: summary.currency,
+      inputTokens: summary.inputTokens + line.inputTokens,
+      outputTokens: summary.outputTokens + line.outputTokens,
+      pricedUsageLineCount:
+        summary.pricedUsageLineCount + (line.priceStatus === "priced" ? 1 : 0),
+      provider: summary.provider,
+      reasoningOutputTokens:
+        summary.reasoningOutputTokens + line.reasoningOutputTokens,
+      threadId: summary.threadId,
+      totalCostMicros: summary.totalCostMicros + line.totalCostMicros,
+      totalTokens: summary.totalTokens + line.totalTokens,
+      uncachedInputTokens: summary.uncachedInputTokens + line.uncachedInputTokens,
+      unpricedUsageLineCount:
+        summary.unpricedUsageLineCount + (line.priceStatus === "priced" ? 0 : 1),
+      updatedAt: Math.max(summary.updatedAt, line.completedAt ?? line.createdAt),
+      usageLineCount: summary.usageLineCount + 1,
+    }),
+    {
+      backend: firstLine.backend,
+      cachedInputTokens: 0,
+      currency: firstLine.currency,
+      inputTokens: 0,
+      outputTokens: 0,
+      pricedUsageLineCount: 0,
+      provider: firstLine.provider,
+      reasoningOutputTokens: 0,
+      threadId: firstLine.threadId,
+      totalCostMicros: 0,
+      totalTokens: 0,
+      uncachedInputTokens: 0,
+      unpricedUsageLineCount: 0,
+      updatedAt: 0,
+      usageLineCount: 0,
+    },
+  );
 }
 
 function formatUsageLineTitle(line: ThreadUsageLineRecord): string {

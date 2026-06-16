@@ -2830,6 +2830,7 @@ function summarizeTokenUsageActivity(
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const billedOutputTokens = outputTokens + reasoningOutputTokens;
   const resolvedPricingContext = mergeTokenUsagePricingContext(
     readTokenUsagePricingContext(record),
     pricingContext
@@ -2971,7 +2972,7 @@ function summarizeTokenUsageActivity(
       {
         id: `token-usage-${idSuffix}-output-cost`,
         kind: "read",
-        label: `Output cost: ${formatTokenCount(outputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
+        label: `Output cost: ${formatTokenCount(billedOutputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
           cost.outputUsdPerMillion
         )}/M${formatTokenUsageStandardRateSuffix(
           cost.standardOutputRateMultiplier

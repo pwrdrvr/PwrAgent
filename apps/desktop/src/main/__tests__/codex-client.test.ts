@@ -3365,8 +3365,8 @@ describe("CodexAppServerClient", () => {
                 input_tokens: 40_740,
                 cached_input_tokens: 39_808,
                 output_tokens: 27,
-                reasoning_output_tokens: 0,
-                total_tokens: 40_767,
+                reasoning_output_tokens: 10,
+                total_tokens: 40_777,
               },
               total_token_usage: {
                 input_tokens: 80_972,
@@ -3396,11 +3396,16 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "live-token-usage-1781616385826",
         summary:
-          "Latest request usage: 932 uncached in · 39,808 cached · 27 out · $0.026 list price",
+          "Latest request usage: 932 uncached in · 39,808 cached · 27 out (10 reasoning) · $0.026 list price",
         status: "completed",
       },
     ]);
     const usage = replay.entries[0];
+    expect(
+      usage?.type === "activity"
+        ? usage.details.find((detail) => detail.id.endsWith("-output-cost"))?.label
+        : undefined,
+    ).toBe("Output cost: 37 tokens at $30.00/M = $0.002");
     expect(usage?.type === "activity" ? usage.details.at(-1)?.label : undefined).toBe(
       "Cost: $0.026 list price for GPT-5.5 Standard",
     );

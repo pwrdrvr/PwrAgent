@@ -274,6 +274,7 @@ export function buildTokenUsageActivityEntry(params: {
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const billedOutputTokens = outputTokens + reasoningOutputTokens;
   const cost = estimateOpenAiTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
@@ -348,7 +349,7 @@ export function buildTokenUsageActivityEntry(params: {
       {
         id: `${params.id}-output-cost`,
         kind: "read",
-        label: `Output cost: ${formatTokenCount(outputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
+        label: `Output cost: ${formatTokenCount(billedOutputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
           cost.outputUsdPerMillion,
         )}/M${formatTokenUsageStandardRateSuffix(
           cost.standardOutputRateMultiplier,

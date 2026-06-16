@@ -514,6 +514,47 @@ describe("ThreadContextPanel", () => {
     expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
+  it("summarizes pricing rows when provider summaries are absent", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 50,
+            cachedInputTokens: 500,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 2_000,
+            model: "gpt-5.5",
+            outputCostMicros: 500,
+            outputTokens: 300,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 50,
+            scope: "monitor",
+            source: "monitor",
+            status: "finalized",
+            threadId: "monitor-thread-1",
+            totalCostMicros: 1_250,
+            totalTokens: 2_350,
+            uncachedInputCostMicros: 700,
+            uncachedInputTokens: 1_500,
+            usageLineId: "monitor-line-1",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.queryByText("No usage pricing recorded yet.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("$0.002")[0]).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("1 (1 priced, 0 unpriced)");
+    expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
+  });
+
   it("labels legacy live rows without cumulative context as historical summaries", () => {
     renderPanel({
       activeTab: "pricing",
