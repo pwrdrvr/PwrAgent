@@ -12617,6 +12617,9 @@ textarea,
 .branch-picker__badge {
   flex: 0 0 auto;
   padding: 1px 7px;
+  /* Transparent border keeps every badge the same height; the outlined
+     default badge sets its own border-color. */
+  border: 1px solid transparent;
   border-radius: 999px;
   font-size: 10px;
   font-weight: 600;
@@ -12629,9 +12632,21 @@ textarea,
   background: var(--accent-soft);
 }
 
+.branch-picker__badge--default {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
+
 .branch-picker__badge--in-use {
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.branch-picker__divider {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--border-subtle);
 }
 
 .branch-picker__option-time {

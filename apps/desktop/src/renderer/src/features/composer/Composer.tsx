@@ -1381,6 +1381,8 @@ type LaunchpadBranchOption = {
   inUse?: boolean;
   /** The repository's currently checked-out branch. */
   current?: boolean;
+  /** The repository's default branch (origin/HEAD, or main/master/...). */
+  isDefault?: boolean;
 };
 
 /**
@@ -1412,15 +1414,32 @@ function BranchPicker(props: {
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
 
   const normalizedQuery = query.trim().toLowerCase();
-  const filtered = useMemo(
-    () =>
-      normalizedQuery
-        ? props.options.filter((option) =>
-            option.name.toLowerCase().includes(normalizedQuery),
-          )
-        : props.options,
-    [props.options, normalizedQuery],
-  );
+  // Pin the anchor branches — the one you'll branch off (selected), the repo
+  // default, and the checked-out branch — to the top, deduped in that
+  // priority order. Everything else follows in recency order. When the three
+  // anchors are the same branch (the common case) this is a single pinned row.
+  const { pinnedOptions, restOptions } = useMemo(() => {
+    const byName = new Map(props.options.map((option) => [option.name, option]));
+    const pinnedNames = new Set<string>();
+    const pinned: LaunchpadBranchOption[] = [];
+    const addPin = (option?: LaunchpadBranchOption): void => {
+      if (option && !pinnedNames.has(option.name)) {
+        pinnedNames.add(option.name);
+        pinned.push(option);
+      }
+    };
+    addPin(byName.get(props.value));
+    addPin(props.options.find((option) => option.isDefault));
+    addPin(props.options.find((option) => option.current));
+    const rest = props.options.filter((option) => !pinnedNames.has(option.name));
+    return { pinnedOptions: pinned, restOptions: rest };
+  }, [props.options, props.value]);
+
+  const matchesQuery = (option: LaunchpadBranchOption): boolean =>
+    !normalizedQuery || option.name.toLowerCase().includes(normalizedQuery);
+  const visiblePinned = pinnedOptions.filter(matchesQuery);
+  const visibleRest = restOptions.filter(matchesQuery);
+  const flatVisible = [...visiblePinned, ...visibleRest];
 
   useEffect(() => {
     if (!open) {
@@ -1484,18 +1503,83 @@ function BranchPicker(props: {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((current) =>
-        filtered.length === 0 ? 0 : Math.min(filtered.length - 1, current + 1),
+        flatVisible.length === 0
+          ? 0
+          : Math.min(flatVisible.length - 1, current + 1),
       );
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex((current) => Math.max(0, current - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const option = filtered[activeIndex];
+      const option = flatVisible[activeIndex];
       if (option) {
         commit(option.name);
       }
     }
+  };
+
+  const renderOption = (
+    option: LaunchpadBranchOption,
+    flatIndex: number,
+  ): ReactNode => {
+    const isSelected = option.name === props.value;
+    const relativeTime = formatBranchRelativeTime(option.lastCommitAt, nowMs);
+    return (
+      <button
+        aria-label={option.name}
+        aria-selected={isSelected}
+        className={[
+          "branch-picker__option",
+          flatIndex === activeIndex ? "is-active" : "",
+          isSelected ? "is-selected" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        key={option.name}
+        role="option"
+        type="button"
+        onClick={() => commit(option.name)}
+        onMouseEnter={() => setActiveIndex(flatIndex)}
+      >
+        <span aria-hidden="true" className="branch-picker__option-check">
+          {isSelected ? "✓" : ""}
+        </span>
+        <span aria-hidden="true" className="branch-picker__option-icon">
+          <BranchIcon size={12} />
+        </span>
+        <span className="branch-picker__option-name">{option.name}</span>
+        {option.current ? (
+          <span
+            aria-hidden="true"
+            className="branch-picker__badge branch-picker__badge--current"
+          >
+            Current
+          </span>
+        ) : null}
+        {option.isDefault ? (
+          <span
+            aria-hidden="true"
+            className="branch-picker__badge branch-picker__badge--default"
+          >
+            Default
+          </span>
+        ) : null}
+        {option.inUse ? (
+          <span
+            aria-hidden="true"
+            className="branch-picker__badge branch-picker__badge--in-use"
+          >
+            In use
+          </span>
+        ) : null}
+        {relativeTime ? (
+          <span aria-hidden="true" className="branch-picker__option-time">
+            {relativeTime}
+          </span>
+        ) : null}
+      </button>
+    );
   };
 
   return (
@@ -1563,73 +1647,24 @@ function BranchPicker(props: {
             id={listboxId}
             role="listbox"
           >
-            {filtered.length === 0 ? (
+            {flatVisible.length === 0 ? (
               <p className="branch-picker__empty">No branches match your filter.</p>
             ) : (
-              filtered.map((option, index) => {
-                const isSelected = option.name === props.value;
-                const relativeTime = formatBranchRelativeTime(
-                  option.lastCommitAt,
-                  nowMs,
-                );
-                return (
-                  <button
-                    aria-label={option.name}
-                    aria-selected={isSelected}
-                    className={[
-                      "branch-picker__option",
-                      index === activeIndex ? "is-active" : "",
-                      isSelected ? "is-selected" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    key={option.name}
-                    role="option"
-                    type="button"
-                    onClick={() => commit(option.name)}
-                    onMouseEnter={() => setActiveIndex(index)}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__option-check"
-                    >
-                      {isSelected ? "✓" : ""}
-                    </span>
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__option-icon"
-                    >
-                      <BranchIcon size={12} />
-                    </span>
-                    <span className="branch-picker__option-name">
-                      {option.name}
-                    </span>
-                    {option.current ? (
-                      <span
-                        aria-hidden="true"
-                        className="branch-picker__badge branch-picker__badge--current"
-                      >
-                        Current
-                      </span>
-                    ) : option.inUse ? (
-                      <span
-                        aria-hidden="true"
-                        className="branch-picker__badge branch-picker__badge--in-use"
-                      >
-                        In use
-                      </span>
-                    ) : null}
-                    {relativeTime ? (
-                      <span
-                        aria-hidden="true"
-                        className="branch-picker__option-time"
-                      >
-                        {relativeTime}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })
+              <>
+                {visiblePinned.map((option, index) =>
+                  renderOption(option, index),
+                )}
+                {visiblePinned.length > 0 && visibleRest.length > 0 ? (
+                  <div
+                    aria-hidden="true"
+                    className="branch-picker__divider"
+                    role="presentation"
+                  />
+                ) : null}
+                {visibleRest.map((option, index) =>
+                  renderOption(option, visiblePinned.length + index),
+                )}
+              </>
             )}
           </div>
         </div>
@@ -6884,6 +6919,9 @@ function buildLaunchpadBranchPickerOptions(
   const currentBranch = normalizeSelectableLaunchpadBranch(
     directory?.gitStatus?.currentBranch,
   );
+  const defaultBranch = normalizeSelectableLaunchpadBranch(
+    directory?.gitStatus?.defaultBranch,
+  );
   const ordered: LaunchpadBranchOption[] = [];
   const seen = new Set<string>();
   const push = (candidate?: string): void => {
@@ -6898,6 +6936,7 @@ function buildLaunchpadBranchPickerOptions(
       lastCommitAt: detail?.lastCommitAt,
       inUse: detail?.inUse,
       current: currentBranch ? name === currentBranch : false,
+      isDefault: defaultBranch ? name === defaultBranch : false,
     });
   };
   // Recency-ordered branches: prefer the enriched details, fall back to the

@@ -6371,6 +6371,70 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("pins the selected, default, and current branches above the recency list", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "develop",
+            defaultBranch: "main",
+            branches: ["chore/recent", "feat/x", "develop", "main", "chore/old"],
+            branchDetails: [
+              { name: "chore/recent", lastCommitAt: nowSeconds - 60 },
+              { name: "feat/x", lastCommitAt: nowSeconds - 5 * 86400 },
+              { name: "develop", lastCommitAt: nowSeconds - 6 * 86400 },
+              { name: "main", lastCommitAt: nowSeconds - 7 * 86400 },
+              { name: "chore/old", lastCommitAt: nowSeconds - 30 * 86400 },
+            ],
+            syncState: "in-sync",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "feat/x",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+
+    const optionNames = screen
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("aria-label"));
+    // Pinned anchors first, in selected -> default -> current priority...
+    expect(optionNames.slice(0, 3)).toEqual(["feat/x", "main", "develop"]);
+    // ...then the remaining branches in recency order.
+    expect(optionNames.slice(3)).toEqual(["chore/recent", "chore/old"]);
+
+    expect(
+      screen.getByRole("option", { name: "feat/x" })
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(screen.getByRole("option", { name: "main" })).getByText("Default")
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("option", { name: "develop" })).getByText("Current")
+    ).toBeInTheDocument();
+  });
+
   it("defaults detached new-worktree launchpads to the repository default branch", () => {
     render(
       <Composer
