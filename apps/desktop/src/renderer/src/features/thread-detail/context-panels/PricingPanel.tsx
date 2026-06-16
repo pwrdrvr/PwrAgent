@@ -95,8 +95,7 @@ export function PricingPanel(props: PricingPanelProps) {
               <p className="rail-card__model">
                 {line.model ?? "Unknown model"}
                 {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
-                {line.fastMode ? " · Fast" : ""}
-                {line.serviceTier ? ` · ${line.serviceTier}` : ""}
+                {formatServiceTierLabel(line)}
               </p>
               <p className="rail-card__usage">
                 {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
@@ -128,6 +127,16 @@ export function PricingPanel(props: PricingPanelProps) {
       ) : null}
     </section>
   );
+}
+
+function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
+  if (line.fastMode || line.serviceTier === "priority") {
+    return " · Fast";
+  }
+  if (!line.serviceTier || line.serviceTier === "standard") {
+    return "";
+  }
+  return ` · ${line.serviceTier}`;
 }
 
 function formatUsageLineTitle(line: ThreadUsageLineRecord): string {

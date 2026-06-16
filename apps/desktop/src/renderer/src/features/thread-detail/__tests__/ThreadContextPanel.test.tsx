@@ -438,7 +438,10 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
     expect(screen.getAllByText("$0.010")[0]).toBeInTheDocument();
-    expect(screen.getByText("gpt-5.5 · high · Fast · priority")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
+    expect(
+      screen.queryByText("gpt-5.5 · high · Fast · priority"),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
     ).toBeInTheDocument();
