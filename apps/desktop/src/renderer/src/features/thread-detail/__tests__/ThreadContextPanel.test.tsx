@@ -113,6 +113,7 @@ type PanelOverrides = Partial<
     | "pinned"
     | "thread"
     | "onRefreshNavigation"
+    | "onScrollToTurn"
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
@@ -406,6 +407,13 @@ describe("ThreadContextPanel", () => {
       totalTokens: 2_420,
       priceStatus: "priced",
       currency: "USD",
+      cumulativeCachedInputTokens: 5_000,
+      cumulativeInputTokens: 8_000,
+      cumulativeOutputTokens: 700,
+      cumulativeReasoningOutputTokens: 240,
+      cumulativeTotalCostMicros: 42_000,
+      cumulativeTotalTokens: 8_940,
+      cumulativeUncachedInputTokens: 3_000,
       uncachedInputCostMicros: 7_500,
       cachedInputCostMicros: 500,
       outputCostMicros: 1_500,
@@ -434,7 +442,73 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
     ).toBeInTheDocument();
-    expect(screen.getByText("$0.010 list price")).toBeInTheDocument();
+    expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.042 list price")).toBeInTheDocument();
+  });
+
+  it("makes pricing row timestamps scroll the transcript to their turn", () => {
+    const onScrollToTurn = vi.fn();
+
+    renderPanel({
+      activeTab: "pricing",
+      onScrollToTurn,
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "hydration",
+            status: "finalized",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-1",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-1",
+          },
+        ],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 0,
+            currency: "USD",
+            inputTokens: 100,
+            outputTokens: 10,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            uncachedInputTokens: 100,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_000,
+            usageLineCount: 1,
+          },
+        ],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+
+    expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

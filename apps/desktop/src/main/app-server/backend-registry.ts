@@ -1631,6 +1631,12 @@ type TaskMonitorTokenUsageBreakdown = {
   totalTokens?: number;
 };
 
+type TaskMonitorTokenUsageRecords = {
+  currentUsage?: TaskMonitorTokenUsageBreakdown;
+  latestUsage?: TaskMonitorTokenUsageBreakdown;
+  totalUsage?: TaskMonitorTokenUsageBreakdown;
+};
+
 function buildTaskMonitorUsageSnapshot(params: {
   fastMode?: boolean;
   model?: string;
@@ -1721,6 +1727,51 @@ function normalizeTaskMonitorTokenUsage(
   return undefined;
 }
 
+function readTaskMonitorTokenUsageRecords(
+  tokenUsage: unknown,
+): TaskMonitorTokenUsageRecords | undefined {
+  const root = readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const container =
+    readRecord(root.tokenUsage) ??
+    readRecord(root.token_usage) ??
+    readRecord(root.info) ??
+    root;
+  const latestUsage =
+    readTaskMonitorTokenBreakdownFromUnknown(container.last) ??
+    readTaskMonitorTokenBreakdownFromUnknown(container.last_token_usage);
+  const totalUsage =
+    readTaskMonitorTokenBreakdownFromUnknown(container.total) ??
+    readTaskMonitorTokenBreakdownFromUnknown(container.total_token_usage);
+  const currentUsage =
+    latestUsage ?? totalUsage ?? readTaskMonitorTokenBreakdown(container);
+  if (latestUsage || totalUsage || currentUsage) {
+    return {
+      ...(currentUsage ? { currentUsage } : {}),
+      ...(latestUsage ? { latestUsage } : {}),
+      ...(totalUsage ? { totalUsage } : {}),
+    };
+  }
+
+  for (const key of ["data", "payload", "info", "usage", "result"]) {
+    const nested = readTaskMonitorTokenUsageRecords(root[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readTaskMonitorTokenBreakdownFromUnknown(
+  value: unknown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const record = readRecord(value);
+  return record ? readTaskMonitorTokenBreakdown(record) : undefined;
+}
+
 function readTaskMonitorTokenBreakdown(
   record: Record<string, unknown>,
 ): TaskMonitorTokenUsageBreakdown | undefined {
@@ -1755,6 +1806,56 @@ function readTaskMonitorTokenBreakdown(
     outputTokens,
     reasoningOutputTokens,
     totalTokens,
+  };
+}
+
+function subtractTaskMonitorTokenUsage(
+  total: TaskMonitorTokenUsageBreakdown,
+  baseline: TaskMonitorTokenUsageBreakdown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const result: TaskMonitorTokenUsageBreakdown = {};
+  for (const key of [
+    "cachedInputTokens",
+    "inputTokens",
+    "uncachedInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+    "totalTokens",
+  ] as const) {
+    const totalValue = total[key];
+    if (typeof totalValue === "number" && Number.isFinite(totalValue)) {
+      const baselineValue = baseline[key] ?? 0;
+      result[key] = Math.max(0, totalValue - baselineValue);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeTaskMonitorPricingTokens(
+  tokens: TaskMonitorTokenUsageBreakdown,
+): Required<TaskMonitorTokenUsageBreakdown> {
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    Math.max(0, tokens.cachedInputTokens ?? 0),
+  );
+  const uncachedInputTokens = Math.max(
+    0,
+    tokens.uncachedInputTokens ?? inputTokens - cachedInputTokens,
+  );
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
   };
 }
 
@@ -1955,6 +2056,7 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
 
 function buildLiveThreadUsageLine(params: {
   backend: AppServerBackendKind;
+  cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
   fastMode?: boolean;
   model?: string;
   serviceTier?: string;
@@ -1967,18 +2069,17 @@ function buildLiveThreadUsageLine(params: {
     return undefined;
   }
 
-  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
-  const cachedInputTokens = Math.min(
+  const {
+    cachedInputTokens,
     inputTokens,
-    Math.max(0, tokens.cachedInputTokens ?? 0),
-  );
-  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
-  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
-  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
-  const totalTokens = Math.max(
-    0,
-    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
-  );
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
+  } = normalizeTaskMonitorPricingTokens(tokens);
+  const cumulativeTokens = params.cumulativeTokenUsage
+    ? normalizeTaskMonitorPricingTokens(params.cumulativeTokenUsage)
+    : undefined;
   const cost = estimateOpenAiTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
@@ -1987,6 +2088,16 @@ function buildLiveThreadUsageLine(params: {
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
+  const cumulativeCost = cumulativeTokens
+    ? estimateOpenAiTokenUsageCost({
+        cachedInputTokens: cumulativeTokens.cachedInputTokens,
+        fastMode: params.fastMode,
+        model: params.model,
+        outputTokens: cumulativeTokens.outputTokens,
+        serviceTier: params.serviceTier,
+        uncachedInputTokens: cumulativeTokens.uncachedInputTokens,
+      })
+    : undefined;
   const pricingServiceTier = resolveOpenAiPricingServiceTier({
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
@@ -2006,6 +2117,19 @@ function buildLiveThreadUsageLine(params: {
     cachedInputTokens,
     createdAt: Date.now(),
     currency: cost?.currency ?? "USD",
+    ...(cumulativeTokens
+      ? {
+          cumulativeCachedInputTokens: cumulativeTokens.cachedInputTokens,
+          cumulativeInputTokens: cumulativeTokens.inputTokens,
+          cumulativeOutputTokens: cumulativeTokens.outputTokens,
+          cumulativeReasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
+          ...(cumulativeCost
+            ? { cumulativeTotalCostMicros: cumulativeCost.totalCostMicros }
+            : {}),
+          cumulativeTotalTokens: cumulativeTokens.totalTokens,
+          cumulativeUncachedInputTokens: cumulativeTokens.uncachedInputTokens,
+        }
+      : {}),
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     inputTokens,
     ...(params.model ? { model: params.model } : {}),
@@ -3215,6 +3339,10 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly liveThreadUsageBaselines = new Map<
+    string,
+    TaskMonitorTokenUsageBreakdown
+  >();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -10263,6 +10391,58 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private deriveLiveThreadTokenUsage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): {
+    cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
+    turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
+  } {
+    const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+    if (!records) {
+      return { turnTokenUsage: params.tokenUsage };
+    }
+
+    if (!records.totalUsage || !params.turnId) {
+      return {
+        ...(records.totalUsage ? { cumulativeTokenUsage: records.totalUsage } : {}),
+        turnTokenUsage:
+          records.latestUsage ?? records.currentUsage ?? params.tokenUsage,
+      };
+    }
+
+    const key = [
+      params.backend,
+      params.threadId,
+      params.turnId,
+      "live-token-usage",
+    ].join(":");
+    let baseline = this.liveThreadUsageBaselines.get(key);
+    if (!baseline && records.latestUsage) {
+      baseline = subtractTaskMonitorTokenUsage(
+        records.totalUsage,
+        records.latestUsage,
+      );
+      if (baseline) {
+        this.liveThreadUsageBaselines.set(key, baseline);
+      }
+    }
+
+    const turnTokenUsage = baseline
+      ? subtractTaskMonitorTokenUsage(records.totalUsage, baseline)
+      : undefined;
+    return {
+      cumulativeTokenUsage: records.totalUsage,
+      turnTokenUsage:
+        turnTokenUsage ??
+        records.latestUsage ??
+        records.currentUsage ??
+        records.totalUsage,
+    };
+  }
+
   private async recordLiveThreadUsage(event: AgentEvent): Promise<void> {
     const notification = event.notification;
     if (notification.method !== "thread/tokenUsage/updated") {
@@ -10311,13 +10491,20 @@ export class DesktopBackendRegistry {
     const fastMode =
       readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]) ??
       overlay?.fastMode;
+    const derivedUsage = this.deriveLiveThreadTokenUsage({
+      backend: event.backend,
+      threadId,
+      tokenUsage,
+      turnId: notification.params.turnId ?? undefined,
+    });
     const line = buildLiveThreadUsageLine({
       backend: event.backend,
+      cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
       fastMode,
       model,
       serviceTier,
       threadId,
-      tokenUsage,
+      tokenUsage: derivedUsage.turnTokenUsage,
       turnId: notification.params.turnId ?? undefined,
     });
     if (!line) {

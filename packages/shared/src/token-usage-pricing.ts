@@ -44,6 +44,13 @@ export type ThreadUsageLineRecord = {
   completedAt?: number;
   createdAt: number;
   currency: string;
+  cumulativeCachedInputTokens?: number;
+  cumulativeInputTokens?: number;
+  cumulativeOutputTokens?: number;
+  cumulativeReasoningOutputTokens?: number;
+  cumulativeTotalCostMicros?: number;
+  cumulativeTotalTokens?: number;
+  cumulativeUncachedInputTokens?: number;
   fastMode?: boolean;
   inputTokens: number;
   model?: string;

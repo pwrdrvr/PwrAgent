@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 18;
+export const CURRENT_STATE_DB_USER_VERSION = 19;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -556,6 +556,12 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   output_tokens              INTEGER NOT NULL,
   reasoning_output_tokens    INTEGER NOT NULL,
   total_tokens               INTEGER NOT NULL,
+  cumulative_input_tokens    INTEGER,
+  cumulative_cached_input_tokens INTEGER,
+  cumulative_uncached_input_tokens INTEGER,
+  cumulative_output_tokens   INTEGER,
+  cumulative_reasoning_output_tokens INTEGER,
+  cumulative_total_tokens    INTEGER,
   price_status               TEXT NOT NULL,
   price_unavailable_reason   TEXT,
   currency                   TEXT NOT NULL,
@@ -566,6 +572,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   cached_input_cost_micros   INTEGER NOT NULL,
   output_cost_micros         INTEGER NOT NULL,
   total_cost_micros          INTEGER NOT NULL,
+  cumulative_total_cost_micros INTEGER,
   updated_at                 INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
@@ -751,6 +758,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 18) {
       db.transaction(() => {
         ensureThreadUsagePricingProviderScope(db);
+        db.pragma("user_version = 18");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 19) {
+      db.transaction(() => {
+        ensureThreadUsagePricingCumulativeColumns(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -905,6 +918,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
+    ensureThreadUsagePricingCumulativeColumns(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -1107,6 +1121,49 @@ FROM thread_pricing_summaries
   db.exec("DROP TABLE thread_pricing_summaries");
   db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
   db.exec(THREAD_USAGE_PRICING_SCHEMA);
+}
+
+function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "cumulative_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_cached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_cached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_uncached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_uncached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_reasoning_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_reasoning_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_cost_micros",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_cost_micros INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
 }
 
 function tableExists(

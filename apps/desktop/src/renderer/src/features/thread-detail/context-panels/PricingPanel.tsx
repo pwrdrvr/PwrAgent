@@ -9,6 +9,7 @@ import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
 type PricingPanelProps = {
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
@@ -105,20 +106,57 @@ export function PricingPanel(props: PricingPanelProps) {
                   ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
                   : ""}
               </p>
-              <p className="rail-card__times">
-                {formatTimestamp(line.createdAt)}
-                {line.turnId ? ` · ${line.turnId}` : ""}
-              </p>
+              <PricingUsageTimestamp
+                line={line}
+                onScrollToTurn={props.onScrollToTurn}
+              />
               <p className="rail-card__usage">
                 {line.priceStatus === "priced"
-                  ? `${formatMoney(line.totalCostMicros, line.currency)} list price`
+                  ? `${formatMoney(line.totalCostMicros, line.currency)} list price this turn`
                   : `Unpriced: ${formatUnpricedReason(line.priceUnavailableReason)}`}
               </p>
+              {line.cumulativeTotalCostMicros !== undefined ? (
+                <p className="rail-card__usage">
+                  Running total:{" "}
+                  {formatMoney(line.cumulativeTotalCostMicros, line.currency)} list
+                  price
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
       ) : null}
     </section>
+  );
+}
+
+function PricingUsageTimestamp(props: {
+  line: ThreadUsageLineRecord;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+}) {
+  const timestamp = formatTimestamp(props.line.createdAt);
+  const canScrollToTurn = Boolean(props.line.turnId && props.onScrollToTurn);
+
+  return (
+    <p className="rail-card__times">
+      {canScrollToTurn ? (
+        <button
+          type="button"
+          className="rail-card__time-button"
+          title="Scroll the transcript to this turn"
+          aria-label={`Scroll the transcript to this turn (${timestamp})`}
+          onClick={() =>
+            props.line.turnId &&
+            props.onScrollToTurn?.(props.line.turnId, props.line.createdAt)
+          }
+        >
+          {timestamp}
+        </button>
+      ) : (
+        timestamp
+      )}
+      {props.line.turnId ? ` · ${props.line.turnId}` : ""}
+    </p>
   );
 }
 

@@ -11488,6 +11488,31 @@ textarea,
   line-height: 1.35;
 }
 
+.rail-card__time-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 2px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+}
+
+.rail-card__time-button:hover {
+  color: var(--text-secondary);
+  text-decoration-color: currentColor;
+}
+
+.rail-card__time-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
 .rail-card__time-label {
   color: var(--text-secondary);
 }

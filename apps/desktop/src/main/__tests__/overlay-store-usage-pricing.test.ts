@@ -51,6 +51,53 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ]);
   });
 
+  it("stores running totals on usage lines without adding them to summaries", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputTokens: 200,
+        cumulativeCachedInputTokens: 10_200,
+        cumulativeInputTokens: 11_000,
+        cumulativeOutputTokens: 500,
+        cumulativeReasoningOutputTokens: 100,
+        cumulativeTotalCostMicros: 42_000,
+        cumulativeTotalTokens: 11_600,
+        cumulativeUncachedInputTokens: 800,
+        inputTokens: 1_000,
+        outputTokens: 50,
+        reasoningOutputTokens: 10,
+        totalCostMicros: 5_000,
+        totalTokens: 1_060,
+        uncachedInputTokens: 800,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      cumulativeCachedInputTokens: 10_200,
+      cumulativeInputTokens: 11_000,
+      cumulativeOutputTokens: 500,
+      cumulativeReasoningOutputTokens: 100,
+      cumulativeTotalCostMicros: 42_000,
+      cumulativeTotalTokens: 11_600,
+      cumulativeUncachedInputTokens: 800,
+      inputTokens: 1_000,
+      totalCostMicros: 5_000,
+      totalTokens: 1_060,
+    });
+    expect(pricing.summaries[0]).toMatchObject({
+      cachedInputTokens: 200,
+      inputTokens: 1_000,
+      outputTokens: 50,
+      reasoningOutputTokens: 10,
+      totalCostMicros: 5_000,
+      totalTokens: 1_060,
+    });
+  });
+
   it("excludes superseded rows from active summaries while preserving diagnostics", async () => {
     await store.upsertThreadUsageLine({ line: buildUsageLine() });
     await store.upsertThreadUsageLine({

@@ -621,6 +621,12 @@ export class SqliteOverlayStore {
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
+            cumulative_input_tokens,
+            cumulative_cached_input_tokens,
+            cumulative_uncached_input_tokens,
+            cumulative_output_tokens,
+            cumulative_reasoning_output_tokens,
+            cumulative_total_tokens,
             price_status,
             price_unavailable_reason,
             currency,
@@ -631,6 +637,7 @@ export class SqliteOverlayStore {
             cached_input_cost_micros,
             output_cost_micros,
             total_cost_micros,
+            cumulative_total_cost_micros,
             updated_at
           ) VALUES (
             @usageLineId,
@@ -658,6 +665,12 @@ export class SqliteOverlayStore {
             @outputTokens,
             @reasoningOutputTokens,
             @totalTokens,
+            @cumulativeInputTokens,
+            @cumulativeCachedInputTokens,
+            @cumulativeUncachedInputTokens,
+            @cumulativeOutputTokens,
+            @cumulativeReasoningOutputTokens,
+            @cumulativeTotalTokens,
             @priceStatus,
             @priceUnavailableReason,
             @currency,
@@ -668,6 +681,7 @@ export class SqliteOverlayStore {
             @cachedInputCostMicros,
             @outputCostMicros,
             @totalCostMicros,
+            @cumulativeTotalCostMicros,
             @updatedAt
           )
           ON CONFLICT(usage_line_id) DO UPDATE SET
@@ -695,6 +709,12 @@ export class SqliteOverlayStore {
             output_tokens = excluded.output_tokens,
             reasoning_output_tokens = excluded.reasoning_output_tokens,
             total_tokens = excluded.total_tokens,
+            cumulative_input_tokens = excluded.cumulative_input_tokens,
+            cumulative_cached_input_tokens = excluded.cumulative_cached_input_tokens,
+            cumulative_uncached_input_tokens = excluded.cumulative_uncached_input_tokens,
+            cumulative_output_tokens = excluded.cumulative_output_tokens,
+            cumulative_reasoning_output_tokens = excluded.cumulative_reasoning_output_tokens,
+            cumulative_total_tokens = excluded.cumulative_total_tokens,
             price_status = excluded.price_status,
             price_unavailable_reason = excluded.price_unavailable_reason,
             currency = excluded.currency,
@@ -705,6 +725,7 @@ export class SqliteOverlayStore {
             cached_input_cost_micros = excluded.cached_input_cost_micros,
             output_cost_micros = excluded.output_cost_micros,
             total_cost_micros = excluded.total_cost_micros,
+            cumulative_total_cost_micros = excluded.cumulative_total_cost_micros,
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -2015,6 +2036,12 @@ type ThreadUsageLineRow = {
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
+  cumulative_input_tokens: number | null;
+  cumulative_cached_input_tokens: number | null;
+  cumulative_uncached_input_tokens: number | null;
+  cumulative_output_tokens: number | null;
+  cumulative_reasoning_output_tokens: number | null;
+  cumulative_total_tokens: number | null;
   price_status: ThreadUsageLineRecord["priceStatus"];
   price_unavailable_reason: ThreadUsageLineRecord["priceUnavailableReason"] | null;
   currency: string;
@@ -2025,6 +2052,7 @@ type ThreadUsageLineRow = {
   cached_input_cost_micros: number;
   output_cost_micros: number;
   total_cost_micros: number;
+  cumulative_total_cost_micros: number | null;
   updated_at: number;
 };
 
@@ -2073,6 +2101,39 @@ function normalizeThreadUsageLine(
     completedAt: line.completedAt,
     createdAt: line.createdAt || updatedAt,
     currency: line.currency || "USD",
+    ...(line.cumulativeCachedInputTokens !== undefined
+      ? { cumulativeCachedInputTokens: clampTokenCount(line.cumulativeCachedInputTokens) }
+      : {}),
+    ...(line.cumulativeInputTokens !== undefined
+      ? { cumulativeInputTokens: clampTokenCount(line.cumulativeInputTokens) }
+      : {}),
+    ...(line.cumulativeOutputTokens !== undefined
+      ? { cumulativeOutputTokens: clampTokenCount(line.cumulativeOutputTokens) }
+      : {}),
+    ...(line.cumulativeReasoningOutputTokens !== undefined
+      ? {
+          cumulativeReasoningOutputTokens: clampTokenCount(
+            line.cumulativeReasoningOutputTokens,
+          ),
+        }
+      : {}),
+    ...(line.cumulativeTotalCostMicros !== undefined
+      ? {
+          cumulativeTotalCostMicros: clampTokenCount(
+            line.cumulativeTotalCostMicros,
+          ),
+        }
+      : {}),
+    ...(line.cumulativeTotalTokens !== undefined
+      ? { cumulativeTotalTokens: clampTokenCount(line.cumulativeTotalTokens) }
+      : {}),
+    ...(line.cumulativeUncachedInputTokens !== undefined
+      ? {
+          cumulativeUncachedInputTokens: clampTokenCount(
+            line.cumulativeUncachedInputTokens,
+          ),
+        }
+      : {}),
     inputTokens,
     outputTokens,
     reasoningOutputTokens,
@@ -2103,6 +2164,13 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     cachedInputTokens: line.cachedInputTokens,
     completedAt: line.completedAt ?? null,
     createdAt: line.createdAt,
+    cumulativeCachedInputTokens: line.cumulativeCachedInputTokens ?? null,
+    cumulativeInputTokens: line.cumulativeInputTokens ?? null,
+    cumulativeOutputTokens: line.cumulativeOutputTokens ?? null,
+    cumulativeReasoningOutputTokens: line.cumulativeReasoningOutputTokens ?? null,
+    cumulativeTotalCostMicros: line.cumulativeTotalCostMicros ?? null,
+    cumulativeTotalTokens: line.cumulativeTotalTokens ?? null,
+    cumulativeUncachedInputTokens: line.cumulativeUncachedInputTokens ?? null,
     currency: line.currency,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
     inputTokens: line.inputTokens,
@@ -2144,6 +2212,30 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     cachedInputTokens: row.cached_input_tokens,
     ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
     createdAt: row.created_at,
+    ...(row.cumulative_cached_input_tokens !== null
+      ? { cumulativeCachedInputTokens: row.cumulative_cached_input_tokens }
+      : {}),
+    ...(row.cumulative_input_tokens !== null
+      ? { cumulativeInputTokens: row.cumulative_input_tokens }
+      : {}),
+    ...(row.cumulative_output_tokens !== null
+      ? { cumulativeOutputTokens: row.cumulative_output_tokens }
+      : {}),
+    ...(row.cumulative_reasoning_output_tokens !== null
+      ? {
+          cumulativeReasoningOutputTokens:
+            row.cumulative_reasoning_output_tokens,
+        }
+      : {}),
+    ...(row.cumulative_total_cost_micros !== null
+      ? { cumulativeTotalCostMicros: row.cumulative_total_cost_micros }
+      : {}),
+    ...(row.cumulative_total_tokens !== null
+      ? { cumulativeTotalTokens: row.cumulative_total_tokens }
+      : {}),
+    ...(row.cumulative_uncached_input_tokens !== null
+      ? { cumulativeUncachedInputTokens: row.cumulative_uncached_input_tokens }
+      : {}),
     currency: row.currency,
     ...(row.fast_mode !== null ? { fastMode: Boolean(row.fast_mode) } : {}),
     inputTokens: row.input_tokens,
