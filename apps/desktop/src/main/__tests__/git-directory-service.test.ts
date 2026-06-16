@@ -207,6 +207,26 @@ describe("GitDirectoryService", () => {
       expect.arrayContaining(["main", "release", "older"]),
     );
     expect(status?.handoffBranches).toEqual(["recent", "older"]);
+
+    const detailByName = new Map(
+      (status?.branchDetails ?? []).map((detail) => [detail.name, detail]),
+    );
+    // `release` is checked out by a separate worktree (current branch is main).
+    expect(detailByName.get("release")?.inUse).toBe(true);
+    // The current branch is reported via `currentBranch`, not `inUse`.
+    expect(detailByName.get("main")?.inUse).toBeUndefined();
+    expect(detailByName.get("older")?.inUse).toBeUndefined();
+    // Every branch carries a numeric last-commit timestamp.
+    for (const detail of status?.branchDetails ?? []) {
+      expect(typeof detail.lastCommitAt).toBe("number");
+    }
+    // `branchDetails` mirrors the recency-ordered `branches` list; `recent`
+    // (committed in 2030) sorts ahead of `older`.
+    const detailNames = (status?.branchDetails ?? []).map((detail) => detail.name);
+    expect(detailNames).toEqual(status?.branches);
+    expect(detailNames.indexOf("recent")).toBeLessThan(
+      detailNames.indexOf("older"),
+    );
   });
 
   it("streams directory status lookups with bounded concurrency", async () => {

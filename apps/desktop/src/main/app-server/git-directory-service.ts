@@ -10,6 +10,7 @@ import type {
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
+  NavigationGitBranchDetail,
   NavigationLaunchpadDraft,
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
@@ -268,6 +269,37 @@ function parseGitLines(output: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+/**
+ * Parses `for-each-ref refs/heads` output formatted as
+ * `<short-name>\t<committerdate:unix>`, preserving the input order (which the
+ * caller sorts by `-committerdate`, i.e. most recently touched first).
+ */
+function parseGitBranchDetails(
+  output: string,
+): { name: string; lastCommitAt?: number }[] {
+  const details: { name: string; lastCommitAt?: number }[] = [];
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line.trim()) {
+      continue;
+    }
+    const tabIndex = line.indexOf("\t");
+    const name = (tabIndex === -1 ? line : line.slice(0, tabIndex)).trim();
+    if (!name) {
+      continue;
+    }
+    const unixValue =
+      tabIndex === -1
+        ? Number.NaN
+        : Number.parseInt(line.slice(tabIndex + 1).trim(), 10);
+    details.push({
+      name,
+      lastCommitAt: Number.isFinite(unixValue) ? unixValue : undefined,
+    });
+  }
+  return details;
 }
 
 function resolveDefaultBranch(params: {
@@ -593,7 +625,7 @@ export class GitDirectoryService {
             "for-each-ref",
             "refs/heads",
             "--sort=-committerdate",
-            "--format=%(refname:short)",
+            "--format=%(refname:short)%09%(committerdate:unix)",
           ],
           gitEnv,
         ).catch(() => ""),
@@ -618,12 +650,25 @@ export class GitDirectoryService {
       ],
       gitEnv,
     ).catch(() => "");
-    const branches = parseGitLines(branchesOutput);
+    const parsedBranchDetails = parseGitBranchDetails(branchesOutput);
+    const branches = parsedBranchDetails.map((detail) => detail.name);
     const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+    const worktreeBranchNames = new Set(
+      parseGitWorktreeEntries(worktreeList)
+        .map((entry) => entry.branch)
+        .filter((branch): branch is string => Boolean(branch)),
+    );
+    const buildBranchDetails = (): NavigationGitBranchDetail[] =>
+      parsedBranchDetails.map((detail) =>
+        detail.name !== currentBranch && worktreeBranchNames.has(detail.name)
+          ? { ...detail, inUse: true }
+          : { ...detail },
+      );
     if (!currentBranch) {
       return {
         defaultBranch,
         branches,
+        branchDetails: buildBranchDetails(),
         handoffBranches: branches,
         syncState: "untracked",
       };
@@ -641,6 +686,7 @@ export class GitDirectoryService {
         currentBranch,
         defaultBranch,
         branches,
+        branchDetails: buildBranchDetails(),
         handoffBranches,
         syncState: "untracked",
       };
@@ -672,6 +718,7 @@ export class GitDirectoryService {
       behind,
       defaultBranch,
       branches,
+      branchDetails: buildBranchDetails(),
       handoffBranches,
       syncState,
     };

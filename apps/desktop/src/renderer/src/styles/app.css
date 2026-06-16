@@ -12466,6 +12466,174 @@ textarea,
   background: var(--border-subtle);
 }
 
+/* Branch picker — searchable launchpad base-branch list. Reuses the
+   `.composer-dropdown` trigger (so the `Base branch` button keeps its
+   label/value contract); the open panel is its own filterable surface. */
+.branch-picker__menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: max(100%, 340px);
+  max-width: min(440px, calc(100vw - 32px));
+  max-height: min(440px, calc(100dvh - 128px));
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.branch-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.branch-picker__search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.branch-picker__search-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.branch-picker__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+
+.branch-picker__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.branch-picker__search-input:focus {
+  outline: none;
+}
+
+.branch-picker__eyebrow {
+  padding: 6px 10px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.branch-picker__eyebrow span {
+  color: var(--text-secondary);
+}
+
+.branch-picker__list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.branch-picker__option {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.branch-picker__option.is-active,
+.branch-picker__option:hover,
+.branch-picker__option:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.branch-picker__option-check {
+  width: 12px;
+  flex: 0 0 12px;
+  color: var(--accent-bright);
+  text-align: center;
+}
+
+.branch-picker__option-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.branch-picker__option-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.branch-picker__badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.branch-picker__badge--current {
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+}
+
+.branch-picker__badge--in-use {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.branch-picker__option-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.branch-picker__option.is-active .branch-picker__option-time,
+.branch-picker__option:hover .branch-picker__option-time {
+  color: var(--accent-bright);
+}
+
+.branch-picker__empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .composer__action-button {
   min-height: 34px;
   display: inline-flex;

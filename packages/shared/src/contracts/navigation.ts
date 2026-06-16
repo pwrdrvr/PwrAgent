@@ -469,6 +469,23 @@ export type NavigationLaunchpadImageAttachment = {
   width?: number;
 };
 
+/**
+ * Per-branch metadata for the composer branch picker. `branches` carries the
+ * recency-ordered names for back-compat; `branchDetails` carries the same
+ * branches (same order) enriched with the data the picker renders.
+ */
+export type NavigationGitBranchDetail = {
+  name: string;
+  /** Last commit time on the branch tip, in unix seconds. */
+  lastCommitAt?: number;
+  /**
+   * Checked out by a worktree other than the current one. The current branch
+   * reports `currentBranch` instead of `inUse` so the picker can show a
+   * distinct "current" affordance.
+   */
+  inUse?: boolean;
+};
+
 export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
   defaultBranch?: string;
@@ -476,6 +493,7 @@ export type NavigationDirectoryGitStatus = {
   ahead?: number;
   behind?: number;
   branches?: string[];
+  branchDetails?: NavigationGitBranchDetail[];
   handoffBranches?: string[];
   syncState?:
     | "in-sync"

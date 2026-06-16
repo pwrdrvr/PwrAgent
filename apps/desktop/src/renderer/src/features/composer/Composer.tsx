@@ -36,7 +36,14 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
-import { CloseIcon, EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
+import {
+  BranchIcon,
+  CloseIcon,
+  EditorIcon,
+  FileCodeIcon,
+  SearchIcon,
+  TerminalIcon,
+} from "../../icons";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -1283,7 +1290,6 @@ function ComposerDropdown(props: {
   disabled?: boolean;
   icon?: ComposerDropdownIcon;
   id?: string;
-  kind?: "branch";
   onChange: (value: string) => void;
   options: ComposerDropdownOption[];
   value: string;
@@ -1300,7 +1306,6 @@ function ComposerDropdown(props: {
       className={[
         "composer-dropdown",
         props.compact ? "composer-dropdown--compact" : "",
-        props.kind === "branch" ? "composer-dropdown--branch" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1358,6 +1363,230 @@ function ComposerDropdown(props: {
               <span className="composer-dropdown__option-label">{option.label}</span>
             </button>
           ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type LaunchpadBranchOption = {
+  name: string;
+  /** Last commit time on the branch tip, in unix seconds. */
+  lastCommitAt?: number;
+  /** Checked out by another worktree. */
+  inUse?: boolean;
+  /** The repository's currently checked-out branch. */
+  current?: boolean;
+};
+
+/**
+ * Searchable branch picker for the worktree launchpad. Replaces the plain
+ * dropdown with a filterable list that shows each branch's recency ("2m ago")
+ * and whether it is the current branch or already in use by a worktree.
+ *
+ * Preserves the dropdown's a11y contract — trigger labelled "Base branch" with
+ * `value`/`data-value`, a `composer-dropdown--branch` wrapper, and a
+ * `role="listbox"` of `role="option"` rows — so existing tests and e2e specs
+ * keep targeting it the same way.
+ */
+function BranchPicker(props: {
+  ariaLabel: string;
+  disabled?: boolean;
+  id?: string;
+  onChange: (value: string) => void;
+  options: LaunchpadBranchOption[];
+  projectLabel?: string;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listboxId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      normalizedQuery
+        ? props.options.filter((option) =>
+            option.name.toLowerCase().includes(normalizedQuery),
+          )
+        : props.options,
+    [props.options, normalizedQuery],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      return;
+    }
+    setActiveIndex(0);
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  const nowMs = Date.now();
+  const selectedOption =
+    props.options.find((option) => option.name === props.value) ??
+    props.options[0];
+
+  const commit = (name: string): void => {
+    setOpen(false);
+    setQuery("");
+    if (name !== props.value) {
+      props.onChange(name);
+    }
+  };
+
+  const handleInputKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ): void => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) =>
+        filtered.length === 0 ? 0 : Math.min(filtered.length - 1, current + 1),
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(0, current - 1));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const option = filtered[activeIndex];
+      if (option) {
+        commit(option.name);
+      }
+    }
+  };
+
+  return (
+    <div
+      className="composer-dropdown composer-dropdown--compact composer-dropdown--branch branch-picker"
+      ref={ref}
+    >
+      <button
+        aria-controls={open ? listboxId : undefined}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={props.ariaLabel}
+        className="composer-dropdown__button"
+        data-value={props.value}
+        disabled={props.disabled || props.options.length === 0}
+        id={props.id}
+        type="button"
+        value={props.value}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span aria-hidden="true" className="composer-dropdown__icon">
+          <BranchIcon size={13} />
+        </span>
+        <span className="composer-dropdown__label">
+          {selectedOption?.name ?? props.value}
+        </span>
+        <span aria-hidden="true" className="composer-dropdown__chevron">
+          ⌄
+        </span>
+      </button>
+      {open ? (
+        <div className="branch-picker__menu">
+          <div className="branch-picker__search">
+            <span aria-hidden="true" className="branch-picker__search-icon">
+              <SearchIcon size={13} />
+            </span>
+            <input
+              aria-label="Find a branch"
+              className="branch-picker__search-input"
+              placeholder="Find a branch"
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={handleInputKeyDown}
+            />
+          </div>
+          {props.projectLabel ? (
+            <div aria-hidden="true" className="branch-picker__eyebrow">
+              Branch off from <span>{props.projectLabel}</span>
+            </div>
+          ) : null}
+          <div
+            aria-label={props.ariaLabel}
+            className="branch-picker__list"
+            id={listboxId}
+            role="listbox"
+          >
+            {filtered.length === 0 ? (
+              <p className="branch-picker__empty">No branches match your filter.</p>
+            ) : (
+              filtered.map((option, index) => {
+                const isSelected = option.name === props.value;
+                const relativeTime = formatBranchRelativeTime(
+                  option.lastCommitAt,
+                  nowMs,
+                );
+                return (
+                  <button
+                    aria-label={option.name}
+                    aria-selected={isSelected}
+                    className={[
+                      "branch-picker__option",
+                      index === activeIndex ? "is-active" : "",
+                      isSelected ? "is-selected" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={option.name}
+                    role="option"
+                    type="button"
+                    onClick={() => commit(option.name)}
+                    onMouseEnter={() => setActiveIndex(index)}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__option-check"
+                    >
+                      {isSelected ? "✓" : ""}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__option-icon"
+                    >
+                      <BranchIcon size={12} />
+                    </span>
+                    <span className="branch-picker__option-name">
+                      {option.name}
+                    </span>
+                    {option.current ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--current"
+                      >
+                        Current
+                      </span>
+                    ) : option.inUse ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--in-use"
+                      >
+                        In use
+                      </span>
+                    ) : null}
+                    {relativeTime ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__option-time"
+                      >
+                        {relativeTime}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
       ) : null}
     </div>
@@ -4271,8 +4500,8 @@ export function Composer(props: ComposerProps) {
     launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
       ? props.launchpad.workMode
       : "local";
-  const launchpadBranchOptions = props.launchpad
-    ? buildLaunchpadBranchOptions(props.launchpad, props.directory)
+  const launchpadBranchPickerOptions = props.launchpad
+    ? buildLaunchpadBranchPickerOptions(props.launchpad, props.directory)
     : [];
   const launchpadCodexEnvironmentOptions =
     props.launchpad?.codexEnvironmentOptions ?? [];
@@ -5763,23 +5992,19 @@ export function Composer(props: ComposerProps) {
 
           {props.launchpad &&
           launchpadWorkspaceValue === "worktree" &&
-          launchpadBranchOptions.length > 0 ? (
-            <ComposerDropdown
+          launchpadBranchPickerOptions.length > 0 ? (
+            <BranchPicker
               ariaLabel="Base branch"
               id="launchpad-branch"
-              compact
               disabled={launchpadSubmitting}
-              kind="branch"
+              projectLabel={props.directory?.label}
               value={
                 normalizeSelectableLaunchpadBranch(props.launchpad.branchName) ??
                 normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch) ??
                 props.directory?.gitStatus?.defaultBranch ??
                 ""
               }
-              options={launchpadBranchOptions.map((branch) => ({
-                label: branch,
-                value: branch,
-              }))}
+              options={launchpadBranchPickerOptions}
               onChange={(value) => {
                 handleLaunchpadPatch({ branchName: value || undefined });
               }}
@@ -6584,32 +6809,99 @@ function buildLaunchpadWorkspaceOptions(
   return options;
 }
 
-function buildLaunchpadBranchOptions(
-  launchpad: NavigationLaunchpadDraft,
-  directory?: NavigationDirectorySummary,
-): string[] {
-  const candidates = [
-    launchpad.branchName,
-    directory?.gitStatus?.currentBranch,
-    directory?.gitStatus?.defaultBranch,
-    ...(directory?.gitStatus?.branches ?? []),
-  ];
-  const options = new Set<string>();
-  for (const candidate of candidates) {
-    const value = normalizeSelectableLaunchpadBranch(candidate);
-    if (value) {
-      options.add(value);
-    }
-  }
-  return [...options];
-}
-
 function normalizeSelectableLaunchpadBranch(branch?: string): string | undefined {
   const value = branch?.trim();
   if (!value || value.toUpperCase() === "HEAD") {
     return undefined;
   }
   return value;
+}
+
+/**
+ * Builds the recency-ordered, metadata-enriched branch list for the worktree
+ * launchpad picker. Git branches (already sorted most-recently-touched first)
+ * come first, then the selected/current/default branches as fallbacks so the
+ * picker still functions before directory git status has loaded.
+ */
+function buildLaunchpadBranchPickerOptions(
+  launchpad: NavigationLaunchpadDraft,
+  directory?: NavigationDirectorySummary,
+): LaunchpadBranchOption[] {
+  const details = directory?.gitStatus?.branchDetails ?? [];
+  const detailByName = new Map(details.map((detail) => [detail.name, detail]));
+  const currentBranch = normalizeSelectableLaunchpadBranch(
+    directory?.gitStatus?.currentBranch,
+  );
+  const ordered: LaunchpadBranchOption[] = [];
+  const seen = new Set<string>();
+  const push = (candidate?: string): void => {
+    const name = normalizeSelectableLaunchpadBranch(candidate);
+    if (!name || seen.has(name)) {
+      return;
+    }
+    seen.add(name);
+    const detail = detailByName.get(name);
+    ordered.push({
+      name,
+      lastCommitAt: detail?.lastCommitAt,
+      inUse: detail?.inUse,
+      current: currentBranch ? name === currentBranch : false,
+    });
+  };
+  // Recency-ordered branches: prefer the enriched details, fall back to the
+  // plain name list when details are unavailable (older snapshots, fixtures).
+  const orderedNames =
+    details.length > 0
+      ? details.map((detail) => detail.name)
+      : (directory?.gitStatus?.branches ?? []);
+  for (const name of orderedNames) {
+    push(name);
+  }
+  push(launchpad.branchName);
+  push(directory?.gitStatus?.currentBranch);
+  push(directory?.gitStatus?.defaultBranch);
+  return ordered;
+}
+
+/**
+ * Formats a branch tip's last-commit time as a compact "touched ago" label
+ * ("just now", "2m ago", "yesterday", "3w ago"). Returns undefined when the
+ * timestamp is missing so the picker can omit the column.
+ */
+function formatBranchRelativeTime(
+  lastCommitAt: number | undefined,
+  nowMs: number,
+): string | undefined {
+  if (!lastCommitAt || !Number.isFinite(lastCommitAt)) {
+    return undefined;
+  }
+  const deltaSeconds = Math.round((nowMs - lastCommitAt * 1000) / 1000);
+  if (deltaSeconds < 45) {
+    return "just now";
+  }
+  const minutes = Math.round(deltaSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.round(deltaSeconds / 3600);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.round(deltaSeconds / 86400);
+  if (days === 1) {
+    return "yesterday";
+  }
+  if (days < 7) {
+    return `${days}d ago`;
+  }
+  if (days < 30) {
+    return `${Math.round(days / 7)}w ago`;
+  }
+  const months = Math.round(days / 30);
+  if (months < 12) {
+    return `${months}mo ago`;
+  }
+  return `${Math.round(days / 365)}y ago`;
 }
 
 function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {

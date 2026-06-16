@@ -6203,6 +6203,83 @@ describe("Composer", () => {
     ).toHaveAttribute("aria-selected", "true");
   });
 
+  it("shows recency, current, and in-use metadata in the branch picker and filters by query", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            defaultBranch: "main",
+            branches: ["feat/telegram-integration", "main", "chore/old"],
+            branchDetails: [
+              {
+                name: "feat/telegram-integration",
+                lastCommitAt: nowSeconds - 3 * 86400,
+                inUse: true,
+              },
+              { name: "main", lastCommitAt: nowSeconds - 130 },
+              { name: "chore/old", lastCommitAt: nowSeconds - 40 * 86400 },
+            ],
+            syncState: "in-sync",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+
+    const inUseOption = screen.getByRole("option", {
+      name: "feat/telegram-integration",
+    });
+    expect(within(inUseOption).getByText("In use")).toBeInTheDocument();
+    expect(within(inUseOption).getByText("3d ago")).toBeInTheDocument();
+
+    const currentOption = screen.getByRole("option", { name: "main" });
+    expect(within(currentOption).getByText("Current")).toBeInTheDocument();
+
+    // Recency order: feat/telegram-integration (3d) precedes chore/old (40d).
+    const optionNames = screen
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("aria-label"));
+    expect(optionNames.indexOf("feat/telegram-integration")).toBeLessThan(
+      optionNames.indexOf("chore/old")
+    );
+
+    // Typing in the search field filters the list.
+    fireEvent.change(screen.getByLabelText("Find a branch"), {
+      target: { value: "tele" },
+    });
+    expect(
+      screen.getByRole("option", { name: "feat/telegram-integration" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "main" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "chore/old" })
+    ).not.toBeInTheDocument();
+  });
+
   it("defaults detached new-worktree launchpads to the repository default branch", () => {
     render(
       <Composer
