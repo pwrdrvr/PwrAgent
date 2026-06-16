@@ -1869,6 +1869,7 @@ function buildTaskMonitorUsageLine(params: {
     parentThreadId: params.parentThreadId,
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+    provider: cost?.provider ?? "openai",
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
@@ -2012,6 +2013,7 @@ function buildLiveThreadUsageLine(params: {
     outputTokens,
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+    provider: cost?.provider ?? "openai",
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
@@ -5593,6 +5595,29 @@ export class DesktopBackendRegistry {
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
     }
+  }
+
+  private async emitThreadPricingUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (typeof this.overlayStore.readThreadPricing !== "function") {
+      return;
+    }
+    const pricing = await this.overlayStore.readThreadPricing({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/pricing/updated",
+        params: {
+          threadId: params.threadId,
+          pricing,
+        },
+      },
+    });
   }
 
   async startThread(params: {
@@ -10155,6 +10180,10 @@ export class DesktopBackendRegistry {
           });
           logUnpricedThreadUsageLine(line);
           await this.overlayStore.upsertThreadUsageLine({ line });
+          await this.emitThreadPricingUpdated({
+            backend: event.backend,
+            threadId: line.parentThreadId ?? line.threadId,
+          });
         }
         return;
       }
@@ -10183,6 +10212,10 @@ export class DesktopBackendRegistry {
           });
           logUnpricedThreadUsageLine(line);
           await this.overlayStore.upsertThreadUsageLine({ line });
+          await this.emitThreadPricingUpdated({
+            backend: event.backend,
+            threadId: line.parentThreadId ?? line.threadId,
+          });
         }
         return;
       }
@@ -10222,6 +10255,10 @@ export class DesktopBackendRegistry {
         });
         logUnpricedThreadUsageLine(line);
         await this.overlayStore.upsertThreadUsageLine({ line });
+        await this.emitThreadPricingUpdated({
+          backend: event.backend,
+          threadId: line.parentThreadId ?? line.threadId,
+        });
       }
     }
   }
@@ -10289,6 +10326,10 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.emitThreadPricingUpdated({
+        backend: event.backend,
+        threadId: line.parentThreadId ?? line.threadId,
+      });
     }
   }
 

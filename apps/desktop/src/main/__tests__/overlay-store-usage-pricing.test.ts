@@ -142,6 +142,84 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       usageLineCount: 1,
     });
   });
+
+  it("records one provider-scoped usage turn for multiple usage lines from the same turn", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        source: "live",
+        totalCostMicros: 4_000,
+        usageLineId: "line-1-live",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        source: "hydration",
+        totalCostMicros: 5_000,
+        usageLineId: "line-1-hydrated",
+      }),
+    });
+
+    const turns = stateDb.raw
+      .prepare(
+        `SELECT usage_turn_id, provider, backend, thread_id, turn_id, model
+         FROM thread_usage_turns
+         ORDER BY usage_turn_id`,
+      )
+      .all() as Array<{
+        usage_turn_id: string;
+        provider: string;
+        backend: string;
+        thread_id: string;
+        turn_id: string | null;
+        model: string | null;
+      }>;
+
+    expect(turns).toEqual([
+      {
+        backend: "codex",
+        model: "gpt-5.5",
+        provider: "openai",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        usage_turn_id: "openai:codex:thread-1:turn-1",
+      },
+    ]);
+  });
+
+  it("keeps pricing summaries separated by provider", async () => {
+    await store.upsertThreadUsageLine({ line: buildUsageLine() });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        model: "grok-4.20-reasoning",
+        outputCostMicros: 2_000,
+        provider: "xai",
+        pricingCatalogId: "xai-api",
+        pricingCatalogVersion: "2026-06-16",
+        pricingRateId: "xai:2026-06-16:grok-4.20-reasoning:standard",
+        totalCostMicros: 3_000,
+        usageLineId: "xai-line-1",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.summaries).toHaveLength(2);
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        totalCostMicros: 5_000,
+        usageLineCount: 1,
+      }),
+      expect.objectContaining({
+        provider: "xai",
+        totalCostMicros: 3_000,
+        usageLineCount: 1,
+      }),
+    ]);
+  });
 });
 
 function buildUsageLine(
@@ -159,6 +237,7 @@ function buildUsageLine(
     outputCostMicros: 4_000,
     outputTokens: 300,
     priceStatus: "priced",
+    provider: "openai",
     pricingCatalogId: "openai-api",
     pricingCatalogVersion: "2026-06-16",
     pricingRateId: "openai:2026-06-16:gpt-5.5:standard",

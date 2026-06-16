@@ -52,6 +52,7 @@ export type ThreadUsageLineRecord = {
   parentThreadId?: string;
   priceStatus: TokenUsagePriceStatus;
   priceUnavailableReason?: TokenUsagePriceUnavailableReason;
+  provider: string;
   pricingCatalogId?: string;
   pricingCatalogVersion?: string;
   pricingRateId?: string;
@@ -71,6 +72,7 @@ export type ThreadUsageLineRecord = {
   uncachedInputCostMicros: number;
   uncachedInputTokens: number;
   usageLineId: string;
+  usageTurnId?: string;
 };
 
 export type ThreadPricingSummary = {
@@ -80,6 +82,7 @@ export type ThreadPricingSummary = {
   inputTokens: number;
   outputTokens: number;
   pricedUsageLineCount: number;
+  provider: string;
   reasoningOutputTokens: number;
   threadId: string;
   totalCostMicros: number;

@@ -368,6 +368,7 @@ describe("ThreadContextPanel", () => {
       usageLineCount: 1,
       pricedUsageLineCount: 1,
       unpricedUsageLineCount: 0,
+      provider: "openai",
       updatedAt: 1_800_000_000_000,
     };
     const line: ThreadUsageLineRecord = {
@@ -397,6 +398,7 @@ describe("ThreadContextPanel", () => {
       cachedInputCostMicros: 500,
       outputCostMicros: 1_500,
       totalCostMicros: 9_500,
+      provider: "openai",
       pricingCatalogId: "openai-api",
       pricingCatalogVersion: "2026-06-16",
       pricingRateId: "openai-api:2026-06-16:gpt-5.5:priority",

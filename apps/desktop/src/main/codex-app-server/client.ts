@@ -2886,6 +2886,7 @@ function summarizeTokenUsageActivity(
         outputTokens,
         priceStatus: cost ? "priced" : "unpriced",
         ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+        provider: cost?.provider ?? "openai",
         ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
         ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
         ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),

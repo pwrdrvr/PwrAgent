@@ -521,7 +521,8 @@ export class SqliteOverlayStore {
           .prepare(
             `UPDATE thread_usage_lines
              SET status = 'superseded', updated_at = ?
-             WHERE backend = ?
+             WHERE provider = ?
+               AND backend = ?
                AND thread_id = ?
                AND turn_id = ?
                AND source = 'live'
@@ -529,6 +530,7 @@ export class SqliteOverlayStore {
           )
           .run(
             now,
+            line.provider,
             line.backend,
             line.threadId,
             line.turnId,
@@ -537,8 +539,66 @@ export class SqliteOverlayStore {
       }
       this.stateDb.raw
         .prepare(
+          `INSERT INTO thread_usage_turns (
+            usage_turn_id,
+            provider,
+            backend,
+            thread_id,
+            parent_thread_id,
+            turn_id,
+            model,
+            reasoning_effort,
+            service_tier,
+            fast_mode,
+            settings_source,
+            settings_confidence,
+            started_at,
+            completed_at,
+            observed_at,
+            updated_at
+          ) VALUES (
+            @usageTurnId,
+            @provider,
+            @backend,
+            @threadId,
+            @parentThreadId,
+            @turnId,
+            @model,
+            @reasoningEffort,
+            @serviceTier,
+            @fastMode,
+            @settingsSource,
+            @settingsConfidence,
+            @createdAt,
+            @completedAt,
+            @createdAt,
+            @updatedAt
+          )
+          ON CONFLICT(usage_turn_id) DO UPDATE SET
+            provider = excluded.provider,
+            backend = excluded.backend,
+            thread_id = excluded.thread_id,
+            parent_thread_id = excluded.parent_thread_id,
+            turn_id = excluded.turn_id,
+            model = excluded.model,
+            reasoning_effort = excluded.reasoning_effort,
+            service_tier = excluded.service_tier,
+            fast_mode = excluded.fast_mode,
+            settings_source = excluded.settings_source,
+            settings_confidence = excluded.settings_confidence,
+            started_at = COALESCE(thread_usage_turns.started_at, excluded.started_at),
+            completed_at = excluded.completed_at,
+            observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
+            updated_at = excluded.updated_at`,
+        )
+        .run(toThreadUsageLineRowParams(line));
+
+      this.stateDb.raw
+        .prepare(
           `INSERT INTO thread_usage_lines (
             usage_line_id,
+            usage_turn_id,
+            provider,
             backend,
             thread_id,
             parent_thread_id,
@@ -574,6 +634,8 @@ export class SqliteOverlayStore {
             updated_at
           ) VALUES (
             @usageLineId,
+            @usageTurnId,
+            @provider,
             @backend,
             @threadId,
             @parentThreadId,
@@ -609,6 +671,8 @@ export class SqliteOverlayStore {
             @updatedAt
           )
           ON CONFLICT(usage_line_id) DO UPDATE SET
+            usage_turn_id = excluded.usage_turn_id,
+            provider = excluded.provider,
             backend = excluded.backend,
             thread_id = excluded.thread_id,
             parent_thread_id = excluded.parent_thread_id,
@@ -650,12 +714,14 @@ export class SqliteOverlayStore {
         const nextRollupThreadId = line.parentThreadId ?? line.threadId;
         if (
           existing.backend !== line.backend ||
+          existing.provider !== line.provider ||
           existingRollupThreadId !== nextRollupThreadId ||
           existing.currency !== line.currency
         ) {
           this.recomputeThreadPricingSummarySync({
             backend: existing.backend,
             currency: existing.currency,
+            provider: existing.provider,
             threadId: existingRollupThreadId,
             updatedAt: now,
           });
@@ -665,6 +731,7 @@ export class SqliteOverlayStore {
       return this.recomputeThreadPricingSummarySync({
         backend: line.backend,
         currency: line.currency,
+        provider: line.provider,
         threadId: line.parentThreadId ?? line.threadId,
         updatedAt: now,
       });
@@ -690,7 +757,7 @@ export class SqliteOverlayStore {
       .prepare(
         `SELECT * FROM thread_pricing_summaries
          WHERE backend = ? AND thread_id = ?
-         ORDER BY currency ASC`,
+         ORDER BY provider ASC, currency ASC`,
       )
       .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
 
@@ -1779,6 +1846,7 @@ export class SqliteOverlayStore {
   private recomputeThreadPricingSummarySync(params: {
     backend: string;
     currency: string;
+    provider: string;
     threadId: string;
     updatedAt: number;
   }): ThreadPricingSummary {
@@ -1797,12 +1865,14 @@ export class SqliteOverlayStore {
            COALESCE(SUM(CASE WHEN price_status = 'priced' THEN total_cost_micros ELSE 0 END), 0)
              AS total_cost_micros
          FROM thread_usage_lines
-         WHERE backend = ?
+         WHERE provider = ?
+           AND backend = ?
            AND currency = ?
            AND status != 'superseded'
            AND (thread_id = ? OR parent_thread_id = ?)`,
       )
       .get(
+        params.provider,
         params.backend,
         params.currency,
         params.threadId,
@@ -1816,6 +1886,7 @@ export class SqliteOverlayStore {
       inputTokens: row.input_tokens ?? 0,
       outputTokens: row.output_tokens ?? 0,
       pricedUsageLineCount: row.priced_usage_line_count ?? 0,
+      provider: params.provider,
       reasoningOutputTokens: row.reasoning_output_tokens ?? 0,
       threadId: params.threadId,
       totalCostMicros: row.total_cost_micros ?? 0,
@@ -1830,15 +1901,16 @@ export class SqliteOverlayStore {
       this.stateDb.raw
         .prepare(
           `DELETE FROM thread_pricing_summaries
-           WHERE backend = ? AND thread_id = ? AND currency = ?`,
+           WHERE provider = ? AND backend = ? AND thread_id = ? AND currency = ?`,
         )
-        .run(params.backend, params.threadId, params.currency);
+        .run(params.provider, params.backend, params.threadId, params.currency);
       return summary;
     }
 
     this.stateDb.raw
       .prepare(
         `INSERT INTO thread_pricing_summaries (
+          provider,
           backend,
           thread_id,
           currency,
@@ -1854,6 +1926,7 @@ export class SqliteOverlayStore {
           total_cost_micros,
           updated_at
         ) VALUES (
+          @provider,
           @backend,
           @threadId,
           @currency,
@@ -1869,7 +1942,7 @@ export class SqliteOverlayStore {
           @totalCostMicros,
           @updatedAt
         )
-        ON CONFLICT(backend, thread_id, currency) DO UPDATE SET
+        ON CONFLICT(provider, backend, thread_id, currency) DO UPDATE SET
           usage_line_count = excluded.usage_line_count,
           priced_usage_line_count = excluded.priced_usage_line_count,
           unpriced_usage_line_count = excluded.unpriced_usage_line_count,
@@ -1918,6 +1991,8 @@ function normalizeThreadAgent(
 
 type ThreadUsageLineRow = {
   usage_line_id: string;
+  usage_turn_id: string | null;
+  provider: string;
   backend: string;
   thread_id: string;
   parent_thread_id: string | null;
@@ -1954,6 +2029,7 @@ type ThreadUsageLineRow = {
 };
 
 type ThreadPricingSummaryRow = {
+  provider: string;
   backend: string;
   thread_id: string;
   currency: string;
@@ -2002,6 +2078,15 @@ function normalizeThreadUsageLine(
     reasoningOutputTokens,
     totalTokens,
     uncachedInputTokens,
+    provider: line.provider || "openai",
+    usageTurnId:
+      line.usageTurnId ||
+      [
+        line.provider || "openai",
+        line.backend,
+        line.threadId,
+        line.turnId ?? line.usageLineId,
+      ].join(":"),
   };
 }
 
@@ -2027,6 +2112,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     parentThreadId: line.parentThreadId ?? null,
     priceStatus: line.priceStatus,
     priceUnavailableReason: line.priceUnavailableReason ?? null,
+    provider: line.provider,
     pricingCatalogId: line.pricingCatalogId ?? null,
     pricingCatalogVersion: line.pricingCatalogVersion ?? null,
     pricingRateId: line.pricingRateId ?? null,
@@ -2047,6 +2133,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     uncachedInputTokens: line.uncachedInputTokens,
     updatedAt: Date.now(),
     usageLineId: line.usageLineId,
+    usageTurnId: line.usageTurnId ?? null,
   };
 }
 
@@ -2068,6 +2155,7 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     ...(row.price_unavailable_reason
       ? { priceUnavailableReason: row.price_unavailable_reason }
       : {}),
+    provider: row.provider || "openai",
     ...(row.pricing_catalog_id ? { pricingCatalogId: row.pricing_catalog_id } : {}),
     ...(row.pricing_catalog_version
       ? { pricingCatalogVersion: row.pricing_catalog_version }
@@ -2091,6 +2179,7 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     uncachedInputCostMicros: row.uncached_input_cost_micros,
     uncachedInputTokens: row.uncached_input_tokens,
     usageLineId: row.usage_line_id,
+    ...(row.usage_turn_id ? { usageTurnId: row.usage_turn_id } : {}),
   };
 }
 
@@ -2102,6 +2191,7 @@ function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricin
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
     pricedUsageLineCount: row.priced_usage_line_count,
+    provider: row.provider || "openai",
     reasoningOutputTokens: row.reasoning_output_tokens,
     threadId: row.thread_id,
     totalCostMicros: row.total_cost_micros,

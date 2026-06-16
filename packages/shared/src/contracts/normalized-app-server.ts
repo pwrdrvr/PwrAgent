@@ -902,6 +902,16 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/pricing/updated";
+      params: {
+        threadId: string;
+        pricing: {
+          lines: ThreadUsageLineRecord[];
+          summaries: ThreadPricingSummary[];
+        };
+      };
+    }
+  | {
       method: "account/rateLimits/updated";
       params: {
         rateLimits: unknown;

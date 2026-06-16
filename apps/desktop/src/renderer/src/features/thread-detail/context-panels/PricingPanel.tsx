@@ -18,7 +18,7 @@ type PricingPanelProps = {
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
   const lines = props.pricing?.lines ?? [];
-  const summary = summaries[0];
+  const summary = aggregateSummaries(summaries);
 
   return (
     <section className="context-panel__section">
@@ -56,6 +56,28 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} usage row
               {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
             </p>
+          ) : null}
+          {summaries.length > 1 ? (
+            <ul className="context-list context-list--cards pricing-provider-list">
+              {summaries.map((providerSummary) => (
+                <li
+                  key={`${providerSummary.provider}:${providerSummary.currency}`}
+                  className="rail-card pricing-provider-row"
+                >
+                  <p className="rail-card__title">
+                    {providerSummary.provider} · {providerSummary.currency}
+                  </p>
+                  <p className="rail-card__usage">
+                    {formatMoney(
+                      providerSummary.totalCostMicros,
+                      providerSummary.currency,
+                    )}{" "}
+                    list price · {providerSummary.usageLineCount.toLocaleString()} row
+                    {providerSummary.usageLineCount === 1 ? "" : "s"}
+                  </p>
+                </li>
+              ))}
+            </ul>
           ) : null}
         </>
       ) : (
@@ -97,6 +119,43 @@ export function PricingPanel(props: PricingPanelProps) {
         </ul>
       ) : null}
     </section>
+  );
+}
+
+function aggregateSummaries(
+  summaries: ThreadPricingSummary[],
+): ThreadPricingSummary | undefined {
+  if (summaries.length === 0) {
+    return undefined;
+  }
+  const [first, ...rest] = summaries;
+  if (!first) {
+    return undefined;
+  }
+  if (rest.some((summary) => summary.currency !== first.currency)) {
+    return first;
+  }
+  return rest.reduce<ThreadPricingSummary>(
+    (acc, summary) => ({
+      ...acc,
+      cachedInputTokens: acc.cachedInputTokens + summary.cachedInputTokens,
+      inputTokens: acc.inputTokens + summary.inputTokens,
+      outputTokens: acc.outputTokens + summary.outputTokens,
+      pricedUsageLineCount:
+        acc.pricedUsageLineCount + summary.pricedUsageLineCount,
+      provider: summaries.length === 1 ? acc.provider : "multiple",
+      reasoningOutputTokens:
+        acc.reasoningOutputTokens + summary.reasoningOutputTokens,
+      totalCostMicros: acc.totalCostMicros + summary.totalCostMicros,
+      totalTokens: acc.totalTokens + summary.totalTokens,
+      uncachedInputTokens:
+        acc.uncachedInputTokens + summary.uncachedInputTokens,
+      unpricedUsageLineCount:
+        acc.unpricedUsageLineCount + summary.unpricedUsageLineCount,
+      updatedAt: Math.max(acc.updatedAt, summary.updatedAt),
+      usageLineCount: acc.usageLineCount + summary.usageLineCount,
+    }),
+    { ...first },
   );
 }
 

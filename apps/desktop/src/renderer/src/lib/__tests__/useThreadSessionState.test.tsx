@@ -4070,11 +4070,10 @@ describe("useThreadSessionState", () => {
     );
   });
 
-  it("refreshes pricing after finalized live token usage updates", async () => {
+  it("updates pricing from live pricing notifications without rereading the thread", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
-    const readThread = vi
-      .fn<NonNullable<DesktopApi["readThread"]>>()
-      .mockImplementationOnce(async ({ backend, threadId }) => ({
+    const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(
+      async ({ backend, threadId }) => ({
         backend: backend ?? "codex",
         fetchedAt: Date.now(),
         threadId,
@@ -4090,41 +4089,8 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      }))
-      .mockImplementation(async ({ backend, threadId }) => ({
-        backend: backend ?? "codex",
-        fetchedAt: Date.now(),
-        threadId,
-        pricing: {
-          lines: [],
-          summaries: [
-            {
-              backend: "codex",
-              threadId,
-              currency: "USD",
-              inputTokens: 1_200,
-              uncachedInputTokens: 1_000,
-              cachedInputTokens: 200,
-              outputTokens: 50,
-              reasoningOutputTokens: 10,
-              totalTokens: 1_260,
-              totalCostMicros: 7_250,
-              usageLineCount: 1,
-              pricedUsageLineCount: 1,
-              unpricedUsageLineCount: 0,
-              updatedAt: Date.now(),
-            },
-          ],
-        },
-        replay: {
-          entries: [],
-          messages: [],
-          pagination: {
-            supportsPagination: false,
-            hasPreviousPage: false,
-          },
-        },
-      }));
+      }),
+    );
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -4163,15 +4129,51 @@ describe("useThreadSessionState", () => {
         },
       });
     });
+    expect(result.current.response?.pricing?.summaries).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/pricing/updated",
+          params: {
+            threadId: "thread-1",
+            pricing: {
+              lines: [],
+              summaries: [
+                {
+                  backend: "codex",
+                  provider: "openai",
+                  threadId: "thread-1",
+                  currency: "USD",
+                  inputTokens: 1_200,
+                  uncachedInputTokens: 1_000,
+                  cachedInputTokens: 200,
+                  outputTokens: 50,
+                  reasoningOutputTokens: 10,
+                  totalTokens: 1_260,
+                  totalCostMicros: 7_250,
+                  usageLineCount: 1,
+                  pricedUsageLineCount: 1,
+                  unpricedUsageLineCount: 0,
+                  updatedAt: Date.now(),
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
 
     await waitFor(() => {
       expect(result.current.response?.pricing?.summaries[0]).toMatchObject({
+        provider: "openai",
         threadId: "thread-1",
         totalCostMicros: 7_250,
         usageLineCount: 1,
       });
     });
-    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(readThread).toHaveBeenCalledTimes(1);
   });
 
   it("finalizes active-turn usage from cumulative token deltas", async () => {
