@@ -53,6 +53,7 @@ import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
+import { setSidebarResizing } from "./lib/sidebar-resize-signal";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -164,8 +165,20 @@ function DesktopAppShell(props: {
   settings: DesktopSettingsState;
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
-  // Hardcoded sidebar resize bounds — mirrored in resizeSidebar() below.
-  // Exposed as constants so both the setter and the aria-valuemin/max
+  // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
+  // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
+  // (→ Sidebar → every un-virtualized ThreadRow) that used to fire on each
+  // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
+  // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
+  // dragged width instead of snapping back to the stale committed state.
+  //
+  // INVARIANT: the rendered width reads from this ref, so it must track state.
+  // Write the width through `commitSidebarWidth` (below); never call
+  // `setSidebarWidth` directly, or the rendered width diverges from state.
+  const sidebarWidthRef = useRef(sidebarWidth);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
+  // Exposed as constants so both the clamp and the aria-valuemin/max
   // attributes on the resize handle stay in sync.
   const sidebarMinWidth = 280;
   const sidebarMaxWidth = 560;
@@ -907,24 +920,71 @@ function DesktopAppShell(props: {
   const threadDetailPending =
     mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
+  const clampSidebarWidth = (nextWidth: number): number =>
+    Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth));
+
+  // The single writer of the sidebar width: keeps `sidebarWidthRef` (which the
+  // rendered `--sidebar-width` reads from) and React state in lockstep. The
+  // per-frame drag path writes the ref + DOM directly for speed and calls this
+  // only once on pointerup; every other caller goes through here.
+  const commitSidebarWidth = (width: number): void => {
+    sidebarWidthRef.current = width;
+    setSidebarWidth(width);
+  };
+
+  // Keyboard / commit path: a discrete, low-frequency width change.
   const resizeSidebar = (nextWidth: number): void => {
-    setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth)));
+    commitSidebarWidth(clampSidebarWidth(nextWidth));
   };
 
   const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = sidebarWidth;
+    const startWidth = sidebarWidthRef.current;
+    let frame = 0;
 
+    const flush = (): void => {
+      frame = 0;
+      appShellRef.current?.style.setProperty(
+        "--sidebar-width",
+        `${sidebarWidthRef.current}px`,
+      );
+    };
     const move = (moveEvent: globalThis.PointerEvent): void => {
-      resizeSidebar(startWidth + moveEvent.clientX - startX);
+      // Update the live width synchronously so any incidental rerender reads
+      // the current value, but coalesce the actual DOM write to one per frame.
+      sidebarWidthRef.current = clampSidebarWidth(
+        startWidth + moveEvent.clientX - startX,
+      );
+      if (frame === 0) {
+        frame = window.requestAnimationFrame(flush);
+      }
     };
     const stop = (): void => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      // Make sure the DOM is at the final width before the transcript
+      // re-syncs (the last move's rAF flush may have been cancelled above).
+      flush();
+      // Commit the final width to React state exactly once so it survives
+      // future rerenders and drives `aria-valuenow` — a single reconcile in
+      // place of one per pointermove.
+      commitSidebarWidth(sidebarWidthRef.current);
+      // Release the transcript's resize/scroll sync, which re-syncs once now
+      // that the pane has settled at its final width.
+      setSidebarResizing(false);
     };
 
+    // Pause the transcript's per-frame ResizeObserver/onScroll re-sync for the
+    // duration of the drag — the main pane reflows on every frame, and the
+    // un-virtualized transcript responding to each reflow is the dominant cost
+    // (see lib/sidebar-resize-signal.ts).
+    setSidebarResizing(true);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
@@ -944,9 +1004,10 @@ function DesktopAppShell(props: {
         actions={mastheadActions}
       />
       <div
+        ref={appShellRef}
         className="app-shell"
         data-sidebar-hidden={sidebarHidden ? "true" : undefined}
-        style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+        style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
           backends={backendSummaries.backends}
@@ -1035,7 +1096,7 @@ function DesktopAppShell(props: {
             await navigation.refresh?.();
           }}
           onResizeStart={startSidebarResize}
-          onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
+          onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
           sidebarWidth={sidebarWidth}
           sidebarMinWidth={sidebarMinWidth}
           sidebarMaxWidth={sidebarMaxWidth}
