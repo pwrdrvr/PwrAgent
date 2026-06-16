@@ -171,10 +171,14 @@ function DesktopAppShell(props: {
   // pointermove is gone. The `.app-shell` CSS var is rendered from the ref so
   // an incidental rerender mid-drag (e.g. an agent event) re-applies the live
   // dragged width instead of snapping back to the stale committed state.
+  //
+  // INVARIANT: the rendered width reads from this ref, so it must track state.
+  // Write the width through `commitSidebarWidth` (below); never call
+  // `setSidebarWidth` directly, or the rendered width diverges from state.
   const sidebarWidthRef = useRef(sidebarWidth);
   const appShellRef = useRef<HTMLDivElement>(null);
-  // Hardcoded sidebar resize bounds — mirrored in resizeSidebar() below.
-  // Exposed as constants so both the setter and the aria-valuemin/max
+  // Hardcoded sidebar resize bounds — mirrored in clampSidebarWidth() below.
+  // Exposed as constants so both the clamp and the aria-valuemin/max
   // attributes on the resize handle stay in sync.
   const sidebarMinWidth = 280;
   const sidebarMaxWidth = 560;
@@ -919,12 +923,18 @@ function DesktopAppShell(props: {
   const clampSidebarWidth = (nextWidth: number): number =>
     Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth));
 
-  // Keyboard / commit path: a discrete, low-frequency width change. Keep ref
-  // and state in lockstep so the rendered CSS var and `aria-valuenow` agree.
+  // The single writer of the sidebar width: keeps `sidebarWidthRef` (which the
+  // rendered `--sidebar-width` reads from) and React state in lockstep. The
+  // per-frame drag path writes the ref + DOM directly for speed and calls this
+  // only once on pointerup; every other caller goes through here.
+  const commitSidebarWidth = (width: number): void => {
+    sidebarWidthRef.current = width;
+    setSidebarWidth(width);
+  };
+
+  // Keyboard / commit path: a discrete, low-frequency width change.
   const resizeSidebar = (nextWidth: number): void => {
-    const clamped = clampSidebarWidth(nextWidth);
-    sidebarWidthRef.current = clamped;
-    setSidebarWidth(clamped);
+    commitSidebarWidth(clampSidebarWidth(nextWidth));
   };
 
   const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
@@ -964,7 +974,7 @@ function DesktopAppShell(props: {
       // Commit the final width to React state exactly once so it survives
       // future rerenders and drives `aria-valuenow` — a single reconcile in
       // place of one per pointermove.
-      setSidebarWidth(sidebarWidthRef.current);
+      commitSidebarWidth(sidebarWidthRef.current);
       // Release the transcript's resize/scroll sync, which re-syncs once now
       // that the pane has settled at its final width.
       setSidebarResizing(false);
