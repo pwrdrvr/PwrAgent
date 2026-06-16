@@ -12729,20 +12729,29 @@ textarea,
 /* Branch picker — searchable launchpad base-branch list. Reuses the
    `.composer-dropdown` trigger (so the `Base branch` button keeps its
    label/value contract); the open panel is its own filterable surface. */
+/* ============================================================
+   Composer pickers — shared popover language
+
+   The project picker and the branch picker share ONE popover
+   look: an elevated panel, a search header (search icon +
+   borderless input + bottom divider), an uppercase section
+   eyebrow, and rows (leading check column + icon + label) that
+   tint to the accent on hover / keyboard focus. Picker-specific
+   content — a directory's path, a branch's badges + timestamp —
+   layers on top of these primitives.
+
+   Edit the shared look HERE. Keep only genuinely per-picker
+   overrides (panel anchor/size, project path/error, branch
+   badges/timestamp) in the `.project-picker__*` /
+   `.branch-picker__*` blocks.
+   ============================================================ */
+.project-picker__pop,
 .branch-picker__menu {
   position: absolute;
   z-index: 30;
   bottom: calc(100% + 8px);
-  /* Anchor to the trigger's right edge so the panel opens leftward — the
-     branch chip lives near the right of the composer toolbar. A viewport
-     clamp in BranchPicker nudges it back in on narrow windows. */
-  right: 0;
-  left: auto;
   display: flex;
   flex-direction: column;
-  min-width: max(100%, 340px);
-  max-width: min(440px, calc(100vw - 32px));
-  max-height: min(440px, calc(100dvh - 128px));
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -12750,21 +12759,18 @@ textarea,
   box-shadow: var(--shadow-popover);
 }
 
+.project-picker__search,
 .branch-picker__search {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 5px 10px;
   margin-bottom: 4px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-input);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.branch-picker__search:focus-within {
-  border-color: var(--accent-border);
-}
-
+.project-picker__search-icon,
 .branch-picker__search-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -12772,26 +12778,26 @@ textarea,
   color: var(--text-muted);
 }
 
+.project-picker__search-input,
 .branch-picker__search-input {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 34px;
   border: 0;
+  outline: 0;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
 }
 
+.project-picker__search-input::placeholder,
 .branch-picker__search-input::placeholder {
   color: var(--text-muted);
 }
 
-.branch-picker__search-input:focus {
-  outline: none;
-}
-
+.project-picker__section,
 .branch-picker__eyebrow {
+  flex: 0 0 auto;
   padding: 6px 10px 4px;
   color: var(--text-muted);
   font-size: 11px;
@@ -12800,25 +12806,21 @@ textarea,
   text-transform: uppercase;
 }
 
-.branch-picker__eyebrow span {
-  color: var(--text-secondary);
-}
-
+.project-picker__list,
 .branch-picker__list {
-  display: flex;
-  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
+.project-picker__row,
 .branch-picker__option {
-  width: 100%;
-  min-height: 40px;
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  min-height: 38px;
+  padding: 7px 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -12827,27 +12829,67 @@ textarea,
   font-size: 14px;
   line-height: 1.35;
   text-align: left;
+  cursor: pointer;
 }
 
-.branch-picker__option.is-active,
+.project-picker__row:hover:not(:disabled),
+.project-picker__row:focus-visible:not(:disabled),
 .branch-picker__option:hover,
-.branch-picker__option:focus-visible {
+.branch-picker__option:focus-visible,
+.branch-picker__option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
+  outline: none;
 }
 
+/* Leading 12px column — empty until the row is the current
+   selection, then a ✓. */
+.project-picker__row-check,
 .branch-picker__option-check {
-  width: 12px;
   flex: 0 0 12px;
-  color: var(--accent-bright);
+  width: 12px;
   text-align: center;
+  color: var(--accent-bright);
 }
 
+/* Leading row glyph (folder / branch icon). */
+.project-picker__row-icon,
 .branch-picker__option-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   color: var(--text-muted);
+}
+
+/* ---- Branch picker specifics ---- */
+.branch-picker__menu {
+  /* Anchor to the trigger's right edge so the panel opens leftward — the
+     branch chip lives near the right of the composer toolbar. A viewport
+     clamp in BranchPicker nudges it back in on narrow windows. */
+  right: 0;
+  left: auto;
+  min-width: max(100%, 360px);
+  max-width: min(440px, calc(100vw - 32px));
+  max-height: min(440px, calc(100dvh - 128px));
+}
+
+.branch-picker__list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Selected branch: accent label + ✓, mirroring the project picker's
+   selected row. The accent fill stays reserved for hover / keyboard
+   focus (`.is-active`). */
+.branch-picker__option.is-selected:not(.is-active):not(:hover) {
+  color: var(--accent-bright);
+}
+
+.branch-picker__eyebrow span {
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .branch-picker__option-name {
@@ -13090,100 +13132,37 @@ textarea,
   white-space: nowrap;
 }
 
-/* The popover itself is a fixed-size flex column. The search row +
-   section header are pinned to the top, the "Add directory…" row + any
-   inline error are pinned to the bottom, and only the directories list
-   in the middle scrolls. Critically, the popover height does NOT shrink
-   when the user filters down to fewer matches — the list region just
-   leaves blank space. Resizing the popover on every keystroke shifts
-   the action row vertically and is hard to use. */
+/* Project-picker-specific overrides only — the panel chrome, search
+   header, section eyebrow, row base, hover, and check + icon columns are
+   shared above under "Composer pickers — shared popover language".
+
+   Unlike the branch picker, this panel is a FIXED-size flex column: the
+   search + section pin to the top, the "Add directory…" row + any inline
+   error pin to the bottom, and only the directories list scrolls. The
+   height does NOT shrink as the filter narrows — resizing on every
+   keystroke would shift the action row vertically and is hard to use. */
 .project-picker__pop {
-  position: absolute;
-  z-index: 30;
-  bottom: calc(100% + 8px);
   left: 0;
   width: 440px;
   max-width: calc(100vw - 32px);
   height: 420px;
   max-height: calc(100dvh - 128px);
-  padding: 6px;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel-elevated);
-  box-shadow: var(--shadow-popover);
-  display: flex;
-  flex-direction: column;
   gap: 4px;
-}
-
-.project-picker__search {
-  flex: 0 0 auto;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.project-picker__search-input {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 13px;
-  padding: 4px 0;
-}
-
-.project-picker__search-input::placeholder {
-  color: var(--text-muted);
-}
-
-.project-picker__section {
-  flex: 0 0 auto;
-  padding: 6px 10px 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  overflow: hidden;
 }
 
 .project-picker__list {
+  /* Only the directories list scrolls; it's the sole flex-grow child of
+     the fixed-height panel, so the "Add directory…" row stays pinned to
+     the bottom regardless of how short the filtered list becomes. */
   flex: 1 1 0;
-  /* `min-height: 0` is required for a flex child whose content overflows
-     to actually scroll — without it the list grows past its parent and
-     the popover scroll is taken over by the wrong region. */
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.project-picker__row {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.project-picker__row:hover:not(:disabled),
-.project-picker__row:focus-visible:not(:disabled) {
-  background: var(--accent-soft);
-  color: var(--accent-bright);
-  outline: none;
-}
-
+/* Selected directory: accent label + ✓, no persistent row fill (the fill
+   is reserved for hover / keyboard focus). */
 .project-picker__row.is-active {
   color: var(--accent-bright);
 }
@@ -13214,15 +13193,15 @@ textarea,
 }
 
 .project-picker__row--action {
-  /* Pinned to the bottom of the popover — the directories list above
-     is the only flex-grow child, so this row sits at the bottom edge
-     regardless of how short the (filtered) list becomes. */
   flex: 0 0 auto;
   color: var(--accent-bright);
 }
 
+/* The "+" sits in the leading icon column; it follows the action row's
+   accent color (not the muted glyph color) so it reads as an affordance. */
 .project-picker__plus {
   display: inline-flex;
+  flex: 0 0 14px;
   width: 14px;
   justify-content: center;
   font-weight: 700;
