@@ -1,5 +1,6 @@
 import { type ReactElement } from "react";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
  * Window layout chips — show/hide the left sidebar (primary) and the
@@ -69,6 +70,7 @@ function LayoutChip({
   onClick: () => void;
   disabled?: boolean;
 }): ReactElement {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const label = disabled
     ? "No context rail in this view"
     : kind === "primary"
@@ -82,20 +84,30 @@ function LayoutChip({
   // Ctrl+B / Ctrl+Alt+B on Windows/Linux). The binding itself accepts
   // either modifier — see isPrimaryAccel.
   const chord = formatPrimaryAccel("B", { alt: kind !== "primary" });
+  // Custom viewport tooltip (not native `title`): it triggers instantly on
+  // hover/focus over the whole button, clamps to the window so the chord hint
+  // can't render off the right edge, and matches every other chrome control.
+  // The disabled chip stays inert (`pointer-events: none`), so it just keeps
+  // the aria-label for AT and shows no chord.
+  const tooltipText = disabled ? label : `${label}  (${chord})`;
   return (
-    <button
-      type="button"
-      className={`panel-toggle__chip is-${kind} ${open ? "is-open" : "is-closed"}`}
-      aria-label={label}
-      aria-pressed={disabled ? undefined : open}
-      disabled={disabled}
-      // No title when disabled: `pointer-events: none` makes a native
-      // tooltip unreachable anyway; the aria-label still names it for AT.
-      title={disabled ? undefined : `${label}  (${chord})`}
-      onClick={disabled ? undefined : onClick}
-    >
-      <LayoutGlyph kind={kind} open={open} />
-    </button>
+    <>
+      <button
+        type="button"
+        className={`panel-toggle__chip is-${kind} ${open ? "is-open" : "is-closed"}`}
+        aria-label={label}
+        aria-pressed={disabled ? undefined : open}
+        disabled={disabled}
+        onClick={disabled ? undefined : onClick}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseLeave={tooltip.hide}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onBlur={tooltip.hide}
+      >
+        <LayoutGlyph kind={kind} open={open} />
+      </button>
+      {tooltip.tooltipNode}
+    </>
   );
 }
 

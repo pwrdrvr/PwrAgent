@@ -806,6 +806,11 @@ textarea,
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
+  /* Width-query container so the masthead wordmark can drop out once the rail
+     is too narrow to fit it beside the action buttons (see
+     `.sidebar__masthead`). Width is extrinsic (`--sidebar-width`), so
+     inline-size containment is safe. */
+  container-type: inline-size;
 }
 
 /* Thread-list quick-jump popup (⌘F while the sidebar is focused). Floats below
@@ -968,6 +973,20 @@ textarea,
   align-items: center;
   padding: 10px 0 0 80px;
   border-bottom: none;
+  /* Tighter than the shared 16px so the brand sits closer to its actions. */
+  gap: 8px;
+}
+
+/* The action buttons are load-bearing chrome and keep a comfortable size; the
+   decorative wordmark is what yields when the rail gets narrow. Below the width
+   where both fit beside the macOS stoplight reserve, the wordmark is hidden
+   outright (not squashed or ellipsized). `.sidebar` is the width-query
+   container — the same mechanism the lens switch uses to swap
+   "Directories" → "Dirs". */
+@container (max-width: 301px) {
+  .sidebar__masthead > .sidebar__brand {
+    display: none;
+  }
 }
 
 /* macOS reserves 80px for the traffic-light stoplights. Every other
@@ -989,7 +1008,19 @@ textarea,
 .sidebar__masthead-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  /* Pinned to the trailing edge whether or not the wordmark is present, so the
+     buttons don't jump left when it hides. Never shrink. */
+  margin-left: auto;
+  flex: 0 0 auto;
+  /* Pull 8px toward the wall so the trailing (new-thread) button lines up with
+     the per-directory launchpad (+) buttons below it. Those rows bleed
+     wall-to-wall via `.sidebar__scroll-region` and sit 8px off the wall
+     (`.directory-groups` right padding); the masthead instead carries the
+     sidebar's full 16px side padding, so without this the top button sits 8px
+     further in. Reclaiming the 8px also gives the wordmark more room before it
+     has to drop out. */
+  margin-right: -8px;
 }
 
 .sidebar__masthead-actions,
@@ -2274,22 +2305,36 @@ textarea,
 
 .sidebar__icon-button {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   appearance: none;
   cursor: pointer;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
+  /* Flat toolbar buttons: no resting box (border + filled panel), just the
+     icon with a hover/active tint. Tightened from the old chunky 34px box to a
+     comfortable 28px; the wordmark (not the buttons) is what yields at narrow
+     widths, so these never have to shrink to stay legible. */
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 16px;
   line-height: 1;
 }
 
-.sidebar__icon-button:hover,
-.sidebar__icon-button:focus-visible,
+.sidebar__icon-button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.sidebar__icon-button:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .sidebar__icon-button.is-active {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
@@ -12441,6 +12486,9 @@ textarea,
   padding: 24px;
   background: var(--scrim-opaque);
   cursor: zoom-out;
+  /* The overlay is portaled to <body>, but assert no-drag explicitly so the X
+     can never be swallowed by an OS window-drag region it floats over. */
+  -webkit-app-region: no-drag;
 }
 
 .composer__lightbox-content {
@@ -12451,9 +12499,14 @@ textarea,
 }
 
 .composer__lightbox-close {
+  /* Anchored just inside the image's top-right corner (not floating outside at
+     a negative offset, which for a large image drifts to the window edge /
+     title-bar strip where the click never lands). `z-index` keeps it above the
+     image so the X is always the topmost, clickable element. */
   position: absolute;
-  top: -14px;
-  right: -14px;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
