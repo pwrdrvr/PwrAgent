@@ -89,3 +89,60 @@ describe("desktop config [ui] section", () => {
     expect(config.ui).toBeUndefined();
   });
 });
+
+describe("desktop config [integrated_terminal] section", () => {
+  it("reads the Windows shell preference", () => {
+    const config = parseDesktopSettingsToml(
+      ['[integrated_terminal]', 'windows_shell = "powershell"', ""].join("\n"),
+      "test.toml",
+    );
+
+    expect(config.integratedTerminal).toEqual({
+      windowsShell: "powershell",
+    });
+  });
+
+  it("omits invalid Windows shell preferences", () => {
+    const config = parseDesktopSettingsToml(
+      ['[integrated_terminal]', 'windows_shell = "bash"', ""].join("\n"),
+      "test.toml",
+    );
+
+    expect(config.integratedTerminal).toBeUndefined();
+  });
+
+  it("round-trips a non-default Windows shell preference", () => {
+    const edits = desktopSettingsPatchToEdits({
+      integratedTerminal: {
+        windowsShell: "cmd",
+      },
+    });
+    const written = applyTomlEdits("", edits);
+    const config = parseDesktopSettingsToml(written, "test.toml");
+
+    expect(config.integratedTerminal).toEqual({
+      windowsShell: "cmd",
+    });
+  });
+
+  it("deletes the default automatic Windows shell preference on write", () => {
+    const edits = desktopSettingsPatchToEdits(
+      {
+        integratedTerminal: {
+          windowsShell: "auto",
+        },
+      },
+      parseTomlTables(
+        ['[integrated_terminal]', 'windows_shell = "cmd"', ""].join("\n"),
+        "test.toml",
+      ),
+    );
+
+    expect(edits).toEqual([
+      {
+        op: "delete",
+        path: ["integrated_terminal", "windows_shell"],
+      },
+    ]);
+  });
+});

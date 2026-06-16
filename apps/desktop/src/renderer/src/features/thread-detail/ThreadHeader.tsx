@@ -7,6 +7,7 @@ import {
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { TerminalIcon } from "../../icons/TerminalIcon";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
 import {
   HistoryNavButtons,
@@ -18,8 +19,10 @@ import { formatAutomationRelative } from "../automations/automation-format";
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
   railOpen: boolean;
+  terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
+  onToggleTerminal: () => void;
 };
 
 type ThreadHeaderProps = {
@@ -147,6 +150,23 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onToggleSidebar={props.layout.onToggleSidebar}
               onToggleRail={props.layout.onToggleRail}
             />
+          ) : null}
+          {props.layout ? (
+            <button
+              type="button"
+              className={`thread-header__terminal-toggle${
+                props.layout.terminalOpen ? " is-open" : ""
+              }`}
+              aria-pressed={props.layout.terminalOpen}
+              title={
+                props.layout.terminalOpen
+                  ? "Hide integrated terminal"
+                  : "Open integrated terminal"
+              }
+              onClick={props.layout.onToggleTerminal}
+            >
+              <TerminalIcon size={14} />
+            </button>
           ) : null}
           <MessagingStatusBar
             desktopApi={props.desktopApi}

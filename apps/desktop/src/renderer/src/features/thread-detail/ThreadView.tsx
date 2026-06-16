@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  lazy,
   useMemo,
   useRef,
   useState,
+  Suspense,
   type CSSProperties,
 } from "react";
 import type {
@@ -94,6 +96,11 @@ type LaunchpadEnvironmentSetupProgress = {
   output: string;
   status: "starting" | "running" | "completed" | "failed";
 };
+
+const LazyIntegratedTerminal = lazy(async () => {
+  const module = await import("./IntegratedTerminal");
+  return { default: module.IntegratedTerminal };
+});
 
 const noop = (): void => {};
 
@@ -1046,6 +1053,12 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const [terminalOpenByThread, setTerminalOpenByThread] = useState<
+    Record<string, boolean>
+  >({});
+  const [terminalHeightByThread, setTerminalHeightByThread] = useState<
+    Record<string, number>
+  >({});
   const [launchpadMaterializeError, setLaunchpadMaterializeError] =
     useState<string>();
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
@@ -1154,6 +1167,46 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
+  const selectedThreadTerminalOpen = selectedThreadKey
+    ? terminalOpenByThread[selectedThreadKey] === true
+    : false;
+  const selectedThreadTerminalCwd = selectedThread
+    ? threadDirectoryPaths(selectedThread)[0]
+    : undefined;
+  const selectedThreadTerminalHeight = selectedThreadKey
+    ? terminalHeightByThread[selectedThreadKey] ?? 260
+    : 260;
+  const toggleSelectedThreadTerminal = useCallback(() => {
+    if (!selectedThreadKey) return;
+    setTerminalOpenByThread((current) => ({
+      ...current,
+      [selectedThreadKey]: current[selectedThreadKey] !== true,
+    }));
+  }, [selectedThreadKey]);
+  const closeSelectedThreadTerminal = useCallback(() => {
+    if (!selectedThreadKey) return;
+    setTerminalOpenByThread((current) => ({
+      ...current,
+      [selectedThreadKey]: false,
+    }));
+    void props.desktopApi?.closeIntegratedTerminal?.({
+      threadKey: selectedThreadKey,
+    });
+  }, [props.desktopApi, selectedThreadKey]);
+  const handleSelectedThreadTerminalExit = useCallback(() => {
+    if (!selectedThreadKey) return;
+    setTerminalOpenByThread((current) => ({
+      ...current,
+      [selectedThreadKey]: false,
+    }));
+  }, [selectedThreadKey]);
+  const setSelectedThreadTerminalHeight = useCallback((height: number) => {
+    if (!selectedThreadKey) return;
+    setTerminalHeightByThread((current) => ({
+      ...current,
+      [selectedThreadKey]: height,
+    }));
+  }, [selectedThreadKey]);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );
@@ -2359,8 +2412,10 @@ export function ThreadView(props: ThreadViewProps) {
         layout={{
           sidebarOpen: !sidebarHidden,
           railOpen: contextRailPinned,
+          terminalOpen: selectedThreadTerminalOpen,
           onToggleSidebar,
           onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+          onToggleTerminal: toggleSelectedThreadTerminal,
         }}
         masthead={props.mastheadActions}
         history={props.historyNav}
@@ -2568,6 +2623,20 @@ export function ThreadView(props: ThreadViewProps) {
             threadBusy={props.threadBusy}
             updatingExecutionMode={props.updatingExecutionMode}
           />
+
+          {selectedThreadTerminalOpen && selectedThreadKey ? (
+            <Suspense fallback={null}>
+              <LazyIntegratedTerminal
+                desktopApi={props.desktopApi}
+                threadKey={selectedThreadKey}
+                cwd={selectedThreadTerminalCwd}
+                height={selectedThreadTerminalHeight}
+                onHeightChange={setSelectedThreadTerminalHeight}
+                onClose={closeSelectedThreadTerminal}
+                onExit={handleSelectedThreadTerminalExit}
+              />
+            </Suspense>
+          ) : null}
         </div>
 
         <ThreadContextPanel

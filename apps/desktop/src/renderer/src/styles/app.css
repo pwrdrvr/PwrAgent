@@ -1080,6 +1080,50 @@ textarea,
   pointer-events: none;
 }
 
+.thread-header__terminal-toggle {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease,
+    border-color 80ms ease;
+}
+
+.thread-header__terminal-toggle,
+.thread-header__terminal-toggle * {
+  -webkit-app-region: no-drag;
+}
+
+.thread-header__terminal-toggle:hover {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.thread-header__terminal-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.thread-header__terminal-toggle.is-open {
+  color: var(--accent-bright);
+}
+
+.thread-header__terminal-toggle.is-open:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent-bright);
+}
+
 /* Browser-style Back/Forward pair at the leading edge of the thread/search
    title bars. Mirrors the .panel-toggle chip treatment (size, muted resting
    color, hover row tint, inert disabled state) so the header chrome reads
@@ -11640,6 +11684,98 @@ textarea,
 .composer > * {
   width: 100%;
   max-width: var(--chat-column-max);
+}
+
+.integrated-terminal {
+  position: relative;
+  display: flex;
+  flex: 0 0 var(--integrated-terminal-height, 260px);
+  width: auto;
+  height: var(--integrated-terminal-height, 260px);
+  min-height: 140px;
+  max-height: 68vh;
+  flex-direction: column;
+  align-self: stretch;
+  margin: 0 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.integrated-terminal__resize-handle {
+  flex: 0 0 10px;
+  min-height: 10px;
+  border-top: 1px solid var(--border-subtle);
+  cursor: row-resize;
+  transition: border-color 80ms ease;
+}
+
+.integrated-terminal__resize-handle:hover {
+  border-top-color: var(--border-strong);
+}
+
+.integrated-terminal__resize-handle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.integrated-terminal__close {
+  position: absolute;
+  z-index: 2;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 700 14px/1 var(--font-mono);
+  cursor: pointer;
+}
+
+.integrated-terminal__close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.integrated-terminal__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.integrated-terminal__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.integrated-terminal__body {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 10px 8px;
+}
+
+.integrated-terminal__viewport {
+  width: 100%;
+  height: 100%;
+}
+
+.integrated-terminal .xterm {
+  height: 100%;
+  padding: 0;
+}
+
+.integrated-terminal .xterm-viewport {
+  background: transparent;
 }
 
 .composer__input {

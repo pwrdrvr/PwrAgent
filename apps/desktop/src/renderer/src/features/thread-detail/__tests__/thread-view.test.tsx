@@ -8,9 +8,35 @@ import type {
   MessagingPlatformStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
+
+vi.mock("../IntegratedTerminal", () => ({
+  IntegratedTerminal: (props: {
+    threadKey: string;
+    cwd?: string;
+    height: number;
+    onClose: () => void;
+    onExit: () => void;
+  }) => (
+    <section
+      aria-label="Integrated terminal"
+      data-cwd={props.cwd ?? ""}
+      data-height={props.height}
+      data-thread-key={props.threadKey}
+    >
+      <button type="button" title="Close terminal" onClick={props.onClose}>
+        Close terminal
+      </button>
+      <button type="button" onClick={props.onExit}>
+        Simulate terminal exit
+      </button>
+    </section>
+  ),
+}));
+
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
@@ -270,6 +296,143 @@ describe("ThreadView", () => {
     expect(screen.getByRole("tab", { name: "Provider status" })).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("keeps the integrated terminal open state per selected thread", async () => {
+    const firstThread: NavigationThreadSummary = {
+      id: "thread-a",
+      title: "Thread A",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/a",
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+      },
+    };
+    const secondThread: NavigationThreadSummary = {
+      ...firstThread,
+      id: "thread-b",
+      title: "Thread B",
+      projectKey: "/repo/b",
+    };
+    const closeIntegratedTerminal = vi.fn(async () => undefined);
+    const commonProps = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: {
+        closeIntegratedTerminal,
+      },
+      loading: false,
+      loadingMore: false,
+      messageCount: 1,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      skills: [],
+      transcriptEntries: [],
+    };
+
+    const { rerender } = render(
+      <ThreadView {...commonProps} selectedThread={firstThread} />,
+    );
+
+    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+
+    expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
+      "data-thread-key",
+      "codex:thread-a",
+    );
+    expect(screen.getByLabelText("Integrated terminal")).toHaveAttribute(
+      "data-height",
+      "260",
+    );
+    expect(screen.getByTitle("Hide integrated terminal")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    rerender(<ThreadView {...commonProps} selectedThread={secondThread} />);
+
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+    expect(closeIntegratedTerminal).not.toHaveBeenCalled();
+    expect(screen.getByTitle("Open integrated terminal")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    rerender(<ThreadView {...commonProps} selectedThread={firstThread} />);
+
+    expect(screen.getByLabelText("Integrated terminal")).toHaveAttribute(
+      "data-cwd",
+      "/repo/a",
+    );
+    expect(screen.getByTitle("Hide integrated terminal")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.click(screen.getByTitle("Hide integrated terminal"));
+
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+    expect(closeIntegratedTerminal).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+    fireEvent.click(await screen.findByTitle("Close terminal"));
+
+    expect(closeIntegratedTerminal).toHaveBeenCalledWith({
+      threadKey: "codex:thread-a",
+    });
+  });
+
+  it("hides the integrated terminal when the pty exits without closing it again", async () => {
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-a",
+      title: "Thread A",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/a",
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+      },
+    };
+    const closeIntegratedTerminal = vi.fn(async () => undefined);
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          closeIntegratedTerminal,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+    fireEvent.click(await screen.findByText("Simulate terminal exit"));
+
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Open integrated terminal")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(closeIntegratedTerminal).not.toHaveBeenCalled();
   });
 
   it("renders launchpad header chips and messaging status icons", async () => {

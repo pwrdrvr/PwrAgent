@@ -40,6 +40,17 @@ export type DesktopAppearanceDensity =
 export const DESKTOP_APPEARANCE_DENSITY_DEFAULT: DesktopAppearanceDensity =
   "mission-control";
 
+export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS = [
+  "auto",
+  "pwsh",
+  "powershell",
+  "cmd",
+] as const;
+export type DesktopIntegratedTerminalWindowsShell =
+  (typeof DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS)[number];
+export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT: DesktopIntegratedTerminalWindowsShell =
+  "auto";
+
 export const DESKTOP_CODEX_PROFILE_MODELS = [
   "shared",
   "isolated",
@@ -232,6 +243,10 @@ export type DesktopImageUploadSettingsSnapshot = {
 
 export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
+};
+
+export type DesktopIntegratedTerminalSettingsSnapshot = {
+  windowsShell: DesktopSettingsValue<DesktopIntegratedTerminalWindowsShell>;
 };
 
 export type DesktopAppearanceSnapshot = {
@@ -469,6 +484,7 @@ export type DesktopSettingsSnapshot = {
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
+  integratedTerminal: DesktopIntegratedTerminalSettingsSnapshot;
   /**
    * Window-layout preferences remembered across launches: whether the
    * left sidebar is hidden, whether the right context rail is pinned
@@ -676,6 +692,9 @@ export type DesktopSettingsConfigPatch = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+  };
+  integratedTerminal?: {
+    windowsShell?: DesktopIntegratedTerminalWindowsShell;
   };
   ui?: {
     sidebarHidden?: boolean;
@@ -1167,6 +1186,14 @@ export function isDesktopAppearanceDensity(
 ): value is DesktopAppearanceDensity {
   return DESKTOP_APPEARANCE_DENSITIES.includes(
     value as DesktopAppearanceDensity,
+  );
+}
+
+export function isDesktopIntegratedTerminalWindowsShell(
+  value: string,
+): value is DesktopIntegratedTerminalWindowsShell {
+  return DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS.includes(
+    value as DesktopIntegratedTerminalWindowsShell,
   );
 }
 

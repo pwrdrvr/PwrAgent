@@ -37,6 +37,10 @@ import {
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
 import {
+  disposeIntegratedTerminalIpcHandlers,
+  registerIntegratedTerminalIpcHandlers,
+} from "./ipc/integrated-terminal";
+import {
   disposeComposerDraftIpcHandlers,
   registerComposerDraftIpcHandlers,
 } from "./ipc/composer-drafts";
@@ -238,6 +242,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeImageNormalizationIpcHandlers();
+  disposeIntegratedTerminalIpcHandlers();
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
   disposeProfilesIpcHandlers();
@@ -607,6 +612,7 @@ export function bootstrapApp(): void {
     });
     registerComposerDraftIpcHandlers();
     registerImageNormalizationIpcHandlers();
+    registerIntegratedTerminalIpcHandlers();
     installTranscriptImageProtocol();
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });

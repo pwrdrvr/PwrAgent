@@ -454,6 +454,9 @@ describe("App", () => {
       updates: {
         channel: { value: "latest", source: "default" },
       },
+      integratedTerminal: {
+        windowsShell: { value: "auto", source: "default" },
+      },
       ui: {
         sidebarHidden: { value: false, source: "default" },
         contextRailPinned: { value: false, source: "default" },
