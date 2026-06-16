@@ -6,8 +6,9 @@ import type {
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
-import { EditorIcon } from "../../../icons";
+import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import { DiffStat } from "../DiffStat";
 import {
   EditedFileGroupList,
@@ -200,6 +201,13 @@ export function EditsPanel(props: EditsPanelProps) {
   const [view, setView] = useState<EditedFileGroupView>("turns");
   const hasGroups = props.groups.length > 0;
   const showViewToggle = props.groups.length > 1;
+  const dockTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Icon-only toggle (the full label would crowd the header at narrow rail
+  // widths): an up arrow that fills with the accent when the edits are also
+  // pinned above the composer. Its meaning lives in the custom viewport
+  // tooltip + aria-label rather than inline text.
+  const dockedAbove = props.dock === "above";
+  const dockLabel = dockedAbove ? "Only show here" : "Show above composer";
   const editedPaths = useMemo(
     () => collectEditedPaths(props.groups),
     [props.groups],
@@ -223,18 +231,21 @@ export function EditsPanel(props: EditsPanelProps) {
         </div>
         <button
           type="button"
-          className="edits-panel__dock-toggle"
-          onClick={() =>
-            props.onDockChange(props.dock === "sidebar" ? "above" : "sidebar")
-          }
-          title={
-            props.dock === "sidebar"
-              ? "Also show edited files above the composer"
-              : "Only show edited files in this panel"
-          }
+          className={`edits-panel__dock-toggle${dockedAbove ? " is-active" : ""}`}
+          aria-label={dockLabel}
+          aria-pressed={dockedAbove}
+          onClick={() => {
+            dockTooltip.hide();
+            props.onDockChange(dockedAbove ? "sidebar" : "above");
+          }}
+          onMouseEnter={(event) => dockTooltip.show(event.currentTarget, dockLabel)}
+          onMouseLeave={dockTooltip.hide}
+          onFocus={(event) => dockTooltip.show(event.currentTarget, dockLabel)}
+          onBlur={dockTooltip.hide}
         >
-          {props.dock === "sidebar" ? "Show above composer" : "Only show here"}
+          <ArrowUpIcon size={16} aria-hidden="true" />
         </button>
+        {dockTooltip.tooltipNode}
       </div>
       <div className="edits-panel__body">
         {hasOtherChanges ? (

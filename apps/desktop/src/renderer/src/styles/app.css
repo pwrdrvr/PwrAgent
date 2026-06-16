@@ -9362,18 +9362,37 @@ textarea,
 
 .edits-panel__dock-toggle {
   flex: 0 0 auto;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg-input);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
 }
 
 .edits-panel__dock-toggle:hover {
   border-color: var(--accent-border);
   color: var(--text-primary);
+}
+
+.edits-panel__dock-toggle:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Edits are also pinned above the composer — the up arrow reads "active"
+   (accent fill) so the toggle's current state is legible without a label. */
+.edits-panel__dock-toggle.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .transcript-activity {
