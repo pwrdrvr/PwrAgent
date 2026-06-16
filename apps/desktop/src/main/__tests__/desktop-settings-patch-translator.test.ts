@@ -124,6 +124,22 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       },
     ]);
   });
+
+  it("writes the Codex default-mode request_user_input flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        codexDefaultModeRequestUserInput: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "codex_default_mode_request_user_input"],
+        value: true,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — image uploads", () => {

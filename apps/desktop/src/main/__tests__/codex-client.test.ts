@@ -5198,6 +5198,35 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("enables default-mode request_user_input in Codex thread/start config", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      defaultModeRequestUserInput: true,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const startPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/start");
+
+    expect(startPayload?.params).toMatchObject({
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
+    });
+
+    await client.close();
+  });
+
   it("starts the first turn on a newly created thread without a resume preflight", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {
@@ -6070,6 +6099,40 @@ describe("CodexAppServerClient", () => {
         },
       ],
     });
+
+    await client.close();
+  });
+
+  it("enables default-mode request_user_input in Codex thread/resume config", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply to the existing thread" }],
+      defaultModeRequestUserInput: true,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const resumePayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/resume");
+    const turnPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+
+    expect(resumePayload?.params).toMatchObject({
+      threadId: "thread-2",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
+    });
+    expect(turnPayload?.params).not.toHaveProperty("config");
 
     await client.close();
   });

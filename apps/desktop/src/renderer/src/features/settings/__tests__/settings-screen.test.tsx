@@ -124,6 +124,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      codexDefaultModeRequestUserInput: {
+        value: false,
+        source: "default",
+      },
       diffCondensation: {
         enabled: { value: false, source: "default" },
         model: { value: "auto", source: "default" },
@@ -604,6 +608,17 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Enable Codex skill questions",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { codexDefaultModeRequestUserInput: true },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(
@@ -826,6 +841,31 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { liveTranscriptEventFiltering: true },
+      });
+    });
+  });
+
+  it("defaults Codex skill questions off for stale snapshots", async () => {
+    const snapshot = createSnapshot() as any;
+    delete snapshot.experimental.codexDefaultModeRequestUserInput;
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="experimental"
+        settings={settings}
+      />,
+    );
+
+    const questionsSwitch = screen.getByRole("switch", {
+      name: "Enable Codex skill questions",
+    });
+    expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(questionsSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { codexDefaultModeRequestUserInput: true },
       });
     });
   });

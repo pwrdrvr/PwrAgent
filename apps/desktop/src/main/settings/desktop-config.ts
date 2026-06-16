@@ -97,6 +97,7 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -626,6 +627,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
+    );
+  }
+  if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
+    set(
+      ["experimental", "codex_default_mode_request_user_input"],
+      patch.experimental.codexDefaultModeRequestUserInput,
     );
   }
   if (patch.experimental?.diffCondensation?.model !== undefined) {
@@ -1213,6 +1220,9 @@ function normalizeDesktopConfig(
       ),
       liveTranscriptEventFiltering: readBoolean(
         experimental?.live_transcript_event_filtering,
+      ),
+      codexDefaultModeRequestUserInput: readBoolean(
+        experimental?.codex_default_mode_request_user_input,
       ),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),

@@ -31,6 +31,11 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   source: "default" as const,
 };
 
+const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_AGENT_CORE_GROK = {
   value: false,
   source: "default" as const,
@@ -42,12 +47,18 @@ export function ExperimentalSettings(props: {
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
+  onCodexDefaultModeRequestUserInputChange: (
+    enabled: boolean,
+  ) => Promise<void>;
   onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+  const codexDefaultModeRequestUserInput =
+    props.snapshot.experimental.codexDefaultModeRequestUserInput ??
+    DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
   const agentCoreGrok =
     props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
@@ -126,6 +137,32 @@ export function ExperimentalSettings(props: {
                   </button>
                 ) : null}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Codex Skill Questions"
+        description="Allow Codex skills to pause ordinary turns for structured questions when the installed Codex build supports default-mode request_user_input."
+        chip={codexDefaultModeRequestUserInput.value ? "On" : "Off"}
+        chipKind={codexDefaultModeRequestUserInput.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable Codex skill questions"
+            sub="When on, PwrAgent enables Codex's default-mode request_user_input feature for Codex threads."
+            source={sourceBadge(codexDefaultModeRequestUserInput)}
+            control={
+              <SettingsSwitch
+                checked={codexDefaultModeRequestUserInput.value}
+                disabled={props.saving}
+                label="Enable Codex skill questions"
+                onChange={(enabled) => {
+                  void props.onCodexDefaultModeRequestUserInputChange(enabled);
+                }}
+              />
             }
           />
         </div>
