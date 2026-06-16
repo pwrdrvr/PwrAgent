@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
+import { tildifyPath } from "../../lib/tildify-path";
 
 /**
  * Project-directory picker for the new-thread composer (issue #223).
@@ -46,11 +47,11 @@ export type ProjectPickerProps = {
 const RECENTS_LIMIT = 10;
 
 function formatLabel(directory: NavigationDirectorySummary): string {
-  return directory.label || directory.path || directory.key;
+  return directory.label || (directory.path ? tildifyPath(directory.path) : directory.key);
 }
 
 function formatPath(directory: NavigationDirectorySummary): string {
-  return directory.path ?? "—";
+  return directory.path ? tildifyPath(directory.path) : "—";
 }
 
 function isPickable(directory: NavigationDirectorySummary): boolean {

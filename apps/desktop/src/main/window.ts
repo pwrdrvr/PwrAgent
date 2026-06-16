@@ -7,6 +7,7 @@ import {
   type ContextMenuParams,
   type MenuItemConstructorOptions,
 } from "electron";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
@@ -362,6 +363,9 @@ export function createMainWindow(options?: {
       additionalArguments: [
         ...themedWindowAdditionalArguments(appearance),
         ...navigationPreferencesAdditionalArguments(navigationPreferences),
+        // Surface the OS home directory so the renderer can collapse long
+        // absolute paths to `~` (the sandboxed preload can't read it itself).
+        `--pwragent-home-dir=${JSON.stringify(homedir())}`,
       ],
     }
   });
