@@ -56,6 +56,56 @@ describe("buildPendingRequestResponse", () => {
     });
   });
 
+  it("keeps legacy option labels while submitting normalized decisions", () => {
+    const request = createRequest({
+      method: "turn/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        options: ["Approve Once", "Cancel"],
+      },
+    });
+
+    const actions = buildPendingRequestActions(request);
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        label: "Approve Once",
+        response: { decision: "accept" },
+      }),
+      expect.objectContaining({
+        label: "Cancel",
+        response: { decision: "cancel" },
+      }),
+    ]);
+    expect(buildPendingRequestResponse(request, actions[0]!)).toEqual({
+      decision: "accept",
+    });
+  });
+
+  it("includes the advertised command approval replies in fallback actions", () => {
+    const request = createRequest();
+
+    expect(buildPendingRequestActions(request)).toEqual([
+      expect.objectContaining({
+        decision: "accept",
+        fallbackText: "1",
+      }),
+      expect.objectContaining({
+        decision: "accept_for_session",
+        fallbackText: "2",
+      }),
+      expect.objectContaining({
+        decision: "decline",
+        fallbackText: "3",
+      }),
+      expect.objectContaining({
+        decision: "cancel",
+        fallbackText: "4",
+      }),
+    ]);
+  });
+
   it("reads structured decision descriptors", () => {
     const request = createRequest({
       params: {
@@ -102,6 +152,52 @@ describe("buildPendingRequestResponse", () => {
     ]);
     expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
       decision: structuredDecision,
+    });
+  });
+
+  it("assigns unique ids to structured amendment decisions", () => {
+    const firstPrefix = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "test"],
+      },
+    };
+    const secondPrefix = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "lint"],
+      },
+    };
+    const firstHost = {
+      applyNetworkPolicyAmendment: {
+        network_policy_amendment: {
+          host: "api.example.com",
+          action: "allow",
+        },
+      },
+    };
+    const secondHost = {
+      applyNetworkPolicyAmendment: {
+        network_policy_amendment: {
+          host: "cdn.example.com",
+          action: "allow",
+        },
+      },
+    };
+    const request = createRequest({
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        availableDecisions: [firstPrefix, secondPrefix, firstHost, secondHost],
+      },
+    });
+
+    const actions = buildPendingRequestActions(request);
+
+    expect(new Set(actions.map((action) => action.id)).size).toBe(actions.length);
+    expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
+      decision: secondPrefix,
+    });
+    expect(buildPendingRequestResponse(request, actions[3]!)).toEqual({
+      decision: secondHost,
     });
   });
 

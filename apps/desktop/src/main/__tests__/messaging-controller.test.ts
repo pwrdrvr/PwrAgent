@@ -9777,6 +9777,78 @@ describe("MessagingController", () => {
     });
   });
 
+  it("submits fallback command approvals for session from advertised text replies", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-fallback",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-fallback",
+      response: {
+        decision: "accept_for_session",
+      },
+    });
+  });
+
+  it("submits normalized decisions for legacy display-string options", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "turn/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-options",
+        prompt: "Run tests?",
+        options: ["Approve Once", "Cancel"],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-options",
+      response: {
+        decision: "accept",
+      },
+    });
+  });
+
   it("resumes typing after submitting an approval response for the waiting turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -9932,7 +10004,7 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment" }),
+      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -9942,6 +10014,54 @@ describe("MessagingController", () => {
       requestId: "approval-prefix",
       response: {
         decision: structuredDecision,
+      },
+    });
+  });
+
+  it("submits the selected structured approval amendment when ids would otherwise collide", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    const firstDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "test"],
+      },
+    };
+    const secondDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "lint"],
+      },
+    };
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-prefix",
+        prompt: "Run tests?",
+        command: "pnpm test",
+        availableDecisions: [firstDecision, secondDecision, "cancel"],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-prefix",
+      response: {
+        decision: secondDecision,
       },
     });
   });

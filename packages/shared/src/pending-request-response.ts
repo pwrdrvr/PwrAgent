@@ -118,7 +118,7 @@ function actionFromEntry(
     return actionFromDecisionString(
       request,
       entry,
-      entry,
+      preserveStringLabel ? legacyOptionResponseDecision(entry) : entry,
       index,
       preserveStringLabel ? entry : undefined,
     );
@@ -136,7 +136,7 @@ function actionFromEntry(
     return buildAction({
       decision: "accept_with_execpolicy_amendment",
       fallbackText: String(index + 1),
-      id: "approval:accept_with_execpolicy_amendment",
+      id: `approval:accept_with_execpolicy_amendment:${index}`,
       label: label ?? execpolicyLabel(execpolicyPayload),
       responseDecision: entry,
       style: "primary",
@@ -155,7 +155,7 @@ function actionFromEntry(
     return buildAction({
       decision: "apply_network_policy_amendment",
       fallbackText: String(index + 1),
-      id: `approval:apply_network_policy_amendment:${action ?? index}`,
+      id: `approval:apply_network_policy_amendment:${action ?? "rule"}:${index}`,
       label: label ?? networkPolicyLabel(networkPayload),
       responseDecision: entry,
       style: action?.toLowerCase() === "deny" ? "danger" : "primary",
@@ -208,8 +208,24 @@ function defaultPendingRequestActions(
         style: "primary",
       }),
       buildAction({
-        decision: "cancel",
+        decision: "accept_for_session",
         fallbackText: "2",
+        id: "approval:accept_for_session",
+        label: "Approve for Session",
+        responseDecision: "accept_for_session",
+        style: "secondary",
+      }),
+      buildAction({
+        decision: "decline",
+        fallbackText: "3",
+        id: "approval:decline",
+        label: "Decline",
+        responseDecision: "decline",
+        style: "danger",
+      }),
+      buildAction({
+        decision: "cancel",
+        fallbackText: "4",
         id: "approval:cancel",
         label: "Cancel Turn",
         responseDecision: "cancel",
@@ -340,6 +356,10 @@ function normalizeDecision(
     return "cancel";
   }
   return undefined;
+}
+
+function legacyOptionResponseDecision(rawDecision: string): string {
+  return normalizeDecision(rawDecision) ?? rawDecision;
 }
 
 function defaultLabel(

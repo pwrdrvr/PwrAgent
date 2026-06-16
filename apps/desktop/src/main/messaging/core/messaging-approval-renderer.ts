@@ -25,6 +25,7 @@ export function buildApprovalIntent(params: {
     buildDecisions(params.request),
     params.capabilityProfile,
   );
+  const replyInstruction = approvalReplyInstruction(decisions);
 
   return {
     id: params.id,
@@ -37,11 +38,11 @@ export function buildApprovalIntent(params: {
         ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
         : undefined,
       fileContext ? ["Context:", fileContext].join("\n") : undefined,
-      "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+      replyInstruction.body,
     ]
       .filter((part): part is string => Boolean(part))
       .join("\n\n"),
-    fallbackText: "Reply yes, yes for this session, no, cancel, or a choice number.",
+    fallbackText: replyInstruction.fallbackText,
     decisions,
   };
 }
@@ -73,6 +74,53 @@ function messagingDecisionFromPendingAction(
   action: PendingRequestAction,
 ): MessagingApprovalDecision {
   return action.decision;
+}
+
+function approvalReplyInstruction(
+  decisions: MessagingApprovalIntent["decisions"],
+): { body: string; fallbackText: string } {
+  const examples = new Set<string>();
+  for (const decision of decisions) {
+    if (decision.fallbackText) {
+      examples.add(decision.fallbackText);
+    }
+  }
+  if (decisions.some((decision) => decision.decision === "accept")) {
+    examples.add("yes");
+  }
+  if (decisions.some((decision) => decision.decision === "accept_for_session")) {
+    examples.add("yes for this session");
+  }
+  if (
+    decisions.some(
+      (decision) => decision.decision === "accept_with_execpolicy_amendment",
+    )
+  ) {
+    examples.add("approve and remember");
+  }
+  if (decisions.some((decision) => decision.decision === "decline")) {
+    examples.add("no");
+  }
+  if (decisions.some((decision) => decision.decision === "cancel")) {
+    examples.add("cancel");
+  }
+
+  if (!examples.size) {
+    return {
+      body: "Use a supported provider action to respond.",
+      fallbackText: "Use a supported provider action to respond.",
+    };
+  }
+
+  const quotedExamples = Array.from(examples, (example) => `"${example}"`);
+  const list =
+    quotedExamples.length === 1
+      ? quotedExamples[0]!
+      : `${quotedExamples.slice(0, -1).join(", ")}, or ${quotedExamples.at(-1)}`;
+  return {
+    body: `Reply with ${list}, or use a button.`,
+    fallbackText: `Reply with ${Array.from(examples).join(", ")}, or use a button.`,
+  };
 }
 
 function extractCommand(
