@@ -8,6 +8,7 @@ const xtermState = vi.hoisted(() => ({
   instances: [] as Array<{
     cols: number;
     rows: number;
+    options: unknown;
     focus: ReturnType<typeof vi.fn>;
     handlers: Array<(data: string) => void>;
     emitData: (data: string) => void;
@@ -21,7 +22,7 @@ vi.mock("@xterm/xterm", () => ({
     focus = vi.fn();
     handlers: Array<(data: string) => void> = [];
 
-    constructor() {
+    constructor(public options: unknown) {
       xtermState.instances.push(this);
     }
 
@@ -67,6 +68,84 @@ describe("IntegratedTerminal", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    document.documentElement.removeAttribute("style");
+  });
+
+  it("passes concrete terminal palette colors to xterm", async () => {
+    const terminalTokens = {
+      "--font-mono": "IBM Plex Mono",
+      "--terminal-bg": "#ffffff",
+      "--terminal-fg": "#333333",
+      "--terminal-cursor": "#d96d00",
+      "--terminal-cursor-accent": "#ffffff",
+      "--terminal-ansi-black": "#000000",
+      "--terminal-ansi-red": "#cd3131",
+      "--terminal-ansi-green": "#107c10",
+      "--terminal-ansi-yellow": "#949800",
+      "--terminal-ansi-blue": "#0451a5",
+      "--terminal-ansi-magenta": "#bc05bc",
+      "--terminal-ansi-cyan": "#0598bc",
+      "--terminal-ansi-white": "#555555",
+      "--terminal-ansi-bright-black": "#666666",
+      "--terminal-ansi-bright-red": "#cd3131",
+      "--terminal-ansi-bright-green": "#14ce14",
+      "--terminal-ansi-bright-yellow": "#b5ba00",
+      "--terminal-ansi-bright-blue": "#0451a5",
+      "--terminal-ansi-bright-magenta": "#bc05bc",
+      "--terminal-ansi-bright-cyan": "#0598bc",
+      "--terminal-ansi-bright-white": "#a5a5a5",
+      "--accent": "#c45200",
+    };
+    for (const [token, value] of Object.entries(terminalTokens)) {
+      document.documentElement.style.setProperty(token, value);
+    }
+
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+          writeIntegratedTerminal: vi.fn(async () => undefined),
+          resizeIntegratedTerminal: vi.fn(async () => undefined),
+          onIntegratedTerminalOutput: vi.fn(() => () => undefined),
+          onIntegratedTerminalExit: vi.fn(() => () => undefined),
+          onIntegratedTerminalError: vi.fn(() => () => undefined),
+        }}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={260}
+        onHeightChange={() => undefined}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+
+    const options = xtermState.instances[0]!.options as {
+      theme: Record<string, string>;
+    };
+    expect(options.theme).toMatchObject({
+      background: "#ffffff",
+      foreground: "#333333",
+      cursor: "#d96d00",
+      cursorAccent: "#ffffff",
+      selectionBackground: "#c45200",
+      black: "#000000",
+      red: "#cd3131",
+      green: "#107c10",
+      yellow: "#949800",
+      blue: "#0451a5",
+      magenta: "#bc05bc",
+      cyan: "#0598bc",
+      white: "#555555",
+      brightBlack: "#666666",
+      brightWhite: "#a5a5a5",
+    });
   });
 
   it("buffers user input until the pty session attaches", async () => {

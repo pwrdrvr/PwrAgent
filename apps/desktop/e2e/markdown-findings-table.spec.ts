@@ -13,7 +13,10 @@ test("renders a wide assistant markdown findings table without crushing the colu
     ),
     windowSize: {
       width: 1440,
-      height: 900,
+      // This spec validates wide transcript/table layout; height is not part
+      // of the assertion. Keep it below Linux CI's observed 873px content cap
+      // so the shared launcher can still assert the requested viewport exactly.
+      height: 860,
     },
     // This spec asserts on the full-width transcript layout; unpin the
     // (default pinned-open) context rail so it doesn't narrow the assistant

@@ -38,6 +38,28 @@ The desktop renderer centralizes theme values in [apps/desktop/src/renderer/src/
 --text-secondary: #b8b0a5;
 --text-muted: #8c857a;
 
+--terminal-bg: #000000;
+--terminal-fg: #cccccc;
+--terminal-cursor: #ffb35c;
+--terminal-cursor-accent: #160a00;
+--terminal-ansi-black: #000000;
+--terminal-ansi-red: #cd3131;
+--terminal-ansi-green: #0dbc79;
+--terminal-ansi-yellow: #e5e510;
+--terminal-ansi-blue: #2472c8;
+--terminal-ansi-magenta: #bc3fbc;
+--terminal-ansi-cyan: #11a8cd;
+--terminal-ansi-white: #e5e5e5;
+--terminal-ansi-bright-black: #666666;
+--terminal-ansi-bright-red: #f14c4c;
+--terminal-ansi-bright-green: #23d18b;
+--terminal-ansi-bright-yellow: #f5f543;
+--terminal-ansi-bright-blue: #3b8eea;
+--terminal-ansi-bright-magenta: #d670d6;
+--terminal-ansi-bright-cyan: #29b8db;
+--terminal-ansi-bright-white: #e5e5e5;
+--terminal-scrollbar-thumb: color-mix(in srgb, var(--terminal-fg) 34%, transparent);
+
 --accent: #ff8a1f;
 --accent-strong: #ffa33d;
 --accent-bright: #ffb35c;
@@ -99,6 +121,36 @@ the base is enough to flip every derived alpha.
 | `--text-secondary` | `#b8b0a5` | `#524a40` |
 | `--text-muted` | `#8c857a` | `#807870` |
 | `--text-subtle` | `rgba(247, 243, 235, 0.42)` | `rgba(26, 22, 18, 0.42)` |
+
+#### Integrated Terminal
+
+The integrated terminal has its own canvas and ANSI tokens. The ANSI values
+mirror VS Code's light/dark defaults so common shell output remains readable
+when the app theme changes.
+
+| Token | Dark | Light |
+|---|---|---|
+| `--terminal-bg` | `#000000` | `#ffffff` |
+| `--terminal-fg` | `#cccccc` | `#333333` |
+| `--terminal-cursor` | `#ffb35c` | `#d96d00` |
+| `--terminal-cursor-accent` | `#160a00` | `#ffffff` |
+| `--terminal-ansi-black` | `#000000` | `#000000` |
+| `--terminal-ansi-red` | `#cd3131` | `#cd3131` |
+| `--terminal-ansi-green` | `#0dbc79` | `#107c10` |
+| `--terminal-ansi-yellow` | `#e5e510` | `#949800` |
+| `--terminal-ansi-blue` | `#2472c8` | `#0451a5` |
+| `--terminal-ansi-magenta` | `#bc3fbc` | `#bc05bc` |
+| `--terminal-ansi-cyan` | `#11a8cd` | `#0598bc` |
+| `--terminal-ansi-white` | `#e5e5e5` | `#555555` |
+| `--terminal-ansi-bright-black` | `#666666` | `#666666` |
+| `--terminal-ansi-bright-red` | `#f14c4c` | `#cd3131` |
+| `--terminal-ansi-bright-green` | `#23d18b` | `#14ce14` |
+| `--terminal-ansi-bright-yellow` | `#f5f543` | `#b5ba00` |
+| `--terminal-ansi-bright-blue` | `#3b8eea` | `#0451a5` |
+| `--terminal-ansi-bright-magenta` | `#d670d6` | `#bc05bc` |
+| `--terminal-ansi-bright-cyan` | `#29b8db` | `#0598bc` |
+| `--terminal-ansi-bright-white` | `#e5e5e5` | `#a5a5a5` |
+| `--terminal-scrollbar-thumb` | derived (34% of `--terminal-fg`) | derived |
 
 #### Accent (Tangerine Terminal)
 
