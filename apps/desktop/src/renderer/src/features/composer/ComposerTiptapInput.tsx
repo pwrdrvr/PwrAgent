@@ -332,6 +332,125 @@ function buildMarkdownListItem(text: string): JSONContent {
   };
 }
 
+function getHtmlInlineMark(tagName: string): { type: string } | undefined {
+  if (tagName === "strong" || tagName === "b") {
+    return { type: "bold" };
+  }
+  if (tagName === "em" || tagName === "i") {
+    return { type: "italic" };
+  }
+  if (tagName === "s" || tagName === "strike" || tagName === "del") {
+    return { type: "strike" };
+  }
+  if (tagName === "code") {
+    return { type: "code" };
+  }
+  return undefined;
+}
+
+function parseHtmlInlineContent(
+  node: Node,
+  inheritedMarks: { type: string }[] = [],
+): JSONContent[] {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? "";
+    if (!text) {
+      return [];
+    }
+    return [
+      {
+        type: "text",
+        text,
+        ...(inheritedMarks.length > 0 ? { marks: inheritedMarks } : {}),
+      },
+    ];
+  }
+
+  if (!(node instanceof HTMLElement)) {
+    return [];
+  }
+
+  if (node.tagName.toLowerCase() === "br") {
+    return [{ type: "hardBreak" }];
+  }
+
+  const mark = getHtmlInlineMark(node.tagName.toLowerCase());
+  const nextMarks = mark ? [...inheritedMarks, mark] : inheritedMarks;
+  return Array.from(node.childNodes).flatMap((child) =>
+    parseHtmlInlineContent(child, nextMarks),
+  );
+}
+
+function parseHtmlListItemContent(listItem: HTMLElement): JSONContent[] {
+  const blockChildren = Array.from(listItem.children).filter((child) => {
+    const tagName = child.tagName.toLowerCase();
+    return tagName !== "ul" && tagName !== "ol";
+  });
+  const inlineNodes =
+    blockChildren.length > 0
+      ? blockChildren.flatMap((child) => parseHtmlInlineContent(child))
+      : Array.from(listItem.childNodes).flatMap((child) =>
+          child instanceof HTMLElement &&
+          ["ul", "ol"].includes(child.tagName.toLowerCase())
+            ? []
+            : parseHtmlInlineContent(child),
+        );
+
+  return [
+    {
+      type: "paragraph",
+      content: inlineNodes.length > 0 ? inlineNodes : undefined,
+    },
+  ];
+}
+
+function parseClipboardHtmlStructuredContent(
+  event: ClipboardEvent<HTMLDivElement>,
+): JSONContent[] {
+  const html = event.clipboardData?.getData("text/html") ?? "";
+  if (!html.trim()) {
+    return [];
+  }
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const listElements = Array.from(doc.body.querySelectorAll("ul, ol"))
+    .filter((child): child is HTMLElement => child instanceof HTMLElement)
+    .filter((child) => !child.parentElement?.closest("li"));
+
+  return listElements.flatMap((child) => {
+    const tagName = child.tagName.toLowerCase();
+    const items = Array.from(child.children)
+      .filter((item): item is HTMLElement => item instanceof HTMLElement)
+      .filter((item) => item.tagName.toLowerCase() === "li")
+      .map((item) => ({
+        type: "listItem",
+        content: parseHtmlListItemContent(item),
+      }));
+
+    if (items.length === 0) {
+      return [];
+    }
+
+    if (tagName === "ol") {
+      const start = Number.parseInt(child.getAttribute("start") ?? "1", 10);
+      return [
+        {
+          type: "orderedList",
+          attrs: { start: Number.isFinite(start) ? start : 1 },
+          content: items,
+        },
+      ];
+    }
+
+    return [
+      {
+        type: "bulletList",
+        content: items,
+      },
+    ];
+  });
+}
+
 function buildTiptapContent(
   value: string,
   skillTokens: ComposerSkillToken[],
@@ -831,6 +950,13 @@ function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
   return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
 }
 
+function clipboardHtmlHasStructuredBlocks(
+  event: ClipboardEvent<HTMLDivElement>,
+): boolean {
+  const html = event.clipboardData?.getData("text/html") ?? "";
+  return /<(?:pre|ul|ol|blockquote|h[1-6])[\s>]/i.test(html);
+}
+
 function selectionIsInsideNode(editor: TiptapEditor, nodeTypeName: string): boolean {
   const { $from, $to } = editor.state.selection;
   const isInside = ($pos: typeof $from): boolean => {
@@ -865,6 +991,13 @@ function pastePlainTextIntoActiveBlock(
   }
 
   if (selectionIsInsideNode(editor, "blockquote")) {
+    const structuredHtmlContent = parseClipboardHtmlStructuredContent(event);
+    if (structuredHtmlContent.length > 0) {
+      event.preventDefault();
+      return editor.commands.insertContent(structuredHtmlContent, {
+        updateSelection: true,
+      });
+    }
     event.preventDefault();
     return editor.commands.insertContent(splitTextContent(text), {
       updateSelection: true,
@@ -906,8 +1039,7 @@ function pastePlainMarkdownText(
   // this targets — one rendered message copied with both flavors — and is not
   // meant to be a general markdown/HTML merge. Note <p> alone does NOT count:
   // bare paragraph HTML around a text/plain fence must still reach the parser.
-  const html = event.clipboardData?.getData("text/html") ?? "";
-  if (html.trim().length > 0 && /<(?:pre|ul|ol|blockquote|h[1-6])[\s>]/i.test(html)) {
+  if (clipboardHtmlHasStructuredBlocks(event)) {
     return false;
   }
 

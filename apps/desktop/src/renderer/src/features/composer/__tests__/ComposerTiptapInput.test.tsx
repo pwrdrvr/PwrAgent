@@ -260,6 +260,84 @@ describe("ComposerTiptapInput", () => {
     ).toBe(false);
   });
 
+  it("preserves rich web-page lists when pasting inside a blockquote", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Release notes:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Release notes:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Release notes:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return [
+              "<ul>",
+              "<li>Improved composer paste handling.</li>",
+              "<li>Added Escape-key handling.</li>",
+              "</ul>",
+            ].join("");
+          }
+          if (type === "text/plain") {
+            return [
+              "Improved composer paste handling.",
+              "Added Escape-key handling.",
+            ].join("\n");
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Release notes:",
+          "> ",
+          "> - Improved composer paste handling.",
+          "> - Added Escape-key handling.",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+
+    const quoteListItems = [
+      ...container.querySelectorAll("blockquote ul > li"),
+    ];
+    expect(quoteListItems).toHaveLength(2);
+    expect(quoteListItems[0]).toHaveTextContent(
+      "Improved composer paste handling.",
+    );
+    expect(quoteListItems[1]).toHaveTextContent("Added Escape-key handling.");
+  });
+
   it("preserves paragraph separators when pasting a handoff prefix without a code block", async () => {
     const { onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
