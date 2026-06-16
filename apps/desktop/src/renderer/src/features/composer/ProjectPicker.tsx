@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
-import { FolderIcon } from "../../icons";
+import { FolderIcon, SearchIcon } from "../../icons";
+import { tildifyPath } from "../../lib/tildify-path";
 
 /**
  * Project-directory picker for the new-thread composer (issue #223).
@@ -46,11 +47,11 @@ export type ProjectPickerProps = {
 const RECENTS_LIMIT = 10;
 
 function formatLabel(directory: NavigationDirectorySummary): string {
-  return directory.label || directory.path || directory.key;
+  return directory.label || (directory.path ? tildifyPath(directory.path) : directory.key);
 }
 
 function formatPath(directory: NavigationDirectorySummary): string {
-  return directory.path ?? "—";
+  return directory.path ? tildifyPath(directory.path) : "—";
 }
 
 function isPickable(directory: NavigationDirectorySummary): boolean {
@@ -142,10 +143,13 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
       {open ? (
         <div className="project-picker__pop" role="dialog" aria-label="Project picker">
           <div className="project-picker__search">
+            <span aria-hidden="true" className="project-picker__search-icon">
+              <SearchIcon size={13} />
+            </span>
             <input
               type="text"
               autoFocus
-              placeholder="Search directories"
+              placeholder="Find a directory"
               className="project-picker__search-input"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -164,8 +168,11 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
                 props.onSelectNoDirectory?.();
               }}
             >
+              <span aria-hidden="true" className="project-picker__row-check">
+                {isEmpty ? "✓" : ""}
+              </span>
               <span className="project-picker__no-directory-icon" aria-hidden="true">
-                <FolderIcon size={11} />
+                <FolderIcon size={13} />
                 <span className="project-picker__no-directory-slash" />
               </span>
               <span className="project-picker__no-directory-text">
@@ -203,6 +210,12 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
                         props.onSelect(directory);
                       }}
                     >
+                      <span aria-hidden="true" className="project-picker__row-check">
+                        {active ? "✓" : ""}
+                      </span>
+                      <span aria-hidden="true" className="project-picker__row-icon">
+                        <FolderIcon size={13} />
+                      </span>
                       <span className="project-picker__row-name">
                         {formatLabel(directory)}
                       </span>
@@ -227,6 +240,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               props.onPickFromDisk();
             }}
           >
+            <span aria-hidden="true" className="project-picker__row-check" />
             <span aria-hidden="true" className="project-picker__plus">
               +
             </span>

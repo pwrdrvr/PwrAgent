@@ -559,6 +559,10 @@ export class DesktopSettingsService {
           config.experimental?.threadPricingSummary,
           false,
         ),
+        codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
+          config.experimental?.codexDefaultModeRequestUserInput,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
@@ -1037,6 +1041,13 @@ export class DesktopSettingsService {
   resolveNotificationsEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.notificationsEnabled,
+      false,
+    ).value;
+  }
+
+  resolveCodexDefaultModeRequestUserInput(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.codexDefaultModeRequestUserInput,
       false,
     ).value;
   }

@@ -1,12 +1,16 @@
 import type {
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingQuestionnaireIntent,
   MessagingSurfaceIntent,
 } from "../index";
 import {
   MESSAGING_SURFACE_INTENT_KINDS,
   extractMessagingPairingToken,
+  formatMessagingQuestionnaireText,
   looksLikePairingAttempt,
+  messagingQuestionnaireActions,
+  normalizeMessagingQuestionnaireIntent,
 } from "../index";
 
 type FakeProvider = {
@@ -133,6 +137,87 @@ describe("messaging interface package", () => {
     expect(extractMessagingPairingToken(`pair ${token} ${largePayload}`)).toBe(token);
     expect(extractMessagingPairingToken(`${largePayload} pair ${token}`)).toBeUndefined();
     expect(extractMessagingPairingToken(`pair ${largePayload}`)).toBeUndefined();
+  });
+
+  it("normalizes legacy questionnaire intents before deriving actions", () => {
+    const legacyIntent = {
+      id: "intent-questionnaire-legacy",
+      kind: "questionnaire",
+      createdAt: 1000,
+      currentIndex: 0,
+      questions: [
+        {
+          id: "q1",
+          question: "First?",
+          options: [
+            {
+              id: "q1:option:1",
+              label: "First option",
+            },
+          ],
+        },
+      ],
+    } as unknown as MessagingQuestionnaireIntent;
+
+    expect(normalizeMessagingQuestionnaireIntent(legacyIntent)).toMatchObject({
+      answers: [null],
+      currentIndex: 0,
+      phase: "answering",
+    });
+    expect(messagingQuestionnaireActions(legacyIntent)).toEqual([
+      expect.objectContaining({
+        id: "q1:option:1",
+        label: "First option",
+      }),
+    ]);
+  });
+
+  it("masks secret questionnaire answers in provider-visible text", () => {
+    const intent = {
+      id: "intent-questionnaire-secret",
+      kind: "questionnaire",
+      createdAt: 1000,
+      currentIndex: 0,
+      phase: "review",
+      answers: [
+        {
+          kind: "custom",
+          value: "sk-live-secret",
+        },
+        {
+          kind: "custom",
+          value: "normal answer",
+        },
+      ],
+      questions: [
+        {
+          id: "token",
+          question: "Token?",
+          options: [],
+          allowFreeform: true,
+          secret: true,
+        },
+        {
+          id: "note",
+          question: "Note?",
+          options: [],
+          allowFreeform: true,
+        },
+      ],
+    } satisfies MessagingQuestionnaireIntent;
+
+    const reviewText = formatMessagingQuestionnaireText(intent);
+    expect(reviewText).toContain("Secret answer provided");
+    expect(reviewText).toContain("Custom: normal answer");
+    expect(reviewText).not.toContain("sk-live-secret");
+
+    const answeringText = formatMessagingQuestionnaireText({
+      ...intent,
+      currentIndex: 0,
+      phase: "answering",
+    });
+    expect(answeringText).toContain("Current answer: Secret answer provided");
+    expect(answeringText).not.toContain("sk-live-secret");
   });
 
   it("does not throw on fuzzed pairing-like payloads", () => {

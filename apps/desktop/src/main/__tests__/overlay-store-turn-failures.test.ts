@@ -1,14 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnFailure } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
 
 function buildFailure(
   overrides: Partial<ThreadTurnFailure>,
@@ -23,14 +24,12 @@ function buildFailure(
 }
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-turn-failures-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("SqliteOverlayStore — turn failure log", () => {
@@ -96,29 +95,40 @@ describe("SqliteOverlayStore — turn failure log", () => {
   });
 
   it("persists the failure log across a reopen", async () => {
-    await store.appendTurnFailure({
-      backend: "codex",
-      threadId: "thread-1",
-      failure: buildFailure({ id: "entry-1", turnId: "turn-1" }),
-    });
-
-    const dbPath = path.join(tempDir, "state.db");
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-turn-failures-test-",
+    );
     stateDb.close();
-
-    const reopened = StateDb.open(dbPath);
-    const reopenedStore = new SqliteOverlayStore(reopened);
-    const overlay = await reopenedStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: "thread-1",
-    });
-    expect(overlay?.turnFailureLog).toEqual([
-      buildFailure({ id: "entry-1", turnId: "turn-1" }),
-    ]);
-    reopened.close();
-
-    // Re-open the original handle so afterEach's close doesn't double-close.
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
+
+    try {
+      await store.appendTurnFailure({
+        backend: "codex",
+        threadId: "thread-1",
+        failure: buildFailure({ id: "entry-1", turnId: "turn-1" }),
+      });
+      stateDb.close();
+
+      const reopened = StateDb.open(dbPath);
+      const reopenedStore = new SqliteOverlayStore(reopened);
+      try {
+        const overlay = await reopenedStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        expect(overlay?.turnFailureLog).toEqual([
+          buildFailure({ id: "entry-1", turnId: "turn-1" }),
+        ]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
   });
 
   it("scopes the log per (backend, threadId)", async () => {

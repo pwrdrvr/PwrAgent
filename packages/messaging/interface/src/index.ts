@@ -643,6 +643,19 @@ export type MessagingQuestionnaireQuestion = {
   secret?: boolean;
 };
 
+export type MessagingQuestionnaireAnswer =
+  | {
+      kind: "option";
+      optionId: string;
+      value: string;
+    }
+  | {
+      kind: "custom";
+      value: string;
+    };
+
+export type MessagingQuestionnairePhase = "answering" | "review" | "submitted";
+
 export type MessagingApprovalDecision =
   | "accept"
   | "accept_for_session"
@@ -766,9 +779,189 @@ export type MessagingMultiSelectIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
   kind: "questionnaire";
+  answers: Array<MessagingQuestionnaireAnswer | null>;
   currentIndex: number;
+  phase: MessagingQuestionnairePhase;
   questions: MessagingQuestionnaireQuestion[];
 };
+
+export function normalizeMessagingQuestionnaireIntent(
+  intent: MessagingQuestionnaireIntent,
+): MessagingQuestionnaireIntent {
+  const questions = Array.isArray(intent.questions) ? intent.questions : [];
+  const rawAnswers = Array.isArray(intent.answers) ? intent.answers : [];
+  const answers = questions.map((_, index) => rawAnswers[index] ?? null);
+  const currentIndex =
+    Number.isInteger(intent.currentIndex) && intent.currentIndex >= 0
+      ? Math.min(intent.currentIndex, Math.max(0, questions.length - 1))
+      : 0;
+  const phase = isMessagingQuestionnairePhase(intent.phase)
+    ? intent.phase
+    : "answering";
+
+  return {
+    ...intent,
+    answers,
+    currentIndex,
+    phase,
+    questions,
+  };
+}
+
+export function messagingQuestionnaireActions(
+  intent: MessagingQuestionnaireIntent,
+): MessagingSurfaceAction[] {
+  const normalized = normalizeMessagingQuestionnaireIntent(intent);
+  if (normalized.phase === "submitted") {
+    return [];
+  }
+
+  if (normalized.phase === "review") {
+    return [
+      {
+        id: "questionnaire:back",
+        label: "Back",
+        style: "navigation",
+        fallbackText: "back",
+      },
+      {
+        id: "questionnaire:submit",
+        label: "Submit",
+        style: "primary",
+        fallbackText: "submit",
+      },
+    ];
+  }
+
+  const question = normalized.questions[normalized.currentIndex];
+  const answer = normalized.answers[normalized.currentIndex];
+  const actions: MessagingSurfaceAction[] = (question?.options ?? []).map(
+    (option) => ({
+      ...option,
+      label:
+        answer?.kind === "option" && answer.optionId === option.id
+          ? `Selected: ${option.label}`
+          : option.label,
+    }),
+  );
+
+  if (normalized.currentIndex > 0) {
+    actions.push({
+      id: "questionnaire:back",
+      label: "Back",
+      style: "navigation",
+      fallbackText: "back",
+    });
+  }
+  if (messagingQuestionnaireAnswerComplete(answer)) {
+    const isFinalQuestion = normalized.currentIndex >= normalized.questions.length - 1;
+    actions.push({
+      id: "questionnaire:next",
+      label: isFinalQuestion ? "Review" : "Next",
+      style: isFinalQuestion ? "primary" : "navigation",
+      fallbackText: isFinalQuestion ? "review" : "next",
+    });
+  }
+
+  return actions;
+}
+
+export function messagingQuestionnaireAnswerComplete(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+): boolean {
+  return Boolean(answer?.value.trim());
+}
+
+export function messagingQuestionnaireAnswerDisplay(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+  options: { secret?: boolean } = {},
+): string {
+  if (!answer) {
+    return "";
+  }
+  const value = answer.value.trim();
+  if (!value) {
+    return "";
+  }
+  if (options.secret) {
+    return "Secret answer provided";
+  }
+  return answer.kind === "custom" ? `Custom: ${value}` : value;
+}
+
+export function formatMessagingQuestionnaireText(
+  intent: MessagingQuestionnaireIntent,
+): string {
+  const normalized = normalizeMessagingQuestionnaireIntent(intent);
+  if (normalized.phase === "review" || normalized.phase === "submitted") {
+    const lines = [
+      normalized.phase === "submitted" ? "Submitted answers" : "Review answers",
+      "",
+    ];
+    normalized.questions.forEach((question, index) => {
+      const title = [question.header, question.question]
+        .filter(Boolean)
+        .join(question.header && question.question ? ": " : "");
+      lines.push(`${index + 1}. ${title}`);
+      lines.push(
+        `Answer: ${
+          messagingQuestionnaireAnswerDisplay(normalized.answers[index], {
+            secret: question.secret,
+          }) || "No answer"
+        }`,
+      );
+      if (index < normalized.questions.length - 1) {
+        lines.push("");
+      }
+    });
+    return lines.join("\n");
+  }
+
+  const question =
+    normalized.questions[normalized.currentIndex] ?? normalized.questions[0];
+  if (!question) {
+    return "Input needed.";
+  }
+
+  const lines = [
+    `Question ${normalized.currentIndex + 1} of ${normalized.questions.length}`,
+    "",
+  ];
+  if (question.header) {
+    lines.push(question.header);
+  }
+  lines.push(question.question);
+
+  const answer = normalized.answers[normalized.currentIndex];
+  question.options.forEach((option, index) => {
+    const selected = answer?.kind === "option" && answer.optionId === option.id;
+    lines.push("");
+    lines.push(`${selected ? "[selected] " : ""}${index + 1}. ${option.label}`);
+    if (option.description) {
+      lines.push(`   ${option.description}`);
+    }
+  });
+
+  if (question.allowFreeform) {
+    lines.push("", "Other: reply with a free-form answer.");
+  }
+
+  const currentAnswer = messagingQuestionnaireAnswerDisplay(
+    normalized.answers[normalized.currentIndex],
+    { secret: question.secret },
+  );
+  if (currentAnswer) {
+    lines.push("", `Current answer: ${currentAnswer}`);
+  }
+
+  return lines.join("\n");
+}
+
+function isMessagingQuestionnairePhase(
+  value: unknown,
+): value is MessagingQuestionnairePhase {
+  return value === "answering" || value === "review" || value === "submitted";
+}
 
 export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   kind: "approval";
@@ -1287,13 +1480,10 @@ export type MessagingAttachmentCapabilities = {
 /**
  * Outbound attachment capabilities — what we can deliver to the user.
  *
- * Reserved for forthcoming Plan/Review surface delivery: the agent's plan
- * artifact (and code-review artifact) is intended to ride out as a
- * Markdown file attachment with a truncated inline preview, mirroring the
- * pattern proven in openclaw-app-server (`buildCodexPlanMarkdownPreview` +
- * `formatCodexPlanAttachmentSummary` + `formatCodexPlanAttachmentFallback`).
- * Producers will read `supportsFileUpload` and `maxUploadBytes` to decide
- * between attachment-with-preview and inline-only fallback.
+ * Read by generic artifact producers such as Plan/Review surface delivery:
+ * the agent artifact can ride out as a Markdown file attachment with a
+ * truncated inline preview when the provider supports upload, or as an
+ * inline-only fallback for text-only providers and oversized artifacts.
  *
  * Tracked in: docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md
  */
@@ -1322,8 +1512,8 @@ export type MessagingCapabilityProfile = {
   /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
   /**
-   * Outbound attachment limits — reserved for Plan/Review surface delivery.
-   * See `MessagingOutboundAttachmentCapabilities` for the planned consumer.
+   * Outbound attachment limits — read by Plan/Review artifact producers and
+   * any future generic surfaces that can choose between file upload and text.
    */
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };

@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -95,6 +96,26 @@ export function useViewportTooltip(options: {
   const hide = useCallback((): void => {
     setState(undefined);
   }, []);
+
+  // A hover tooltip is shown on pointerenter/focus, but those handlers give
+  // us no dismissal signal when the window loses focus (cmd-tab away leaves
+  // the pointer "over" the chip, so no `mouseleave` fires) or when the list
+  // scrolls underneath the position:fixed portal (the tooltip detaches from
+  // its target and lingers). Tear it down on either, matching ReactionPicker's
+  // window-level teardown. Keyed on visibility so the measure pass doesn't
+  // resubscribe each render.
+  const visible = state !== undefined;
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    window.addEventListener("blur", hide);
+    window.addEventListener("scroll", hide, { capture: true });
+    return () => {
+      window.removeEventListener("blur", hide);
+      window.removeEventListener("scroll", hide, { capture: true });
+    };
+  }, [visible, hide]);
 
   const tooltipNode =
     state && typeof document !== "undefined"

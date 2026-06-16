@@ -2282,12 +2282,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (fileParts.length === 0) {
       return [];
     }
+    const requiresAllFiles = isArtifactFileDelivery(params.intent);
     const maxBytes =
       this.capabilityProfile.outboundAttachments?.maxUploadBytes ?? Infinity;
     const ids: string[] = [];
     for (const part of fileParts) {
       try {
         if (!part.data && !part.url) {
+          if (requiresAllFiles) {
+            throw new Error(`artifact file ${part.name} has no upload data`);
+          }
           continue;
         }
         const bytes = part.data ?? (await fetchRemoteBytes(part.url!));
@@ -2297,6 +2301,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
             sizeBytes: bytes.byteLength,
             maxBytes,
           });
+          if (requiresAllFiles) {
+            throw new Error(
+              `artifact file ${part.name} exceeds Mattermost upload size cap`,
+            );
+          }
           continue;
         }
         const formData = new FormData();
@@ -2322,7 +2331,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           name: part.name,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (requiresAllFiles) {
+          throw error;
+        }
       }
+    }
+    if (requiresAllFiles && ids.length !== fileParts.length) {
+      throw new Error(
+        `Mattermost uploaded ${ids.length}/${fileParts.length} artifact files`,
+      );
     }
     return ids;
   }
@@ -2524,6 +2541,14 @@ export function summarizeThreadRoot(text: string): string {
   }
   // -1 to leave room for the ellipsis without overshooting `max`.
   return `${single.slice(0, max - 1)}…`;
+}
+
+function isArtifactFileDelivery(intent: MessagingSurfaceIntent): boolean {
+  return (
+    intent.kind === "message" &&
+    "artifactDelivery" in intent &&
+    intent.parts.some((part) => part.type === "file")
+  );
 }
 
 function parseEmbeddedPost(

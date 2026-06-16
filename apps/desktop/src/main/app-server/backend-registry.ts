@@ -413,6 +413,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
@@ -438,6 +439,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
@@ -3497,6 +3499,7 @@ export class DesktopBackendRegistry {
    * `ONBOARDING_CODEX_GATE_ENABLED`.
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
+  private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -3531,6 +3534,7 @@ export class DesktopBackendRegistry {
     threadSearchService?: ThreadSearchService | null;
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
+    resolveCodexDefaultModeRequestUserInput?: () => boolean;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -3573,6 +3577,23 @@ export class DesktopBackendRegistry {
     const settingsService = createsLiveCodexClient
       ? getDesktopSettingsService()
       : undefined;
+    this.resolveCodexDefaultModeRequestUserInputFn =
+      options?.resolveCodexDefaultModeRequestUserInput ??
+      (() => {
+        try {
+          return (
+            settingsService?.resolveCodexDefaultModeRequestUserInput() ?? false
+          );
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve Codex default-mode request_user_input setting",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
+        }
+      });
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -5938,6 +5959,12 @@ export class DesktopBackendRegistry {
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           sandbox: request.sandbox ?? modeSettings.sandbox,
           codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+          ...(backend === "codex"
+            ? {
+                defaultModeRequestUserInput:
+                  this.resolveCodexDefaultModeRequestUserInputFn(),
+              }
+            : {}),
           dynamicTools,
         });
     const startedAt = Date.now();
@@ -6474,6 +6501,8 @@ export class DesktopBackendRegistry {
                 ...(overlay?.codexEnvironmentRuntime
                   ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                   : {}),
+                defaultModeRequestUserInput:
+                  this.resolveCodexDefaultModeRequestUserInputFn(),
                 dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
               });
               activeTurnMode = effectiveMode;

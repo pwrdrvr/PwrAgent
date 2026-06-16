@@ -1,5 +1,7 @@
 import {
+  formatMessagingQuestionnaireText,
   layoutMessagingActionRows,
+  messagingQuestionnaireActions,
   type MessagingActionLayoutPolicy,
   type MessagingCapabilityProfile,
   type MessagingContentPart,
@@ -130,10 +132,8 @@ export function actionsForMattermostIntent(
       return intent.choices;
     case "multi_select":
       return intent.choices;
-    case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return question?.options ?? [];
-    }
+    case "questionnaire":
+      return messagingQuestionnaireActions(intent);
     case "approval":
       return intent.decisions;
     case "confirmation":
@@ -254,13 +254,8 @@ export function textForMattermostIntent(intent: MessagingSurfaceIntent): string 
       return [intent.prompt, intent.fallbackText]
         .filter((value): value is string => Boolean(value))
         .join("\n\n");
-    case "questionnaire": {
-      const question =
-        intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return [question?.header, question?.question]
-        .filter((value): value is string => Boolean(value))
-        .join("\n");
-    }
+    case "questionnaire":
+      return formatMessagingQuestionnaireText(intent);
     case "approval":
       return [intent.title, intent.body].join("\n\n");
     case "confirmation":

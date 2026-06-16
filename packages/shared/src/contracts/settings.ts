@@ -466,6 +466,12 @@ export type DesktopSettingsSnapshot = {
      */
     threadPricingSummary?: DesktopSettingsValue<boolean>;
     /**
+     * Enables Codex's upstream default-mode request_user_input feature for
+     * ordinary turns, allowing skills to pause and ask structured questions
+     * outside Plan mode when the installed Codex build supports it.
+     */
+    codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether we send
      * focused-diff requests to xAI. When enabled, less-relevant diff
      * hunks are hidden via an xAI judgment call. When disabled, every
@@ -687,6 +693,7 @@ export type DesktopSettingsConfigPatch = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
+    codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */

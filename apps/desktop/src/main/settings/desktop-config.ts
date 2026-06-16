@@ -98,6 +98,7 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     threadPricingSummary?: boolean;
+    codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -633,6 +634,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "thread_pricing_summary"],
       patch.experimental.threadPricingSummary,
+    );
+  }
+  if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
+    set(
+      ["experimental", "codex_default_mode_request_user_input"],
+      patch.experimental.codexDefaultModeRequestUserInput,
     );
   }
   if (patch.experimental?.diffCondensation?.model !== undefined) {
@@ -1222,6 +1229,9 @@ function normalizeDesktopConfig(
         experimental?.live_transcript_event_filtering,
       ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
+      codexDefaultModeRequestUserInput: readBoolean(
+        experimental?.codex_default_mode_request_user_input,
+      ),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),

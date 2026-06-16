@@ -30,6 +30,8 @@ export type PendingQuestionnaireAnswer =
       value: string;
     };
 
+export type PendingQuestionnairePhase = "answering" | "review" | "submitted";
+
 export type PendingQuestionnaireState = {
   method: "item/tool/requestUserInput";
   requestId: string;
@@ -38,6 +40,7 @@ export type PendingQuestionnaireState = {
   itemId?: string;
   questions: PendingQuestionnaireQuestion[];
   currentIndex: number;
+  phase: PendingQuestionnairePhase;
   answers: Array<PendingQuestionnaireAnswer | null>;
 };
 
@@ -97,8 +100,16 @@ export function createQuestionnaireState(
     ...(request.params.itemId ? { itemId: request.params.itemId } : {}),
     questions,
     currentIndex: 0,
+    phase: "answering",
     answers: questions.map(() => null),
   };
+}
+
+export function answerQuestionnaireOptionAndAdvance(
+  state: PendingQuestionnaireState,
+  optionKey: string
+): PendingQuestionnaireState {
+  return advanceAfterAnswer(answerQuestionnaireOption(state, optionKey));
 }
 
 export function answerQuestionnaireOption(
@@ -149,6 +160,14 @@ export function goToNextQuestion(
 export function goToPreviousQuestion(
   state: PendingQuestionnaireState
 ): PendingQuestionnaireState {
+  if (state.phase === "review" || state.phase === "submitted") {
+    return {
+      ...state,
+      currentIndex: Math.max(0, state.questions.length - 1),
+      phase: "answering",
+    };
+  }
+
   if (state.currentIndex <= 0) {
     return state;
   }
@@ -156,18 +175,63 @@ export function goToPreviousQuestion(
   return {
     ...state,
     currentIndex: state.currentIndex - 1,
+    phase: "answering",
   };
 }
 
 export function canAdvanceQuestionnaire(state: PendingQuestionnaireState): boolean {
   return (
+    state.phase === "answering" &&
     state.currentIndex < state.questions.length - 1 &&
     isAnswerComplete(state.answers[state.currentIndex])
   );
 }
 
+export function canReviewQuestionnaire(state: PendingQuestionnaireState): boolean {
+  return (
+    state.phase === "answering" &&
+    state.currentIndex === state.questions.length - 1 &&
+    canSubmitQuestionnaire(state)
+  );
+}
+
 export function canSubmitQuestionnaire(state: PendingQuestionnaireState): boolean {
   return state.answers.every(isAnswerComplete);
+}
+
+export function goToQuestionnaireReview(
+  state: PendingQuestionnaireState
+): PendingQuestionnaireState {
+  if (!canSubmitQuestionnaire(state)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    phase: "review",
+  };
+}
+
+export function markQuestionnaireSubmitted(
+  state: PendingQuestionnaireState
+): PendingQuestionnaireState {
+  return {
+    ...state,
+    phase: "submitted",
+  };
+}
+
+export function questionnaireAnswerDisplay(
+  answer: PendingQuestionnaireAnswer | null | undefined
+): string {
+  if (!answer) {
+    return "";
+  }
+  const value = answer.value.trim();
+  if (!value) {
+    return "";
+  }
+  return answer.kind === "text" ? `Custom: ${value}` : value;
 }
 
 export function buildQuestionnaireResponse(
@@ -183,6 +247,20 @@ export function buildQuestionnaireResponse(
       ])
     ),
   };
+}
+
+function advanceAfterAnswer(
+  state: PendingQuestionnaireState
+): PendingQuestionnaireState {
+  if (state.currentIndex < state.questions.length - 1) {
+    return {
+      ...state,
+      currentIndex: state.currentIndex + 1,
+      phase: "answering",
+    };
+  }
+
+  return goToQuestionnaireReview(state);
 }
 
 function answerCurrentQuestion(

@@ -196,7 +196,7 @@ type MessagingCapabilityProfile = {
     supportsMessageEdit: boolean;
   };
   inboundAttachments?: { /* user-upload limits */ };
-  outboundAttachments?: { /* file-delivery limits — see Plan/Review delivery issue */ };
+  outboundAttachments?: { /* file-delivery limits for artifacts and media */ };
 };
 ```
 
@@ -437,5 +437,5 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 - [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the formal contract for new platform adapters
 - [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
 - [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
-- [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — planned consumer of `outboundAttachments` for plan/review surface delivery
+- [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — decision artifact for `outboundAttachments` consumption by plan/review surface delivery
 - [`docs/plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md`](plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md) — the Mattermost adapter implementation plan

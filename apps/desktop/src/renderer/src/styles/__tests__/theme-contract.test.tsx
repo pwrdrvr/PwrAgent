@@ -7,9 +7,19 @@ const cssPath = path.resolve(testDir, "../app.css");
 const css = readFileSync(cssPath, "utf8");
 
 function extractRootTokens(source: string): Record<string, string> {
-  const rootMatch = source.match(/:root\s*\{(?<body>[\s\S]*?)\n\}/);
+  return extractTokensForSelector(source, ":root");
+}
+
+function extractTokensForSelector(
+  source: string,
+  selector: string,
+): Record<string, string> {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rootMatch = source.match(
+    new RegExp(`${escapedSelector}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
+  );
   if (!rootMatch?.groups?.body) {
-    throw new Error("Expected app.css to define a :root token block");
+    throw new Error(`Expected app.css to define a ${selector} token block`);
   }
 
   return Object.fromEntries(
@@ -78,6 +88,7 @@ function contrastRatio(foreground: string, background: string): number {
 
 describe("Tangerine Terminal theme contract", () => {
   const tokens = extractRootTokens(css);
+  const lightTokens = extractTokensForSelector(css, ':root[data-theme="light"]');
 
   it("defines the semantic tokens used by the renderer theme", () => {
     expect(tokens).toMatchObject({
@@ -100,6 +111,28 @@ describe("Tangerine Terminal theme contract", () => {
       "info-text": "#9fc8ff",
       "success-soft": "rgba(74, 148, 92, 0.18)",
       "success-text": "#9ce5b3",
+      "terminal-ansi-black": "#000000",
+      "terminal-ansi-blue": "#2472c8",
+      "terminal-ansi-bright-black": "#666666",
+      "terminal-ansi-bright-blue": "#3b8eea",
+      "terminal-ansi-bright-cyan": "#29b8db",
+      "terminal-ansi-bright-green": "#23d18b",
+      "terminal-ansi-bright-magenta": "#d670d6",
+      "terminal-ansi-bright-red": "#f14c4c",
+      "terminal-ansi-bright-white": "#e5e5e5",
+      "terminal-ansi-bright-yellow": "#f5f543",
+      "terminal-ansi-cyan": "#11a8cd",
+      "terminal-ansi-green": "#0dbc79",
+      "terminal-ansi-magenta": "#bc3fbc",
+      "terminal-ansi-red": "#cd3131",
+      "terminal-ansi-white": "#e5e5e5",
+      "terminal-ansi-yellow": "#e5e510",
+      "terminal-bg": "#000000",
+      "terminal-cursor": "#ffb35c",
+      "terminal-cursor-accent": "#160a00",
+      "terminal-fg": "#cccccc",
+      "terminal-scrollbar-thumb":
+        "color-mix(in srgb, var(--terminal-fg) 34%, transparent)",
       "text-muted": "#8c857a",
       "text-primary": "#f7f3eb",
       "text-secondary": "#b8b0a5",
@@ -117,6 +150,7 @@ describe("Tangerine Terminal theme contract", () => {
       ["accent", "bg-app", 4.5],
       ["accent", "bg-panel-elevated", 4.5],
       ["button-text", "accent", 4.5],
+      ["terminal-fg", "terminal-bg", 4.5],
     ];
 
     for (const [foreground, background, threshold] of pairs) {
@@ -125,6 +159,20 @@ describe("Tangerine Terminal theme contract", () => {
         `${foreground} on ${background}`
       ).toBeGreaterThanOrEqual(threshold);
     }
+  });
+
+  it("keeps light terminal ANSI white readable on a light canvas", () => {
+    expect(lightTokens).toMatchObject({
+      "terminal-bg": "#ffffff",
+      "terminal-fg": "#333333",
+      "terminal-ansi-white": "#555555",
+      "terminal-ansi-bright-white": "#a5a5a5",
+    });
+    expect(contrastRatio(lightTokens["terminal-fg"], lightTokens["terminal-bg"]))
+      .toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(lightTokens["terminal-ansi-white"], lightTokens["terminal-bg"]),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 
   it("does not leave unresolved theme token references in app.css", () => {

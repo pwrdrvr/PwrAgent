@@ -414,6 +414,11 @@ function SettingsSectionBody(props: {
             experimental: { threadPricingSummary: enabled },
           });
         }}
+        onCodexDefaultModeRequestUserInputChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { codexDefaultModeRequestUserInput: enabled },
+          });
+        }}
         onAgentCoreGrokChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { agentCoreGrok: enabled },

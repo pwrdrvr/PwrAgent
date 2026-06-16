@@ -809,6 +809,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
   };
   lastForkThreadParams?: {
     threadId: string;
@@ -834,6 +835,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
   };
   interruptTurnCallCount = 0;
@@ -1101,6 +1103,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return this.options.startThreadResult ?? { threadId: "thread-1" };
@@ -1135,6 +1138,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
@@ -1527,6 +1531,37 @@ function createKimiAcpRegistry(options?: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexDefaultModeRequestUserInput: () => true,
+    });
+
+    try {
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(codexClient.lastStartThreadParams?.defaultModeRequestUserInput).toBe(
+        true,
+      );
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue" }],
+      });
+      expect(codexClient.lastStartTurnParams?.defaultModeRequestUserInput).toBe(
+        true,
+      );
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("returns ACP provider commands from session metadata", async () => {
     const session: AcpSessionMetadata = {
       backendId: "acp:kimi",

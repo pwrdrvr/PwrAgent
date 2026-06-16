@@ -163,6 +163,7 @@ export function buildBindingStatusIntent(params: {
       `Model: ${model}`,
       reasoning ? `Reasoning: ${reasoning}` : undefined,
       supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
+      planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
@@ -386,6 +387,14 @@ function formatRateLimitReset(resetAt: number | undefined): string | undefined {
 
 function formatWholeNumber(value: number): string {
   return Math.round(value).toLocaleString();
+}
+
+function planDeliveryLine(
+  capabilityProfile: MessagingCapabilityProfile | undefined,
+): string {
+  return capabilityProfile?.outboundAttachments?.supportsFileUpload
+    ? "Plan delivery: Markdown attachment + inline preview"
+    : "Plan delivery: inline preview";
 }
 
 function mentionRequiredLine(

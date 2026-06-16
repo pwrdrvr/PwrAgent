@@ -3113,6 +3113,7 @@ describe("TranscriptList", () => {
           threadId: "thread-1",
           requestId: "input-request-1",
           currentIndex: 0,
+          phase: "answering",
           answers: [null],
           questions: [
             {

@@ -5,7 +5,11 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { layoutMessagingActionRows } from "@pwragent/messaging-interface";
+import {
+  formatMessagingQuestionnaireText,
+  layoutMessagingActionRows,
+  messagingQuestionnaireActions,
+} from "@pwragent/messaging-interface";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES = 100;
 export const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
@@ -87,10 +91,8 @@ export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
       return intent.prompt;
     case "multi_select":
       return intent.prompt;
-    case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return [question?.header, question?.question].filter(Boolean).join("\n");
-    }
+    case "questionnaire":
+      return formatMessagingQuestionnaireText(intent);
     case "approval":
       return [intent.title, intent.body].join("\n\n");
     case "confirmation":
@@ -113,10 +115,8 @@ export function actionsForDiscordIntent(
       return intent.choices;
     case "multi_select":
       return intent.choices;
-    case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return question?.options ?? [];
-    }
+    case "questionnaire":
+      return messagingQuestionnaireActions(intent);
     case "approval":
       return intent.decisions;
     case "confirmation":

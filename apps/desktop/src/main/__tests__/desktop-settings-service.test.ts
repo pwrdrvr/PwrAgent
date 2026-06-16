@@ -1679,6 +1679,39 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults Codex default-mode request_user_input to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.codexDefaultModeRequestUserInput).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveCodexDefaultModeRequestUserInput()).toBe(false);
+
+    await service.writeConfigPatch({
+      experimental: {
+        codexDefaultModeRequestUserInput: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.codexDefaultModeRequestUserInput).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(service.resolveCodexDefaultModeRequestUserInput()).toBe(true);
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "codex_default_mode_request_user_input = true",
+    );
+  });
+
   it("preserves unknown sections written by other builds when saving a patch", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

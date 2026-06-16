@@ -13,6 +13,8 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentOption,
@@ -66,14 +68,21 @@ import type {
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingQuestionnaireAnswer,
+  MessagingQuestionnaireIntent,
   MessagingStreamUpdateIntent,
+  MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalItem,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  messagingQuestionnaireAnswerComplete,
+  normalizeMessagingQuestionnaireIntent,
+} from "@pwragent/messaging-interface";
 import {
   buildHelpActions,
   formatMessagingCommandHelpBody,
@@ -110,6 +119,19 @@ import {
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
 } from "./messaging-renderer.js";
+import {
+  artifactFromPlanEntry,
+  artifactFromReviewEntry,
+  buildArtifactDeliveryIntent,
+  buildArtifactInlineFallbackIntent,
+  planEntryFromUpdate,
+  type MessagingArtifact,
+  type MessagingArtifactMessageIntent,
+} from "./messaging-artifact-renderer.js";
+import {
+  artifactFromMarkdownFileSelection,
+  MessagingMarkdownFileAttachmentSelector,
+} from "./messaging-markdown-file-attachment-selector.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
@@ -561,6 +583,9 @@ export class MessagingController {
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
+  private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
+  private readonly markdownFileAttachmentSelector =
+    new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
@@ -842,7 +867,20 @@ export class MessagingController {
       }
       return;
     }
+    const planUpdate = planEntryForBackendEvent(event, this.now());
+    if (planUpdate) {
+      this.planArtifactsByTurnKey.set(
+        artifactTurnKey(event.backend, threadId, planUpdate.turn?.id ?? planUpdate.id),
+        planUpdate,
+      );
+    }
+    const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
+    const markdownFileArtifactSelection =
+      this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
+    const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
+      ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
+      : undefined;
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
@@ -938,6 +976,30 @@ export class MessagingController {
         }
       }
 
+      if (completedPlan && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromPlanEntry(completedPlan),
+          binding,
+          intentId: `artifact:plan:${completedPlan.turn?.id ?? completedPlan.id}:${binding.id}`,
+        });
+      }
+
+      if (reviewArtifact && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromReviewEntry(reviewArtifact),
+          binding,
+          intentId: `artifact:review:${reviewArtifact.id}:${binding.id}`,
+        });
+      }
+
+      if (markdownFileArtifactSelection && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
+          binding,
+          intentId: `artifact:markdown-file:${markdownFileArtifactSelection.path}:${binding.id}`,
+        });
+      }
+
       if (isThreadNameUpdatedEvent(event)) {
         await this.renderBindingStatus(
           binding,
@@ -991,6 +1053,7 @@ export class MessagingController {
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
+      this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
     }
   }
 
@@ -1335,6 +1398,12 @@ export class MessagingController {
             actionId: mapped.action.id,
             value: mapped.action.value,
           });
+          return;
+        }
+        if (
+          pendingIntent.intent.kind === "questionnaire" &&
+          await this.handleQuestionnaireTextAnswer(pendingIntent, event)
+        ) {
           return;
         }
         if (pendingNewThread) {
@@ -2234,6 +2303,10 @@ export class MessagingController {
         );
         return;
       }
+      if (action && pendingIntent.intent.kind === "questionnaire") {
+        await this.handleQuestionnaireAction(pendingIntent, event, action);
+        return;
+      }
     }
 
     if ((event.actionId ?? event.interaction.id).startsWith("approval:")) {
@@ -2243,6 +2316,21 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Approval expired",
           body: "That approval request is no longer available. Retry the command or request that needed approval.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    if ((event.actionId ?? event.interaction.id).startsWith("questionnaire:")) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-questionnaire"),
+          createdAt: this.now(),
+          title: "Input request expired",
+          body: "That input request is no longer available. Retry the command or request that needed input.",
           recoverable: true,
         }),
         undefined,
@@ -2262,6 +2350,243 @@ export class MessagingController {
       undefined,
       event,
     );
+  }
+
+  private async handleQuestionnaireTextAnswer(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundTextEvent,
+  ): Promise<boolean> {
+    if (pendingIntent.intent.kind !== "questionnaire") {
+      return false;
+    }
+
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+    const question = intent.questions[intent.currentIndex];
+    const value = event.text.trim();
+    if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
+      return false;
+    }
+
+    const updated = this.questionnaireWithRecordedAnswer(intent, {
+      kind: "custom",
+      value,
+    });
+    await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
+    return true;
+  }
+
+  private async handleQuestionnaireAction(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+    action: MessagingSurfaceAction,
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "questionnaire") {
+      return;
+    }
+
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+    if (action.id === "questionnaire:back") {
+      await this.updateQuestionnairePendingIntent(
+        pendingIntent,
+        this.questionnaireWithPreviousQuestion(intent),
+        event,
+      );
+      return;
+    }
+
+    if (action.id === "questionnaire:next") {
+      await this.updateQuestionnairePendingIntent(
+        pendingIntent,
+        this.questionnaireWithNextQuestion(intent),
+        event,
+      );
+      return;
+    }
+
+    if (action.id === "questionnaire:submit") {
+      if (!intent.answers.every(messagingQuestionnaireAnswerComplete)) {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("questionnaire-incomplete"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: this.now(),
+            title: "Answer each question",
+            body: "Review the input request and answer every question before submitting.",
+            fallbackText: "Answer each question before submitting.",
+          }),
+          undefined,
+          event,
+        );
+        return;
+      }
+
+      const submittedIntent: MessagingQuestionnaireIntent = {
+        ...intent,
+        phase: "submitted",
+      };
+      await this.submitQuestionnaireIntent(submittedIntent);
+      await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      await this.resumeBindingForPendingIntent(
+        pendingIntent,
+        "pending_request.submitted",
+      );
+      return;
+    }
+
+    const updated = this.questionnaireWithOptionAnswer(intent, action.id);
+    if (updated !== intent) {
+      await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
+    }
+  }
+
+  private questionnaireWithOptionAnswer(
+    intent: MessagingQuestionnaireIntent,
+    optionId: string,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase !== "answering") {
+      return intent;
+    }
+
+    const question = intent.questions[intent.currentIndex];
+    const option = question?.options.find((candidate) => candidate.id === optionId);
+    if (!option) {
+      return intent;
+    }
+
+    return this.questionnaireWithRecordedAnswer(intent, {
+      kind: "option",
+      optionId: option.id,
+      value: typeof option.value === "string" ? option.value : option.label,
+    });
+  }
+
+  private questionnaireWithRecordedAnswer(
+    intent: MessagingQuestionnaireIntent,
+    answer: MessagingQuestionnaireAnswer,
+  ): MessagingQuestionnaireIntent {
+    const answers = [...intent.answers];
+    answers[intent.currentIndex] = answer;
+
+    const nextIndex = intent.currentIndex + 1;
+    if (nextIndex < intent.questions.length) {
+      return {
+        ...intent,
+        answers,
+        currentIndex: nextIndex,
+        phase: "answering",
+      };
+    }
+
+    return {
+      ...intent,
+      answers,
+      phase: "review",
+    };
+  }
+
+  private questionnaireWithNextQuestion(
+    intent: MessagingQuestionnaireIntent,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase !== "answering") {
+      return intent;
+    }
+    if (!messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])) {
+      return intent;
+    }
+    if (intent.currentIndex >= intent.questions.length - 1) {
+      return {
+        ...intent,
+        phase: "review",
+      };
+    }
+    return {
+      ...intent,
+      currentIndex: intent.currentIndex + 1,
+    };
+  }
+
+  private questionnaireWithPreviousQuestion(
+    intent: MessagingQuestionnaireIntent,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase === "review") {
+      return {
+        ...intent,
+        currentIndex: Math.max(0, intent.questions.length - 1),
+        phase: "answering",
+      };
+    }
+    if (intent.phase !== "answering" || intent.currentIndex <= 0) {
+      return intent;
+    }
+    return {
+      ...intent,
+      currentIndex: intent.currentIndex - 1,
+    };
+  }
+
+  private async updateQuestionnairePendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<void> {
+    const result = await this.deliverQuestionnaireIntent(pendingIntent, intent, event);
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      intent,
+      surface: result.surface ?? pendingIntent.surface,
+    });
+  }
+
+  private async deliverQuestionnaireIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<MessagingDeliveryResult> {
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    const targetSurface = pendingIntent.surface ?? (
+      event.kind === "callback" ? event.interaction : undefined
+    );
+    const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
+      ? {
+          ...intent,
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "present_new",
+          },
+          targetSurface,
+        }
+      : intent;
+    return await this.deliver(deliveryIntent, binding, event);
+  }
+
+  private async submitQuestionnaireIntent(
+    intent: MessagingQuestionnaireIntent,
+  ): Promise<void> {
+    const requestContext = intent.requestContext;
+    if (!requestContext || !this.options.backend.submitServerRequest) {
+      return;
+    }
+
+    await this.options.backend.submitServerRequest({
+      backend: requestContext.backend,
+      threadId: requestContext.threadId,
+      turnId: requestContext.turnId,
+      requestId: requestContext.requestId,
+      response: {
+        answers: Object.fromEntries(
+          intent.questions.map((question, index) => [
+            question.id,
+            {
+              answers: questionnaireAnswerValue(intent.answers[index]),
+            },
+          ]),
+        ),
+      },
+    });
   }
 
   private async submitApprovalAction(
@@ -10408,6 +10733,42 @@ export class MessagingController {
     }
   }
 
+  private async deliverArtifactForBinding(params: {
+    artifact: MessagingArtifact;
+    binding: MessagingBindingRecord;
+    intentId: string;
+  }): Promise<void> {
+    const intent = buildArtifactDeliveryIntent({
+      artifact: params.artifact,
+      bindingId: params.binding.id,
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      id: params.intentId,
+    });
+    const result = await this.deliver(intent, params.binding);
+    if (!shouldRetryArtifactInline(intent, result)) {
+      return;
+    }
+    this.logger.debug?.("messaging artifact attachment delivery failed; retrying inline fallback", {
+      bindingId: params.binding.id,
+      errorMessage: result.errorMessage,
+      intentId: intent.id,
+      kind: params.artifact.kind,
+      outcome: result.outcome,
+      threadId: params.binding.threadId,
+    });
+    await this.deliver(
+      buildArtifactInlineFallbackIntent({
+        artifact: params.artifact,
+        bindingId: params.binding.id,
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        id: `${params.intentId}:inline-fallback`,
+      }),
+      params.binding,
+    );
+  }
+
   private logDeliveryResult(
     intent: MessagingSurfaceIntent,
     binding: MessagingBindingRecord | undefined,
@@ -12306,6 +12667,159 @@ function formatContextUsageNumber(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
+function planEntryForBackendEvent(
+  event: AgentEvent,
+  createdAt: number,
+): AppServerThreadPlanEntry | undefined {
+  if (event.notification.method !== "turn/plan/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    plan?: {
+      explanation?: unknown;
+      steps?: unknown;
+    };
+    turnId?: unknown;
+  };
+  if (typeof params.turnId !== "string" || !Array.isArray(params.plan?.steps)) {
+    return undefined;
+  }
+  const explanation = typeof params.plan.explanation === "string"
+    ? params.plan.explanation.trim()
+    : undefined;
+  const steps = params.plan.steps.flatMap((step): AppServerThreadPlanEntry["steps"] => {
+    if (!step || typeof step !== "object") {
+      return [];
+    }
+    const record = step as { status?: unknown; step?: unknown };
+    if (
+      typeof record.step !== "string" ||
+      !isPlanStepStatus(record.status) ||
+      !record.step.trim()
+    ) {
+      return [];
+    }
+    return [{ step: record.step.trim(), status: record.status }];
+  });
+  if (!explanation && steps.length === 0) {
+    return undefined;
+  }
+  return planEntryFromUpdate({
+    createdAt,
+    id: `plan:${params.turnId}`,
+    ...(explanation ? { explanation } : {}),
+    steps,
+    turnId: params.turnId,
+  });
+}
+
+function reviewArtifactForBackendEvent(
+  event: AgentEvent,
+  createdAt: number,
+): AppServerThreadReviewEntry | undefined {
+  if (event.notification.method !== "item/completed") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    item?: unknown;
+    turnId?: unknown;
+  };
+  if (!params.item || typeof params.item !== "object") {
+    return undefined;
+  }
+  const item = params.item as {
+    data?: unknown;
+    id?: unknown;
+    review?: unknown;
+    review_output?: unknown;
+    reviewOutput?: unknown;
+    text?: unknown;
+    type?: unknown;
+  };
+  if (typeof item.id !== "string" || typeof item.type !== "string") {
+    return undefined;
+  }
+  const normalizedType = normalizeReviewItemType(item.type);
+  if (
+    normalizedType !== "exitedreviewmode" &&
+    normalizedType !== "review" &&
+    normalizedType !== "reviewartifact"
+  ) {
+    return undefined;
+  }
+  const reviewOutput = normalizeStructuredReviewOutput(item as Record<string, unknown>);
+  const review = (typeof item.review === "string" ? item.review.trim() : "") ||
+    (typeof item.text === "string" ? item.text.trim() : "") ||
+    reviewOutput?.overall_explanation.trim() ||
+    "";
+  if (!review) {
+    return undefined;
+  }
+  return {
+    type: "review",
+    id: item.id,
+    createdAt,
+    review,
+    displayText: "Code review completed",
+    ...(reviewOutput ? { output: reviewOutput } : {}),
+    ...(typeof params.turnId === "string"
+      ? {
+          turn: {
+            id: params.turnId,
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeStructuredReviewOutput(
+  item: Record<string, unknown>,
+): AppServerThreadReviewEntry["output"] | undefined {
+  const data = asPlainRecord(item.data);
+  const reviewOutput =
+    asPlainRecord(data?.reviewOutput) ??
+    asPlainRecord(data?.review_output) ??
+    asPlainRecord(item.reviewOutput) ??
+    asPlainRecord(item.review_output);
+  const findings = Array.isArray(reviewOutput?.findings)
+    ? reviewOutput.findings
+    : undefined;
+
+  if (
+    !reviewOutput ||
+    !findings ||
+    (reviewOutput.overall_correctness !== "patch is correct" &&
+      reviewOutput.overall_correctness !== "patch is incorrect") ||
+    typeof reviewOutput.overall_explanation !== "string" ||
+    typeof reviewOutput.overall_confidence_score !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    overall_correctness: reviewOutput.overall_correctness,
+    overall_explanation: reviewOutput.overall_explanation,
+    overall_confidence_score: reviewOutput.overall_confidence_score,
+  };
+}
+
+function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {
+  return value === "pending" || value === "in_progress" || value === "completed";
+}
+
+function normalizeReviewItemType(type: string): string {
+  return type.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function artifactTurnKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
 function turnIdForBackendEvent(event: AgentEvent): string | undefined {
   const params = event.notification.params as {
     turn?: { id?: unknown };
@@ -12869,6 +13383,16 @@ function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boo
   );
 }
 
+function shouldRetryArtifactInline(
+  intent: MessagingArtifactMessageIntent,
+  result: MessagingDeliveryResult,
+): boolean {
+  return (
+    intent.artifactDelivery.mode === "attachment_summary" &&
+    (result.outcome === "failed" || result.outcome === "unsupported")
+  );
+}
+
 function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): boolean {
   return (
     result.outcome === "presented" ||
@@ -13385,6 +13909,13 @@ function readStringValue(
 
   const result = value[key];
   return typeof result === "string" ? result : undefined;
+}
+
+function questionnaireAnswerValue(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+): string[] {
+  const value = answer?.value.trim();
+  return value ? [value] : [];
 }
 
 function readNullableStringValue(
