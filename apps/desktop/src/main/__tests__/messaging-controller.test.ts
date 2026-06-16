@@ -9707,8 +9707,13 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "tone:option:2" }),
+      buildCallbackEvent({ actionId: "questionnaire:next" }),
     );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "review",
+    });
+
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "questionnaire:submit" }),
     );
@@ -9724,7 +9729,7 @@ describe("MessagingController", () => {
             answers: ["A tiny waffle with a serious hat."],
           },
           tone: {
-            answers: ["Extremely silly"],
+            answers: ["Dry"],
           },
         },
       },

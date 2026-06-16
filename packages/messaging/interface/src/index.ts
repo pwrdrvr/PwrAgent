@@ -829,15 +829,13 @@ export function messagingQuestionnaireActions(
       fallbackText: "back",
     });
   }
-  if (
-    intent.currentIndex < intent.questions.length - 1 &&
-    messagingQuestionnaireAnswerComplete(answer)
-  ) {
+  if (messagingQuestionnaireAnswerComplete(answer)) {
+    const isFinalQuestion = intent.currentIndex >= intent.questions.length - 1;
     actions.push({
       id: "questionnaire:next",
-      label: "Next",
-      style: "navigation",
-      fallbackText: "next",
+      label: isFinalQuestion ? "Review" : "Next",
+      style: isFinalQuestion ? "primary" : "navigation",
+      fallbackText: isFinalQuestion ? "review" : "next",
     });
   }
 

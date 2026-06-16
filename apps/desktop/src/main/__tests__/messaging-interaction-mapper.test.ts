@@ -123,6 +123,35 @@ describe("DeterministicInteractionMapper", () => {
     });
   });
 
+  it("matches review navigation on answered final questionnaire questions", () => {
+    const intent = {
+      id: "intent-questionnaire-final",
+      kind: "questionnaire",
+      createdAt: 1000,
+      answers: [
+        {
+          kind: "custom",
+          value: "Ship the compact version.",
+        },
+      ],
+      currentIndex: 0,
+      phase: "answering",
+      questions: [
+        {
+          id: "q1",
+          question: "Final answer?",
+          options: [],
+          allowFreeform: true,
+        },
+      ],
+    } satisfies MessagingQuestionnaireIntent;
+
+    expect(mapper.mapText({ intent, text: "review" })).toMatchObject({
+      kind: "matched",
+      action: { id: "questionnaire:next", label: "Review" },
+    });
+  });
+
   it("passes unrelated instructions through instead of forcing a choice", () => {
     const intent = {
       id: "intent-select",
