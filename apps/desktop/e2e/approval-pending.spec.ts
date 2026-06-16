@@ -55,7 +55,7 @@ async function openApprovalPendingReplay() {
     app.window.getByText("Waiting for approval before this turn can continue.")
   ).toBeVisible();
   await expect(
-    app.window.getByRole("button", { name: "Approve" })
+    app.window.getByRole("button", { name: "Approve Once" })
   ).toBeVisible();
 
   return app;
@@ -79,7 +79,7 @@ test("shows pending approval UI without duplicating the turn elsewhere", async (
       app.window.getByText("Waiting for approval before this turn can continue.")
     ).toBeVisible();
     await expect(
-      app.window.getByRole("button", { name: "Approve" })
+      app.window.getByRole("button", { name: "Approve Once" })
     ).toBeVisible();
   } finally {
     await app.close();
@@ -90,7 +90,7 @@ test("dismisses the pending approval UI after approval", async () => {
   const app = await openApprovalPendingReplay();
 
   try {
-    await app.window.getByRole("button", { name: "Approve" }).click();
+    await app.window.getByRole("button", { name: "Approve Once" }).click();
 
     await expect(
       app.window.getByRole("group", { name: "Pending approval" })
