@@ -6,7 +6,11 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { layoutMessagingActionRows } from "@pwragent/messaging-interface";
+import {
+  formatMessagingQuestionnaireText,
+  layoutMessagingActionRows,
+  messagingQuestionnaireActions,
+} from "@pwragent/messaging-interface";
 
 export const TELEGRAM_CALLBACK_DATA_LIMIT_BYTES = 64;
 export const TELEGRAM_MESSAGE_TEXT_LIMIT = 4096;
@@ -96,13 +100,8 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
       return renderTelegramHtml(intent.prompt, "plain");
     case "multi_select":
       return renderTelegramHtml(intent.prompt, "plain");
-    case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return renderTelegramHtml(
-        [question?.header, question?.question].filter(Boolean).join("\n"),
-        "plain",
-      );
-    }
+    case "questionnaire":
+      return renderTelegramHtml(formatMessagingQuestionnaireText(intent), "plain");
     case "approval":
       return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "markdown");
     case "confirmation":
@@ -125,10 +124,8 @@ export function actionsForTelegramIntent(
       return intent.choices;
     case "multi_select":
       return intent.choices;
-    case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
-      return question?.options ?? [];
-    }
+    case "questionnaire":
+      return messagingQuestionnaireActions(intent);
     case "approval":
       return intent.decisions;
     case "confirmation":

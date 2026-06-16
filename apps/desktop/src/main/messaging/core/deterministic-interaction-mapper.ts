@@ -4,6 +4,7 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { messagingQuestionnaireActions } from "@pwragent/messaging-interface";
 import type {
   MessagingInteractionMapper,
   MessagingInteractionMapperResult,
@@ -94,32 +95,7 @@ export function actionsForIntent(intent: MessagingSurfaceIntent): MessagingSurfa
 }
 
 function questionnaireActions(intent: MessagingQuestionnaireIntent): MessagingSurfaceAction[] {
-  const question = intent.questions[intent.currentIndex];
-  const actions: MessagingSurfaceAction[] = question?.options ?? [];
-  if (intent.currentIndex > 0) {
-    actions.push({
-      id: "questionnaire:back",
-      label: "Back",
-      style: "navigation",
-      fallbackText: "back",
-    });
-  }
-  if (intent.currentIndex < intent.questions.length - 1) {
-    actions.push({
-      id: "questionnaire:next",
-      label: "Next",
-      style: "navigation",
-      fallbackText: "next",
-    });
-  } else {
-    actions.push({
-      id: "questionnaire:submit",
-      label: "Submit",
-      style: "primary",
-      fallbackText: "submit",
-    });
-  }
-  return actions;
+  return messagingQuestionnaireActions(intent);
 }
 
 function matchSynonym(
@@ -188,7 +164,12 @@ function actionTokens(action: MessagingSurfaceAction): string[] {
     .flatMap((value) => {
       const normalized = normalizeText(value);
       const labelNumber = /^(\d+)\s/.exec(normalized)?.[1];
-      return labelNumber ? [normalized, labelNumber] : [normalized];
+      const unmarked = normalized.replace(/^selected:\s+/, "");
+      const tokens = new Set([normalized, unmarked]);
+      if (labelNumber) {
+        tokens.add(labelNumber);
+      }
+      return [...tokens];
     });
 }
 

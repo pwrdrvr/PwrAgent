@@ -68,14 +68,21 @@ import type {
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingQuestionnaireAnswer,
+  MessagingQuestionnaireIntent,
   MessagingStreamUpdateIntent,
+  MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalItem,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  messagingQuestionnaireAnswerComplete,
+  normalizeMessagingQuestionnaireIntent,
+} from "@pwragent/messaging-interface";
 import {
   buildHelpActions,
   formatMessagingCommandHelpBody,
@@ -1393,6 +1400,12 @@ export class MessagingController {
           });
           return;
         }
+        if (
+          pendingIntent.intent.kind === "questionnaire" &&
+          await this.handleQuestionnaireTextAnswer(pendingIntent, event)
+        ) {
+          return;
+        }
         if (pendingNewThread) {
           await this.appendPendingNewThreadPrompt(pendingNewThread, event);
           return;
@@ -2290,6 +2303,10 @@ export class MessagingController {
         );
         return;
       }
+      if (action && pendingIntent.intent.kind === "questionnaire") {
+        await this.handleQuestionnaireAction(pendingIntent, event, action);
+        return;
+      }
     }
 
     if ((event.actionId ?? event.interaction.id).startsWith("approval:")) {
@@ -2299,6 +2316,21 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Approval expired",
           body: "That approval request is no longer available. Retry the command or request that needed approval.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    if ((event.actionId ?? event.interaction.id).startsWith("questionnaire:")) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-questionnaire"),
+          createdAt: this.now(),
+          title: "Input request expired",
+          body: "That input request is no longer available. Retry the command or request that needed input.",
           recoverable: true,
         }),
         undefined,
@@ -2318,6 +2350,243 @@ export class MessagingController {
       undefined,
       event,
     );
+  }
+
+  private async handleQuestionnaireTextAnswer(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundTextEvent,
+  ): Promise<boolean> {
+    if (pendingIntent.intent.kind !== "questionnaire") {
+      return false;
+    }
+
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+    const question = intent.questions[intent.currentIndex];
+    const value = event.text.trim();
+    if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
+      return false;
+    }
+
+    const updated = this.questionnaireWithRecordedAnswer(intent, {
+      kind: "custom",
+      value,
+    });
+    await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
+    return true;
+  }
+
+  private async handleQuestionnaireAction(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+    action: MessagingSurfaceAction,
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "questionnaire") {
+      return;
+    }
+
+    const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+    if (action.id === "questionnaire:back") {
+      await this.updateQuestionnairePendingIntent(
+        pendingIntent,
+        this.questionnaireWithPreviousQuestion(intent),
+        event,
+      );
+      return;
+    }
+
+    if (action.id === "questionnaire:next") {
+      await this.updateQuestionnairePendingIntent(
+        pendingIntent,
+        this.questionnaireWithNextQuestion(intent),
+        event,
+      );
+      return;
+    }
+
+    if (action.id === "questionnaire:submit") {
+      if (!intent.answers.every(messagingQuestionnaireAnswerComplete)) {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("questionnaire-incomplete"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: this.now(),
+            title: "Answer each question",
+            body: "Review the input request and answer every question before submitting.",
+            fallbackText: "Answer each question before submitting.",
+          }),
+          undefined,
+          event,
+        );
+        return;
+      }
+
+      const submittedIntent: MessagingQuestionnaireIntent = {
+        ...intent,
+        phase: "submitted",
+      };
+      await this.submitQuestionnaireIntent(submittedIntent);
+      await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      await this.resumeBindingForPendingIntent(
+        pendingIntent,
+        "pending_request.submitted",
+      );
+      return;
+    }
+
+    const updated = this.questionnaireWithOptionAnswer(intent, action.id);
+    if (updated !== intent) {
+      await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
+    }
+  }
+
+  private questionnaireWithOptionAnswer(
+    intent: MessagingQuestionnaireIntent,
+    optionId: string,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase !== "answering") {
+      return intent;
+    }
+
+    const question = intent.questions[intent.currentIndex];
+    const option = question?.options.find((candidate) => candidate.id === optionId);
+    if (!option) {
+      return intent;
+    }
+
+    return this.questionnaireWithRecordedAnswer(intent, {
+      kind: "option",
+      optionId: option.id,
+      value: typeof option.value === "string" ? option.value : option.label,
+    });
+  }
+
+  private questionnaireWithRecordedAnswer(
+    intent: MessagingQuestionnaireIntent,
+    answer: MessagingQuestionnaireAnswer,
+  ): MessagingQuestionnaireIntent {
+    const answers = [...intent.answers];
+    answers[intent.currentIndex] = answer;
+
+    const nextIndex = intent.currentIndex + 1;
+    if (nextIndex < intent.questions.length) {
+      return {
+        ...intent,
+        answers,
+        currentIndex: nextIndex,
+        phase: "answering",
+      };
+    }
+
+    return {
+      ...intent,
+      answers,
+      phase: "review",
+    };
+  }
+
+  private questionnaireWithNextQuestion(
+    intent: MessagingQuestionnaireIntent,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase !== "answering") {
+      return intent;
+    }
+    if (!messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])) {
+      return intent;
+    }
+    if (intent.currentIndex >= intent.questions.length - 1) {
+      return {
+        ...intent,
+        phase: "review",
+      };
+    }
+    return {
+      ...intent,
+      currentIndex: intent.currentIndex + 1,
+    };
+  }
+
+  private questionnaireWithPreviousQuestion(
+    intent: MessagingQuestionnaireIntent,
+  ): MessagingQuestionnaireIntent {
+    if (intent.phase === "review") {
+      return {
+        ...intent,
+        currentIndex: Math.max(0, intent.questions.length - 1),
+        phase: "answering",
+      };
+    }
+    if (intent.phase !== "answering" || intent.currentIndex <= 0) {
+      return intent;
+    }
+    return {
+      ...intent,
+      currentIndex: intent.currentIndex - 1,
+    };
+  }
+
+  private async updateQuestionnairePendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<void> {
+    const result = await this.deliverQuestionnaireIntent(pendingIntent, intent, event);
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      intent,
+      surface: result.surface ?? pendingIntent.surface,
+    });
+  }
+
+  private async deliverQuestionnaireIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<MessagingDeliveryResult> {
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    const targetSurface = pendingIntent.surface ?? (
+      event.kind === "callback" ? event.interaction : undefined
+    );
+    const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
+      ? {
+          ...intent,
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "present_new",
+          },
+          targetSurface,
+        }
+      : intent;
+    return await this.deliver(deliveryIntent, binding, event);
+  }
+
+  private async submitQuestionnaireIntent(
+    intent: MessagingQuestionnaireIntent,
+  ): Promise<void> {
+    const requestContext = intent.requestContext;
+    if (!requestContext || !this.options.backend.submitServerRequest) {
+      return;
+    }
+
+    await this.options.backend.submitServerRequest({
+      backend: requestContext.backend,
+      threadId: requestContext.threadId,
+      turnId: requestContext.turnId,
+      requestId: requestContext.requestId,
+      response: {
+        answers: Object.fromEntries(
+          intent.questions.map((question, index) => [
+            question.id,
+            {
+              answers: questionnaireAnswerValue(intent.answers[index]),
+            },
+          ]),
+        ),
+      },
+    });
   }
 
   private async submitApprovalAction(
@@ -13640,6 +13909,13 @@ function readStringValue(
 
   const result = value[key];
   return typeof result === "string" ? result : undefined;
+}
+
+function questionnaireAnswerValue(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+): string[] {
+  const value = answer?.value.trim();
+  return value ? [value] : [];
 }
 
 function readNullableStringValue(

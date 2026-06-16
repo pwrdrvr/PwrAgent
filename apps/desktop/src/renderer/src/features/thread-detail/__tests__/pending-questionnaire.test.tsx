@@ -16,6 +16,7 @@ function buildState(): PendingQuestionnaireState {
     itemId: "input-1",
     requestId: "input-request-1",
     currentIndex: 0,
+    phase: "answering",
     answers: [null, null],
     questions: [
       {
@@ -64,6 +65,29 @@ function buildState(): PendingQuestionnaireState {
   };
 }
 
+function buildFreeformState(): PendingQuestionnaireState {
+  return {
+    method: "item/tool/requestUserInput",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "input-1",
+    requestId: "input-request-1",
+    currentIndex: 0,
+    phase: "answering",
+    answers: [null],
+    questions: [
+      {
+        id: "breakfast",
+        header: "Breakfast",
+        question: "What's for breakfast?",
+        options: [],
+        allowFreeform: true,
+        secret: false,
+      },
+    ],
+  };
+}
+
 describe("PendingQuestionnaire", () => {
   it("renders plan questions without approval controls", () => {
     render(
@@ -101,10 +125,19 @@ describe("PendingQuestionnaire", () => {
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /Large refactor/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    fireEvent.click(screen.getByRole("button", { name: /Unit only/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText("Question 2 of 2")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: /Unit only/ }));
+    expect(screen.getAllByText("Review answers").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText("Question 2 of 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Unit only/ })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByText("Question 1 of 2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Large refactor/ })).toHaveAttribute(
       "aria-pressed",
@@ -112,8 +145,39 @@ describe("PendingQuestionnaire", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByText(/Scope: How much should change\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Tests: Which test path\?/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps freeform answers compact and caps autosizing growth", () => {
+    const onChange = vi.fn();
+    render(
+      <PendingQuestionnaire
+        state={buildFreeformState()}
+        onChange={onChange}
+        onSubmit={async () => undefined}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Other answer") as HTMLTextAreaElement;
+    expect(textarea).toHaveAttribute("rows", "1");
+
+    Object.defineProperty(textarea, "scrollHeight", {
+      configurable: true,
+      value: 400,
+    });
+    fireEvent.change(textarea, {
+      target: {
+        value: "Line one\nLine two\nLine three\nLine four\nLine five",
+      },
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(textarea.style.overflowY).toBe("auto");
+    expect(Number.parseFloat(textarea.style.height)).toBeLessThan(120);
   });
 });

@@ -92,6 +92,8 @@ const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
 };
+const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
+  "features.default_mode_request_user_input";
 const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.5",
   "gpt-5.4",
@@ -4397,6 +4399,7 @@ function buildThreadStartPayload(params: {
   ephemeral?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadStartParams["config"];
+  defaultModeRequestUserInput?: boolean;
   dynamicTools?: CodexDynamicToolSpec[];
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
@@ -4429,7 +4432,10 @@ function buildThreadStartPayload(params: {
     base.ephemeral = params.ephemeral;
   }
   const config = mergeCodexShellEnvironmentPolicyConfig(
-    params.config,
+    mergeCodexDefaultModeRequestUserInputConfig(
+      params.config,
+      params.defaultModeRequestUserInput,
+    ),
     params.codexEnvironmentRuntime,
   );
   if (config) {
@@ -4482,6 +4488,20 @@ function mergeCodexShellEnvironmentPolicyConfig(
     },
     { ...baseConfig },
   ) as CodexThreadStartParams["config"];
+}
+
+function mergeCodexDefaultModeRequestUserInputConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+  enabled: boolean | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (!enabled) {
+    return config;
+  }
+  const baseConfig = isPlainRecord(config) ? config : {};
+  return {
+    ...baseConfig,
+    [CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY]: true,
+  } as CodexThreadStartParams["config"];
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -4561,6 +4581,7 @@ function buildThreadResumePayloads(params: {
   reasoningEffort?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  defaultModeRequestUserInput?: boolean;
   dynamicTools?: CodexDynamicToolSpec[];
 }): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
@@ -4596,7 +4617,10 @@ function buildThreadResumePayloads(params: {
     };
   }
   const config = mergeCodexShellEnvironmentPolicyConfig(
-    base.config,
+    mergeCodexDefaultModeRequestUserInputConfig(
+      base.config,
+      params.defaultModeRequestUserInput,
+    ),
     params.codexEnvironmentRuntime,
   );
   if (config) {
@@ -5662,6 +5686,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
@@ -5731,6 +5756,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
@@ -5758,6 +5784,7 @@ export class CodexAppServerClient {
           reasoningEffort: params.reasoningEffort,
           fastMode: params.fastMode,
           codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+          defaultModeRequestUserInput: params.defaultModeRequestUserInput,
           dynamicTools: params.dynamicTools,
         }),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS

@@ -442,6 +442,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        codexDefaultModeRequestUserInput: {
+          value: false,
+          source: "default",
+        },
         diffCondensation: {
           enabled: { value: false, source: "default" },
           model: { value: "auto", source: "default" },

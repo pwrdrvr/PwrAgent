@@ -1,10 +1,14 @@
+import { useLayoutEffect, useRef } from "react";
 import {
-  answerQuestionnaireOption,
+  answerQuestionnaireOptionAndAdvance,
   answerQuestionnaireText,
   canAdvanceQuestionnaire,
+  canReviewQuestionnaire,
   canSubmitQuestionnaire,
   goToNextQuestion,
   goToPreviousQuestion,
+  goToQuestionnaireReview,
+  questionnaireAnswerDisplay,
   type PendingQuestionnaireState,
 } from "./questionnaire";
 
@@ -15,17 +19,118 @@ type PendingQuestionnaireProps = {
   onSubmit: (state: PendingQuestionnaireState) => Promise<void> | void;
 };
 
+const FREEFORM_MAX_ROWS = 4;
+const FREEFORM_FALLBACK_LINE_HEIGHT = 19;
+
+function resizeFreeformTextarea(element: HTMLTextAreaElement | null): void {
+  if (!element) {
+    return;
+  }
+  element.style.height = "auto";
+
+  const computed = window.getComputedStyle(element);
+  const rawLineHeight = Number.parseFloat(computed.lineHeight);
+  const fontSize = Number.parseFloat(computed.fontSize) || 13;
+  const lineHeight =
+    Number.isFinite(rawLineHeight) && rawLineHeight > 0
+      ? computed.lineHeight.endsWith("px")
+        ? rawLineHeight
+        : rawLineHeight * fontSize
+      : FREEFORM_FALLBACK_LINE_HEIGHT;
+  const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
+  const borderTop = Number.parseFloat(computed.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(computed.borderBottomWidth) || 0;
+  const maxHeight =
+    lineHeight * FREEFORM_MAX_ROWS + paddingTop + paddingBottom + borderTop + borderBottom;
+  const nextHeight = Math.min(element.scrollHeight, maxHeight);
+
+  element.style.height = `${nextHeight}px`;
+  element.style.overflowY = element.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
 export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
   const question = props.state.questions[props.state.currentIndex];
   const answer = props.state.answers[props.state.currentIndex];
+  const freeformRef = useRef<HTMLTextAreaElement | null>(null);
+  const textAnswer = answer?.kind === "text" ? answer.value : "";
+
+  useLayoutEffect(() => {
+    resizeFreeformTextarea(freeformRef.current);
+  }, [textAnswer, props.state.currentIndex, question?.allowFreeform]);
+
   if (!question) {
     return null;
   }
 
   const isLastQuestion = props.state.currentIndex === props.state.questions.length - 1;
   const canMoveNext = canAdvanceQuestionnaire(props.state);
+  const canMoveToReview = canReviewQuestionnaire(props.state);
   const canSubmit = canSubmitQuestionnaire(props.state);
-  const textAnswer = answer?.kind === "text" ? answer.value : "";
+
+  if (props.state.phase === "review" || props.state.phase === "submitted") {
+    const submitted = props.state.phase === "submitted";
+    return (
+      <div className="transcript-questionnaire" role="group" aria-label="Pending input">
+        <div className="transcript-questionnaire__header">
+          <span className="chip chip--mode">
+            {submitted ? "Input submitted" : "Review answers"}
+          </span>
+          <span className="transcript-message__time">
+            {props.state.questions.length} answer
+            {props.state.questions.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        <div className="transcript-questionnaire__prompt">
+          <h3>{submitted ? "Submitted answers" : "Review answers"}</h3>
+        </div>
+
+        <div className="transcript-questionnaire__summary">
+          {props.state.questions.map((summaryQuestion, index) => {
+            const title = [summaryQuestion.header, summaryQuestion.question]
+              .filter(Boolean)
+              .join(summaryQuestion.header && summaryQuestion.question ? ": " : "");
+            return (
+              <div className="transcript-questionnaire__summary-item" key={summaryQuestion.id}>
+                <span className="transcript-questionnaire__summary-question">
+                  {index + 1}. {title}
+                </span>
+                <span className="transcript-questionnaire__summary-answer">
+                  {questionnaireAnswerDisplay(props.state.answers[index]) || "No answer"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {submitted ? null : (
+          <div className="transcript-questionnaire__actions">
+            <button
+              className="button button--ghost"
+              disabled={props.busy}
+              type="button"
+              onClick={() => {
+                props.onChange(goToPreviousQuestion(props.state));
+              }}
+            >
+              Back
+            </button>
+            <button
+              className="button button--primary"
+              disabled={props.busy || !canSubmit}
+              type="button"
+              onClick={() => {
+                void props.onSubmit(props.state);
+              }}
+            >
+              Submit
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="transcript-questionnaire" role="group" aria-label="Pending input">
@@ -58,7 +163,9 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
                 aria-pressed={selected}
                 disabled={props.busy}
                 onClick={() => {
-                  props.onChange(answerQuestionnaireOption(props.state, option.key));
+                  props.onChange(
+                    answerQuestionnaireOptionAndAdvance(props.state, option.key),
+                  );
                 }}
               >
                 <span className="transcript-questionnaire__option-label">
@@ -87,10 +194,12 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
         <label className="transcript-questionnaire__freeform">
           <span>Other answer</span>
           <textarea
+            ref={freeformRef}
             value={textAnswer}
             disabled={props.busy}
-            rows={3}
+            rows={1}
             onChange={(event) => {
+              resizeFreeformTextarea(event.currentTarget);
               props.onChange(answerQuestionnaireText(props.state, event.target.value));
             }}
           />
@@ -111,13 +220,13 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
         {isLastQuestion ? (
           <button
             className="button button--primary"
-            disabled={props.busy || !canSubmit}
+            disabled={props.busy || !canMoveToReview}
             type="button"
             onClick={() => {
-              void props.onSubmit(props.state);
+              props.onChange(goToQuestionnaireReview(props.state));
             }}
           >
-            Submit
+            Review
           </button>
         ) : (
           <button

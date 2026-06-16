@@ -97,7 +97,9 @@ describe("DeterministicInteractionMapper", () => {
       id: "intent-questionnaire",
       kind: "questionnaire",
       createdAt: 1000,
+      answers: [{ kind: "custom", value: "Ready." }, null],
       currentIndex: 0,
+      phase: "answering",
       questions: [
         {
           id: "q1",
@@ -118,6 +120,35 @@ describe("DeterministicInteractionMapper", () => {
     });
     expect(mapper.mapText({ intent, text: "back" })).toMatchObject({
       kind: "ambiguous",
+    });
+  });
+
+  it("matches review navigation on answered final questionnaire questions", () => {
+    const intent = {
+      id: "intent-questionnaire-final",
+      kind: "questionnaire",
+      createdAt: 1000,
+      answers: [
+        {
+          kind: "custom",
+          value: "Ship the compact version.",
+        },
+      ],
+      currentIndex: 0,
+      phase: "answering",
+      questions: [
+        {
+          id: "q1",
+          question: "Final answer?",
+          options: [],
+          allowFreeform: true,
+        },
+      ],
+    } satisfies MessagingQuestionnaireIntent;
+
+    expect(mapper.mapText({ intent, text: "review" })).toMatchObject({
+      kind: "matched",
+      action: { id: "questionnaire:next", label: "Review" },
     });
   });
 

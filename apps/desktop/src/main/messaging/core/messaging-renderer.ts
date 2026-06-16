@@ -189,7 +189,9 @@ export function buildQuestionnaireIntent(params: {
     id: params.id,
     kind: "questionnaire",
     createdAt: params.createdAt,
+    answers: params.request.params.questions.map(() => null),
     currentIndex: 0,
+    phase: "answering",
     fallbackText: "Reply with an option, Back, Next, Submit, or a free-form answer.",
     questions: params.request.params.questions.map((question) => ({
       id: question.id,
@@ -203,6 +205,7 @@ export function buildQuestionnaireIntent(params: {
         description: option.description || undefined,
         fallbackText: String(index + 1),
         recommended: /\(recommended\)/i.test(option.label),
+        value: option.label,
       })),
     })),
   };

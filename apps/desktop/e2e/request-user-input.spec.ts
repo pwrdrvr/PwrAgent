@@ -50,10 +50,17 @@ test("answers request_user_input questionnaires with back and next navigation", 
     const pendingInput = app.window.getByRole("group", { name: "Pending input" });
 
     await pendingInput.getByRole("button", { name: /Large refactor/ }).click();
-    await pendingInput.getByRole("button", { name: "Next" }).click();
     await expect(pendingInput.getByText("Question 2 of 2")).toBeVisible();
 
     await pendingInput.getByRole("button", { name: /Unit only/ }).click();
+    await expect(pendingInput.getByRole("heading", { name: "Review answers" })).toBeVisible();
+
+    await pendingInput.getByRole("button", { name: "Back" }).click();
+    await expect(pendingInput.getByText("Question 2 of 2")).toBeVisible();
+    await expect(
+      pendingInput.getByRole("button", { name: /Unit only/ })
+    ).toHaveAttribute("aria-pressed", "true");
+
     await pendingInput.getByRole("button", { name: "Back" }).click();
     await expect(pendingInput.getByText("Question 1 of 2")).toBeVisible();
     await expect(
@@ -61,6 +68,7 @@ test("answers request_user_input questionnaires with back and next navigation", 
     ).toHaveAttribute("aria-pressed", "true");
 
     await pendingInput.getByRole("button", { name: "Next" }).click();
+    await pendingInput.getByRole("button", { name: "Review" }).click();
     await pendingInput.getByRole("button", { name: "Submit" }).click();
 
     await expect(app.window.getByRole("group", { name: "Pending input" })).toHaveCount(0);
