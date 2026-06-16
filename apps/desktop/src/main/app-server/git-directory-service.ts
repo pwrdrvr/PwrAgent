@@ -10,6 +10,7 @@ import type {
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
+  NavigationGitBranchDetail,
   NavigationLaunchpadDraft,
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
@@ -268,6 +269,75 @@ function parseGitLines(output: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+/**
+ * Parses `for-each-ref refs/heads` output formatted as
+ * `<short-name>\t<committerdate:unix>`, preserving the input order (which the
+ * caller sorts by `-committerdate`, i.e. most recently touched first).
+ */
+function parseGitBranchDetails(
+  output: string,
+): { name: string; lastCommitAt?: number }[] {
+  const details: { name: string; lastCommitAt?: number }[] = [];
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line.trim()) {
+      continue;
+    }
+    const tabIndex = line.indexOf("\t");
+    const name = (tabIndex === -1 ? line : line.slice(0, tabIndex)).trim();
+    if (!name) {
+      continue;
+    }
+    const unixValue =
+      tabIndex === -1
+        ? Number.NaN
+        : Number.parseInt(line.slice(tabIndex + 1).trim(), 10);
+    details.push({
+      name,
+      lastCommitAt: Number.isFinite(unixValue) ? unixValue : undefined,
+    });
+  }
+  return details;
+}
+
+/**
+ * Upper bound on how many branches we enrich, hold in the navigation
+ * snapshot, and persist to the directory git-status cache. Repos can have
+ * thousands of branches; the picker (and the messaging / PR-status surfaces
+ * that read `branches`) only ever need the most recently touched ones. The
+ * git enumeration itself still walks every ref — that cost is transient — but
+ * nothing past this many branches is retained or written to disk.
+ */
+export const MAX_TRACKED_BRANCHES = 100;
+
+/**
+ * Keeps the most recently touched `limit` branches, always retaining the
+ * `keep` anchors (current / default) even when they fall outside the cutoff,
+ * so pinned anchors and default resolution keep working on busy repos.
+ * Input is assumed sorted most-recent-first.
+ */
+export function capRecentBranchDetails(
+  details: { name: string; lastCommitAt?: number }[],
+  options: { keep: Array<string | undefined>; limit: number },
+): { name: string; lastCommitAt?: number }[] {
+  if (details.length <= options.limit) {
+    return details;
+  }
+  const kept = details.slice(0, options.limit);
+  const keptNames = new Set(kept.map((detail) => detail.name));
+  for (const name of options.keep) {
+    if (!name || keptNames.has(name)) {
+      continue;
+    }
+    const detail = details.find((entry) => entry.name === name);
+    if (detail) {
+      keptNames.add(name);
+      kept.push(detail);
+    }
+  }
+  return kept;
 }
 
 function resolveDefaultBranch(params: {
@@ -593,7 +663,7 @@ export class GitDirectoryService {
             "for-each-ref",
             "refs/heads",
             "--sort=-committerdate",
-            "--format=%(refname:short)",
+            "--format=%(refname:short)%09%(committerdate:unix)",
           ],
           gitEnv,
         ).catch(() => ""),
@@ -618,12 +688,34 @@ export class GitDirectoryService {
       ],
       gitEnv,
     ).catch(() => "");
-    const branches = parseGitLines(branchesOutput);
-    const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+    const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
+    // Resolve the default branch against the FULL list so a rarely-committed
+    // `main` is still found, then cap everything we hold/persist downstream.
+    const defaultBranch = resolveDefaultBranch({
+      branches: parsedBranchDetailsAll.map((detail) => detail.name),
+      remoteHead,
+    });
+    const parsedBranchDetails = capRecentBranchDetails(parsedBranchDetailsAll, {
+      keep: [currentBranch, defaultBranch],
+      limit: MAX_TRACKED_BRANCHES,
+    });
+    const branches = parsedBranchDetails.map((detail) => detail.name);
+    const worktreeBranchNames = new Set(
+      parseGitWorktreeEntries(worktreeList)
+        .map((entry) => entry.branch)
+        .filter((branch): branch is string => Boolean(branch)),
+    );
+    const buildBranchDetails = (): NavigationGitBranchDetail[] =>
+      parsedBranchDetails.map((detail) =>
+        detail.name !== currentBranch && worktreeBranchNames.has(detail.name)
+          ? { ...detail, inUse: true }
+          : { ...detail },
+      );
     if (!currentBranch) {
       return {
         defaultBranch,
         branches,
+        branchDetails: buildBranchDetails(),
         handoffBranches: branches,
         syncState: "untracked",
       };
@@ -641,6 +733,7 @@ export class GitDirectoryService {
         currentBranch,
         defaultBranch,
         branches,
+        branchDetails: buildBranchDetails(),
         handoffBranches,
         syncState: "untracked",
       };
@@ -672,6 +765,7 @@ export class GitDirectoryService {
       behind,
       defaultBranch,
       branches,
+      branchDetails: buildBranchDetails(),
       handoffBranches,
       syncState,
     };
