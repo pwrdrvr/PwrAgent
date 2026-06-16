@@ -1,23 +1,22 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-launchpad-defaults-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 function listDefaultKeys(): string[] {
@@ -37,19 +36,34 @@ function readDefaultValue(key: string): unknown {
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
   it("persists the selected navigation browse mode", async () => {
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-launchpad-defaults-test-",
+    );
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
     expect(store.getNavigationBrowseModeSync()).toBe("inbox");
 
-    await expect(store.setNavigationBrowseMode("directories")).resolves.toBe(
-      "directories",
-    );
-    await expect(store.getNavigationBrowseMode()).resolves.toBe("directories");
-
-    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
-    const reopenedStore = new SqliteOverlayStore(reopenedDb);
     try {
-      expect(reopenedStore.getNavigationBrowseModeSync()).toBe("directories");
+      await expect(store.setNavigationBrowseMode("directories")).resolves.toBe(
+        "directories",
+      );
+      await expect(store.getNavigationBrowseMode()).resolves.toBe("directories");
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      const reopenedStore = new SqliteOverlayStore(reopenedDb);
+      try {
+        expect(reopenedStore.getNavigationBrowseModeSync()).toBe("directories");
+      } finally {
+        reopenedDb.close();
+      }
     } finally {
-      reopenedDb.close();
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
     }
   });
 
