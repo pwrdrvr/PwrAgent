@@ -1,5 +1,7 @@
-import type {
-  AppServerPendingRequestNotification,
+import {
+  buildPendingRequestActions,
+  type AppServerPendingRequestNotification,
+  type PendingRequestAction,
 } from "@pwragent/shared";
 import type {
   MessagingApprovalDecision,
@@ -20,9 +22,10 @@ export function buildApprovalIntent(params: {
   const command = extractCommand(params.request.params);
   const fileContext = extractFileContext(params.request.params);
   const decisions = applyActionCapabilityLimits(
-    buildDecisions(params.request.params.options),
+    buildDecisions(params.request),
     params.capabilityProfile,
   );
+  const replyInstruction = approvalReplyInstruction(decisions);
 
   return {
     id: params.id,
@@ -31,13 +34,15 @@ export function buildApprovalIntent(params: {
     title: titleForRequest(params.request),
     body: [
       prompt,
-      command ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n") : undefined,
+      command
+        ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
+        : undefined,
       fileContext ? ["Context:", fileContext].join("\n") : undefined,
-      "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+      replyInstruction.body,
     ]
       .filter((part): part is string => Boolean(part))
       .join("\n\n"),
-    fallbackText: "Reply yes, yes for this session, no, cancel, or a choice number.",
+    fallbackText: replyInstruction.fallbackText,
     decisions,
   };
 }
@@ -53,80 +58,74 @@ function titleForRequest(request: AppServerPendingRequestNotification): string {
 }
 
 function buildDecisions(
-  options: string[] | undefined,
+  request: AppServerPendingRequestNotification,
 ): MessagingApprovalIntent["decisions"] {
-  const provided = options
-    ?.map((option, index) => decisionFromOption(option, index))
-    .filter((decision): decision is MessagingApprovalIntent["decisions"][number] =>
-      Boolean(decision),
-    );
-  if (provided && provided.length > 0) {
-    return provided;
-  }
-
-  return [
-    {
-      id: "approval:accept",
-      label: "Approve Once",
-      decision: "accept",
-      style: "primary",
-      fallbackText: "1",
-    },
-    {
-      id: "approval:accept_for_session",
-      label: "Approve for Session",
-      decision: "accept_for_session",
-      style: "secondary",
-      fallbackText: "2",
-    },
-    {
-      id: "approval:decline",
-      label: "Decline",
-      decision: "decline",
-      style: "danger",
-      fallbackText: "3",
-    },
-    {
-      id: "approval:cancel",
-      label: "Cancel",
-      decision: "cancel",
-      style: "secondary",
-      fallbackText: "4",
-    },
-  ];
+  return buildPendingRequestActions(request).map((action) => ({
+    id: action.id,
+    label: action.label,
+    decision: messagingDecisionFromPendingAction(action),
+    style: action.style,
+    fallbackText: action.fallbackText,
+    response: action.response,
+  }));
 }
 
-function decisionFromOption(
-  option: string,
-  index: number,
-): MessagingApprovalIntent["decisions"][number] | undefined {
-  const normalized = option.toLowerCase();
-  const decision: MessagingApprovalDecision | undefined = normalized.includes("session")
-    ? "accept_for_session"
-    : normalized.includes("decline") || normalized.includes("deny") || normalized === "no"
-      ? "decline"
-      : normalized.includes("cancel")
-        ? "cancel"
-        : normalized.includes("approve") ||
-            normalized.includes("allow") ||
-            normalized.includes("accept") ||
-            normalized === "yes"
-          ? "accept"
-          : undefined;
-  if (!decision) {
-    return undefined;
+function messagingDecisionFromPendingAction(
+  action: PendingRequestAction,
+): MessagingApprovalDecision {
+  return action.decision;
+}
+
+function approvalReplyInstruction(
+  decisions: MessagingApprovalIntent["decisions"],
+): { body: string; fallbackText: string } {
+  const examples = new Set<string>();
+  for (const decision of decisions) {
+    if (decision.fallbackText) {
+      examples.add(decision.fallbackText);
+    }
+  }
+  if (decisions.some((decision) => decision.decision === "accept")) {
+    examples.add("yes");
+  }
+  if (decisions.some((decision) => decision.decision === "accept_for_session")) {
+    examples.add("yes for this session");
+  }
+  if (
+    decisions.some(
+      (decision) => decision.decision === "accept_with_execpolicy_amendment",
+    )
+  ) {
+    examples.add("approve and remember");
+  }
+  if (decisions.some((decision) => decision.decision === "decline")) {
+    examples.add("no");
+  }
+  if (decisions.some((decision) => decision.decision === "cancel")) {
+    examples.add("cancel");
   }
 
+  if (!examples.size) {
+    return {
+      body: "Use a supported provider action to respond.",
+      fallbackText: "Use a supported provider action to respond.",
+    };
+  }
+
+  const quotedExamples = Array.from(examples, (example) => `"${example}"`);
+  const list =
+    quotedExamples.length === 1
+      ? quotedExamples[0]!
+      : `${quotedExamples.slice(0, -1).join(", ")}, or ${quotedExamples.at(-1)}`;
   return {
-    id: `approval:${decision}`,
-    label: option,
-    decision,
-    style: decision === "accept" ? "primary" : decision === "decline" ? "danger" : "secondary",
-    fallbackText: String(index + 1),
+    body: `Reply with ${list}, or use a button.`,
+    fallbackText: `Reply with ${Array.from(examples).join(", ")}, or use a button.`,
   };
 }
 
-function extractCommand(params: AppServerPendingRequestNotification["params"]): string | undefined {
+function extractCommand(
+  params: AppServerPendingRequestNotification["params"],
+): string | undefined {
   const promptCommand =
     commandFromApprovalText(stringField(params.prompt)) ??
     commandFromApprovalText(stringField(params.reason));

@@ -31,6 +31,7 @@ import type {
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
+  PendingRequestAction,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -1973,9 +1974,7 @@ export function ThreadView(props: ThreadViewProps) {
     selectedThread,
   ]);
 
-  async function respondToPendingRequest(
-    decision: "approve" | "decline" | "cancel"
-  ): Promise<void> {
+  async function respondToPendingRequest(action: PendingRequestAction): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread || !props.pendingRequest) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
       return;
@@ -1993,11 +1992,18 @@ export function ThreadView(props: ThreadViewProps) {
             ? props.pendingRequest.params.turnId
             : undefined,
         requestId: props.pendingRequest.params.requestId,
-        response: buildPendingRequestResponse(props.pendingRequest, decision),
+        response: buildPendingRequestResponse(props.pendingRequest, action),
       });
       props.clearPendingRequest(
         props.pendingRequest.params.requestId,
-        decision === "approve" ? "Thinking" : undefined
+        (
+          action.decision === "accept" ||
+          action.decision === "accept_for_session" ||
+          action.decision === "accept_with_execpolicy_amendment" ||
+          action.decision === "apply_network_policy_amendment"
+        )
+          ? "Thinking"
+          : undefined,
       );
     } catch (error) {
       setPendingRequestError(error instanceof Error ? error.message : String(error));

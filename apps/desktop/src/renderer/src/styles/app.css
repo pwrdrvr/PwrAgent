@@ -9645,6 +9645,12 @@ textarea,
 .transcript-questionnaire__actions,
 .transcript-mcp__actions {
   justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.transcript-request__actions .button {
+  max-width: 100%;
+  white-space: normal;
 }
 
 .transcript-questionnaire__prompt,

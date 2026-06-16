@@ -17,10 +17,12 @@ import type {
   AppServerThreadReplayPagination,
   AutomationTimelineCard,
   DesktopApplicationsSnapshot,
+  PendingRequestAction,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadTurnFailure,
 } from "@pwragent/shared";
+import { buildPendingRequestActions } from "@pwragent/shared";
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -82,7 +84,7 @@ type TranscriptListProps = {
   skills?: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
-  onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
+  onRespondToPendingRequest?: (action: PendingRequestAction) => Promise<void>;
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
   onSubmitPendingMcpInteraction?: (
     state: PendingMcpInteractionState,
@@ -375,6 +377,11 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingUserInput ||
       props.pendingStatusText ||
       props.runningTurnUsageText
+  );
+  const pendingRequestActions = useMemo(
+    () =>
+      props.pendingRequest ? buildPendingRequestActions(props.pendingRequest) : [],
+    [props.pendingRequest],
   );
   const automationThreadTarget = useMemo(
     () => parseThreadIdentity(props.threadId),
@@ -999,36 +1006,23 @@ export function TranscriptList(props: TranscriptListProps) {
                 text={pendingRequestPrompt(props.pendingRequest)}
               />
               <div className="transcript-request__actions">
-                <button
-                  className="button button--primary"
-                  disabled={props.pendingRequestBusy}
-                  type="button"
-                  onClick={() => {
-                    void props.onRespondToPendingRequest?.("approve");
-                  }}
-                >
-                  Approve
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={props.pendingRequestBusy}
-                  type="button"
-                  onClick={() => {
-                    void props.onRespondToPendingRequest?.("decline");
-                  }}
-                >
-                  Decline
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={props.pendingRequestBusy}
-                  type="button"
-                  onClick={() => {
-                    void props.onRespondToPendingRequest?.("cancel");
-                  }}
-                >
-                  Cancel turn
-                </button>
+                {pendingRequestActions.map((action) => (
+                  <button
+                    className={
+                      action.style === "primary"
+                        ? "button button--primary"
+                        : "button button--ghost"
+                    }
+                    disabled={props.pendingRequestBusy}
+                    key={action.id}
+                    type="button"
+                    onClick={() => {
+                      void props.onRespondToPendingRequest?.(action);
+                    }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
               </div>
             </div>
           ) : null}
