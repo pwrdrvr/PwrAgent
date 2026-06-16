@@ -382,26 +382,59 @@ function parseHtmlInlineContent(
 }
 
 function parseHtmlListItemContent(listItem: HTMLElement): JSONContent[] {
-  const blockChildren = Array.from(listItem.children).filter((child) => {
-    const tagName = child.tagName.toLowerCase();
-    return tagName !== "ul" && tagName !== "ol";
-  });
-  const inlineNodes =
-    blockChildren.length > 0
-      ? blockChildren.flatMap((child) => parseHtmlInlineContent(child))
-      : Array.from(listItem.childNodes).flatMap((child) =>
-          child instanceof HTMLElement &&
-          ["ul", "ol"].includes(child.tagName.toLowerCase())
-            ? []
-            : parseHtmlInlineContent(child),
-        );
+  const inlineNodes = Array.from(listItem.childNodes).flatMap((child) =>
+    child instanceof HTMLElement && isHtmlListElement(child)
+      ? []
+      : parseHtmlInlineContent(child),
+  );
+
+  const nestedLists = Array.from(listItem.children)
+    .filter((child): child is HTMLElement => child instanceof HTMLElement)
+    .filter(isHtmlListElement)
+    .map(parseHtmlListElement)
+    .filter((child): child is JSONContent => child !== undefined);
 
   return [
     {
       type: "paragraph",
       content: inlineNodes.length > 0 ? inlineNodes : undefined,
     },
+    ...nestedLists,
   ];
+}
+
+function isHtmlListElement(element: HTMLElement): boolean {
+  const tagName = element.tagName.toLowerCase();
+  return tagName === "ul" || tagName === "ol";
+}
+
+function parseHtmlListElement(listElement: HTMLElement): JSONContent | undefined {
+  const tagName = listElement.tagName.toLowerCase();
+  const items = Array.from(listElement.children)
+    .filter((item): item is HTMLElement => item instanceof HTMLElement)
+    .filter((item) => item.tagName.toLowerCase() === "li")
+    .map((item) => ({
+      type: "listItem",
+      content: parseHtmlListItemContent(item),
+    }));
+
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  if (tagName === "ol") {
+    const start = Number.parseInt(listElement.getAttribute("start") ?? "1", 10);
+    return {
+      type: "orderedList",
+      attrs: { start: Number.isFinite(start) ? start : 1 },
+      content: items,
+    };
+  }
+
+  return {
+    type: "bulletList",
+    content: items,
+  };
 }
 
 function parseClipboardHtmlStructuredContent(
@@ -413,42 +446,11 @@ function parseClipboardHtmlStructuredContent(
   }
 
   const doc = new DOMParser().parseFromString(html, "text/html");
-  const listElements = Array.from(doc.body.querySelectorAll("ul, ol"))
+  return Array.from(doc.body.querySelectorAll("ul, ol"))
     .filter((child): child is HTMLElement => child instanceof HTMLElement)
-    .filter((child) => !child.parentElement?.closest("li"));
-
-  return listElements.flatMap((child) => {
-    const tagName = child.tagName.toLowerCase();
-    const items = Array.from(child.children)
-      .filter((item): item is HTMLElement => item instanceof HTMLElement)
-      .filter((item) => item.tagName.toLowerCase() === "li")
-      .map((item) => ({
-        type: "listItem",
-        content: parseHtmlListItemContent(item),
-      }));
-
-    if (items.length === 0) {
-      return [];
-    }
-
-    if (tagName === "ol") {
-      const start = Number.parseInt(child.getAttribute("start") ?? "1", 10);
-      return [
-        {
-          type: "orderedList",
-          attrs: { start: Number.isFinite(start) ? start : 1 },
-          content: items,
-        },
-      ];
-    }
-
-    return [
-      {
-        type: "bulletList",
-        content: items,
-      },
-    ];
-  });
+    .filter((child) => !child.parentElement?.closest("li"))
+    .map(parseHtmlListElement)
+    .filter((child): child is JSONContent => child !== undefined);
 }
 
 function buildTiptapContent(

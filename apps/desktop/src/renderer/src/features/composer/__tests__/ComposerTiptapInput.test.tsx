@@ -338,6 +338,143 @@ describe("ComposerTiptapInput", () => {
     expect(quoteListItems[1]).toHaveTextContent("Added Escape-key handling.");
   });
 
+  it("preserves text around inline marks in rich lists pasted inside a blockquote", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Checklist:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Checklist:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Checklist:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<ul><li>Use <strong>bold</strong> text</li></ul>";
+          }
+          if (type === "text/plain") {
+            return "Use bold text";
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Checklist:",
+          "> ",
+          "> - Use **bold** text",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+
+    const quoteListItem = container.querySelector("blockquote ul > li");
+    expect(quoteListItem).toHaveTextContent("Use bold text");
+    expect(quoteListItem?.querySelector("strong")).toHaveTextContent("bold");
+  });
+
+  it("preserves nested rich list items pasted inside a blockquote", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Tasks:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Tasks:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Tasks:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return [
+              "<ul>",
+              "<li>",
+              "Parent task",
+              "<ul><li>Nested task</li></ul>",
+              "</li>",
+              "</ul>",
+            ].join("");
+          }
+          if (type === "text/plain") {
+            return "Parent task\nNested task";
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Tasks:",
+          "> ",
+          "> - Parent task",
+          ">   - Nested task",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+
+    const parentItem = container.querySelector("blockquote > ul > li");
+    const nestedItem = container.querySelector("blockquote ul ul > li");
+    expect(parentItem).toHaveTextContent("Parent task");
+    expect(nestedItem).toHaveTextContent("Nested task");
+  });
+
   it("preserves paragraph separators when pasting a handoff prefix without a code block", async () => {
     const { onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
