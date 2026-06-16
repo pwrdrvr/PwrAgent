@@ -5289,6 +5289,25 @@ export class DesktopBackendRegistry {
     );
   }
 
+  async listWorktreeOtherChanges(
+    worktreePath: string,
+    options?: { excludePaths?: string[]; maxFiles?: number },
+  ) {
+    return await this.gitWorkingStateService.listOtherChanges(worktreePath, options);
+  }
+
+  async getWorktreeOtherChangeDiff(
+    worktreePath: string,
+    filePath: string,
+    options?: { maxBytes?: number },
+  ) {
+    return await this.gitWorkingStateService.getOtherChangeDiff(
+      worktreePath,
+      filePath,
+      options,
+    );
+  }
+
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {

@@ -91,6 +91,10 @@ export const NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL =
   "navigation:refresh-directory-git-statuses";
 export const NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL =
   "navigation:resolve-edit-commit-states";
+export const NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL =
+  "navigation:list-worktree-other-changes";
+export const NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL =
+  "navigation:get-worktree-other-change-diff";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =

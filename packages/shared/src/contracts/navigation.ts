@@ -3,6 +3,7 @@ import type {
   AppServerBackendScope,
   AppServerBuiltinBackendKind,
   AppServerBackendKind,
+  AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
   AppServerThreadSummary,
@@ -588,6 +589,54 @@ export type ResolveEditCommitStatesRequest = {
 
 export type ResolveEditCommitStatesResponse = {
   states: Record<string, EditGroupCommitState>;
+};
+
+export type WorktreeOtherChangeStatus =
+  | "added"
+  | "copied"
+  | "deleted"
+  | "modified"
+  | "renamed"
+  | "typechange"
+  | "untracked"
+  | "unknown";
+
+export type WorktreeOtherChangeEntry = {
+  path: string;
+  repoPath: string;
+  status: WorktreeOtherChangeStatus;
+  staged: boolean;
+  unstaged: boolean;
+  binary?: boolean;
+  sizeBytes?: number;
+  additions?: number;
+  removals?: number;
+};
+
+export type ListWorktreeOtherChangesRequest = {
+  worktreePath: string;
+  /** Absolute paths already represented by agent-turn edit groups. */
+  excludePaths?: string[];
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxFiles?: number;
+};
+
+export type ListWorktreeOtherChangesResponse = {
+  changes: WorktreeOtherChangeEntry[];
+  totalChanges: number;
+  truncated: boolean;
+  maxFiles: number;
+};
+
+export type GetWorktreeOtherChangeDiffRequest = {
+  worktreePath: string;
+  path: string;
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxBytes?: number;
+};
+
+export type GetWorktreeOtherChangeDiffResponse = {
+  detail?: AppServerThreadActivityDetail;
 };
 
 const ACP_BACKEND_ID_PREFIX = "acp:";
