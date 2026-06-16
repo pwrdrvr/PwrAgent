@@ -13,6 +13,8 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentOption,
@@ -110,6 +112,19 @@ import {
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
 } from "./messaging-renderer.js";
+import {
+  artifactFromPlanEntry,
+  artifactFromReviewEntry,
+  buildArtifactDeliveryIntent,
+  buildArtifactInlineFallbackIntent,
+  planEntryFromUpdate,
+  type MessagingArtifact,
+  type MessagingArtifactMessageIntent,
+} from "./messaging-artifact-renderer.js";
+import {
+  artifactFromMarkdownFileSelection,
+  MessagingMarkdownFileAttachmentSelector,
+} from "./messaging-markdown-file-attachment-selector.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
@@ -561,6 +576,9 @@ export class MessagingController {
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
+  private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
+  private readonly markdownFileAttachmentSelector =
+    new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
@@ -842,7 +860,20 @@ export class MessagingController {
       }
       return;
     }
+    const planUpdate = planEntryForBackendEvent(event, this.now());
+    if (planUpdate) {
+      this.planArtifactsByTurnKey.set(
+        artifactTurnKey(event.backend, threadId, planUpdate.turn?.id ?? planUpdate.id),
+        planUpdate,
+      );
+    }
+    const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
+    const markdownFileArtifactSelection =
+      this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
+    const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
+      ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
+      : undefined;
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
@@ -938,6 +969,30 @@ export class MessagingController {
         }
       }
 
+      if (completedPlan && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromPlanEntry(completedPlan),
+          binding,
+          intentId: `artifact:plan:${completedPlan.turn?.id ?? completedPlan.id}:${binding.id}`,
+        });
+      }
+
+      if (reviewArtifact && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromReviewEntry(reviewArtifact),
+          binding,
+          intentId: `artifact:review:${reviewArtifact.id}:${binding.id}`,
+        });
+      }
+
+      if (markdownFileArtifactSelection && !automationTurnEvent) {
+        await this.deliverArtifactForBinding({
+          artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
+          binding,
+          intentId: `artifact:markdown-file:${markdownFileArtifactSelection.path}:${binding.id}`,
+        });
+      }
+
       if (isThreadNameUpdatedEvent(event)) {
         await this.renderBindingStatus(
           binding,
@@ -991,6 +1046,7 @@ export class MessagingController {
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
+      this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
     }
   }
 
@@ -10408,6 +10464,42 @@ export class MessagingController {
     }
   }
 
+  private async deliverArtifactForBinding(params: {
+    artifact: MessagingArtifact;
+    binding: MessagingBindingRecord;
+    intentId: string;
+  }): Promise<void> {
+    const intent = buildArtifactDeliveryIntent({
+      artifact: params.artifact,
+      bindingId: params.binding.id,
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      id: params.intentId,
+    });
+    const result = await this.deliver(intent, params.binding);
+    if (!shouldRetryArtifactInline(intent, result)) {
+      return;
+    }
+    this.logger.debug?.("messaging artifact attachment delivery failed; retrying inline fallback", {
+      bindingId: params.binding.id,
+      errorMessage: result.errorMessage,
+      intentId: intent.id,
+      kind: params.artifact.kind,
+      outcome: result.outcome,
+      threadId: params.binding.threadId,
+    });
+    await this.deliver(
+      buildArtifactInlineFallbackIntent({
+        artifact: params.artifact,
+        bindingId: params.binding.id,
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        id: `${params.intentId}:inline-fallback`,
+      }),
+      params.binding,
+    );
+  }
+
   private logDeliveryResult(
     intent: MessagingSurfaceIntent,
     binding: MessagingBindingRecord | undefined,
@@ -12306,6 +12398,159 @@ function formatContextUsageNumber(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
+function planEntryForBackendEvent(
+  event: AgentEvent,
+  createdAt: number,
+): AppServerThreadPlanEntry | undefined {
+  if (event.notification.method !== "turn/plan/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    plan?: {
+      explanation?: unknown;
+      steps?: unknown;
+    };
+    turnId?: unknown;
+  };
+  if (typeof params.turnId !== "string" || !Array.isArray(params.plan?.steps)) {
+    return undefined;
+  }
+  const explanation = typeof params.plan.explanation === "string"
+    ? params.plan.explanation.trim()
+    : undefined;
+  const steps = params.plan.steps.flatMap((step): AppServerThreadPlanEntry["steps"] => {
+    if (!step || typeof step !== "object") {
+      return [];
+    }
+    const record = step as { status?: unknown; step?: unknown };
+    if (
+      typeof record.step !== "string" ||
+      !isPlanStepStatus(record.status) ||
+      !record.step.trim()
+    ) {
+      return [];
+    }
+    return [{ step: record.step.trim(), status: record.status }];
+  });
+  if (!explanation && steps.length === 0) {
+    return undefined;
+  }
+  return planEntryFromUpdate({
+    createdAt,
+    id: `plan:${params.turnId}`,
+    ...(explanation ? { explanation } : {}),
+    steps,
+    turnId: params.turnId,
+  });
+}
+
+function reviewArtifactForBackendEvent(
+  event: AgentEvent,
+  createdAt: number,
+): AppServerThreadReviewEntry | undefined {
+  if (event.notification.method !== "item/completed") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    item?: unknown;
+    turnId?: unknown;
+  };
+  if (!params.item || typeof params.item !== "object") {
+    return undefined;
+  }
+  const item = params.item as {
+    data?: unknown;
+    id?: unknown;
+    review?: unknown;
+    review_output?: unknown;
+    reviewOutput?: unknown;
+    text?: unknown;
+    type?: unknown;
+  };
+  if (typeof item.id !== "string" || typeof item.type !== "string") {
+    return undefined;
+  }
+  const normalizedType = normalizeReviewItemType(item.type);
+  if (
+    normalizedType !== "exitedreviewmode" &&
+    normalizedType !== "review" &&
+    normalizedType !== "reviewartifact"
+  ) {
+    return undefined;
+  }
+  const reviewOutput = normalizeStructuredReviewOutput(item as Record<string, unknown>);
+  const review = (typeof item.review === "string" ? item.review.trim() : "") ||
+    (typeof item.text === "string" ? item.text.trim() : "") ||
+    reviewOutput?.overall_explanation.trim() ||
+    "";
+  if (!review) {
+    return undefined;
+  }
+  return {
+    type: "review",
+    id: item.id,
+    createdAt,
+    review,
+    displayText: "Code review completed",
+    ...(reviewOutput ? { output: reviewOutput } : {}),
+    ...(typeof params.turnId === "string"
+      ? {
+          turn: {
+            id: params.turnId,
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeStructuredReviewOutput(
+  item: Record<string, unknown>,
+): AppServerThreadReviewEntry["output"] | undefined {
+  const data = asPlainRecord(item.data);
+  const reviewOutput =
+    asPlainRecord(data?.reviewOutput) ??
+    asPlainRecord(data?.review_output) ??
+    asPlainRecord(item.reviewOutput) ??
+    asPlainRecord(item.review_output);
+  const findings = Array.isArray(reviewOutput?.findings)
+    ? reviewOutput.findings
+    : undefined;
+
+  if (
+    !reviewOutput ||
+    !findings ||
+    (reviewOutput.overall_correctness !== "patch is correct" &&
+      reviewOutput.overall_correctness !== "patch is incorrect") ||
+    typeof reviewOutput.overall_explanation !== "string" ||
+    typeof reviewOutput.overall_confidence_score !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    overall_correctness: reviewOutput.overall_correctness,
+    overall_explanation: reviewOutput.overall_explanation,
+    overall_confidence_score: reviewOutput.overall_confidence_score,
+  };
+}
+
+function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {
+  return value === "pending" || value === "in_progress" || value === "completed";
+}
+
+function normalizeReviewItemType(type: string): string {
+  return type.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function artifactTurnKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
 function turnIdForBackendEvent(event: AgentEvent): string | undefined {
   const params = event.notification.params as {
     turn?: { id?: unknown };
@@ -12866,6 +13111,16 @@ function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boo
         /\bUnknown Channel\b|chat not found|message thread not found/i,
       ),
     )
+  );
+}
+
+function shouldRetryArtifactInline(
+  intent: MessagingArtifactMessageIntent,
+  result: MessagingDeliveryResult,
+): boolean {
+  return (
+    intent.artifactDelivery.mode === "attachment_summary" &&
+    (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }
 

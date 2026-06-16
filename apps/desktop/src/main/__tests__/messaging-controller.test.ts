@@ -2908,6 +2908,302 @@ describe("MessagingController", () => {
     expect(errorNotices).toHaveLength(1);
   });
 
+  it("delivers a completed plan artifact as markdown attachment plus inline preview", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          plan: {
+            explanation: "Implementation plan",
+            steps: Array.from({ length: 80 }, (_, index) => ({
+              step: `Complete implementation step ${index + 1}`,
+              status: "pending" as const,
+            })),
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactIntent = harness.delivered.find(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "plan"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactIntent).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "plan",
+        mode: "attachment_summary",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Open the attachment"),
+        }),
+        expect.objectContaining({
+          type: "file",
+          mimeType: "text/markdown",
+          name: expect.stringMatching(/^plan-[a-f0-9]{10}\.md$/),
+        }),
+      ],
+    });
+  });
+
+  it("retries plan artifact delivery as inline preview when attachment delivery fails", async () => {
+    const attempts: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        attempts.push(intent);
+        const hasFile = intent.kind === "message" && intent.parts.some((part) => part.type === "file");
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: hasFile ? "failed" : "presented",
+          ...(hasFile ? { errorMessage: "file upload failed" } : {}),
+        };
+      },
+    });
+    await bindThread(harness);
+    attempts.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          plan: {
+            steps: Array.from({ length: 80 }, (_, index) => ({
+              step: `Complete implementation step ${index + 1}`,
+              status: "pending" as const,
+            })),
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactAttempts = attempts.filter(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "plan"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactAttempts.map((intent) => intent.artifactDelivery.mode)).toEqual([
+      "attachment_summary",
+      "inline_fallback",
+    ]);
+    expect(artifactAttempts[1]?.kind === "message" ? artifactAttempts[1].parts : []).toHaveLength(1);
+  });
+
+  it("delivers review artifacts for standard exited_review_mode items", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "review-1",
+            type: "exited_review_mode",
+            review: "Review found no blocking issues.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.find(
+        (intent): intent is MessagingSurfaceIntent & {
+          artifactDelivery: { kind: "review"; mode: string };
+        } => intent.kind === "message" && "artifactDelivery" in intent,
+      ),
+    ).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "review",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Review found no blocking issues."),
+        }),
+      ],
+    });
+  });
+
+  it("delivers review artifacts from structured review output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "review-structured-1",
+            type: "exited_review_mode",
+            data: {
+              reviewOutput: {
+                findings: [
+                  {
+                    title: "Missing validation",
+                    body: "The input is not validated.",
+                    confidence_score: 0.91,
+                    priority: 1,
+                    code_location: {
+                      absolute_file_path: "/repo/src/index.ts",
+                      line_range: {
+                        start: 12,
+                        end: 12,
+                      },
+                    },
+                  },
+                ],
+                overall_correctness: "patch is incorrect",
+                overall_explanation: "The patch has one validation issue.",
+                overall_confidence_score: 0.87,
+              },
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactIntent = harness.delivered.find(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "review"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactIntent).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "review",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("The patch has one validation issue."),
+        }),
+      ],
+    });
+    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    expect(textPart).toEqual(expect.objectContaining({
+      text: expect.stringContaining("Missing validation"),
+    }));
+  });
+
+  it("delivers a single added markdown file as attachment plus bounded preview", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const markdown = `# Release notes\n\n${"x".repeat(1_200)}\n\nDo not include this tail in the preview.`;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "file-1",
+            type: "fileChange",
+            changes: [
+              {
+                path: "/repo/docs/release-notes.md",
+                kind: {
+                  type: "add",
+                  content: markdown,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const artifactIntent = harness.delivered.find(
+      (intent): intent is MessagingSurfaceIntent & {
+        artifactDelivery: { kind: "markdown_file"; mode: string };
+      } => intent.kind === "message" && "artifactDelivery" in intent,
+    );
+    expect(artifactIntent).toMatchObject({
+      kind: "message",
+      artifactDelivery: {
+        kind: "markdown_file",
+        mode: "attachment_summary",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Added /repo/docs/release-notes.md"),
+        }),
+        expect.objectContaining({
+          type: "file",
+          mimeType: "text/markdown",
+          name: "release-notes.md",
+          sizeBytes: new TextEncoder().encode(markdown).byteLength,
+        }),
+      ],
+    });
+    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    const filePart = artifactIntent?.kind === "message" ? artifactIntent.parts[1] : undefined;
+    expect(textPart?.type === "text" ? textPart.text : "").toContain("Open the attachment");
+    expect(textPart?.type === "text" ? textPart.text : "").not.toContain(
+      "Do not include this tail",
+    );
+    expect(filePart?.type === "file" ? new TextDecoder().decode(filePart.data) : "").toBe(
+      markdown,
+    );
+  });
+
   it("posts a durable start notice for automation turns", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -3025,6 +3321,22 @@ describe("MessagingController", () => {
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          plan: {
+            steps: Array.from({ length: 80 }, (_, index) => ({
+              step: `Automation plan step ${index + 1}`,
+              status: "pending" as const,
+            })),
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
@@ -3047,6 +3359,11 @@ describe("MessagingController", () => {
     ).toEqual([]);
     expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate thinking");
     expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate commentary");
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && "artifactDelivery" in intent,
+      ),
+    ).toEqual([]);
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "message",

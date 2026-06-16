@@ -112,6 +112,7 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Model: gpt-5.3-codex");
     expect(intent.text).toContain("Reasoning: high");
     expect(intent.text).toContain("Fast mode: on");
+    expect(intent.text).toContain("Plan delivery: inline preview");
     expect(intent.text).not.toContain("Plan mode:");
     expect(intent.text).toContain("Permissions: Full Access");
     expect(intent.text).toContain("Streaming: Off");

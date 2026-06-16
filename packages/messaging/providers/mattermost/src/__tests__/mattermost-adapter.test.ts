@@ -96,6 +96,8 @@ function fakeClient4(spies: {
     root_id?: string;
     create_at: number;
   }>;
+  uploadFile?: (formData: FormData) => Promise<{ file_infos?: Array<{ id?: string }> }>;
+  uploadedFiles?: FormData[];
 }): Client4 {
   return {
     setUrl: () => {},
@@ -117,6 +119,13 @@ function fakeClient4(spies: {
       ),
       order: (spies.postsSinceResults ?? []).map((p) => p.id),
     }),
+    uploadFile: async (formData: FormData) => {
+      spies.uploadedFiles?.push(formData);
+      if (spies.uploadFile) {
+        return await spies.uploadFile(formData);
+      }
+      return { file_infos: [{ id: `file-${(spies.uploadedFiles?.length ?? 1)}` }] };
+    },
     // Stubs sufficient for `adapter.start()` to complete without
     // throwing — slash-command reconciliation runs against an empty
     // team list, the WS init is no-op'd by the websocket fake.
@@ -372,6 +381,8 @@ describe("MattermostAdapter — outbound deliver", () => {
   function makeAdapter(spies: {
     createdPosts: CreatedPost[];
     patchedPosts: PatchedPost[];
+    uploadFile?: (formData: FormData) => Promise<{ file_infos?: Array<{ id?: string }> }>;
+    uploadedFiles?: FormData[];
   }) {
     return new MattermostAdapter({
       callbackHandleStore: fakeStore,
@@ -461,6 +472,45 @@ describe("MattermostAdapter — outbound deliver", () => {
 
     expect(spies.createdPosts[0].channel_id).toBe("channel-id");
     expect(spies.createdPosts[0].root_id).toBe("root-post-id");
+  });
+
+  it("fails artifact delivery when file upload returns no file id", async () => {
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+      uploadedFiles: [] as FormData[],
+      uploadFile: async () => ({ file_infos: [] }),
+    };
+    const adapter = makeAdapter(spies);
+
+    const result = await adapter.deliver({
+      id: "artifact-1",
+      kind: "message",
+      artifactDelivery: {
+        kind: "plan",
+        mode: "attachment_summary",
+      },
+      createdAt: 1_700_000_000_000,
+      parts: [
+        { type: "text", text: "Open the attachment for the full artifact." },
+        {
+          type: "file",
+          name: "plan.md",
+          data: new TextEncoder().encode("# Plan\n\nFull content"),
+          mimeType: "text/markdown",
+          sizeBytes: 20,
+        },
+      ],
+      audit: {
+        channel: dmChannel("dm-1"),
+        actor: { platformUserId: "user-1" },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("failed");
+    expect(result.errorMessage).toContain("uploaded 0/1 artifact files");
+    expect(spies.uploadedFiles).toHaveLength(1);
+    expect(spies.createdPosts).toHaveLength(0);
   });
 
   it("clears attachments on patchPost when delivery.replaceMarkup is true and intent has no buttons", async () => {
