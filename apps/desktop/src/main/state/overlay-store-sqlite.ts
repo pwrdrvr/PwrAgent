@@ -32,8 +32,10 @@ import {
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildThreadIdentityKey,
   applyNavigationLaunchpadProviderSettingsPatch,
+  estimateOpenAiTokenUsageCost,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
+  resolveOpenAiPricingServiceTier,
 } from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
@@ -510,9 +512,12 @@ export class SqliteOverlayStore {
     line: ThreadUsageLineRecord;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
     const now = Date.now();
-    const line = normalizeThreadUsageLine(params.line, now);
+    let line = repriceOpenAiUsageLine(normalizeThreadUsageLine(params.line, now));
     const upsert = this.stateDb.raw.transaction(() => {
       const existing = this.readThreadUsageLineSync(line.usageLineId);
+      if (existing) {
+        line = mergeThreadUsageLineForUpsert(line, existing);
+      }
       if (
         (line.source === "hydration" || line.source === "backfill") &&
         line.turnId
@@ -580,12 +585,20 @@ export class SqliteOverlayStore {
             thread_id = excluded.thread_id,
             parent_thread_id = excluded.parent_thread_id,
             turn_id = excluded.turn_id,
-            model = excluded.model,
-            reasoning_effort = excluded.reasoning_effort,
-            service_tier = excluded.service_tier,
-            fast_mode = excluded.fast_mode,
-            settings_source = excluded.settings_source,
-            settings_confidence = excluded.settings_confidence,
+            model = COALESCE(excluded.model, thread_usage_turns.model),
+            reasoning_effort = COALESCE(excluded.reasoning_effort, thread_usage_turns.reasoning_effort),
+            service_tier = COALESCE(excluded.service_tier, thread_usage_turns.service_tier),
+            fast_mode = COALESCE(excluded.fast_mode, thread_usage_turns.fast_mode),
+            settings_source = CASE
+              WHEN excluded.settings_source IS NULL OR excluded.settings_source = 'unknown'
+                THEN thread_usage_turns.settings_source
+              ELSE excluded.settings_source
+            END,
+            settings_confidence = CASE
+              WHEN excluded.settings_confidence IS NULL OR excluded.settings_confidence = 'unknown'
+                THEN thread_usage_turns.settings_confidence
+              ELSE excluded.settings_confidence
+            END,
             started_at = COALESCE(thread_usage_turns.started_at, excluded.started_at),
             completed_at = excluded.completed_at,
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
@@ -2148,6 +2161,102 @@ function normalizeThreadUsageLine(
         line.threadId,
         line.turnId ?? line.usageLineId,
       ].join(":"),
+  };
+}
+
+function mergeThreadUsageLineForUpsert(
+  line: ThreadUsageLineRecord,
+  existing: ThreadUsageLineRecord,
+): ThreadUsageLineRecord {
+  const merged: ThreadUsageLineRecord = {
+    ...line,
+    createdAt: Math.min(existing.createdAt, line.createdAt),
+    ...(line.fastMode !== undefined
+      ? { fastMode: line.fastMode }
+      : existing.fastMode !== undefined
+        ? { fastMode: existing.fastMode }
+        : {}),
+    ...(line.model ? { model: line.model } : existing.model ? { model: existing.model } : {}),
+    ...(line.reasoningEffort
+      ? { reasoningEffort: line.reasoningEffort }
+      : existing.reasoningEffort
+        ? { reasoningEffort: existing.reasoningEffort }
+        : {}),
+    ...(line.serviceTier
+      ? { serviceTier: line.serviceTier }
+      : existing.serviceTier
+        ? { serviceTier: existing.serviceTier }
+        : {}),
+    settingsConfidence: mergeUsageSettingValue(
+      line.settingsConfidence,
+      existing.settingsConfidence,
+    ),
+    settingsSource: mergeUsageSettingValue(
+      line.settingsSource,
+      existing.settingsSource,
+    ),
+  };
+
+  return repriceOpenAiUsageLine(merged);
+}
+
+function mergeUsageSettingValue<T extends string>(
+  next: T | undefined,
+  existing: T | undefined,
+): T | undefined {
+  if (!next || next === "unknown") {
+    return existing;
+  }
+  return next;
+}
+
+function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
+  if (line.provider !== "openai") {
+    return line;
+  }
+
+  const cost = estimateOpenAiTokenUsageCost({
+    cachedInputTokens: line.cachedInputTokens,
+    fastMode: line.fastMode,
+    model: line.model,
+    outputTokens: line.outputTokens,
+    reasoningOutputTokens: line.reasoningOutputTokens,
+    serviceTier: line.serviceTier,
+    uncachedInputTokens: line.uncachedInputTokens,
+  });
+  const pricingServiceTier = resolveOpenAiPricingServiceTier({
+    fastMode: line.fastMode,
+    serviceTier: line.serviceTier,
+  });
+  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
+    cost
+      ? undefined
+      : !line.model
+        ? "missing-model"
+        : pricingServiceTier === undefined
+          ? "unsupported-service-tier"
+          : "missing-rate";
+  const {
+    priceUnavailableReason: _discardedPriceUnavailableReason,
+    pricingCatalogId: _discardedPricingCatalogId,
+    pricingCatalogVersion: _discardedPricingCatalogVersion,
+    pricingRateId: _discardedPricingRateId,
+    ...baseLine
+  } = line;
+
+  return {
+    ...baseLine,
+    cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+    currency: cost?.currency ?? line.currency,
+    outputCostMicros: cost?.outputCostMicros ?? 0,
+    priceStatus: cost ? "priced" : "unpriced",
+    ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+    ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
+    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+    ...(cost?.serviceTier && !line.serviceTier ? { serviceTier: cost.serviceTier } : {}),
+    totalCostMicros: cost?.totalCostMicros ?? 0,
+    uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
   };
 }
 

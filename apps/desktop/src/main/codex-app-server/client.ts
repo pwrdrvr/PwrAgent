@@ -2840,6 +2840,7 @@ function summarizeTokenUsageActivity(
     fastMode: resolvedPricingContext.fastMode,
     model: resolvedPricingContext.model,
     outputTokens,
+    reasoningOutputTokens,
     serviceTier: resolvedPricingContext.serviceTier,
     uncachedInputTokens,
   });
@@ -3736,11 +3737,10 @@ function timestampFromRecord(record: Record<string, unknown>): number | undefine
 
 function extractThreadEntries(
   value: unknown,
-  options: { threadId?: string } = {}
+  options: { threadId?: string } = {},
 ): AppServerThreadEntry[] {
   const record = asRecord(value);
   const thread = asRecord(record?.thread);
-  const pricingContext = extractTokenUsagePricingContext(value);
   const threadId = extractThreadIdFromValue(value) ?? options.threadId;
   const turns = Array.isArray(thread?.turns)
     ? thread.turns
@@ -3756,7 +3756,7 @@ function extractThreadEntries(
           ...message
         }),
       ),
-      ...extractTokenUsageEntries(value, pricingContext, threadId),
+      ...extractTokenUsageEntries(value, undefined, threadId),
     ]);
   }
 
@@ -3764,8 +3764,7 @@ function extractThreadEntries(
 
   for (const turn of turns) {
     const turnMetadata = extractTurnMetadata(turn);
-    const turnPricingContext =
-      extractTokenUsagePricingContext(turn) ?? pricingContext;
+    const turnPricingContext = extractTokenUsagePricingContext(turn);
     const createdAt = normalizeEpochTimestamp(
       pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
     );

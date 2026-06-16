@@ -279,6 +279,7 @@ export function buildTokenUsageActivityEntry(params: {
     fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    reasoningOutputTokens,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });

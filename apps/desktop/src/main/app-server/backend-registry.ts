@@ -1662,6 +1662,7 @@ function buildTaskMonitorUsageSnapshot(params: {
     fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    reasoningOutputTokens,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
@@ -1877,6 +1878,7 @@ function estimateTaskMonitorUsageCost(params: {
   fastMode?: boolean;
   model?: string;
   outputTokens: number;
+  reasoningOutputTokens?: number;
   serviceTier?: string;
   uncachedInputTokens: number;
 }): { model: string; totalUsd: number } | undefined {
@@ -1940,6 +1942,7 @@ function buildTaskMonitorUsageLine(params: {
     fastMode: params.fastMode,
     model,
     outputTokens,
+    reasoningOutputTokens,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
@@ -2085,6 +2088,7 @@ function buildLiveThreadUsageLine(params: {
     fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    reasoningOutputTokens,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
@@ -2094,6 +2098,7 @@ function buildLiveThreadUsageLine(params: {
         fastMode: params.fastMode,
         model: params.model,
         outputTokens: cumulativeTokens.outputTokens,
+        reasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
         serviceTier: params.serviceTier,
         uncachedInputTokens: cumulativeTokens.uncachedInputTokens,
       })

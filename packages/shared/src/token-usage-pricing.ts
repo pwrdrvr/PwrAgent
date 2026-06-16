@@ -256,8 +256,10 @@ export function estimateOpenAiTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
+  outputTokensIncludeReasoning?: boolean;
   model?: string;
   outputTokens: number;
+  reasoningOutputTokens?: number;
   serviceTier?: string;
   uncachedInputTokens: number;
 }): TokenUsageCostEstimate | undefined {
@@ -294,8 +296,11 @@ export function estimateOpenAiTokenUsageCost(params: {
     params.cachedInputTokens,
     entry.cachedInputUsdPerMillion,
   );
+  const billedOutputTokens = params.outputTokensIncludeReasoning
+    ? params.outputTokens
+    : params.outputTokens + Math.max(0, params.reasoningOutputTokens ?? 0);
   const outputCostMicros = calculateTokenCostMicros(
-    params.outputTokens,
+    billedOutputTokens,
     entry.outputUsdPerMillion,
   );
   const totalCostMicros =

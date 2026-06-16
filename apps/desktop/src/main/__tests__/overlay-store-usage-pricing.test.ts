@@ -42,7 +42,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         outputTokens: 300,
         pricedUsageLineCount: 1,
         threadId: "thread-1",
-        totalCostMicros: 5_000,
+        totalCostMicros: 16_100,
         totalTokens: 1_300,
         uncachedInputTokens: 800,
         unpricedUsageLineCount: 0,
@@ -65,7 +65,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         inputTokens: 1_000,
         outputTokens: 50,
         reasoningOutputTokens: 10,
-        totalCostMicros: 5_000,
+        totalCostMicros: 5_900,
         totalTokens: 1_060,
         uncachedInputTokens: 800,
       }),
@@ -85,7 +85,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       cumulativeTotalTokens: 11_600,
       cumulativeUncachedInputTokens: 800,
       inputTokens: 1_000,
-      totalCostMicros: 5_000,
+      totalCostMicros: 5_900,
       totalTokens: 1_060,
     });
     expect(pricing.summaries[0]).toMatchObject({
@@ -93,7 +93,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       inputTokens: 1_000,
       outputTokens: 50,
       reasoningOutputTokens: 10,
-      totalCostMicros: 5_000,
+      totalCostMicros: 5_900,
       totalTokens: 1_060,
     });
   });
@@ -113,7 +113,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         inputTokens: 1_400,
         source: "live",
         status: "pending",
-        totalCostMicros: 6_000,
+        totalCostMicros: 16_100,
         totalTokens: 1_700,
       }),
     });
@@ -126,8 +126,68 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.lines[0]).toMatchObject({
       createdAt: 1_000,
       inputTokens: 1_400,
-      totalCostMicros: 6_000,
+      totalCostMicros: 16_100,
       totalTokens: 1_700,
+    });
+  });
+
+  it("does not erase known turn settings when usage updates omit them", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: 1_000,
+        fastMode: true,
+        model: "gpt-5.5",
+        serviceTier: "priority",
+        settingsConfidence: "exact",
+        settingsSource: "turn-context",
+        source: "live",
+        status: "pending",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: 2_000,
+        fastMode: undefined,
+        model: undefined,
+        serviceTier: undefined,
+        settingsConfidence: "unknown",
+        settingsSource: "unknown",
+        source: "live",
+        status: "pending",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT model, service_tier, fast_mode, settings_source, settings_confidence
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageTurnId) as {
+        fast_mode: number | null;
+        model: string | null;
+        service_tier: string | null;
+        settings_confidence: string | null;
+        settings_source: string | null;
+      };
+
+    expect(pricing.lines[0]).toMatchObject({
+      fastMode: true,
+      model: "gpt-5.5",
+      serviceTier: "priority",
+      settingsConfidence: "exact",
+      settingsSource: "turn-context",
+    });
+    expect(turn).toEqual({
+      fast_mode: 1,
+      model: "gpt-5.5",
+      service_tier: "priority",
+      settings_confidence: "exact",
+      settings_source: "turn-context",
     });
   });
 
@@ -136,13 +196,13 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         status: "superseded",
-        totalCostMicros: 5_000,
+        totalCostMicros: 16_100,
       }),
     });
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         outputTokens: 600,
-        totalCostMicros: 9_000,
+        totalCostMicros: 25_100,
         totalTokens: 1_600,
         usageLineId: "line-1-hydrated",
       }),
@@ -158,7 +218,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ]);
     expect(pricing.summaries[0]).toMatchObject({
       outputTokens: 600,
-      totalCostMicros: 9_000,
+      totalCostMicros: 25_100,
       totalTokens: 1_600,
       usageLineCount: 1,
     });
@@ -169,7 +229,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       line: buildUsageLine({
         parentThreadId: "thread-1",
         threadId: "monitor-thread-1",
-        totalCostMicros: 7_000,
+        totalCostMicros: 16_100,
         usageLineId: "monitor-line-1",
       }),
     });
@@ -186,7 +246,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(parentPricing.lines).toHaveLength(1);
     expect(parentPricing.summaries[0]).toMatchObject({
       threadId: "thread-1",
-      totalCostMicros: 7_000,
+      totalCostMicros: 16_100,
       usageLineCount: 1,
     });
     expect(monitorPricing.lines).toHaveLength(1);
@@ -196,6 +256,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
   it("tracks unpriced token rows separately from priced cost totals", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
+        model: undefined,
         priceStatus: "unpriced",
         priceUnavailableReason: "missing-model",
         pricingCatalogId: undefined,
@@ -234,7 +295,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         source: "hydration",
-        totalCostMicros: 5_000,
+        totalCostMicros: 16_100,
         usageLineId: "line-1-hydrated",
       }),
     });
@@ -290,7 +351,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.summaries).toEqual([
       expect.objectContaining({
         provider: "openai",
-        totalCostMicros: 5_000,
+        totalCostMicros: 16_100,
         usageLineCount: 1,
       }),
       expect.objectContaining({
@@ -314,7 +375,7 @@ function buildUsageLine(
     fastMode: false,
     inputTokens: 1_000,
     model: "gpt-5.5",
-    outputCostMicros: 4_000,
+    outputCostMicros: 12_000,
     outputTokens: 300,
     priceStatus: "priced",
     provider: "openai",
@@ -331,10 +392,10 @@ function buildUsageLine(
     sourceItemId: "item-1",
     status: "finalized",
     threadId: "thread-1",
-    totalCostMicros: 5_000,
+    totalCostMicros: 16_100,
     totalTokens: 1_300,
     turnId: "turn-1",
-    uncachedInputCostMicros: 900,
+    uncachedInputCostMicros: 4_000,
     uncachedInputTokens: 800,
     usageLineId: "line-1",
     ...overrides,

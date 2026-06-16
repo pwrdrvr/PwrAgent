@@ -46,6 +46,39 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("bills separately reported reasoning tokens at the output rate", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      cachedInputTokens: 0,
+      model: "gpt-5.5",
+      outputTokens: 2_000,
+      reasoningOutputTokens: 500,
+      uncachedInputTokens: 0,
+    });
+
+    expect(cost).toMatchObject({
+      outputCostMicros: 75_000,
+      totalCostMicros: 75_000,
+      totalUsd: 0.075,
+    });
+  });
+
+  it("does not double count reasoning tokens when output already includes them", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      cachedInputTokens: 0,
+      model: "gpt-5.5",
+      outputTokens: 2_500,
+      outputTokensIncludeReasoning: true,
+      reasoningOutputTokens: 500,
+      uncachedInputTokens: 0,
+    });
+
+    expect(cost).toMatchObject({
+      outputCostMicros: 75_000,
+      totalCostMicros: 75_000,
+      totalUsd: 0.075,
+    });
+  });
+
   it("returns undefined when the effective date does not match a local catalog row", () => {
     expect(
       estimateOpenAiTokenUsageCost({

@@ -3500,6 +3500,95 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("does not price a turn by borrowing another turn's model metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-token-count-missing-turn-context", {
+      events: [
+        {
+          type: "turn_context",
+          timestamp: "2026-06-16T13:26:02.690Z",
+          payload: {
+            turn_id: "unrelated-top-level-turn",
+            model: "gpt-5.5",
+          },
+        },
+      ],
+      thread: {
+        id: "thread-token-count-missing-turn-context",
+        turns: [
+          {
+            id: "turn-with-context",
+            status: "completed",
+            startedAt: 1_781_616_000,
+            items: [
+              {
+                type: "turn_context",
+                id: "context-gpt-55",
+                model: "gpt-5.5",
+              },
+              {
+                type: "token_count",
+                id: "usage-gpt-55",
+                info: {
+                  last_token_usage: {
+                    input_tokens: 1_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 1_000,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            id: "turn-without-context",
+            status: "completed",
+            startedAt: 1_781_616_060,
+            items: [
+              {
+                type: "token_count",
+                id: "usage-missing-model",
+                info: {
+                  last_token_usage: {
+                    input_tokens: 1_000_000,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 1_000_000,
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-token-count-missing-turn-context",
+    });
+
+    const usageEntries = replay.entries.filter(
+      (entry): entry is Extract<typeof entry, { type: "activity" }> =>
+        entry.type === "activity" && entry.usageLine !== undefined,
+    );
+    expect(usageEntries.map((entry) => entry.usageLine?.priceStatus)).toEqual([
+      "priced",
+      "unpriced",
+    ]);
+    expect(usageEntries[1]?.usageLine).toMatchObject({
+      priceUnavailableReason: "missing-model",
+      totalCostMicros: 0,
+      turnId: "turn-without-context",
+    });
+
+    await client.close();
+  });
+
   it("preserves local image fields from durable user message records", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-local-image-records", {
