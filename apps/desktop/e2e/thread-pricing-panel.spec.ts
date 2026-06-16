@@ -57,12 +57,10 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(contextRail.getByText("$0.017 list price · 2 rows")).toBeVisible();
     await expect(contextRail.getByText("xai · USD")).toBeVisible();
     await expect(contextRail.getByText("$0.003 list price · 1 row")).toBeVisible();
-    await expect(
-      contextRail.getByText("gpt-5.5 · high · standard"),
-    ).toBeVisible();
+    await expect(contextRail.getByText("gpt-5.5 · high")).toBeVisible();
     await expect(contextRail.getByText("$0.017 list price this turn")).toBeVisible();
     await expect(contextRail.getByText("Unknown model")).toBeVisible();
-    await expect(contextRail.getByText("grok-4.20-reasoning · standard")).toBeVisible();
+    await expect(contextRail.getByText("grok-4.20-reasoning")).toBeVisible();
   } finally {
     await app.close();
   }
