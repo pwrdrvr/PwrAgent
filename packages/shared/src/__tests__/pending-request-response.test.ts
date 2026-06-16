@@ -143,7 +143,7 @@ describe("buildPendingRequestResponse", () => {
       }),
       expect.objectContaining({
         decision: "accept_with_execpolicy_amendment",
-        label: "Approve Prefix: pnpm test",
+        label: "Always Allow Prefix: pnpm test",
         response: { decision: structuredDecision },
       }),
       expect.objectContaining({

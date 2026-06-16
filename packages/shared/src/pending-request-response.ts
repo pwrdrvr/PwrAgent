@@ -405,7 +405,7 @@ function execpolicyLabel(payload: object): string {
     ? prefix.filter((part): part is string => typeof part === "string")
     : undefined;
   const rendered = command?.join(" ").trim();
-  return rendered ? `Approve Prefix: ${rendered}` : "Approve Command Prefix";
+  return rendered ? `Always Allow Prefix: ${rendered}` : "Always Allow Command Prefix";
 }
 
 function networkPolicyLabel(payload: object): string {
