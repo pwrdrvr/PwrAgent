@@ -14,35 +14,35 @@
   --font-display: "Geist", "SF Pro Display", system-ui, sans-serif;
 
   /* ---------- COLOR — surfaces (warm off-black system) ---------- */
-  --bg-app:            #0a0908;   /* root, slightly warm */
-  --bg-sidebar:        #0e0d0b;   /* nav rail */
-  --bg-panel:          #13110e;   /* primary cards/content panels */
-  --bg-panel-elevated: #1a1714;   /* nested cards, popovers */
-  --bg-panel-hover:    #1f1a15;   /* hover on panels */
-  --bg-row-active:     #2a1810;   /* deep copper-tinted, selected items */
-  --bg-input:          #0d0c0a;   /* input fields */
-  --bg-overlay:        rgba(10, 9, 8, 0.78);  /* modal scrim */
+  --bg-app:            #000000;   /* root, true black */
+  --bg-sidebar:        #050505;   /* nav rail */
+  --bg-panel:          #0a0a0a;   /* primary cards/content panels */
+  --bg-panel-elevated: #101010;   /* nested cards, popovers */
+  --bg-panel-hover:    #14110d;   /* hover on panels */
+  --bg-row-active:     #120800;   /* deep copper-black, selected items */
+  --bg-input:          #080808;   /* input fields */
+  --bg-overlay:        rgba(0, 0, 0, 0.78);  /* modal scrim */
 
   /* ---------- COLOR — borders ---------- */
-  --border-subtle: rgba(247, 243, 235, 0.08);
-  --border-default: rgba(247, 243, 235, 0.12);
-  --border-strong: rgba(247, 243, 235, 0.18);
+  --border-subtle: rgba(247, 243, 235, 0.10);
+  --border-default: rgba(247, 243, 235, 0.14);
+  --border-strong: rgba(247, 243, 235, 0.20);
 
   /* ---------- COLOR — text ---------- */
-  --text-primary:   #f5efe3;   /* warm bone — never pure white */
-  --text-secondary: #b8b0a4;
-  --text-muted:     #8a8275;
-  --text-subtle:    #5a544b;
+  --text-primary:   #f7f3eb;   /* warm bone — never pure white */
+  --text-secondary: #b8b0a5;
+  --text-muted:     #8c857a;
+  --text-subtle:    rgba(247, 243, 235, 0.42);
 
-  /* ---------- COLOR — accent (burnt copper) ---------- */
-  --accent:        #e8743a;
-  --accent-strong: #f48a55;
-  --accent-bright: #fda984;
-  --accent-deep:   #9c4d20;
-  --accent-soft:   rgba(232, 116, 58, 0.14);
-  --accent-tint:   rgba(232, 116, 58, 0.06);
-  --accent-border: rgba(232, 116, 58, 0.38);
-  --accent-shadow: rgba(232, 116, 58, 0.30);
+  /* ---------- COLOR — accent (tangerine) ---------- */
+  --accent:        #ff8a1f;
+  --accent-strong: #ffa33d;
+  --accent-bright: #ffb35c;
+  --accent-deep:   #b3590f;
+  --accent-soft:   rgba(255, 138, 31, 0.12);
+  --accent-tint:   rgba(255, 138, 31, 0.06);
+  --accent-border: rgba(255, 138, 31, 0.42);
+  --accent-shadow: rgba(255, 138, 31, 0.34);
 
   /* ---------- COLOR — brand blue (logo / parent stamp ONLY) ---------- */
   /* Reserved for the PwrDrvr brand mark on its navy plate. Do NOT use
@@ -52,28 +52,28 @@
   --brand-blue-deep:  #0e1a2b;
 
   /* ---------- COLOR — semantic ---------- */
-  --danger:        #e85a3a;
-  --danger-soft:   rgba(232, 90, 58, 0.16);
-  --danger-border: rgba(232, 90, 58, 0.36);
+  --danger:        #c45a3a;
+  --danger-soft:   rgba(185, 66, 50, 0.24);
+  --danger-border: rgba(255, 176, 161, 0.32);
   --danger-text:   #ffb0a1;
 
-  --success:       #6dba7e;
-  --success-soft:  rgba(109, 186, 126, 0.14);
-  --success-border:rgba(109, 186, 126, 0.32);
+  --success:       #5fa969;
+  --success-soft:  rgba(74, 148, 92, 0.18);
+  --success-border:rgba(74, 148, 92, 0.32);
   --success-text:  #9ce5b3;
 
-  --info:          #6b9ad8;
-  --info-soft:     rgba(107, 154, 216, 0.14);
-  --info-border:   rgba(107, 154, 216, 0.32);
-  --info-text:     #a8c5ee;
+  --info:          #5689c4;
+  --info-soft:     rgba(86, 137, 196, 0.16);
+  --info-border:   rgba(86, 137, 196, 0.28);
+  --info-text:     #9fc8ff;
 
-  --warn:          #d8a85a;
-  --warn-soft:     rgba(216, 168, 90, 0.14);
-  --warn-border:   rgba(216, 168, 90, 0.32);
+  --warn:          #d99a3d;
+  --warn-soft:     rgba(217, 154, 61, 0.16);
+  --warn-border:   rgba(217, 154, 61, 0.32);
   --warn-text:     #e8c890;
 
   /* ---------- BUTTON ---------- */
-  --button-text-on-accent: #1a0d05;   /* dark warm-black, used on bright copper fills */
+  --button-text-on-accent: #120800;   /* deep copper-black, used on bright tangerine fills */
 
   /* ---------- SHADOWS ---------- */
   --shadow-xs:     0 1px 2px rgba(0, 0, 0, 0.32);

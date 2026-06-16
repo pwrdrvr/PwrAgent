@@ -70,15 +70,22 @@ function ThreadPlatformChip({ platform, status, blink, onUnbind }) {
   );
 }
 
-function ThreadRow({ thread, selected, onClick, onAddReaction, onUnbindPlatform }) {
+function ThreadRow({ thread, selected, onClick, onAddReaction, onUnbindPlatform, plain }) {
   const I = window.PA.Icon;
   const [picker, setPicker] = useStateSB(false);
-  const cls = ["pa-tr", selected ? "is-selected" : "", (thread.reactions||[]).length ? "has-reactions" : ""].filter(Boolean).join(" ");
+  const cls = ["pa-tr", selected ? "is-selected" : "", (thread.reactions||[]).length && !plain ? "has-reactions" : "", plain ? "is-plain" : ""].filter(Boolean).join(" ");
+  const showPlatforms = !plain && (thread.platforms || []).length > 0;
+  const prs = plain ? [] : (thread.prs || []);
+  const reactions = plain ? [] : (thread.reactions || []);
   return (
     <button className={cls} onClick={onClick} style={{ position: "relative" }}>
       <div className="pa-tr__head">
-        {thread.working && <span className="pa-tr__working-dot" title="Working…" />}
-        {(thread.platforms || []).length > 0 && (
+        <span className="pa-tr__lead">
+          {thread.working
+            ? <span className="pa-tr__working-dot" title="Working…" />
+            : <span className="pa-tr__idle-dot" aria-hidden="true" />}
+        </span>
+        {showPlatforms && (
           <span className="pa-tr__platforms">
             {thread.platforms.map((p) => (
               <ThreadPlatformChip
@@ -108,10 +115,10 @@ function ThreadRow({ thread, selected, onClick, onAddReaction, onUnbindPlatform 
           </span>
         )}
       </div>
-      {((thread.prs && thread.prs.length) || (thread.reactions && thread.reactions.length) || true) && (
+      {((prs.length) || (reactions.length) || true) && (
         <div className="pa-tr__row-end">
-          {(thread.prs || []).map((pr, i) => <PRChip key={i} pr={pr} />)}
-          {(thread.reactions || []).map((r, i) => (
+          {prs.map((pr, i) => <PRChip key={i} pr={pr} />)}
+          {reactions.map((r, i) => (
             <span key={i} className={`pa-react ${r.mine ? "is-mine" : ""}`} onClick={(e) => e.stopPropagation()}>
               <span className="pa-react__emoji">{r.emoji}</span>
               {r.count > 1 && r.count}
@@ -149,7 +156,7 @@ function LensSwitch({ value, onChange }) {
   );
 }
 
-function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPlatform, onNewThreadInDir }) {
+function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPlatform, onNewThreadInDir, plain }) {
   const I = window.PA.Icon;
   return (
     <div className="pa-dir-section">
@@ -174,13 +181,14 @@ function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPl
           onClick={() => onSelect(t.id)}
           onAddReaction={onAddReaction}
           onUnbindPlatform={onUnbindPlatform}
+          plain={plain}
         />
       ))}
     </div>
   );
 }
 
-function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contextBranch, showDevContext, newThreadActive, onAddReaction, onUnbindPlatform, onNewThread, onNewThreadInDir }) {
+function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contextBranch, showDevContext, newThreadActive, onAddReaction, onUnbindPlatform, onNewThread, onNewThreadInDir, plainThreads }) {
   const I = window.PA.Icon;
   const flat = data.flatMap((g) => g.threads);
   return (
@@ -222,6 +230,7 @@ function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contex
             onClick={() => onSelect(t.id)}
             onAddReaction={onAddReaction}
             onUnbindPlatform={onUnbindPlatform}
+            plain={plainThreads}
           />
         ))}
         {lens === "Directories" && data.map((g) => (
@@ -233,6 +242,7 @@ function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contex
             onAddReaction={onAddReaction}
             onUnbindPlatform={onUnbindPlatform}
             onNewThreadInDir={onNewThreadInDir}
+            plain={plainThreads}
           />
         ))}
       </div>
