@@ -29,7 +29,7 @@ export function ThreadMetaChips({
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
-  const hasTrackedDirt = Boolean(
+  const hasDirtySummary = Boolean(
     gitWorking &&
       (gitWorking.dirtyFiles > 0 ||
         gitWorking.dirtyAdditions > 0 ||
@@ -38,7 +38,7 @@ export function ThreadMetaChips({
   const hasUntracked = Boolean(gitWorking && gitWorking.untrackedFiles > 0);
   const dirtyTooltip = gitWorking
     ? [
-        hasTrackedDirt
+        hasDirtySummary
           ? `Uncommitted changes: ${gitWorking.dirtyFiles} file${
               gitWorking.dirtyFiles === 1 ? "" : "s"
             }, +${gitWorking.dirtyAdditions.toLocaleString()}, -${gitWorking.dirtyDeletions.toLocaleString()}`
@@ -182,7 +182,7 @@ export function ThreadMetaChips({
         </CopyableThreadChip>
       ) : null}
 
-      {hasTrackedDirt || hasUntracked ? (
+      {hasDirtySummary || hasUntracked ? (
         <span
           aria-label={dirtyTooltip.replace(/\n/g, "; ")}
           role="img"
@@ -192,7 +192,7 @@ export function ThreadMetaChips({
           }
           onMouseLeave={gitStateTooltip.hide}
         >
-          {hasTrackedDirt ? (
+          {hasDirtySummary ? (
             <>
               <span className="thread-row__chip-stat thread-row__chip-stat--added">
                 +{gitWorking!.dirtyAdditions.toLocaleString()}
