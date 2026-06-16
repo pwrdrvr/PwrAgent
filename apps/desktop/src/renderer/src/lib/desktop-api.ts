@@ -115,6 +115,10 @@ import type {
   RefreshDirectoryGitStatusesResponse,
   ResolveEditCommitStatesRequest,
   ResolveEditCommitStatesResponse,
+  ListWorktreeOtherChangesRequest,
+  ListWorktreeOtherChangesResponse,
+  GetWorktreeOtherChangeDiffRequest,
+  GetWorktreeOtherChangeDiffResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -569,6 +573,12 @@ export type DesktopApi = {
   resolveEditCommitStates?: (
     request: ResolveEditCommitStatesRequest
   ) => Promise<ResolveEditCommitStatesResponse>;
+  listWorktreeOtherChanges?: (
+    request: ListWorktreeOtherChangesRequest
+  ) => Promise<ListWorktreeOtherChangesResponse>;
+  getWorktreeOtherChangeDiff?: (
+    request: GetWorktreeOtherChangeDiffRequest
+  ) => Promise<GetWorktreeOtherChangeDiffResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest

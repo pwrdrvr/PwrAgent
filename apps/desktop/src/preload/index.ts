@@ -117,6 +117,10 @@ import type {
   RefreshDirectoryGitStatusesResponse,
   ResolveEditCommitStatesRequest,
   ResolveEditCommitStatesResponse,
+  ListWorktreeOtherChangesRequest,
+  ListWorktreeOtherChangesResponse,
+  GetWorktreeOtherChangeDiffRequest,
+  GetWorktreeOtherChangeDiffResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -323,6 +327,8 @@ import {
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
+  NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
+  NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
@@ -1023,6 +1029,20 @@ const desktopApi = Object.freeze({
   ): Promise<ResolveEditCommitStatesResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
+      request,
+    ),
+  listWorktreeOtherChanges: async (
+    request: ListWorktreeOtherChangesRequest,
+  ): Promise<ListWorktreeOtherChangesResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
+      request,
+    ),
+  getWorktreeOtherChangeDiff: async (
+    request: GetWorktreeOtherChangeDiffRequest,
+  ): Promise<GetWorktreeOtherChangeDiffResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
       request,
     ),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>

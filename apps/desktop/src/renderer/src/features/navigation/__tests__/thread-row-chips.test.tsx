@@ -441,7 +441,7 @@ describe("ThreadRow chip flow", () => {
       thread: {
         ...baseThread,
         gitWorkingState: {
-          dirtyFiles: 2,
+          dirtyFiles: 3,
           dirtyAdditions: 112,
           dirtyDeletions: 3,
           untrackedFiles: 1,
@@ -456,7 +456,7 @@ describe("ThreadRow chip flow", () => {
     expect(dirtyChip).toHaveTextContent("-3");
     expect(dirtyChip).toHaveAttribute(
       "aria-label",
-      "Uncommitted changes: 2 files, +112, -3; 1 untracked file",
+      "Uncommitted changes: 3 files, +112, -3; 1 untracked file",
     );
 
     const unpushedChip = container.querySelector(".thread-row__chip--unpushed");
@@ -468,7 +468,31 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
-  it("renders an untracked-only dirty chip without +/- stats", () => {
+  it("renders an untracked-only dirty chip with +/- stats when available", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitWorkingState: {
+          dirtyFiles: 3,
+          dirtyAdditions: 17,
+          dirtyDeletions: 0,
+          untrackedFiles: 3,
+          unpushedCommits: 0,
+        },
+      },
+    });
+
+    const dirtyChip = container.querySelector(".thread-row__chip--dirty");
+    expect(dirtyChip).toHaveTextContent("+17");
+    expect(dirtyChip).toHaveTextContent("-0");
+    expect(dirtyChip).toHaveAttribute(
+      "aria-label",
+      "Uncommitted changes: 3 files, +17, -0; 3 untracked files",
+    );
+    expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
+  });
+
+  it("renders a legacy untracked-only dirty chip without +/- stats", () => {
     const { container } = renderRow({
       thread: {
         ...baseThread,

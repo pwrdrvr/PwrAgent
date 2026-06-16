@@ -1,9 +1,13 @@
 import path from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
+  AppServerThreadActivityDetail,
   EditGroupCommitInput,
   EditGroupCommitState,
   ThreadGitWorkingState,
+  WorktreeOtherChangeEntry,
+  WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
 
@@ -13,6 +17,10 @@ function normalizeAbsolutePath(value: string): string {
 
 /** Bounded concurrency for the per-group `git log`/`rev-list` commit probes. */
 const EDIT_COMMIT_RESOLVE_CONCURRENCY = 4;
+const DEFAULT_OTHER_CHANGES_MAX_FILES = 50;
+const HARD_OTHER_CHANGES_MAX_FILES = 100;
+const DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
+const HARD_OTHER_CHANGE_DIFF_MAX_BYTES = 500_000;
 
 type GitCommandRunner = (
   cwd: string,
@@ -76,6 +84,271 @@ function parseNumstat(output: string): {
   return { files, additions, deletions };
 }
 
+function clampPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  max: number,
+): number {
+  if (!Number.isFinite(value) || value === undefined) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(Math.floor(value), max));
+}
+
+function normalizeGitRelativePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function statusCodeToChangeStatus(
+  indexCode: string,
+  worktreeCode: string,
+): WorktreeOtherChangeStatus {
+  const code = indexCode !== " " && indexCode !== "?" ? indexCode : worktreeCode;
+  switch (code) {
+    case "A":
+      return "added";
+    case "C":
+      return "copied";
+    case "D":
+      return "deleted";
+    case "M":
+      return "modified";
+    case "R":
+      return "renamed";
+    case "T":
+      return "typechange";
+    case "?":
+      return "untracked";
+    default:
+      return "unknown";
+  }
+}
+
+function parseStatusPorcelainRecord(
+  record: string,
+  cwd: string,
+): WorktreeOtherChangeEntry | undefined {
+  if (record.length < 3) {
+    return undefined;
+  }
+  let indexCode = record[0] ?? " ";
+  let worktreeCode = record[1] ?? " ";
+  let pathStart = 3;
+  if (record[1] === " " && record[2] !== " ") {
+    // runGitCommand trims stdout; an unstaged-only status record starts with
+    // a leading space (` M path`), so after trim the first record can arrive
+    // as `M path`. Recover that shape instead of dropping the path's first
+    // character (`apps/...` -> `pps/...`).
+    indexCode = " ";
+    worktreeCode = record[0] ?? " ";
+    pathStart = 2;
+  }
+  let repoPath = record.slice(pathStart);
+  const renameSeparator = repoPath.indexOf(" -> ");
+  if (renameSeparator >= 0) {
+    repoPath = repoPath.slice(renameSeparator + " -> ".length);
+  }
+  repoPath = normalizeGitRelativePath(repoPath);
+  if (!repoPath) {
+    return undefined;
+  }
+  return {
+    path: normalizeAbsolutePath(path.resolve(cwd, repoPath)),
+    repoPath,
+    status: statusCodeToChangeStatus(indexCode, worktreeCode),
+    staged: indexCode !== " " && indexCode !== "?",
+    unstaged: worktreeCode !== " " || indexCode === "?",
+  };
+}
+
+function parseStatusPorcelain(
+  output: string,
+  cwd: string,
+): WorktreeOtherChangeEntry[] {
+  if (output.includes("\0")) {
+    const records = output.split("\0").filter(Boolean);
+    const entries: WorktreeOtherChangeEntry[] = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const entry = parseStatusPorcelainRecord(records[index]!, cwd);
+      if (!entry) {
+        continue;
+      }
+      entries.push(entry);
+      if (entry.status === "renamed" || entry.status === "copied") {
+        index += 1;
+      }
+    }
+    return entries;
+  }
+
+  const entries: WorktreeOtherChangeEntry[] = [];
+  for (const rawLine of output.split("\n")) {
+    if (!rawLine) {
+      continue;
+    }
+    const entry = parseStatusPorcelainRecord(rawLine, cwd);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+function parseNumstatByPath(
+  output: string,
+): Map<string, { additions?: number; removals?: number; binary?: boolean }> {
+  const stats = new Map<
+    string,
+    { additions?: number; removals?: number; binary?: boolean }
+  >();
+  for (const line of output.split("\n")) {
+    const [rawAdditions, rawRemovals, ...pathParts] = line.split("\t");
+    const repoPath = normalizeGitRelativePath(pathParts.join("\t"));
+    if (!repoPath) {
+      continue;
+    }
+    if (rawAdditions === "-" || rawRemovals === "-") {
+      stats.set(repoPath, { binary: true });
+    } else {
+      stats.set(repoPath, {
+        additions: rawAdditions ? Number(rawAdditions) || 0 : 0,
+        removals: rawRemovals ? Number(rawRemovals) || 0 : 0,
+      });
+    }
+  }
+  return stats;
+}
+
+function isPathInsideWorktree(cwd: string, absolutePath: string): boolean {
+  const relative = path.relative(cwd, absolutePath);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function summarizeDiffText(diff: string): {
+  additions: number;
+  removals: number;
+} {
+  let additions = 0;
+  let removals = 0;
+  for (const line of diff.split("\n")) {
+    if (
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("@@") ||
+      line.startsWith("\\")
+    ) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      removals += 1;
+    }
+  }
+  return { additions, removals };
+}
+
+function countTextLines(contents: string): number {
+  if (contents.length === 0) {
+    return 0;
+  }
+  const lines = contents.split("\n");
+  return lines.length > 0 && lines[lines.length - 1] === ""
+    ? lines.length - 1
+    : lines.length;
+}
+
+async function readFileSize(absolutePath: string): Promise<number | undefined> {
+  try {
+    const fileStat = await stat(absolutePath);
+    return fileStat.size;
+  } catch {
+    return undefined;
+  }
+}
+
+async function enrichUntrackedChangeStats(
+  entry: WorktreeOtherChangeEntry,
+): Promise<void> {
+  try {
+    const fileStat = await stat(entry.path);
+    if (!fileStat.isFile()) {
+      return;
+    }
+    entry.sizeBytes = fileStat.size;
+    if (fileStat.size > DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES) {
+      return;
+    }
+    const buffer = await readFile(entry.path);
+    if (buffer.includes(0)) {
+      entry.binary = true;
+      return;
+    }
+    entry.additions = countTextLines(buffer.toString("utf8"));
+    entry.removals = 0;
+  } catch {
+    // Summary stats are best-effort; expansion can still report a precise
+    // omitted/unavailable reason for the single requested file.
+  }
+}
+
+async function summarizeUntrackedChanges(
+  cwd: string,
+  statusOutput: string,
+): Promise<{ files: number; additions: number }> {
+  const untrackedEntries = parseStatusPorcelain(statusOutput, cwd).filter(
+    (entry) => entry.status === "untracked",
+  );
+  const visibleEntries = untrackedEntries.slice(0, DEFAULT_OTHER_CHANGES_MAX_FILES);
+  await Promise.all(visibleEntries.map((entry) => enrichUntrackedChangeStats(entry)));
+  return {
+    files: untrackedEntries.length,
+    additions: visibleEntries.reduce(
+      (sum, entry) => sum + (entry.additions ?? 0),
+      0,
+    ),
+  };
+}
+
+function buildUntrackedFileDiff(repoPath: string, contents: string): string {
+  const lines = contents.length > 0 ? contents.split("\n") : [];
+  const lineCount = countTextLines(contents);
+  const body = lines
+    .slice(0, lineCount)
+    .map((line) => `+${line}`)
+    .join("\n");
+  return [
+    `diff --git a/${repoPath} b/${repoPath}`,
+    "new file mode 100644",
+    "index 0000000..0000000",
+    "--- /dev/null",
+    `+++ b/${repoPath}`,
+    `@@ -0,0 +1,${lineCount} @@`,
+    body,
+  ]
+    .filter((line, index) => index < 6 || line.length > 0)
+    .join("\n");
+}
+
+function statusLabel(status: WorktreeOtherChangeStatus): string {
+  switch (status) {
+    case "added":
+      return "Added";
+    case "copied":
+      return "Copied";
+    case "deleted":
+      return "Deleted";
+    case "modified":
+      return "Modified";
+    case "renamed":
+      return "Renamed";
+    case "typechange":
+      return "Type changed";
+    case "untracked":
+      return "Untracked";
+    default:
+      return "Changed";
+  }
+}
+
 /**
  * Probe a thread's working directory for its local git working state:
  * uncommitted change totals (staged + unstaged vs HEAD), untracked file
@@ -103,7 +376,12 @@ export async function probeWorktreeWorkingState(
     // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
     // (fresh repo with no commits) — treated as "no tracked changes".
     runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
-    runGitNoLocks(["status", "--porcelain"]).catch(() => undefined),
+    runGitNoLocks([
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=normal",
+    ]).catch(() => undefined),
     runGitNoLocks(["remote"]).catch(() => undefined),
   ]);
   if (numstatOutput === undefined && statusOutput === undefined) {
@@ -111,9 +389,7 @@ export async function probeWorktreeWorkingState(
   }
 
   const numstat = parseNumstat(numstatOutput ?? "");
-  const untrackedFiles = (statusOutput ?? "")
-    .split("\n")
-    .filter((line) => line.startsWith("??")).length;
+  const untracked = await summarizeUntrackedChanges(worktreePath, statusOutput ?? "");
 
   // "Unpushed" means reachable from HEAD but on no remote ref. With no
   // remotes configured, every commit would count — meaningless for a
@@ -150,10 +426,10 @@ export async function probeWorktreeWorkingState(
   }
 
   return {
-    dirtyFiles: numstat.files,
-    dirtyAdditions: numstat.additions,
+    dirtyFiles: numstat.files + untracked.files,
+    dirtyAdditions: numstat.additions + untracked.additions,
     dirtyDeletions: numstat.deletions,
-    untrackedFiles,
+    untrackedFiles: untracked.files,
     unpushedCommits,
   };
 }
@@ -280,6 +556,182 @@ export class GitWorkingStateService {
         this.cache.delete(cacheKey);
       }
     }
+  }
+
+  /**
+   * List worktree changes that are not already represented by turn-level
+   * edited-file groups. This is intentionally summary-only: file count is
+   * capped, untracked directories stay collapsed by git's default status mode,
+   * and no patch text is generated here.
+   */
+  async listOtherChanges(
+    worktreePath: string,
+    options: {
+      excludePaths?: string[];
+      maxFiles?: number;
+    } = {},
+  ): Promise<{
+    changes: WorktreeOtherChangeEntry[];
+    totalChanges: number;
+    truncated: boolean;
+    maxFiles: number;
+  }> {
+    const cwd = worktreePath?.trim();
+    const maxFiles = clampPositiveInteger(
+      options.maxFiles,
+      DEFAULT_OTHER_CHANGES_MAX_FILES,
+      HARD_OTHER_CHANGES_MAX_FILES,
+    );
+    if (!cwd) {
+      return { changes: [], totalChanges: 0, truncated: false, maxFiles };
+    }
+
+    const noLocks = (args: string[]): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], this.gitEnv);
+    const output = await noLocks([
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=normal",
+    ]).catch(() => "");
+    const excluded = new Set(
+      (options.excludePaths ?? [])
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map(normalizeAbsolutePath),
+    );
+    const allChanges = parseStatusPorcelain(output, cwd).filter(
+      (entry) => !excluded.has(normalizeAbsolutePath(entry.path)),
+    );
+    const visible = allChanges.slice(0, maxFiles);
+
+    const trackedPaths = visible
+      .filter((entry) => entry.status !== "untracked")
+      .map((entry) => entry.repoPath);
+    if (trackedPaths.length > 0) {
+      const numstatOutput = await noLocks([
+        "diff",
+        "--numstat",
+        "HEAD",
+        "--",
+        ...trackedPaths,
+      ]).catch(() => "");
+      const statsByPath = parseNumstatByPath(numstatOutput);
+      for (const entry of visible) {
+        const stats = statsByPath.get(entry.repoPath);
+        if (stats) {
+          if (stats.binary) {
+            entry.binary = true;
+            entry.sizeBytes = await readFileSize(entry.path);
+          } else {
+            entry.additions = stats.additions ?? 0;
+            entry.removals = stats.removals ?? 0;
+          }
+        }
+      }
+    }
+
+    await Promise.all(
+      visible
+        .filter((entry) => entry.status === "untracked")
+        .map((entry) => enrichUntrackedChangeStats(entry)),
+    );
+
+    return {
+      changes: visible,
+      totalChanges: allChanges.length,
+      truncated: allChanges.length > visible.length,
+      maxFiles,
+    };
+  }
+
+  async getOtherChangeDiff(
+    worktreePath: string,
+    filePath: string,
+    options: { maxBytes?: number } = {},
+  ): Promise<{ detail?: AppServerThreadActivityDetail }> {
+    const cwd = worktreePath?.trim();
+    const absolutePath = normalizeAbsolutePath(path.resolve(filePath));
+    const maxBytes = clampPositiveInteger(
+      options.maxBytes,
+      DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES,
+      HARD_OTHER_CHANGE_DIFF_MAX_BYTES,
+    );
+    if (!cwd || !isPathInsideWorktree(cwd, absolutePath)) {
+      return {};
+    }
+
+    const repoPath = normalizeGitRelativePath(path.relative(cwd, absolutePath));
+    const noLocks = (args: string[]): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], this.gitEnv);
+    const status = parseStatusPorcelain(
+      await noLocks([
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=normal",
+        "--",
+        repoPath,
+      ]).catch(() => ""),
+      cwd,
+    ).find((entry) => normalizeAbsolutePath(entry.path) === absolutePath);
+    if (!status) {
+      return {};
+    }
+
+    let diff = "";
+    let omittedReason: string | undefined;
+    if (status.status === "untracked") {
+      try {
+        const fileStat = await stat(absolutePath);
+        if (!fileStat.isFile()) {
+          omittedReason = "Diff omitted for untracked directory.";
+        } else if (fileStat.size > maxBytes) {
+          omittedReason = `Diff omitted for large untracked file (${fileStat.size.toLocaleString()} bytes).`;
+        } else {
+          const buffer = await readFile(absolutePath);
+          if (buffer.includes(0)) {
+            omittedReason = "Diff omitted for binary untracked file.";
+          } else {
+            diff = buildUntrackedFileDiff(repoPath, buffer.toString("utf8"));
+          }
+        }
+      } catch {
+        omittedReason = "Diff unavailable for this untracked file.";
+      }
+    } else {
+      diff = await noLocks(["diff", "--no-ext-diff", "HEAD", "--", repoPath]).catch(
+        () => "",
+      );
+      if (diff.length > maxBytes) {
+        omittedReason = `Diff omitted because it exceeds ${maxBytes.toLocaleString()} bytes.`;
+        diff = "";
+      }
+    }
+
+    const stats = summarizeDiffText(diff);
+    const fileDiffKind =
+      status.status === "deleted"
+        ? "delete"
+        : status.status === "untracked" || status.status === "added"
+          ? "add"
+          : "update";
+    return {
+      detail: {
+        id: `other-change:${absolutePath}`,
+        kind: "write",
+        label: path.basename(repoPath) || repoPath,
+        path: absolutePath,
+        fileDiff: {
+          kind: fileDiffKind,
+          diff,
+          additions: status.additions ?? stats.additions,
+          removals: status.removals ?? stats.removals,
+          ...(omittedReason ? { omittedReason } : {}),
+        },
+        markdown: statusLabel(status.status),
+      },
+    };
   }
 
   /**

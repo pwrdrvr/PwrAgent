@@ -85,6 +85,10 @@ import {
   type RestoreWorktreeResponse,
   type ResolveEditCommitStatesRequest,
   type ResolveEditCommitStatesResponse,
+  type ListWorktreeOtherChangesRequest,
+  type ListWorktreeOtherChangesResponse,
+  type GetWorktreeOtherChangeDiffRequest,
+  type GetWorktreeOtherChangeDiffResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
@@ -128,6 +132,8 @@ import {
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
+  NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
+  NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -1017,6 +1023,28 @@ class DesktopAppServerService {
     } finally {
       this.pendingEditCommitResolves.delete(requestKey);
     }
+  }
+
+  async listWorktreeOtherChanges(
+    request: ListWorktreeOtherChangesRequest,
+  ): Promise<ListWorktreeOtherChangesResponse> {
+    return await getDesktopBackendRegistry().listWorktreeOtherChanges(
+      request.worktreePath,
+      {
+        excludePaths: request.excludePaths,
+        maxFiles: request.maxFiles,
+      },
+    );
+  }
+
+  async getWorktreeOtherChangeDiff(
+    request: GetWorktreeOtherChangeDiffRequest,
+  ): Promise<GetWorktreeOtherChangeDiffResponse> {
+    return await getDesktopBackendRegistry().getWorktreeOtherChangeDiff(
+      request.worktreePath,
+      request.path,
+      { maxBytes: request.maxBytes },
+    );
   }
 
   private collectThreadWorktreePaths(
@@ -3208,6 +3236,26 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.resolveEditCommitStates(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
+    async (
+      _event,
+      request: ListWorktreeOtherChangesRequest,
+    ): Promise<ListWorktreeOtherChangesResponse> => {
+      return await appServerService.listWorktreeOtherChanges(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+    async (
+      _event,
+      request: GetWorktreeOtherChangeDiffRequest,
+    ): Promise<GetWorktreeOtherChangeDiffResponse> => {
+      return await appServerService.getWorktreeOtherChangeDiff(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -3298,6 +3346,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);

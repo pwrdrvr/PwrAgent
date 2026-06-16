@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   GitWorkingStateService,
@@ -5,6 +8,14 @@ import {
 } from "../app-server/git-working-state-service";
 
 type GitCall = { cwd: string; args: string[] };
+
+function makeTempPrefix(): string {
+  return path.join(os.tmpdir(), "pwragent-git-working-state-");
+}
+
+function normalizeTestPath(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
 
 function fakeGit(
   responder: (args: string[]) => string | undefined,
@@ -45,7 +56,7 @@ describe("probeWorktreeWorkingState", () => {
     const state = await probeWorktreeWorkingState("/repo/wt", { runGit });
 
     expect(state).toEqual({
-      dirtyFiles: 2,
+      dirtyFiles: 4,
       dirtyAdditions: 3,
       dirtyDeletions: 1,
       untrackedFiles: 2,
@@ -103,6 +114,34 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit(() => undefined);
     expect(await probeWorktreeWorkingState("/not/a/repo", { runGit })).toBeUndefined();
   });
+
+  it("includes cheap untracked text additions in the dirty working-state totals", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    try {
+      await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
+      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
+      const { runGit } = fakeGit((args) => {
+        if (args.includes("--numstat")) return "3\t1\tsrc/a.ts\n";
+        if (args.includes("status")) {
+          return " M src/a.ts\0?? note.txt\0?? archive.zip\0?? scratch/\0";
+        }
+        if (args[args.length - 1] === "remote") return "";
+        return undefined;
+      });
+
+      const state = await probeWorktreeWorkingState(tmpRoot, { runGit });
+
+      expect(state).toEqual({
+        dirtyFiles: 4,
+        dirtyAdditions: 5,
+        dirtyDeletions: 1,
+        untrackedFiles: 3,
+        unpushedCommits: 0,
+      });
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GitWorkingStateService", () => {
@@ -150,7 +189,174 @@ describe("GitWorkingStateService", () => {
     }
 
     expect([...seen.keys()].sort()).toEqual(["/repo/one", "/repo/two"]);
-    expect(seen.get("/repo/one")).toMatchObject({ dirtyFiles: 2 });
+    expect(seen.get("/repo/one")).toMatchObject({ dirtyFiles: 4 });
+  });
+
+  it("lists other worktree changes with excluded turn paths filtered before the cap", async () => {
+    const worktreePath = "/repo/wt";
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) {
+        return [
+          " M src/turn.ts",
+          " M docs/PwrAgnt v2.html",
+          "A  src/other-b.ts",
+          "?? scratch/",
+          "",
+        ].join("\0");
+      }
+      if (args.includes("--numstat")) {
+        return "2\t1\tdocs/PwrAgnt v2.html\n4\t0\tsrc/other-b.ts\n";
+      }
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges(worktreePath, {
+      excludePaths: [`${worktreePath}/src/turn.ts`],
+      maxFiles: 2,
+    });
+
+    expect(response).toEqual({
+      changes: [
+        {
+          path: normalizeTestPath(`${worktreePath}/docs/PwrAgnt v2.html`),
+          repoPath: "docs/PwrAgnt v2.html",
+          status: "modified",
+          staged: false,
+          unstaged: true,
+          additions: 2,
+          removals: 1,
+        },
+        {
+          path: normalizeTestPath(`${worktreePath}/src/other-b.ts`),
+          repoPath: "src/other-b.ts",
+          status: "added",
+          staged: true,
+          unstaged: false,
+          additions: 4,
+          removals: 0,
+        },
+      ],
+      totalChanges: 3,
+      truncated: true,
+      maxFiles: 2,
+    });
+  });
+
+  it("recovers unstaged status records after git stdout trimming", async () => {
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) {
+        return "M apps/desktop/src/main/__tests__/git-working-state-service.test.ts\0";
+      }
+      if (args.includes("--numstat")) {
+        return "";
+      }
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges("/repo/wt", {
+      excludePaths: [
+        "/repo/wt/apps/desktop/src/main/__tests__/git-working-state-service.test.ts",
+      ],
+    });
+
+    expect(response.changes).toEqual([]);
+    expect(response.totalChanges).toBe(0);
+  });
+
+  it("reports added-line totals for small untracked text files and byte sizes for binary files", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    try {
+      await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
+      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
+      const { runGit } = fakeGit((args) => {
+        if (args.includes("status")) return "?? note.txt\0?? archive.zip\0";
+        if (args.includes("--numstat")) return "";
+        return undefined;
+      });
+      const service = new GitWorkingStateService({ runGit });
+
+      const response = await service.listOtherChanges(tmpRoot);
+
+      expect(response.changes).toEqual([
+        {
+          path: normalizeTestPath(path.join(tmpRoot, "note.txt")),
+          repoPath: "note.txt",
+          status: "untracked",
+          staged: false,
+          unstaged: true,
+          sizeBytes: 11,
+          additions: 2,
+          removals: 0,
+        },
+        {
+          path: normalizeTestPath(path.join(tmpRoot, "archive.zip")),
+          repoPath: "archive.zip",
+          status: "untracked",
+          staged: false,
+          unstaged: true,
+          binary: true,
+          sizeBytes: 4,
+        },
+      ]);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report line totals for tracked binary changes", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    try {
+      await writeFile(path.join(tmpRoot, "asset.png"), Buffer.from([0, 1, 2]));
+      const { runGit } = fakeGit((args) => {
+        if (args.includes("status")) return " M asset.png\0";
+        if (args.includes("--numstat")) return "-\t-\tasset.png\n";
+        return undefined;
+      });
+      const service = new GitWorkingStateService({ runGit });
+
+      const response = await service.listOtherChanges(tmpRoot);
+
+      expect(response.changes).toEqual([
+        {
+          path: normalizeTestPath(path.join(tmpRoot, "asset.png")),
+          repoPath: "asset.png",
+          status: "modified",
+          staged: false,
+          unstaged: true,
+          binary: true,
+          sizeBytes: 3,
+        },
+      ]);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a single-file diff on demand for an untracked file", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    const filePath = path.join(tmpRoot, "note.txt");
+    await writeFile(filePath, "hello\nworld\n", "utf8");
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) return "?? note.txt";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    try {
+      const response = await service.getOtherChangeDiff(tmpRoot, filePath);
+
+      expect(response.detail?.fileDiff).toMatchObject({
+        kind: "add",
+        additions: 2,
+        removals: 0,
+      });
+      expect(response.detail?.fileDiff?.diff).toContain("+++ b/note.txt");
+      expect(response.detail?.fileDiff?.diff).toContain("+hello");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
 

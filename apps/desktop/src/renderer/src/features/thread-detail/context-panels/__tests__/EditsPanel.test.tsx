@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditsPanel } from "../EditsPanel";
 import type { EditedFileGroup } from "../../edited-file-groups";
 
@@ -82,5 +82,88 @@ describe("EditsPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
     expect(screen.getByText("Pushed")).toBeInTheDocument();
+  });
+
+  it("shows non-turn worktree changes first and fetches their diff only when expanded", async () => {
+    const listWorktreeOtherChanges = vi.fn(async () => ({
+      changes: [
+        {
+          path: "/repo/docs/design.md",
+          repoPath: "docs/design.md",
+          status: "modified" as const,
+          staged: false,
+          unstaged: true,
+          additions: 3,
+          removals: 1,
+        },
+        {
+          path: "/repo/docs/PwrAgent.zip",
+          repoPath: "docs/PwrAgent.zip",
+          status: "untracked" as const,
+          staged: false,
+          unstaged: true,
+          binary: true,
+          sizeBytes: 15_846_287,
+        },
+      ],
+      totalChanges: 2,
+      truncated: false,
+      maxFiles: 50,
+    }));
+    const getWorktreeOtherChangeDiff = vi.fn(async () => ({
+      detail: {
+        id: "other-change:/repo/docs/design.md",
+        kind: "write" as const,
+        label: "design.md",
+        path: "/repo/docs/design.md",
+        fileDiff: {
+          kind: "update" as const,
+          diff: "--- a/docs/design.md\n+++ b/docs/design.md\n@@ -1 +1 @@\n-old\n+new\n",
+          additions: 1,
+          removals: 1,
+        },
+      },
+    }));
+
+    render(
+      <EditsPanel
+        groups={[editedGroup()]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        desktopApi={{ listWorktreeOtherChanges, getWorktreeOtherChangeDiff }}
+      />,
+    );
+
+    const otherToggle = await screen.findByRole("button", {
+      name: /Other 2 files/i,
+    });
+    expect(otherToggle).toBeInTheDocument();
+    expect(screen.getAllByLabelText("+3 -1")).toHaveLength(2);
+    expect(screen.getByText("Update design.md")).toBeInTheDocument();
+    expect(screen.getByText("Add PwrAgent.zip")).toBeInTheDocument();
+    expect(screen.getByLabelText("15.1 MB")).toBeInTheDocument();
+    expect(listWorktreeOtherChanges).toHaveBeenCalledWith({
+      worktreePath: "/repo",
+      excludePaths: ["/repo/apps/desktop/src/main/file-1.ts"],
+      maxFiles: 50,
+    });
+    expect(getWorktreeOtherChangeDiff).not.toHaveBeenCalled();
+
+    fireEvent.click(otherToggle);
+    expect(screen.queryByText("Update design.md")).not.toBeInTheDocument();
+
+    fireEvent.click(otherToggle);
+    fireEvent.click(screen.getByRole("button", { name: /Update design\.md/i }));
+
+    await waitFor(() => {
+      expect(getWorktreeOtherChangeDiff).toHaveBeenCalledWith({
+        worktreePath: "/repo",
+        path: "/repo/docs/design.md",
+        maxBytes: 200000,
+      });
+    });
+    expect(screen.getByText("docs/design.md")).toBeInTheDocument();
+    expect(await screen.findByText("new")).toBeInTheDocument();
   });
 });
