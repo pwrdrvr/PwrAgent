@@ -574,7 +574,7 @@ export class SqliteOverlayStore {
             @fastMode,
             @settingsSource,
             @settingsConfidence,
-            @createdAt,
+            @startedAt,
             @completedAt,
             @createdAt,
             @updatedAt
@@ -2150,6 +2150,7 @@ function normalizeThreadUsageLine(
     inputTokens,
     outputTokens,
     reasoningOutputTokens,
+    ...(line.startedAt !== undefined ? { startedAt: line.startedAt } : {}),
     totalTokens,
     uncachedInputTokens,
     provider: line.provider || "openai",
@@ -2187,6 +2188,14 @@ function mergeThreadUsageLineForUpsert(
       : existing.serviceTier
         ? { serviceTier: existing.serviceTier }
         : {}),
+    ...(line.startedAt !== undefined || existing.startedAt !== undefined
+      ? {
+          startedAt: Math.min(
+            existing.startedAt ?? line.startedAt ?? line.createdAt,
+            line.startedAt ?? existing.startedAt ?? existing.createdAt,
+          ),
+        }
+      : {}),
     settingsConfidence: mergeUsageSettingValue(
       line.settingsConfidence,
       existing.settingsConfidence,
@@ -2301,6 +2310,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     settingsSource: line.settingsSource ?? null,
     source: line.source,
     sourceItemId: line.sourceItemId ?? null,
+    startedAt: line.startedAt ?? line.createdAt,
     status: line.status,
     threadId: line.threadId,
     totalCostMicros: line.totalCostMicros,

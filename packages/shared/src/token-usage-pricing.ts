@@ -71,6 +71,7 @@ export type ThreadUsageLineRecord = {
   settingsSource?: ThreadUsageSettingsSnapshot["settingsSource"];
   source: "live" | "hydration" | "backfill" | "monitor";
   sourceItemId?: string;
+  startedAt?: number;
   status: ThreadUsageLineStatus;
   threadId: string;
   totalCostMicros: number;

@@ -2057,12 +2057,53 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   });
 }
 
+function readUuidV7Timestamp(id: string | undefined): number | undefined {
+  if (!id) {
+    return undefined;
+  }
+  const hex = id.replace(/-/g, "").slice(0, 12);
+  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
+    return undefined;
+  }
+  const timestamp = Number.parseInt(hex, 16);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function resolveLiveThreadUsageTiming(params: {
+  overlay?: ThreadOverlayState;
+  turnId?: string;
+}): {
+  completedAt?: number;
+  createdAt?: number;
+  startedAt?: number;
+} {
+  if (!params.turnId) {
+    return {};
+  }
+
+  const activity = params.overlay?.immutableUsageActivities?.find(
+    (entry) => entry.turn?.id === params.turnId,
+  );
+  const turn = activity?.turn;
+  const startedAt = turn?.startedAt ?? readUuidV7Timestamp(params.turnId);
+  const completedAt = turn?.completedAt;
+  const createdAt = completedAt ?? activity?.createdAt;
+  return {
+    ...(typeof completedAt === "number" ? { completedAt } : {}),
+    ...(typeof createdAt === "number" ? { createdAt } : {}),
+    ...(typeof startedAt === "number" ? { startedAt } : {}),
+  };
+}
+
 function buildLiveThreadUsageLine(params: {
   backend: AppServerBackendKind;
   cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
+  completedAt?: number;
+  createdAt?: number;
   fastMode?: boolean;
   model?: string;
   serviceTier?: string;
+  startedAt?: number;
   threadId: string;
   tokenUsage: unknown;
   turnId?: string;
@@ -2120,7 +2161,8 @@ function buildLiveThreadUsageLine(params: {
     backend: params.backend,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens,
-    createdAt: Date.now(),
+    ...(typeof params.completedAt === "number" ? { completedAt: params.completedAt } : {}),
+    createdAt: params.createdAt ?? params.completedAt ?? Date.now(),
     currency: cost?.currency ?? "USD",
     ...(cumulativeTokens
       ? {
@@ -2153,6 +2195,7 @@ function buildLiveThreadUsageLine(params: {
     settingsSource: "thread-overlay",
     source: "live",
     sourceItemId: "thread-token-usage",
+    ...(typeof params.startedAt === "number" ? { startedAt: params.startedAt } : {}),
     status: "pending",
     threadId: params.threadId,
     totalCostMicros: cost?.totalCostMicros ?? 0,
@@ -10502,9 +10545,14 @@ export class DesktopBackendRegistry {
       tokenUsage,
       turnId: notification.params.turnId ?? undefined,
     });
+    const usageTiming = resolveLiveThreadUsageTiming({
+      overlay,
+      turnId: notification.params.turnId ?? undefined,
+    });
     const line = buildLiveThreadUsageLine({
       backend: event.backend,
       cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
+      ...usageTiming,
       fastMode,
       model,
       serviceTier,

@@ -131,6 +131,44 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("stores usage turn start time separately from usage line timestamp", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        completedAt: 20_000,
+        createdAt: 20_100,
+        source: "live",
+        startedAt: 10_000,
+        status: "pending",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT started_at, completed_at, observed_at
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageTurnId) as {
+        completed_at: number | null;
+        observed_at: number | null;
+        started_at: number | null;
+      };
+
+    expect(pricing.lines[0]).toMatchObject({
+      completedAt: 20_000,
+      createdAt: 20_100,
+    });
+    expect(turn).toMatchObject({
+      completed_at: 20_000,
+      observed_at: 20_100,
+      started_at: 10_000,
+    });
+  });
+
   it("does not erase known turn settings when usage updates omit them", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

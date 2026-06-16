@@ -4855,6 +4855,126 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("uses known turn timing for older turn usage while a newer turn is active", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
+      backend,
+      threadId,
+      activityId: activity.id,
+      persisted: true,
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      persistThreadUsageActivity,
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "activity" as const,
+              id: "live-turn-usage-turn-old",
+              createdAt: 1_781_630_444_000,
+              details: [],
+              status: "completed" as const,
+              summary: "Turn usage: 9,000 uncached in · 1,000 cached · 100 out",
+              turn: {
+                id: "turn-old",
+                status: "completed" as const,
+                startedAt: 1_781_630_372_000,
+                completedAt: 1_781_630_444_000,
+                durationMs: 10_000,
+              },
+            },
+          ],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-new");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-old",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 10_000,
+                cached_input_tokens: 9_000,
+                output_tokens: 100,
+                reasoning_output_tokens: 20,
+                total_tokens: 10_120,
+              },
+              total_token_usage: {
+                input_tokens: 200_000,
+                cached_input_tokens: 180_000,
+                output_tokens: 1_000,
+                reasoning_output_tokens: 200,
+                total_tokens: 201_200,
+              },
+              model_context_window: 258_400,
+            },
+          },
+        },
+      });
+    });
+
+    expect(persistThreadUsageActivity).toHaveBeenCalledTimes(1);
+    expect(persistThreadUsageActivity).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      activity: expect.objectContaining({
+        id: "live-turn-usage-turn-old",
+        createdAt: 1_781_630_444_000,
+        turn: expect.objectContaining({
+          id: "turn-old",
+          status: "completed",
+          startedAt: 1_781_630_372_000,
+          completedAt: 1_781_630_444_000,
+          durationMs: 10_000,
+        }),
+      }),
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Turn usage: 1,000 uncached in · 9,000 cached · 100 out (20 reasoning)",
+    ]);
+    expect(result.current.runningTurnUsageText).toBeUndefined();
+    expect(result.current.contextWindow).toMatchObject({
+      cachedInputTokens: 9_000,
+      cumulativeCachedInputTokens: 180_000,
+      cumulativeInputTokens: 200_000,
+      cumulativeOutputTokens: 1_000,
+      cumulativeReasoningOutputTokens: 200,
+      inputTokens: 10_000,
+      modelContextWindow: 258_400,
+      outputTokens: 100,
+      totalTokens: 10_120,
+    });
+  });
+
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
@@ -7694,7 +7814,7 @@ describe("useThreadSessionState", () => {
         type: "activity",
         turn: expect.objectContaining({
           id: "turn-1",
-          status: "in_progress",
+          status: "completed",
         }),
       }),
     ]);
