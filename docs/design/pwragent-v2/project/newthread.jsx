@@ -101,6 +101,123 @@ function ProjectPicker({ value, recents, onChange, onPickFromDisk }) {
 }
 
 /* ----------------------------------------------------------------
+   Branch picker — sits next to the Worktree picker. Mirrors the
+   ProjectPicker pattern: popover, search, recents, action row.
+   Scoped to the currently-selected project's branch list.
+---------------------------------------------------------------- */
+function BranchPicker({ project, value, worktreeMode, onChange, onCreate }) {
+  const I = window.PA.Icon;
+  const [open, setOpen] = useStateNT(false);
+  const [query, setQuery] = useStateNT("");
+  const ref = useRefNT(null);
+
+  useEffectNT(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const branches = (project && project.branches) || [];
+  const filtered = useMemoNT(() => {
+    if (!query.trim()) return branches;
+    const q = query.trim().toLowerCase();
+    return branches.filter((b) => b.name.toLowerCase().includes(q));
+  }, [branches, query]);
+
+  const disabled = !project || !project.isRepo;
+  const label = value || project?.branch || "main";
+  const isWorktreeBase = worktreeMode === "worktree";
+
+  return (
+    <span ref={ref} style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        className={`pa-pick pa-pick--branch ${disabled ? "" : "is-active"}`}
+        onClick={(e) => { if (disabled) return; e.stopPropagation(); setOpen(!open); }}
+        disabled={disabled}
+        type="button"
+        title={disabled ? "Pick a git project first" : (isWorktreeBase ? `Worktree base: ${label}` : `Branch: ${label}`)}
+      >
+        <I.Branch size={11} />
+        <span className="pa-pick__txt">{label}</span>
+        <span className="pa-pick__chev">▾</span>
+      </button>
+
+      {open && !disabled && (
+        <div className="pa-pop pa-projpop pa-bpop" style={{ bottom: "calc(100% + 6px)", right: 0 }}>
+          <div className="pa-projpop__head">
+            <I.Search size={12} />
+            <input
+              className="pa-projpop__search"
+              placeholder="Find or create branch"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div className="pa-projpop__section">
+            {isWorktreeBase ? "Branch off from" : "Switch branch"}
+            <span className="pa-bpop__scope">{project.dir}</span>
+          </div>
+
+          {filtered.length === 0 && !query.trim() && (
+            <div className="pa-projpop__empty">No branches yet.</div>
+          )}
+
+          {filtered.map((b) => {
+            const active = b.name === label;
+            return (
+              <button
+                key={b.name}
+                className={`pa-projpop__row pa-bpop__row ${active ? "is-active" : ""}`}
+                onClick={() => { onChange(b.name); setOpen(false); }}
+                type="button"
+              >
+                <I.Branch size={12} />
+                <span className="pa-bpop__name" title={b.name}>{b.name}</span>
+                {b.current && <span className="pa-bpop__tag pa-bpop__tag--current">current</span>}
+                {b.busy && <span className="pa-bpop__tag pa-bpop__tag--busy">in&nbsp;use</span>}
+                <span className="pa-bpop__counts">
+                  {b.ahead > 0 && <span className="pa-bpop__ahead">↑{b.ahead}</span>}
+                  {b.behind > 0 && <span className="pa-bpop__behind">↓{b.behind}</span>}
+                </span>
+                <span className="pa-bpop__when">{b.lastCommit}</span>
+                {active && <I.Check size={12} />}
+              </button>
+            );
+          })}
+
+          {query.trim() && !filtered.some((b) => b.name === query.trim()) && (
+            <button
+              className="pa-projpop__row pa-projpop__row--action"
+              onClick={() => { onCreate?.(query.trim()); setOpen(false); setQuery(""); }}
+              type="button"
+            >
+              <I.Plus size={13} />
+              <span className="pa-projpop__name">Create&nbsp;<span className="pa-bpop__newname">{query.trim()}</span></span>
+              <span className="pa-projpop__hint">⏎</span>
+            </button>
+          )}
+
+          <div className="pa-projpop__sep" />
+
+          <button
+            className="pa-projpop__row pa-projpop__row--action"
+            onClick={() => { onCreate?.(); setOpen(false); }}
+            type="button"
+          >
+            <I.Plus size={13} />
+            <span className="pa-projpop__name">New branch from {label}…</span>
+            <span className="pa-projpop__hint">⌘B</span>
+          </button>
+        </div>
+      )}
+    </span>
+  );
+}
+
+/* ----------------------------------------------------------------
    File-browser modal — stand-in for the native Open dialog.
    Lets the user "navigate" a fake filesystem and pick a folder.
 ---------------------------------------------------------------- */
@@ -231,6 +348,7 @@ function FileBrowser({ initialPath, onCancel, onPick }) {
 function NewThread({ recents, initialProject, onCancel, onStart }) {
   const I = window.PA.Icon;
   const [project, setProject] = useStateNT(initialProject || null);
+  const [branch, setBranch] = useStateNT(initialProject?.branch || "main");
   const [text, setText] = useStateNT("");
   const [fast, setFast] = useStateNT(false);
   const [plan, setPlan] = useStateNT(false);
@@ -242,7 +360,7 @@ function NewThread({ recents, initialProject, onCancel, onStart }) {
   const start = () => {
     if (!canStart) return;
     onStart({
-      project,
+      project: { ...project, branch },
       text,
       worktreeMode,
       fast,
@@ -254,15 +372,19 @@ function NewThread({ recents, initialProject, onCancel, onStart }) {
   const onChosenFromDisk = (target) => {
     setBrowser(false);
     // Synthesize a directory entry; mark it as "new" so it gets added on start.
-    setProject({
+    const newProj = {
       dir: target.name,
       path: target.fullPath,
       branch: target.branch,
       isRepo: target.repo,
       isNew: true,
       lastUsed: Date.now(),
-    });
-    // If it's not a repo, default to local rather than worktree.
+      branches: target.repo ? [
+        { name: target.branch || "main", lastCommit: "just now", ahead: 0, behind: 0, current: true },
+      ] : [],
+    };
+    setProject(newProj);
+    setBranch(target.branch || "main");
     if (!target.repo) setWorktreeMode("local");
   };
 
@@ -276,174 +398,178 @@ function NewThread({ recents, initialProject, onCancel, onStart }) {
         />
       )}
 
-      <div className="pa-newthread__inner">
-        <header className="pa-newthread__header">
-          <div className="pa-newthread__eyebrow-row">
-            <span className="pa-newthread__eyebrow">NEW THREAD</span>
-            <span className="pa-pill2">OpenAI</span>
-            <span className="pa-pill2">Full Access</span>
-            <span className="pa-newthread__spacer" />
-            <div className="pa-newthread__meta">
-              <div className="pa-newthread__meta-col">
-                <div className="pa-newthread__meta-label">Workspace</div>
-                <div className="pa-newthread__meta-value">
-                  {project
-                    ? (worktreeMode === "worktree" && project.isRepo ? "New worktree" : "Local")
-                    : "—"}
-                </div>
-              </div>
-              <div className="pa-newthread__meta-col">
-                <div className="pa-newthread__meta-label">Branch</div>
-                <div className="pa-newthread__meta-value">{project?.branch || "—"}</div>
-              </div>
+      <div className="pa-newthread__topbar">
+        <div className="pa-newthread__topbar-eyebrow">NEW THREAD</div>
+        <h1 className="pa-newthread__topbar-title">
+          {project ? project.dir : "Untitled"}
+        </h1>
+        <span className="pa-pill2">OpenAI</span>
+        <span className="pa-pill2">Full Access</span>
+        <span style={{ flex: 1 }} />
+        <div className="pa-newthread__meta">
+          <div className="pa-newthread__meta-col">
+            <div className="pa-newthread__meta-label">Workspace</div>
+            <div className="pa-newthread__meta-value">
+              {project
+                ? (worktreeMode === "worktree" && project.isRepo ? "New worktree" : "Local")
+                : "—"}
             </div>
           </div>
-          <h1 className="pa-newthread__title">
-            {project ? project.dir : "Untitled"}
-          </h1>
-        </header>
-
-        {project ? (
-          <section className="pa-newthread__card">
-            <div className="pa-newthread__card-col">
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Project</div>
-                <div className="pa-newthread__field-value">{project.dir}</div>
-              </div>
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Threads</div>
-                <div className="pa-newthread__field-value pa-newthread__field-value--strong">
-                  {project.isNew ? "0 threads (new)" : `${project.threadCount ?? 0} threads`}
-                </div>
-              </div>
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Status</div>
-                <div className="pa-newthread__field-value">
-                  {project.isNew ? "Not yet tracked" : "Up to date"}
-                </div>
-              </div>
-            </div>
-            <div className="pa-newthread__card-col">
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Path</div>
-                <div className="pa-newthread__field-value pa-newthread__field-value--mono">
-                  {project.path || "—"}
-                </div>
-              </div>
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Upstream</div>
-                <div className="pa-newthread__field-value pa-newthread__field-value--mono">
-                  {project.isRepo ? `origin/${project.branch || "main"}` : "—"}
-                </div>
-              </div>
-              <div className="pa-newthread__card-row">
-                <div className="pa-newthread__field-label">Current branch</div>
-                <div className="pa-newthread__field-value pa-newthread__field-value--mono">
-                  {project.branch || "—"}
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : (
-          <section className="pa-newthread__card pa-newthread__card--empty">
-            <div className="pa-newthread__empty">
-              <I.Folder size={22} />
-              <div className="pa-newthread__empty-title">No project selected</div>
-              <div className="pa-newthread__empty-sub">
-                Pick a directory below to start the thread in. We'll add it to your Directories list.
-              </div>
-            </div>
-          </section>
-        )}
-
-        <div className="pa-newthread__filler" />
-
-        {/* ---- Composer ---- */}
-        <div className="pa-composer">
-          <div className="pa-composer__eyebrow">New thread</div>
-          <div className="pa-newthread__compose-input">
-            <span className="pa-slash">$ce:plan</span>
-            <textarea
-              className="pa-composer__textarea pa-newthread__textarea"
-              placeholder="Describe what you want to do…"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start(); }}
-              autoFocus
-            />
+          <div className="pa-newthread__meta-col">
+            <div className="pa-newthread__meta-label">Branch</div>
+            <div className="pa-newthread__meta-value">{branch || "—"}</div>
           </div>
+        </div>
+      </div>
 
-          <div className="pa-composer__row">
-            <button className="pa-pick">OpenAI<span className="pa-pick__chev">▾</span></button>
-            <button className="pa-pick"><span>Full Access</span><span className="pa-pick__chev">▾</span></button>
-
-            {/* NEW: Project picker, sits before Worktree */}
-            <ProjectPicker
-              value={project}
-              recents={recents}
-              onChange={(d) => {
-                setProject({ ...d, isNew: false, lastUsed: Date.now() });
-                if (!d.isRepo) setWorktreeMode("local");
-                else setWorktreeMode("worktree");
-              }}
-              onPickFromDisk={onPickFromDisk}
-            />
-
-            <button
-              className={`pa-pick ${project && project.isRepo ? "is-active" : ""}`}
-              onClick={() => {
-                if (!project) return;
-                setWorktreeMode((m) => m === "worktree" ? "local" : (project.isRepo ? "worktree" : "local"));
-              }}
-              disabled={!project}
-              title={project?.isRepo ? "Toggle worktree / local" : "Local only — not a git repo"}
-            >
-              <I.Worktree size={11} />
-              <span>{worktreeMode === "worktree" && project?.isRepo ? "New worktree" : "Local"}</span>
-              <span className="pa-pick__chev">▾</span>
-            </button>
-
-            <button className="pa-pick" disabled={!project}>
-              <I.Branch size={11} />
-              <span>{project?.branch || "main"}</span>
-              <span className="pa-pick__chev">▾</span>
-            </button>
-
-            <button className="pa-pick"><span>GPT-5.5</span><span className="pa-pick__chev">▾</span></button>
-            <button className="pa-pick"><span>high</span><span className="pa-pick__chev">▾</span></button>
-
-            <span className="pa-composer__spacer" />
-
-            <button className={`pa-toggle2 ${fast ? "is-on" : ""}`} onClick={() => setFast(!fast)}>
-              <span className="pa-toggle__box">{fast && <I.Check size={9} />}</span>
-              Fast mode
-            </button>
-            <button className={`pa-toggle2 ${plan ? "is-on" : ""}`} onClick={() => setPlan(!plan)}>
-              <span className="pa-toggle__box">{plan && <I.Check size={9} />}</span>
-              Plan mode
-            </button>
-          </div>
-
-          <div className="pa-composer__row">
-            <button className="pa-applaunch" disabled={!project}>
-              <I.VSCodeGlyph size={16} />VS Code
-            </button>
-            <button className="pa-applaunch" disabled={!project}>
-              <I.GhosttyGlyph size={16} />Ghostty
-            </button>
-            <span className="pa-composer__spacer" />
-            {project?.isNew && (
-              <span className="pa-newthread__addnote">
-                <I.Plus size={11} />
-                Adds <strong>{project.dir}</strong> to Directories
-              </span>
+      <div className="pa-transcript">
+        <div className="pa-transcript__fade pa-transcript__fade--top" />
+        <div className="pa-transcript__scroll">
+          <div className="pa-transcript__inner pa-newthread__transcript-inner">
+            {project ? (
+              <section className="pa-newthread__card">
+                <div className="pa-newthread__card-col">
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Project</div>
+                    <div className="pa-newthread__field-value">{project.dir}</div>
+                  </div>
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Threads</div>
+                    <div className="pa-newthread__field-value pa-newthread__field-value--strong">
+                      {project.isNew ? "0 threads (new)" : `${project.threadCount ?? 0} threads`}
+                    </div>
+                  </div>
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Status</div>
+                    <div className="pa-newthread__field-value">
+                      {project.isNew ? "Not yet tracked" : "Up to date"}
+                    </div>
+                  </div>
+                </div>
+                <div className="pa-newthread__card-col">
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Path</div>
+                    <div className="pa-newthread__field-value pa-newthread__field-value--mono">
+                      {project.path || "—"}
+                    </div>
+                  </div>
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Upstream</div>
+                    <div className="pa-newthread__field-value pa-newthread__field-value--mono">
+                      {project.isRepo ? `origin/${branch || "main"}` : "—"}
+                    </div>
+                  </div>
+                  <div className="pa-newthread__card-row">
+                    <div className="pa-newthread__field-label">Selected branch</div>
+                    <div className="pa-newthread__field-value pa-newthread__field-value--mono">
+                      {branch || "—"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <section className="pa-newthread__card pa-newthread__card--empty">
+                <div className="pa-newthread__empty">
+                  <I.Folder size={22} />
+                  <div className="pa-newthread__empty-title">No project selected</div>
+                  <div className="pa-newthread__empty-sub">
+                    Pick a directory below to start the thread in. We'll add it to your Directories list.
+                  </div>
+                </div>
+              </section>
             )}
-            <button className="pa-newthread__cancel" onClick={onCancel}>Cancel</button>
-            <button className="pa-send" onClick={start} disabled={!canStart} title={!project ? "Pick a project first" : !text.trim() ? "Type a prompt" : "Start thread"}>
-              <I.Send size={12} />
-              Start thread
-            </button>
           </div>
+        </div>
+        <div className="pa-transcript__fade pa-transcript__fade--bottom" />
+      </div>
+
+      {/* ---- Composer (shares styles with thread reply) ---- */}
+      <div className="pa-composer">
+        <div className="pa-composer__eyebrow">New thread</div>
+        <div className="pa-newthread__compose-input">
+          <span className="pa-slash">$ce:plan</span>
+          <textarea
+            className="pa-composer__textarea pa-newthread__textarea"
+            placeholder="Describe what you want to do…"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start(); }}
+            autoFocus
+          />
+        </div>
+
+        <div className="pa-composer__row">
+          <button className="pa-pick">OpenAI<span className="pa-pick__chev">▾</span></button>
+          <button className="pa-pick"><span>Full Access</span><span className="pa-pick__chev">▾</span></button>
+
+          <ProjectPicker
+            value={project}
+            recents={recents}
+            onChange={(d) => {
+              setProject({ ...d, isNew: false, lastUsed: Date.now() });
+              setBranch(d.branch || "main");
+              if (!d.isRepo) setWorktreeMode("local");
+              else setWorktreeMode("worktree");
+            }}
+            onPickFromDisk={onPickFromDisk}
+          />
+
+          <button
+            className={`pa-pick ${project && project.isRepo ? "is-active" : ""}`}
+            onClick={() => {
+              if (!project) return;
+              setWorktreeMode((m) => m === "worktree" ? "local" : (project.isRepo ? "worktree" : "local"));
+            }}
+            disabled={!project}
+            title={project?.isRepo ? "Toggle worktree / local" : "Local only — not a git repo"}
+          >
+            <I.Worktree size={11} />
+            <span>{worktreeMode === "worktree" && project?.isRepo ? "New worktree" : "Local"}</span>
+            <span className="pa-pick__chev">▾</span>
+          </button>
+
+          <BranchPicker
+            project={project}
+            value={branch}
+            worktreeMode={worktreeMode}
+            onChange={(b) => setBranch(b)}
+            onCreate={(name) => { if (name) setBranch(name); }}
+          />
+
+          <button className="pa-pick"><span>GPT-5.5</span><span className="pa-pick__chev">▾</span></button>
+          <button className="pa-pick"><span>high</span><span className="pa-pick__chev">▾</span></button>
+
+          <span className="pa-composer__spacer" />
+
+          <button className={`pa-toggle2 ${fast ? "is-on" : ""}`} onClick={() => setFast(!fast)}>
+            <span className="pa-toggle__box">{fast && <I.Check size={9} />}</span>
+            Fast mode
+          </button>
+          <button className={`pa-toggle2 ${plan ? "is-on" : ""}`} onClick={() => setPlan(!plan)}>
+            <span className="pa-toggle__box">{plan && <I.Check size={9} />}</span>
+            Plan mode
+          </button>
+        </div>
+
+        <div className="pa-composer__row">
+          <button className="pa-applaunch" disabled={!project}>
+            <I.VSCodeGlyph size={16} />VS Code
+          </button>
+          <button className="pa-applaunch" disabled={!project}>
+            <I.GhosttyGlyph size={16} />Ghostty
+          </button>
+          <span className="pa-composer__spacer" />
+          {project?.isNew && (
+            <span className="pa-newthread__addnote">
+              <I.Plus size={11} />
+              Adds <strong>{project.dir}</strong> to Directories
+            </span>
+          )}
+          <button className="pa-newthread__cancel" onClick={onCancel}>Cancel</button>
+          <button className="pa-send" onClick={start} disabled={!canStart} title={!project ? "Pick a project first" : !text.trim() ? "Type a prompt" : "Start thread"}>
+            <I.Send size={12} />
+            Start thread
+          </button>
         </div>
       </div>
     </main>

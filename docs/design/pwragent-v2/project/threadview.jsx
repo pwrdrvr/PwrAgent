@@ -187,9 +187,83 @@ function MessageBlock({ msg }) {
 }
 
 /* ----------------------------------------------------------------
+   Context-window moon — ported from the desktop renderer.
+   A waxing/waning sprite that visualizes how full the model's
+   context window is. Phase 0 = empty (new moon),
+   phase 4 = full (~100%), phase 8 = over budget (danger glow).
+---------------------------------------------------------------- */
+const CONTEXT_MOON_PHASES = [
+  "new moon",        // 0  · empty
+  "waxing crescent", // 1
+  "first quarter",   // 2
+  "waxing gibbous",  // 3
+  "full moon",       // 4  · at capacity
+  "waning gibbous",  // 5
+  "last quarter",    // 6
+  "waning crescent", // 7
+  "blood moon",      // 8  · over budget
+];
+function moonPhaseForPercent(p) {
+  if (p <= 0) return 0;
+  if (p < 18) return 1;
+  if (p < 38) return 2;
+  if (p < 58) return 3;
+  if (p < 78) return 4;
+  if (p < 88) return 5;
+  if (p < 95) return 6;
+  if (p < 100) return 7;
+  return 8;
+}
+function compactNum(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1).replace(/\.0$/, "") + "k";
+  return String(n);
+}
+function ContextWindowMoon({ usedPercent = 0, totalTokens, modelContextWindow, model = "GPT-5.5" }) {
+  const phase = moonPhaseForPercent(usedPercent);
+  const phaseLabel = CONTEXT_MOON_PHASES[phase];
+  const pct = Math.round(usedPercent);
+  const percentLabel = `${pct}%`;
+  const tokens = totalTokens ?? Math.round((usedPercent / 100) * (modelContextWindow ?? 200_000));
+  const max = modelContextWindow ?? 200_000;
+  const label = `Context window ${percentLabel} full, ${compactNum(tokens)}/${compactNum(max)} tokens, ${phaseLabel}`;
+  return (
+    <div
+      aria-label={label}
+      className="context-window-moon"
+      data-phase={phase}
+      role="img"
+      tabIndex={0}
+    >
+      <span
+        aria-hidden="true"
+        className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
+      >
+        <span className="context-window-moon__disc" />
+      </span>
+      <span className="context-window-moon__label">{percentLabel}</span>
+      <span className="context-window-moon__tooltip" role="tooltip">
+        <strong>Context · {phaseLabel}</strong>
+        <span className="context-window-moon__tooltip-row">
+          <span>Used</span><b>{pct}%</b>
+        </span>
+        <span className="context-window-moon__tooltip-row">
+          <span>Snapshot</span><b>{compactNum(tokens)} / {compactNum(max)}</b>
+        </span>
+        <span className="context-window-moon__tooltip-row">
+          <span>Model</span><b>{model}</b>
+        </span>
+      </span>
+    </div>
+  );
+}
+window.PA = window.PA || {};
+window.PA.ContextWindowMoon = ContextWindowMoon;
+
+/* ----------------------------------------------------------------
    Composer (now sits flush against bottom of app)
 ---------------------------------------------------------------- */
-function Composer({ onSend }) {
+function Composer({ onSend, contextPercent = 57 }) {
   const I = window.PA.Icon;
   const [text, setText] = useStateTV("");
   const [fast, setFast] = useStateTV(false);
@@ -197,7 +271,6 @@ function Composer({ onSend }) {
   const send = () => { if (!text.trim()) return; onSend?.(text); setText(""); };
   return (
     <div className="pa-composer">
-      <div className="pa-composer__eyebrow">Reply</div>
       <textarea
         className="pa-composer__textarea"
         placeholder="Reply to this thread"
@@ -225,9 +298,11 @@ function Composer({ onSend }) {
         <button className="pa-applaunch"><I.VSCodeGlyph size={16} />VS Code</button>
         <button className="pa-applaunch"><I.GhosttyGlyph size={16} />Ghostty</button>
         <span className="pa-composer__spacer" />
-        <button className="pa-pick" disabled style={{opacity:.6}}>
-          <I.Activity size={11} /><span>57%</span>
-        </button>
+        <window.PA.ContextWindowMoon
+          usedPercent={contextPercent}
+          modelContextWindow={200000}
+          model="GPT-5.5"
+        />
         <button className="pa-send" onClick={send} disabled={!text.trim()}>
           <I.Send size={12} />Send
         </button>
@@ -367,7 +442,7 @@ Test Files  1 passed (1)
 /* ----------------------------------------------------------------
    Thread view — full-bleed transcript, composer flush at bottom
 ---------------------------------------------------------------- */
-function ThreadView({ thread, onSend }) {
+function ThreadView({ thread, onSend, contextPercent }) {
   const turns = (thread.turns && thread.turns.length > 4) ? thread.turns : buildSampleTurns();
   const scrollRef = useRefTV(null);
 
@@ -395,7 +470,7 @@ function ThreadView({ thread, onSend }) {
         <div className="pa-transcript__fade pa-transcript__fade--top" />
         <div className="pa-transcript__fade pa-transcript__fade--bottom" />
       </section>
-      <Composer onSend={onSend} />
+      <Composer onSend={onSend} contextPercent={contextPercent} />
     </main>
   );
 }

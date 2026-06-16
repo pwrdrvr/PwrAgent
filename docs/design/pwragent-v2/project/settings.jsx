@@ -558,6 +558,7 @@ const SECTIONS = [
   { id: "applications", label: "Applications", icon: "VSCodeGlyph" },
   { id: "worktrees", label: "Worktrees", icon: "Worktree" },
   { id: "messaging", label: "Messaging", icon: "Activity", badge: true },
+  { id: "access", label: "Access Control", icon: "Lock" },
   { id: "models", label: "Models", icon: "Zap" },
   { id: "experimental", label: "Experimental", icon: "Loader" },
   { id: "about", label: "About", icon: "Info" },
@@ -592,6 +593,7 @@ function Settings({ section, setSection, onExit, platforms }) {
         {section === "applications" && <ApplicationsPanel />}
         {section === "worktrees" && <WorktreesPanel />}
         {section === "messaging" && <MessagingPanel platforms={platforms} />}
+        {section === "access" && <window.PA.RBACPanel />}
         {section === "models" && <ModelsPanel />}
         {section === "experimental" && <ExperimentalPanel />}
         {section === "about" && <AboutPanel />}

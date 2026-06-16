@@ -8,38 +8,46 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-thread, var(--bg-panel));
-}
-.pa-newthread__inner {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 28px 32px 18px;
-  max-width: 1280px;
-  width: 100%;
-  margin: 0 auto;
+  background: var(--bg-app);
 }
 
-/* ---- Header ---- */
-.pa-newthread__header {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 18px;
+/* Top bar — same shape & rhythm as .pa-thread__header in threadview */
+.pa-newthread__topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-app);
 }
-.pa-newthread__eyebrow-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.pa-newthread__eyebrow {
+.pa-newthread__topbar-eyebrow {
   font: 700 10px/1 var(--font-sans);
   color: var(--accent);
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  margin-right: 2px;
 }
+.pa-newthread__topbar-title {
+  margin: 0;
+  font: 700 16px/1.2 var(--font-sans);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 40%;
+}
+.pa-newthread__meta {
+  display: flex;
+  gap: 28px;
+}
+.pa-newthread__meta-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pa-newthread__meta-label {
+  font: 500 9px/1 var(--font-sans);
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pa-newthread__meta-value {
+  font: 600 12px/1.2 var(--font-sans);
+  color: var(--text-primary);
+}
+
 .pa-pill2 {
   display: inline-flex; align-items: center;
   height: 22px; padding: 0 8px;
@@ -48,27 +56,64 @@
   color: var(--text-secondary);
   font: 500 11px/1 var(--font-sans);
 }
-.pa-newthread__spacer { flex: 1; }
-.pa-newthread__meta {
-  display: flex;
-  gap: 36px;
+
+/* Inner content reuses .pa-transcript__inner — only deltas live here */
+.pa-newthread__transcript-inner > * + * { border-top: 0 !important; }
+.pa-newthread__transcript-inner { gap: 14px; padding-top: 22px; }
+
+/* ---- Branch picker (pa-projpop variant) ---- */
+.pa-pick--branch { max-width: 260px; }
+.pa-pick--branch .pa-pick__txt { max-width: 180px; }
+.pa-bpop { min-width: 360px; max-width: 460px; }
+.pa-bpop__scope {
+  margin-left: 8px;
+  font: 500 10px/1 var(--font-mono);
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  text-transform: none;
 }
-.pa-newthread__meta-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.pa-newthread__meta-label {
-  font: 500 10px/1 var(--font-sans);
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
+.pa-bpop__row { gap: 8px; }
+.pa-bpop__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 500 12px/1 var(--font-mono);
+  color: var(--text-primary);
+}
+.pa-bpop__tag {
+  display: inline-flex; align-items: center;
+  height: 16px; padding: 0 6px;
+  border-radius: 8px;
+  font: 600 9px/1 var(--font-sans);
   text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 0 0 auto;
 }
-.pa-newthread__meta-value {
-  font: 600 13px/1.2 var(--font-sans);
-  color: var(--text-primary);
+.pa-bpop__tag--current {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--accent-bright);
 }
-.pa-newthread__title {
-  font: 700 30px/1.05 var(--font-sans);
-  color: var(--text-primary);
-  margin: 4px 0 0;
-  letter-spacing: -0.01em;
+.pa-bpop__tag--busy {
+  background: color-mix(in oklab, var(--text-muted) 22%, transparent);
+  color: var(--text-secondary);
+}
+.pa-bpop__counts {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 500 10px/1 var(--font-mono);
+  flex: 0 0 auto;
+}
+.pa-bpop__ahead { color: oklch(72% 0.12 145); }
+.pa-bpop__behind { color: oklch(72% 0.13 35); }
+.pa-bpop__when {
+  font: 400 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  min-width: 56px;
+  text-align: right;
+}
+.pa-bpop__newname {
+  font-family: var(--font-mono);
+  color: var(--accent-bright);
 }
 
 /* ---- Project info card ---- */
