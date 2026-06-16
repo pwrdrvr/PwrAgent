@@ -4425,7 +4425,7 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Done.",
-      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.58 list price",
+      "activity:Turn usage: 96,642 uncached in · 1,120,384 cached · 3,721 out (1,130 reasoning) · $0.60 list price",
     ]);
   });
 

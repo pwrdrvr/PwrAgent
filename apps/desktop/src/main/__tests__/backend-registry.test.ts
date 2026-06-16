@@ -13553,7 +13553,7 @@ command = "pnpm dev"
           monitorUsage: {
             cost: {
               model: "gpt-5.4-mini",
-              totalUsd: 0.00084,
+              totalUsd: 0.000885,
             },
             summary: expectedUsageSummary,
           },
@@ -13606,7 +13606,7 @@ command = "pnpm dev"
                 },
                 cost: {
                   model: "gpt-5.4-mini",
-                  totalUsd: 0.00084,
+                  totalUsd: 0.000885,
                 },
                 phase: "progress",
               },
@@ -13746,7 +13746,7 @@ command = "pnpm dev"
           monitorUsage: {
             cost: {
               model: "gpt-5.4-mini",
-              totalUsd: 0.00084,
+              totalUsd: 0.000885,
             },
             summary: expectedUsageSummary,
           },
