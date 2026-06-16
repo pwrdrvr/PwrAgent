@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import {
-  accessModeChipClassName,
   acpRuntimeModeRequiresFullAccess,
   formatAccessModeLabel,
   getAcpRuntimeModeControl,
@@ -109,13 +108,5 @@ describe("ACP execution mode labels", () => {
     } satisfies BackendSummary;
 
     expect(getAcpRuntimeModeControl(singleModeBackend, thread)).toBeUndefined();
-  });
-
-  it("adds the danger chip class only for full access", () => {
-    expect(accessModeChipClassName("full-access")).toBe(
-      "chip chip--mode chip--mode--danger",
-    );
-    expect(accessModeChipClassName("default")).toBe("chip chip--mode");
-    expect(accessModeChipClassName(undefined)).toBe("chip chip--mode");
   });
 });

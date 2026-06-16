@@ -373,7 +373,8 @@ describe("ThreadView", () => {
     expect(header).not.toBeNull();
     expect(within(header as HTMLElement).getByText("New thread")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("Codex app server")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("Full Access")).toBeInTheDocument();
+    // Access mode is shown only in the composer now, not the header.
+    expect(within(header as HTMLElement).queryByText("Full Access")).toBeNull();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });

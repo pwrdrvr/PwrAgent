@@ -41,11 +41,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
-import {
-  accessModeChipClassName,
-  formatAccessModeLabel,
-  formatExecutionModeLabel,
-} from "../../lib/execution-mode";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
@@ -2187,14 +2183,6 @@ export function ThreadView(props: ThreadViewProps) {
               <p className="eyebrow">New thread</p>
               <span className="chip chip--backend">
                 {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
-              </span>
-              <span className={accessModeChipClassName(selectedLaunchpad.executionMode)}>
-                {formatAccessModeLabel(
-                  selectedLaunchpad,
-                  props.backends.find(
-                    (backend) => backend.kind === selectedLaunchpad.backend,
-                  ),
-                )}
               </span>
             </div>
             <h2 className="thread-header__title">{launchpadTitle}</h2>

@@ -3323,16 +3323,6 @@ textarea,
   font-weight: 600;
 }
 
-/* Full access is the one elevated/dangerous access mode, so its chip carries
-   the danger tone (same tokens as the composer access chip) — orange alone
-   doesn't distinguish it from default access. Defined after `.chip--mode` so
-   it wins on source order at equal specificity. */
-.chip--mode--danger {
-  border-color: var(--danger-border);
-  background: var(--danger-surface);
-  color: var(--danger-text);
-}
-
 /* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
    tint carry the "pinned" signal without spending a word of row width;
    the literal label lives in aria-label / title for assistive tech and
@@ -12399,19 +12389,23 @@ textarea,
   line-height: 1;
 }
 
-/* "Full Access" is a permission escalation — it reads as a caution, not a
-   call to action, so it carries the danger tone wherever it is selected. */
+/* Full Access is the one elevated/risky access mode, and the only access mode
+   that shows a distinct chip (default access reads as a normal neutral chip).
+   It's the single SOLID-orange fill in the otherwise-neutral chip row so it
+   can't be missed — the accent doubles as our warning signal. */
 .composer-dropdown--danger .composer-dropdown__button {
-  border-color: var(--danger-border);
-  background: var(--danger-surface);
-  color: var(--danger-text);
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 600;
 }
 
 .composer-dropdown--danger .composer-dropdown__button:hover,
 .composer-dropdown--danger .composer-dropdown__button:focus-visible,
 .composer-dropdown--danger.composer-dropdown--open .composer-dropdown__button {
-  border-color: var(--danger-text);
-  background: var(--danger-soft);
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--button-text);
 }
 
 .composer-dropdown__menu {
