@@ -12,6 +12,7 @@ import { ProjectPicker } from "../ProjectPicker";
 
 afterEach(() => {
   cleanup();
+  delete (window as unknown as { __pwragentHomeDir?: unknown }).__pwragentHomeDir;
 });
 
 const dirA: NavigationDirectorySummary = {
@@ -104,6 +105,23 @@ describe("ProjectPicker", () => {
     expect(rows[2]).toHaveTextContent("Workspaces");
   });
 
+  it("collapses the home directory to ~ in row paths", () => {
+    (window as unknown as { __pwragentHomeDir?: unknown }).__pwragentHomeDir =
+      "/Users/me";
+    render(
+      <ProjectPicker
+        directories={[dirA]}
+        onSelect={() => undefined}
+        onPickFromDisk={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
+    const row = screen.getByRole("option", { name: /pwragent/i });
+    expect(row).toHaveTextContent("~/code/PwrAgent");
+    expect(row).not.toHaveTextContent("/Users/me/code/PwrAgent");
+  });
+
   it("filters out the 'unlinked' pseudo-directory", () => {
     render(
       <ProjectPicker
@@ -130,7 +148,7 @@ describe("ProjectPicker", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
-    const search = screen.getByPlaceholderText("Search directories");
+    const search = screen.getByPlaceholderText("Find a directory");
     fireEvent.change(search, { target: { value: "snap" } });
 
     const list = screen.getByRole("listbox", { name: /tracked directories/i });

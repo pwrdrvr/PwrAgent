@@ -1369,6 +1369,26 @@ function readBootstrapNavigationPreferences(): {
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 
+// Decode the OS home directory passed from main via
+// `webPreferences.additionalArguments`. The sandboxed preload can't call
+// `os.homedir()` itself, so main resolves it and forwards it here. The
+// renderer reads `window.__pwragentHomeDir` to collapse long absolute
+// paths to `~` for display (see renderer `lib/tildify-path`).
+const HOME_DIR_ARG_PREFIX = "--pwragent-home-dir=";
+function readBootstrapHomeDir(): string {
+  for (const arg of process.argv) {
+    if (!arg.startsWith(HOME_DIR_ARG_PREFIX)) continue;
+    try {
+      const raw = JSON.parse(arg.slice(HOME_DIR_ARG_PREFIX.length));
+      return typeof raw === "string" ? raw : "";
+    } catch {
+      break;
+    }
+  }
+  return "";
+}
+const bootstrapHomeDir = readBootstrapHomeDir();
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragent", desktopApi);
   contextBridge.exposeInMainWorld("__pwragentAppearance", bootstrapAppearance);
@@ -1381,6 +1401,7 @@ if (process.contextIsolated) {
     "__pwragentNavigationPreferences",
     bootstrapNavigationPreferences,
   );
+  contextBridge.exposeInMainWorld("__pwragentHomeDir", bootstrapHomeDir);
   recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });
