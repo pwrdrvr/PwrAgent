@@ -1371,6 +1371,12 @@ textarea,
 .thread-row__chip-wrap {
   position: relative;
   display: inline-flex;
+  /* Clamp + shrink like the chip it wraps. Without this the inline-flex
+     wrapper grows to the binding label's natural width, so the inner
+     chip's `max-width: 100%` resolves against an unconstrained parent and
+     never truncates — the label overflows the row instead of eliding. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .thread-row__chip-menu {
@@ -3430,6 +3436,19 @@ textarea,
   align-items: center;
   flex: 0 0 auto;
   line-height: 1;
+}
+
+/* Text content of a chip. The pill is an inline-flex container, so
+   `text-overflow: ellipsis` on the chip itself is inert — it only engages on
+   the text-bearing child. `min-width: 0` lets this label shrink below its
+   content size so a long branch name / breadcrumb truncates with a "…"
+   instead of ramming the final glyphs into the pill's padding. */
+.thread-row__chip-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* PR chips on thread rows. Color comes from the --status-* tokens

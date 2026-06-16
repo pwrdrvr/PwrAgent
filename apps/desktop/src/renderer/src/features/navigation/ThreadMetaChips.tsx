@@ -103,7 +103,7 @@ export function ThreadMetaChips({
                 <span aria-hidden="true" className="thread-row__chip-icon">
                   {directory.kind === "worktree" ? <WorktreeIcon size={12} /> : <FolderIcon size={12} />}
                 </span>
-                {directory.label}
+                <span className="thread-row__chip-label">{directory.label}</span>
               </CopyableThreadChip>
             );
           })
@@ -162,7 +162,7 @@ export function ThreadMetaChips({
           <span aria-hidden="true" className="thread-row__chip-icon">
             <BranchIcon size={12} />
           </span>
-          {branchChip}
+          <span className="thread-row__chip-label">{branchChip}</span>
         </CopyableThreadChip>
       ) : null}
 
@@ -178,7 +178,7 @@ export function ThreadMetaChips({
           <span aria-hidden="true" className="thread-row__chip-icon">
             !
           </span>
-          now {thread.observedGitBranch}
+          <span className="thread-row__chip-label">now {thread.observedGitBranch}</span>
         </CopyableThreadChip>
       ) : null}
 
