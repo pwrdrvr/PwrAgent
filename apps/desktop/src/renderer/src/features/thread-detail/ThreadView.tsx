@@ -41,11 +41,9 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
-import {
-  formatAccessModeLabel,
-  formatExecutionModeLabel,
-} from "../../lib/execution-mode";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
+import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
@@ -1563,15 +1561,13 @@ export function ThreadView(props: ThreadViewProps) {
   const editedFilesWorktreeRoot = selectedThread?.projectKey;
   const applications = props.applications;
   const desktopApi = props.desktopApi;
+  const preferredEditor = useMemo(
+    () => resolvePreferredEditor(applications),
+    [applications],
+  );
   const handleOpenEditedFile = useCallback(
     (absolutePath: string) => {
-      const editor =
-        applications?.editors.find(
-          (application) =>
-            application.canOpenWorkspace &&
-            application.id === applications?.preferredEditorId.value,
-        ) ??
-        applications?.editors.find((application) => application.canOpenWorkspace);
+      const editor = resolvePreferredEditor(applications);
       if (editor && desktopApi?.openApplication) {
         void desktopApi
           .openApplication({
@@ -2188,14 +2184,6 @@ export function ThreadView(props: ThreadViewProps) {
               <span className="chip chip--backend">
                 {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
               </span>
-              <span className="chip chip--mode">
-                {formatAccessModeLabel(
-                  selectedLaunchpad,
-                  props.backends.find(
-                    (backend) => backend.kind === selectedLaunchpad.backend,
-                  ),
-                )}
-              </span>
             </div>
             <h2 className="thread-header__title">{launchpadTitle}</h2>
           </div>
@@ -2585,6 +2573,7 @@ export function ThreadView(props: ThreadViewProps) {
           editedFileCommitStates={editedFileCommitStates}
           editedFilesWorktreeRoot={editedFilesWorktreeRoot}
           onOpenEditedFile={handleOpenEditedFile}
+          preferredEditor={preferredEditor}
           onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}

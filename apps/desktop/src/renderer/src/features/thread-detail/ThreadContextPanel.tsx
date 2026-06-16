@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import type {
   BackendSummary,
+  DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -101,6 +102,8 @@ type ThreadContextPanelProps = {
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
   editedFilesWorktreeRoot?: string;
   onOpenEditedFile?: (absolutePath: string) => void;
+  /** Resolved preferred editor, for the per-row open-in-editor icon. */
+  preferredEditor?: DesktopApplicationDiscoveryCandidate;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
@@ -615,6 +618,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={props.editedFilesWorktreeRoot}
             onOpenFile={props.onOpenEditedFile}
+            preferredEditor={props.preferredEditor}
             onScrollToTurn={props.onScrollToTurn}
             dock={props.editedFilesDock ?? "above"}
             onDockChange={props.onEditedFilesDockChange ?? noop}

@@ -36,7 +36,8 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
-import { CloseIcon, EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
+import { CloseIcon, FileCodeIcon, LightningIcon, PlanIcon, PlayIcon } from "../../icons";
+import { AppIcon } from "../../components/AppIcon";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -1284,6 +1285,7 @@ function ComposerDropdown(props: {
   icon?: ComposerDropdownIcon;
   id?: string;
   kind?: "branch";
+  tone?: "danger";
   onChange: (value: string) => void;
   options: ComposerDropdownOption[];
   value: string;
@@ -1301,6 +1303,8 @@ function ComposerDropdown(props: {
         "composer-dropdown",
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
+        props.tone === "danger" ? "composer-dropdown--danger" : "",
+        open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1326,9 +1330,6 @@ function ComposerDropdown(props: {
         ) : null}
         <span className="composer-dropdown__label">
           {selectedOption?.label ?? props.value}
-        </span>
-        <span aria-hidden="true" className="composer-dropdown__chevron">
-          ⌄
         </span>
       </button>
       {open ? (
@@ -1369,44 +1370,31 @@ function ComposerApplicationButton(props: {
   label: string;
   onOpen: (application: DesktopApplicationDiscoveryCandidate) => Promise<void>;
 }) {
+  // A real OS icon (iconDataUrl) is a recognizable brand mark, so collapse to
+  // an icon-only chip — the name stays available via aria-label + tooltip.
+  // Fallback glyphs keep the text label, since a generic editor/terminal glyph
+  // alone is ambiguous.
+  const hasRealIcon = Boolean(props.application.iconDataUrl);
   return (
     <button
-      className="composer__application-button"
+      aria-label={props.application.name}
+      className={
+        hasRealIcon
+          ? "composer__application-button composer__application-button--icon-only"
+          : "composer__application-button"
+      }
       title={`Open workspace in ${props.application.name}`}
       type="button"
       onClick={() => {
         void props.onOpen(props.application);
       }}
     >
-      {props.application.iconDataUrl ? (
-        <img
-          alt=""
-          className="composer__application-icon"
-          src={props.application.iconDataUrl}
-        />
-      ) : props.application.kind === "editor" ? (
-        <span
-          aria-hidden="true"
-          className="composer__application-icon composer__application-icon--glyph"
-        >
-          <EditorIcon size={14} />
-        </span>
-      ) : props.application.kind === "terminal" ? (
-        <span
-          aria-hidden="true"
-          className="composer__application-icon composer__application-icon--glyph"
-        >
-          <TerminalIcon size={14} />
-        </span>
-      ) : (
-        <span
-          aria-hidden="true"
-          className="composer__application-icon composer__application-icon--fallback"
-        >
-          {props.application.name.slice(0, 1)}
-        </span>
-      )}
-      <span>{props.label}</span>
+      <AppIcon
+        application={props.application}
+        className="composer__application-icon"
+        size={16}
+      />
+      {hasRealIcon ? null : <span>{props.label}</span>}
     </button>
   );
 }
@@ -5594,6 +5582,13 @@ export function Composer(props: ComposerProps) {
             <ComposerDropdown
               ariaLabel="Access mode"
               compact
+              tone={
+                (props.launchpad?.executionMode ??
+                  props.thread?.executionMode ??
+                  "default") === "full-access"
+                  ? "danger"
+                  : undefined
+              }
               disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
               value={
                 props.launchpad?.executionMode ??
@@ -5712,7 +5707,12 @@ export function Composer(props: ComposerProps) {
               }}
             />
           ) : workspaceLabel && threadWorkspace ? (
-            <div className="composer-dropdown composer-dropdown--compact" ref={workspaceMenuRef}>
+            <div
+              className={`composer-dropdown composer-dropdown--compact${
+                workspaceMenuOpen ? " composer-dropdown--open" : ""
+              }`}
+              ref={workspaceMenuRef}
+            >
               <button
                 aria-expanded={workspaceMenuOpen}
                 aria-haspopup="menu"
@@ -5724,9 +5724,6 @@ export function Composer(props: ComposerProps) {
                 onClick={() => setWorkspaceMenuOpen((open) => !open)}
               >
                 <span className="composer-dropdown__label">{workspaceLabel}</span>
-                <span aria-hidden="true" className="composer-dropdown__chevron">
-                  ⌄
-                </span>
               </button>
               {workspaceMenuOpen ? (
                 <div className="composer-dropdown__menu" role="menu">
@@ -5871,35 +5868,42 @@ export function Composer(props: ComposerProps) {
           ) : null}
 
           {(props.launchpad || props.thread) && supportsFast ? (
-            <label className="composer__checkbox">
-              <input
-                checked={Boolean(currentSettings?.fastMode)}
-                disabled={launchpadSubmitting}
-                type="checkbox"
-                onChange={(event) => {
-                  if (props.launchpad) {
-                    handleLaunchpadPatch({ fastMode: event.target.checked });
-                    return;
-                  }
-                  handleThreadModelSettingsPatch({ fastMode: event.target.checked });
-                }}
-              />
-              <span>Fast mode</span>
-            </label>
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${
+                currentSettings?.fastMode ? " is-active" : ""
+              }`}
+              aria-label="Fast mode"
+              aria-pressed={Boolean(currentSettings?.fastMode)}
+              data-tooltip="Fast mode — faster, lower-latency responses"
+              disabled={launchpadSubmitting}
+              onClick={() => {
+                const next = !currentSettings?.fastMode;
+                if (props.launchpad) {
+                  handleLaunchpadPatch({ fastMode: next });
+                  return;
+                }
+                handleThreadModelSettingsPatch({ fastMode: next });
+              }}
+            >
+              <LightningIcon size={15} aria-hidden="true" />
+            </button>
           ) : null}
 
           {supportsPlanMode ? (
-            <label className="composer__checkbox">
-              <input
-                checked={planModeEnabled}
-                disabled={sending}
-                type="checkbox"
-                onChange={(event) => {
-                  setPlanModeEnabled(event.target.checked);
-                }}
-              />
-              <span>Plan mode</span>
-            </label>
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${
+                planModeEnabled ? " is-active" : ""
+              }`}
+              aria-label="Plan mode"
+              aria-pressed={planModeEnabled}
+              data-tooltip="Plan mode — plan the work before making changes"
+              disabled={sending}
+              onClick={() => setPlanModeEnabled((current) => !current)}
+            >
+              <PlanIcon size={15} aria-hidden="true" />
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -6028,7 +6032,37 @@ export function Composer(props: ComposerProps) {
             ) : null}
 
             {props.thread?.codexEnvironmentRuntime ? (
-              <>
+              // Split chip (issue #240 follow-up): the left segment runs the
+              // selected command (orange CTA hover); the right segment is the
+              // command picker. Click left to run, right to choose.
+              <div className="composer__run-split">
+                <button
+                  aria-label="Run"
+                  className="composer__run-split-play tooltip-target"
+                  data-tooltip={
+                    selectedThreadCodexAction
+                      ? `Run ${selectedThreadCodexAction.name}`
+                      : "Run command"
+                  }
+                  disabled={
+                    currentThreadEnvActionStarting ||
+                    !selectedThreadCodexAction ||
+                    !props.desktopApi?.runCodexEnvironmentAction
+                  }
+                  type="button"
+                  onClick={() => {
+                    void runThreadCodexEnvironmentAction();
+                  }}
+                >
+                  {currentThreadEnvActionStarting ? (
+                    <span
+                      aria-hidden="true"
+                      className="composer__action-button-spinner"
+                    />
+                  ) : (
+                    <PlayIcon size={13} aria-hidden="true" />
+                  )}
+                </button>
                 <ComposerDropdown
                   ariaLabel="Environment command"
                   compact
@@ -6052,33 +6086,7 @@ export function Composer(props: ComposerProps) {
                     );
                   }}
                 />
-                <button
-                  aria-label="Run"
-                  className={
-                    currentThreadEnvActionStarting
-                      ? "composer__action-button composer__action-button--busy"
-                      : "composer__action-button"
-                  }
-                  disabled={
-                    currentThreadEnvActionStarting ||
-                    !selectedThreadCodexAction ||
-                    !props.desktopApi?.runCodexEnvironmentAction
-                  }
-                  type="button"
-                  onClick={() => {
-                    void runThreadCodexEnvironmentAction();
-                  }}
-                >
-                  {currentThreadEnvActionStarting ? (
-                    <span
-                      aria-hidden="true"
-                      className="composer__action-button-spinner"
-                    />
-                  ) : (
-                    "Run"
-                  )}
-                </button>
-              </>
+              </div>
             ) : null}
 
             {workspaceOpenPath && editorApplication ? (

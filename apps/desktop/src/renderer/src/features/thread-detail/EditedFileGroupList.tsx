@@ -11,9 +11,11 @@ import {
 } from "react";
 import type {
   AppServerThreadActivityDetail,
+  DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
 } from "@pwragent/shared";
 import { EditorIcon } from "../../icons";
+import { AppIcon } from "../../components/AppIcon";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { DiffStat } from "./DiffStat";
 import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
@@ -34,6 +36,8 @@ type EditedFileRowConfig = {
   worktreeRoot?: string;
   ignoredPaths: ReadonlySet<string>;
   onOpenFile?: (absolutePath: string) => void;
+  /** Editor used by the "open in editor" affordance — drives its real icon. */
+  preferredEditor?: DesktopApplicationDiscoveryCandidate;
 };
 
 const EditedFileRowContext = createContext<EditedFileRowConfig>({
@@ -78,6 +82,12 @@ type EditedFileGroupListProps = {
   worktreeRoot?: string;
   /** Open an edited file (absolute path) in the editor / OS default. */
   onOpenFile?: (absolutePath: string) => void;
+  /**
+   * Resolved preferred editor, so the per-row "open in editor" button shows
+   * that editor's real app icon instead of a generic glyph. Falls back to the
+   * generic editor glyph when no editor is discovered.
+   */
+  preferredEditor?: DesktopApplicationDiscoveryCandidate;
   /** Scroll the transcript to a group's turn (clickable timestamp). */
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   /**
@@ -173,8 +183,9 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
       worktreeRoot: props.worktreeRoot,
       ignoredPaths,
       onOpenFile: props.onOpenFile,
+      preferredEditor: props.preferredEditor,
     }),
-    [props.worktreeRoot, ignoredPaths, props.onOpenFile],
+    [props.worktreeRoot, ignoredPaths, props.onOpenFile, props.preferredEditor],
   );
 
   if (props.groups.length === 0) {
@@ -370,7 +381,7 @@ export function EditedFileRow(props: {
   const diffId = useId();
   const additions = props.detail.fileDiff?.additions ?? 0;
   const removals = props.detail.fileDiff?.removals ?? 0;
-  const { worktreeRoot, ignoredPaths, onOpenFile } = useContext(
+  const { worktreeRoot, ignoredPaths, onOpenFile, preferredEditor } = useContext(
     EditedFileRowContext,
   );
   const absolutePath = props.detail.path;
@@ -437,7 +448,15 @@ export function EditedFileRow(props: {
                     aria-label={`Open ${repoRelativePath ?? props.detail.label} in editor`}
                     title="Open in editor"
                   >
-                    <EditorIcon className="edited-file-row__open-icon" />
+                    {preferredEditor ? (
+                      <AppIcon
+                        application={preferredEditor}
+                        className="edited-file-row__open-icon"
+                        size={14}
+                      />
+                    ) : (
+                      <EditorIcon className="edited-file-row__open-icon" />
+                    )}
                   </button>
                 ) : null}
               </div>

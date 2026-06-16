@@ -12206,14 +12206,15 @@ textarea,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .composer__footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .composer__application-actions {
@@ -12230,18 +12231,18 @@ textarea,
 
 .composer__application-button {
   display: inline-flex;
-  min-height: 34px;
+  min-height: 26px;
   max-width: 150px;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--bg-input);
   color: var(--text-primary);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 550;
 }
 
 .composer__application-button:hover,
@@ -12258,32 +12259,24 @@ textarea,
   white-space: nowrap;
 }
 
+/* When a real app icon is present the label is hidden (kept in aria-label +
+   tooltip), so the chip collapses to a round icon-only button. */
+.composer__application-button--icon-only {
+  width: 26px;
+  max-width: 26px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+
+/* App icon (real OS icon when available, kind glyph or initial otherwise),
+   shared by the composer launcher chips via the <AppIcon> component. */
 .composer__application-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
   border-radius: 4px;
   object-fit: contain;
-}
-
-.composer__application-icon--fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-panel-hover);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.composer__application-icon--glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  background: transparent;
-  border: none;
 }
 
 .composer__select {
@@ -12318,15 +12311,15 @@ textarea,
 }
 
 .composer__fixed-value {
-  min-height: 34px;
+  min-height: 26px;
   display: inline-flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--bg-input);
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .composer__select--compact {
@@ -12335,9 +12328,13 @@ textarea,
   max-width: 220px;
 }
 
+/* Composer settings render as compact chips that size to their selected
+   label. Neutral at rest (one accent stays sparse); the accent border + a
+   quiet chevron only appear on hover / focus / while the menu is open. */
 .composer-dropdown {
   position: relative;
-  min-width: 168px;
+  min-width: 0;
+  max-width: 240px;
 }
 
 .composer-dropdown--compact {
@@ -12348,26 +12345,31 @@ textarea,
 
 .composer-dropdown__button {
   width: 100%;
-  min-height: 34px;
+  min-height: 26px;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 10px 0 12px;
+  gap: 6px;
+  padding: 0 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--bg-input);
   color: var(--text-primary);
+  cursor: pointer;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .composer-dropdown__button:hover,
-.composer-dropdown__button:focus-visible {
+.composer-dropdown__button:focus-visible,
+.composer-dropdown--open .composer-dropdown__button {
   border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
 }
 
 .composer-dropdown__button:disabled {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
   color: var(--text-secondary);
   cursor: default;
 }
@@ -12387,10 +12389,23 @@ textarea,
   line-height: 1;
 }
 
-.composer-dropdown__chevron {
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
+/* Full Access is the one elevated/risky access mode, and the only access mode
+   that shows a distinct chip (default access reads as a normal neutral chip).
+   It's the single SOLID-orange fill in the otherwise-neutral chip row so it
+   can't be missed — the accent doubles as our warning signal. */
+.composer-dropdown--danger .composer-dropdown__button {
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 600;
+}
+
+.composer-dropdown--danger .composer-dropdown__button:hover,
+.composer-dropdown--danger .composer-dropdown__button:focus-visible,
+.composer-dropdown--danger.composer-dropdown--open .composer-dropdown__button {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--button-text);
 }
 
 .composer-dropdown__menu {
@@ -12515,6 +12530,71 @@ textarea,
   color: var(--danger-text);
 }
 
+/* Split run chip: a play segment (run the selected command) joined to the
+   command picker. One pill outline around both, a hairline divider between.
+   The play segment takes the orange CTA hover so "run" reads as the action. */
+.composer__run-split {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  max-width: 240px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.composer__run-split:hover,
+.composer__run-split:focus-within {
+  border-color: var(--accent-border);
+}
+
+.composer__run-split-play {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 26px;
+  padding: 0;
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 999px 0 0 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.composer__run-split-play:hover:not(:disabled),
+.composer__run-split-play:focus-visible {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.composer__run-split-play:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The picker reuses ComposerDropdown but drops its own outline — the split
+   container owns the border — and squares off the joined (left) edge. */
+.composer__run-split .composer-dropdown {
+  max-width: 200px;
+}
+
+.composer__run-split .composer-dropdown__button {
+  border: none;
+  border-radius: 0 999px 999px 0;
+  background: var(--bg-input);
+}
+
+.composer__run-split .composer-dropdown__button:hover,
+.composer__run-split .composer-dropdown__button:focus-visible,
+.composer__run-split .composer-dropdown--open .composer-dropdown__button {
+  background: var(--bg-panel-hover);
+}
+
 /* ===========================================================
    Project picker (issue #223)
    ===========================================================
@@ -12530,25 +12610,30 @@ textarea,
   display: inline-flex;
 }
 
+/* Matches the setting chips (`.composer-dropdown__button`): a content-sized
+   pill, neutral at rest, accent only on hover / focus / while open. */
 .project-picker__trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: 26px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--bg-input);
   color: var(--text-primary);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   max-width: 240px;
 }
 
 .project-picker__trigger:hover:not(:disabled),
-.project-picker__trigger:focus-visible:not(:disabled) {
+.project-picker__trigger:focus-visible:not(:disabled),
+.project-picker[data-state="open"] .project-picker__trigger {
   border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
   outline: none;
 }
 
@@ -12557,15 +12642,12 @@ textarea,
   cursor: default;
 }
 
+/* No project selected yet: a dashed outline keeps the "pick something" hint
+   while still reading as a pill like its neighbours. (`.is-active` — a project
+   IS selected — stays neutral, matching the other chips.) */
 .project-picker__trigger.is-empty {
   border-style: dashed;
   color: var(--text-muted);
-}
-
-.project-picker__trigger.is-active {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--text-primary);
 }
 
 .project-picker__label {
@@ -12574,12 +12656,6 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.project-picker__chevron {
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
 }
 
 /* The popover itself is a fixed-size flex column. The search row +
@@ -13164,6 +13240,46 @@ textarea,
   accent-color: var(--accent);
 }
 
+/* Icon toggle chips (Fast / Plan). Square pill the same height as the
+   setting chips; only shown for models that support the feature. The
+   "on" state carries the single accent so it reads as enabled at a glance;
+   the name + description live in the hover tooltip. */
+.composer__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.composer__toggle:hover:not(:disabled),
+.composer__toggle:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.composer__toggle.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer__toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .composer__autocomplete {
   position: absolute;
   right: 0;
@@ -13461,13 +13577,24 @@ textarea,
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 8px;
+  gap: 6px;
   justify-content: flex-end;
+}
+
+/* Send / Queue / Stop / Cancel ride the footer as chips so they sit flush
+   with the context-window moon and the setting chips. Keeps the shared
+   `.button` tone (primary CTA, ghost) but trims the height + pills the
+   corners. Scoped to the composer footer so other `.button`s are untouched. */
+.composer__actions .button {
+  min-height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
 }
 
 .context-window-moon {
   display: inline-flex;
-  min-height: 34px;
+  min-height: 26px;
   min-width: 0;
   align-items: center;
   align-self: center;
@@ -13476,7 +13603,7 @@ textarea,
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
-  line-height: 34px;
+  line-height: 1;
   margin-right: 4px;
 }
 

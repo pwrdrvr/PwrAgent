@@ -6,6 +6,7 @@ import type {
   EditGroupCommitState,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { TranscriptPlan } from "./TranscriptPlan";
 import {
   EditedFileGroupList,
@@ -149,6 +150,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
               view={editedView}
               worktreeRoot={props.editedFilesWorktreeRoot}
               onOpenFile={props.onOpenEditedFile}
+              preferredEditor={resolvePreferredEditor(props.applications)}
               onScrollToTurn={props.onScrollToTurn}
             />
           </section>

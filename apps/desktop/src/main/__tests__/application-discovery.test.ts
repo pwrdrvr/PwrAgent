@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGhosttyAppleScriptArgs,
   discoverDesktopApplications,
+  extractIcnsPng,
+  isIcnsBuffer,
   openDesktopApplication,
   resolveBundledApplicationCliPath,
 } from "../settings/application-discovery";
@@ -209,6 +211,68 @@ describe("application discovery", () => {
     await expect(resolveBundledApplicationCliPath(appPath, ["code"])).resolves.toBe(
       bundledCodePath
     );
+  });
+});
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Minimal PNG: signature + an IHDR chunk carrying the width at byte 16. */
+function fakePng(width: number): Buffer {
+  const png = Buffer.alloc(33);
+  PNG_MAGIC.copy(png, 0);
+  png.writeUInt32BE(13, 8); // IHDR data length
+  png.write("IHDR", 12, "latin1");
+  png.writeUInt32BE(width, 16); // width
+  png.writeUInt32BE(width, 20); // height
+  return png;
+}
+
+/** Wrap entry bodies in the flat `.icns` container format. */
+function fakeIcns(entries: Array<{ type: string; body: Buffer }>): Buffer {
+  const blocks = entries.map(({ type, body }) => {
+    const header = Buffer.alloc(8);
+    header.write(type, 0, "latin1");
+    header.writeUInt32BE(body.length + 8, 4);
+    return Buffer.concat([header, body]);
+  });
+  const payload = Buffer.concat(blocks);
+  const header = Buffer.alloc(8);
+  header.write("icns", 0, "latin1");
+  header.writeUInt32BE(payload.length + 8, 4);
+  return Buffer.concat([header, payload]);
+}
+
+describe("icns icon extraction", () => {
+  it("detects the icns container magic", () => {
+    expect(isIcnsBuffer(fakeIcns([{ type: "ic07", body: fakePng(128) }]))).toBe(true);
+    expect(isIcnsBuffer(Buffer.from("not an icon file at all"))).toBe(false);
+    expect(isIcnsBuffer(Buffer.alloc(2))).toBe(false);
+  });
+
+  it("picks the smallest PNG at least 2x the render size", () => {
+    const icns = fakeIcns([
+      { type: "ic13", body: fakePng(256) },
+      { type: "ic07", body: fakePng(128) },
+      { type: "ic12", body: fakePng(64) },
+    ]);
+    const png = extractIcnsPng(icns);
+    expect(png).toBeDefined();
+    expect(png!.subarray(0, 8).equals(PNG_MAGIC)).toBe(true);
+    // Render size is 48px, so the 128px entry is the smallest >= 96.
+    expect(png!.readUInt32BE(16)).toBe(128);
+  });
+
+  it("falls back to the largest PNG when none meet the target size", () => {
+    const icns = fakeIcns([
+      { type: "ic11", body: fakePng(32) },
+      { type: "ic12", body: fakePng(64) },
+    ]);
+    expect(extractIcnsPng(icns)!.readUInt32BE(16)).toBe(64);
+  });
+
+  it("returns undefined for an icns with no PNG entries", () => {
+    const icns = fakeIcns([{ type: "ic04", body: Buffer.alloc(40, 1) }]);
+    expect(extractIcnsPng(icns)).toBeUndefined();
   });
 });
 

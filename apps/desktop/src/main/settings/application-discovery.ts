@@ -3,7 +3,7 @@ import {
   spawn as spawnProcess,
 } from "node:child_process";
 import fs from "node:fs";
-import { access, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -14,8 +14,17 @@ import type {
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 
 const execFile = promisify(execFileCallback);
+
+const log = getMainLogger("pwragent:application-discovery");
+
+// App-bundle icons are rendered at this many logical pixels. The largest
+// on-screen consumer is the Settings → Applications row at ~20px, so 48px
+// keeps it crisp on 2x retina displays without bloating the settings IPC
+// payload with a full-resolution icon.
+const APPLICATION_ICON_SIZE = 48;
 
 type KnownApplication = {
   id: string;
@@ -596,17 +605,45 @@ async function spawnDetached(
 async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
   const iconPath = findApplicationIconPath(appPath);
   if (!iconPath) {
+    log.warn("application-icon-not-found", { appPath });
     return undefined;
   }
 
   try {
     const { nativeImage } = await import("electron");
-    const image = nativeImage.createFromPath(iconPath);
-    if (image.isEmpty()) {
+
+    // `nativeImage.createFromPath()` returns an EMPTY image for `.icns`
+    // files, so decode the container ourselves: a modern `.icns` embeds a
+    // PNG per size, and `nativeImage` CAN decode PNG from a buffer. Everything
+    // here is in-process — deliberately NOT `app.getFileIcon()`, which drives
+    // the macOS Launch Services icon loader on a worker thread and hard-aborts
+    // the whole process with an uncatchable SIGTRAP on some OS builds (the v1
+    // beta crash on macOS 26).
+    const fileBytes = await readFile(iconPath);
+    const source = isIcnsBuffer(fileBytes) ? extractIcnsPng(fileBytes) : fileBytes;
+    if (!source) {
+      log.warn("application-icon-empty", { appPath, iconPath });
       return undefined;
     }
-    return image.resize({ width: 32, height: 32 }).toDataURL();
-  } catch {
+
+    const image = nativeImage.createFromBuffer(source);
+    if (image.isEmpty()) {
+      log.warn("application-icon-empty", { appPath, iconPath });
+      return undefined;
+    }
+    return image
+      .resize({
+        width: APPLICATION_ICON_SIZE,
+        height: APPLICATION_ICON_SIZE,
+        quality: "best",
+      })
+      .toDataURL();
+  } catch (error) {
+    log.warn("application-icon-failed", {
+      appPath,
+      iconPath,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
 }
@@ -614,15 +651,108 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
 function findApplicationIconPath(appPath: string): string | undefined {
   const resourcesPath = path.join(appPath, "Contents", "Resources");
   const iconFile = readBundleIconFile(appPath);
-  const candidates = [
+  const named = [
     iconFile ? path.join(resourcesPath, iconFile) : undefined,
     iconFile && !path.extname(iconFile)
       ? path.join(resourcesPath, `${iconFile}.icns`)
       : undefined,
     path.join(resourcesPath, "AppIcon.icns"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  ]
+    // Must be a regular FILE: some bundles (e.g. Ghostty) have a directory
+    // named after `CFBundleIconFile` sitting next to the real `<name>.icns`,
+    // which `fs.existsSync` would wrongly accept.
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .find(isFilePath);
 
-  return candidates.find((candidate) => fs.existsSync(candidate));
+  if (named) {
+    return named;
+  }
+
+  // Bundles whose `Info.plist` is binary (so the UTF-8 `CFBundleIconFile`
+  // match misses) and whose icon isn't `AppIcon.icns` fall back to the
+  // largest `.icns` in Resources — reliably the app icon, not a doc icon.
+  return largestIcnsInResources(resourcesPath);
+}
+
+function isFilePath(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function largestIcnsInResources(resourcesPath: string): string | undefined {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resourcesPath);
+  } catch {
+    return undefined;
+  }
+
+  let best: { path: string; size: number } | undefined;
+  for (const entry of entries) {
+    if (!entry.toLowerCase().endsWith(".icns")) {
+      continue;
+    }
+    const candidate = path.join(resourcesPath, entry);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (!best || stat.size > best.size)) {
+        best = { path: candidate, size: stat.size };
+      }
+    } catch {
+      // Skip entries we can't stat.
+    }
+  }
+  return best?.path;
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** True when `buffer` is an Apple `.icns` icon container. */
+export function isIcnsBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.toString("latin1", 0, 4) === "icns";
+}
+
+/**
+ * Pull a usable PNG out of an `.icns` container. The format is a flat list of
+ * entries (4-byte OSType + 4-byte big-endian length-including-header + body);
+ * modern icons store one PNG per size (type codes `ic07`..`ic14`). We pick the
+ * smallest PNG that is still at least 2x the render size so the downscale
+ * stays crisp without decoding the 1024px entry, falling back to the largest
+ * available. Returns `undefined` for legacy `.icns` that only carry
+ * JPEG-2000 / raw bitmap entries (which `nativeImage` can't decode anyway).
+ */
+export function extractIcnsPng(buffer: Buffer): Buffer | undefined {
+  const pngs: Array<{ data: Buffer; width: number }> = [];
+  let offset = 8; // skip the "icns" magic + total-length header
+  while (offset + 8 <= buffer.length) {
+    const entryLength = buffer.readUInt32BE(offset + 4);
+    if (entryLength < 8 || offset + entryLength > buffer.length) {
+      break;
+    }
+    const body = buffer.subarray(offset + 8, offset + entryLength);
+    // PNG IHDR width is the big-endian uint32 at byte 16 (8-byte signature +
+    // 8-byte chunk length/type), so we need at least 20 bytes to read it.
+    if (body.length >= 24 && body.subarray(0, 8).equals(PNG_MAGIC)) {
+      pngs.push({ data: body, width: body.readUInt32BE(16) });
+    }
+    offset += entryLength;
+  }
+
+  if (pngs.length === 0) {
+    return undefined;
+  }
+
+  const minWidth = APPLICATION_ICON_SIZE * 2;
+  const crispEnough = pngs
+    .filter((entry) => entry.width >= minWidth)
+    .sort((a, b) => a.width - b.width);
+  if (crispEnough.length > 0) {
+    return crispEnough[0].data;
+  }
+  return pngs.sort((a, b) => b.width - a.width)[0].data;
 }
 
 function readBundleIconFile(appPath: string): string | undefined {
