@@ -43,6 +43,7 @@ import {
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
+  type CodexEnvironmentActionRun,
   type CodexEnvironmentOption,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
@@ -8824,10 +8825,25 @@ export class DesktopBackendRegistry {
           if (matching.output === params.event.output) {
             return;
           }
+          // A null/null close can come from a wrapper path while the useful
+          // descendant is still producing output. Fresh output proves the run
+          // is not terminal, so keep the UI in a controllable running state.
+          const ambiguousTerminalFailure =
+            matching.status === "failed" &&
+            matching.exitCode === undefined &&
+            matching.exitSignal === undefined;
+          const patch: Partial<CodexEnvironmentActionRun> = {
+            output: params.event.output,
+          };
+          if (ambiguousTerminalFailure) {
+            patch.status = "started";
+            patch.durationMs = undefined;
+            patch.exitedAt = undefined;
+          }
           const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
             kind: "patch",
             runId: params.runId,
-            patch: { output: params.event.output },
+            patch,
           });
           const next: CodexThreadEnvironmentRuntime = {
             ...current,
