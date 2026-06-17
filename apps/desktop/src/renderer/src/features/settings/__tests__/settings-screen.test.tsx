@@ -47,6 +47,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * The Experimental tab tucks its deprecated features (Diff Condensation,
+ * AgentCore - Grok, Live Transcript Event Filtering) inside a collapsed-by-
+ * default "Soon to be discontinued" drawer, where they are hidden from the
+ * accessibility tree until expanded. Idempotent (checks `aria-expanded`) so
+ * it is safe regardless of the drawer's persisted collapse state from a
+ * prior test in this file.
+ */
+function openDiscontinuedDrawer() {
+  const header = screen.getByRole("button", {
+    name: "Soon to be discontinued",
+  });
+  if (header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
+}
+
 function createSnapshot(
   overrides: Partial<DesktopSettingsSnapshot> = {},
 ): DesktopSettingsSnapshot {
@@ -602,6 +619,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
     expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
+    openDiscontinuedDrawer();
     fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -900,6 +918,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    openDiscontinuedDrawer();
     const filteringSwitch = screen.getByRole("switch", {
       name: "Enable live transcript event filtering",
     });
