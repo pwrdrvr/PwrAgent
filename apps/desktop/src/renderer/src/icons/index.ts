@@ -11,6 +11,7 @@ export { EditsIcon } from "./EditsIcon";
 export { FeishuIcon } from "./FeishuIcon";
 export { FileCodeIcon } from "./FileCodeIcon";
 export { FolderIcon } from "./FolderIcon";
+export { HelpCircleIcon } from "./HelpCircleIcon";
 export { InfoIcon } from "./InfoIcon";
 export { LightningIcon } from "./LightningIcon";
 export { MattermostIcon } from "./MattermostIcon";

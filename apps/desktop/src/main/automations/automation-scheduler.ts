@@ -156,25 +156,25 @@ export class AutomationScheduler {
 
     if (automation.backlogPolicy === "drop_missed") {
       if (this.options.store.findActiveRunForAutomation(automation.id)) {
-        for (const window of windows) {
-          const skipped = this.options.store.createRun({
-            automationId: automation.id,
-            trigger: "scheduled",
+        const skipped = this.options.store.createRun({
+          automationId: automation.id,
+          trigger: "scheduled",
+          status: "skipped",
+          scheduledFor: windows[0]?.scheduledFor,
+          scheduledWindows: windows.slice(0, 1),
+          now,
+        });
+        if (skipped) {
+          this.options.store.markRunTerminal({
+            runId: skipped.id,
             status: "skipped",
-            scheduledFor: window.scheduledFor,
-            scheduledWindows: [window],
+            completedAt: now,
+            errorMessage:
+              windows.length === 1
+                ? "The automation execution lane was busy when this schedule fired."
+                : `Dropped ${windows.length} missed schedule windows because the automation execution lane was busy.`,
             now,
           });
-          if (skipped) {
-            this.options.store.markRunTerminal({
-              runId: skipped.id,
-              status: "skipped",
-              completedAt: now,
-              errorMessage:
-                "The automation execution lane was busy when this schedule fired.",
-              now,
-            });
-          }
         }
         this.options.store.updateAutomation(automation.id, {
           nextRunAt: computeNextAutomationRunAt(automation.schedule, now),

@@ -882,4 +882,115 @@ describe("DesktopAutomationService", () => {
       ),
     ).toEqual(Array.from({ length: 55 }, (_, index) => `queue-${55 - index}`));
   });
+
+  it("cancels queued automation turns when pausing an automation", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+    const run = store.createRun({
+      id: "run-1",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 10_000,
+      now: 10_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunQueued({
+      runId: "run-1",
+      queueEntryId: "queue-1",
+      queuedAt: 10_100,
+      now: 10_100,
+    });
+
+    await service.pause({ automationId: created.automation.id });
+
+    expect(registry.cancelQueuedTurn).toHaveBeenCalledWith(
+      "queue-1",
+      "Automation paused before this run started.",
+    );
+    expect(store.listRunsForAutomation(created.automation.id)).toEqual([
+      expect.objectContaining({
+        id: "run-1",
+        status: "cancelled",
+        errorMessage: "Automation paused before this run started.",
+      }),
+    ]);
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: expect.objectContaining({
+          automationId: created.automation.id,
+          runId: "run-1",
+          status: "cancelled",
+          threadId: "thread-1",
+        }),
+      },
+    });
+  });
+
+  it("cancels queued automation turns when disabling from an update", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+    const run = store.createRun({
+      id: "run-1",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 10_000,
+      now: 10_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunQueued({
+      runId: "run-1",
+      queueEntryId: "queue-1",
+      queuedAt: 10_100,
+      now: 10_100,
+    });
+
+    await service.update({
+      automationId: created.automation.id,
+      enabled: false,
+    });
+
+    expect(registry.cancelQueuedTurn).toHaveBeenCalledWith(
+      "queue-1",
+      "Automation paused before this run started.",
+    );
+    expect(store.listRunsForAutomation(created.automation.id)).toEqual([
+      expect.objectContaining({
+        id: "run-1",
+        status: "cancelled",
+        errorMessage: "Automation paused before this run started.",
+      }),
+    ]);
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: expect.objectContaining({
+          automationId: created.automation.id,
+          runId: "run-1",
+          status: "cancelled",
+          threadId: "thread-1",
+        }),
+      },
+    });
+  });
 });

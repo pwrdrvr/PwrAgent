@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  AutomationDetail,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { AutomationEditor } from "../AutomationEditor";
 
 afterEach(() => {
@@ -54,7 +58,7 @@ describe("AutomationEditor", () => {
     });
   });
 
-  it("only offers Agent threads from the global picker", async () => {
+  it("offers Agents first and regular threads on the Threads tab", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
     render(
@@ -93,9 +97,52 @@ describe("AutomationEditor", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Agent")).toHaveDisplayValue("Choose Agent");
-    expect(screen.getByRole("option", { name: "Inbox Agent" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Ordinary work" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Agent")).toHaveTextContent("Choose Agent");
+    fireEvent.click(screen.getByLabelText("Agent"));
+    expect(screen.getByRole("option", { name: /Inbox Agent/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Ordinary work/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
+    expect(screen.getByRole("option", { name: /Ordinary work/ })).toBeInTheDocument();
+  });
+
+  it("explains Agents and supports deferring Agent setup while drafting", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{ kind: "create" }}
+        threads={[]}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "What is an Agent?" }));
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "thread that is allowed to receive Automation responses",
+    );
+
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.click(screen.getByRole("option", { name: /I'll set this up later/ }));
+    expect(screen.getByLabelText("Agent")).toHaveTextContent(
+      "I'll set this up later...",
+    );
+    fireEvent.click(screen.getByLabelText("Agent"));
+    expect(screen.getByRole("option", { name: /I'll set this up later/ }))
+      .toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Draft automation" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Run once I pick the Agent." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Choose an Agent before saving",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("can reassign an existing automation to another Agent", async () => {
@@ -124,10 +171,9 @@ describe("AutomationEditor", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Agent")).toHaveDisplayValue("Old Jarvis");
-    fireEvent.change(screen.getByLabelText("Agent"), {
-      target: { value: "codex:new-thread" },
-    });
+    expect(screen.getByLabelText("Agent")).toHaveTextContent("Old Jarvis");
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.click(screen.getByRole("option", { name: /New Jarvis/ }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -137,6 +183,125 @@ describe("AutomationEditor", () => {
         automationId: "automation-1",
         backend: "codex",
         threadId: "new-thread",
+      }),
+    });
+  });
+
+  it("labels an assigned Agent without exposing the raw thread id as primary text", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation = buildAutomation({
+      threadId: "019ed770-c7e9-7031-a4d4-87b9f47ec3e9",
+    });
+
+    render(
+      <AutomationEditor
+        mode={{ automation, kind: "edit" }}
+        threads={[]}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByLabelText("Agent")).toHaveTextContent(
+      "Current assigned Agent",
+    );
+    expect(screen.getByLabelText("Agent")).not.toHaveTextContent(
+      "019ed770-c7e9-7031-a4d4-87b9f47ec3e9",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "update",
+      request: expect.objectContaining({
+        backend: "codex",
+        threadId: "019ed770-c7e9-7031-a4d4-87b9f47ec3e9",
+      }),
+    });
+  });
+
+  it("promotes a regular thread to an Agent and selects it", async () => {
+    const onPromoteThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "ordinary-thread",
+    }));
+    const onSubmit = vi.fn(async () => undefined);
+    const ordinaryThread = buildThread({
+      id: "ordinary-thread",
+      title: "Incident triage",
+    });
+
+    render(
+      <AutomationEditor
+        mode={{ kind: "create" }}
+        threads={[ordinaryThread]}
+        onCancel={() => undefined}
+        onPromoteThread={onPromoteThread}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
+    fireEvent.click(screen.getByRole("option", { name: /Incident triage/ }));
+
+    await waitFor(() => expect(onPromoteThread).toHaveBeenCalledTimes(1));
+    expect(onPromoteThread).toHaveBeenCalledWith(ordinaryThread);
+    expect(screen.getByLabelText("Agent")).toHaveTextContent("Incident triage");
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Summarize incidents" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Summarize recent incident context." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        backend: "codex",
+        threadId: "ordinary-thread",
+      }),
+    });
+  });
+
+  it("preserves ACP backend ids when selecting an Agent", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{ kind: "create" }}
+        threads={[
+          buildThread({
+            agentName: "Qwen Agent",
+            id: "thread-1",
+            source: "acp:qwen",
+            title: "Qwen transcript",
+          }),
+        ]}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Check Qwen" },
+    });
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.click(screen.getByRole("option", { name: /Qwen Agent/ }));
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Run this through Qwen." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        backend: "acp:qwen",
+        threadId: "thread-1",
       }),
     });
   });
@@ -243,6 +408,7 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
 function buildThread(params: {
   agentName?: string;
   id: string;
+  source?: AppServerBackendKind;
   title: string;
 }): NavigationThreadSummary {
   return {
@@ -258,7 +424,7 @@ function buildThread(params: {
     id: params.id,
     inbox: { inInbox: false },
     linkedDirectories: [],
-    source: "codex",
+    source: params.source ?? "codex",
     title: params.title,
     titleSource: "explicit",
     updatedAt: 1,

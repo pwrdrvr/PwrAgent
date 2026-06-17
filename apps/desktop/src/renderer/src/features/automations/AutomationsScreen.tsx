@@ -4,6 +4,7 @@ import type {
   MessagingChannelKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
@@ -40,7 +41,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     () =>
       new Map(
         props.threads.map((thread) => [
-          `${thread.source}:${thread.id}`,
+          buildThreadIdentityKey(thread.source, thread.id),
           thread,
         ]),
       ),
@@ -60,6 +61,23 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     } finally {
       setSaving(false);
     }
+  };
+
+  const promoteThreadToAgent = async (thread: NavigationThreadSummary) => {
+    if (!props.desktopApi?.setThreadAgent) {
+      throw new Error("Desktop bridge is missing setThreadAgent().");
+    }
+    const response = await props.desktopApi.setThreadAgent({
+      agent: { name: thread.title },
+      backend: thread.source,
+      threadId: thread.id,
+    });
+    await props.onRefreshNavigation?.();
+    return {
+      agent: response.agent,
+      backend: response.backend,
+      threadId: response.threadId,
+    };
   };
 
   return (
@@ -125,6 +143,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                 saving={saving}
                 threads={props.threads}
                 onCancel={() => setEditorMode(undefined)}
+                onPromoteThread={promoteThreadToAgent}
                 onSubmit={submitEditor}
               />
             </div>
@@ -151,7 +170,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
               </div>
               {automations.automations.map((automation) => {
                 const thread = threadsByKey.get(
-                  `${automation.backend}:${automation.threadId}`,
+                  buildThreadIdentityKey(automation.backend, automation.threadId),
                 );
                 return (
                   <AutomationTableRow
@@ -310,7 +329,15 @@ function formatAutomationAgentLabel(props: {
   automation: AutomationDetail;
   thread?: NavigationThreadSummary;
 }): string {
-  return props.thread?.agent?.name ?? props.thread?.title ?? props.automation.threadId;
+  return (
+    props.thread?.agent?.name ??
+    props.thread?.title ??
+    `Assigned thread ...${formatThreadIdSuffix(props.automation.threadId)}`
+  );
+}
+
+function formatThreadIdSuffix(threadId: string): string {
+  return threadId.length > 12 ? threadId.slice(-12) : threadId;
 }
 
 function formatAutomationLatestRun(automation: AutomationDetail): string {

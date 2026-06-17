@@ -250,6 +250,37 @@ export class AutomationStore {
     return record;
   }
 
+  cancelPendingRunsForAutomation(params: {
+    automationId: string;
+    now: number;
+    errorMessage: string;
+  }): void {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued')",
+      )
+      .all(params.automationId) as AutomationRunRow[];
+    for (const row of rows) {
+      const run = this.runFromRow(row);
+      if (!run) continue;
+      this.upsertRun(
+        {
+          ...run,
+          status: "cancelled",
+          completedAt: params.now,
+          errorMessage: params.errorMessage,
+        },
+        {
+          backend: row.backend,
+          threadId: row.thread_id,
+          queueEntryId: row.queue_entry_id ?? undefined,
+          createdAt: row.created_at,
+          updatedAt: params.now,
+        },
+      );
+    }
+  }
+
   getAutomation(
     id: string,
     options: { includeDeleted?: boolean } = {},
@@ -700,37 +731,6 @@ export class AutomationStore {
       updatedAt: now,
     });
     return nextRun;
-  }
-
-  private cancelPendingRunsForAutomation(params: {
-    automationId: string;
-    now: number;
-    errorMessage: string;
-  }): void {
-    const rows = this.stateDb.raw
-      .prepare(
-        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued')",
-      )
-      .all(params.automationId) as AutomationRunRow[];
-    for (const row of rows) {
-      const run = this.runFromRow(row);
-      if (!run) continue;
-      this.upsertRun(
-        {
-          ...run,
-          status: "cancelled",
-          completedAt: params.now,
-          errorMessage: params.errorMessage,
-        },
-        {
-          backend: row.backend,
-          threadId: row.thread_id,
-          queueEntryId: row.queue_entry_id ?? undefined,
-          createdAt: row.created_at,
-          updatedAt: params.now,
-        },
-      );
-    }
   }
 
   private updateAutomationLastRun(
