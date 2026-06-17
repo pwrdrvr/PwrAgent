@@ -3,6 +3,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadFileDiffRef,
 } from "./contracts/normalized-app-server";
 
 export type PendingRequestDecision = "approve" | "decline" | "cancel";
@@ -36,9 +37,14 @@ export type PendingRequestApprovalContext = {
 
 export type PendingRequestApprovalFileContext = {
   action?: string;
+  additions?: number;
   diff?: string;
+  diffRef?: AppServerThreadFileDiffRef;
+  diffRefs?: AppServerThreadFileDiffRef[];
   displayPath: string;
+  omittedReason?: string;
   path: string;
+  removals?: number;
 };
 
 export function buildPendingRequestApprovalContext(
@@ -157,12 +163,22 @@ function readEmbeddedApprovalFiles(
           ...(readString(record?.action)
             ? { action: readString(record?.action) }
             : {}),
+          ...(readNumber(record?.additions) !== undefined
+            ? { additions: readNumber(record?.additions) }
+            : {}),
           ...(readString(record?.diff) ? { diff: readString(record?.diff) } : {}),
+          ...readDiffRefFields(record),
           displayPath: formatApprovalPath(
             readString(record?.displayPath) ?? path,
             directoryPaths,
           ),
+          ...(readString(record?.omittedReason)
+            ? { omittedReason: readString(record?.omittedReason) }
+            : {}),
           path,
+          ...(readNumber(record?.removals) !== undefined
+            ? { removals: readNumber(record?.removals) }
+            : {}),
         };
       })
       .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
@@ -195,9 +211,14 @@ function fileContextFromActivityDetail(
   }
   return {
     action: detail.fileDiff?.kind,
+    additions: detail.fileDiff?.additions,
     diff: detail.fileDiff?.diff,
+    diffRef: detail.fileDiff?.diffRef,
+    diffRefs: detail.fileDiff?.diffRefs,
     displayPath: formatApprovalPath(path, directoryPaths),
+    omittedReason: detail.fileDiff?.omittedReason,
     path,
+    removals: detail.fileDiff?.removals,
   };
 }
 
@@ -658,6 +679,65 @@ function hasNetworkApprovalContext(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readDiffRefFields(
+  record: Record<string, unknown> | undefined,
+): Pick<PendingRequestApprovalFileContext, "diffRef" | "diffRefs"> {
+  if (!record) {
+    return {};
+  }
+  const diffRef = readDiffRef(record.diffRef);
+  const diffRefs = Array.isArray(record.diffRefs)
+    ? record.diffRefs
+        .map((entry) => readDiffRef(entry))
+        .filter((entry): entry is AppServerThreadFileDiffRef => Boolean(entry))
+    : undefined;
+  return {
+    ...(diffRef ? { diffRef } : {}),
+    ...(diffRefs?.length ? { diffRefs } : {}),
+  };
+}
+
+function readDiffRef(value: unknown): AppServerThreadFileDiffRef | undefined {
+  const record = asRecord(value);
+  const source = readString(record?.source);
+  const key = readString(record?.key);
+  const threadId = readString(record?.threadId);
+  const entryId = readString(record?.entryId);
+  const detailId = readString(record?.detailId);
+  if (
+    (source !== "live" && source !== "thread") ||
+    !key ||
+    !threadId ||
+    !entryId ||
+    !detailId
+  ) {
+    return undefined;
+  }
+  const backend = readDiffRefBackend(record?.backend);
+  return {
+    source,
+    key,
+    threadId,
+    entryId,
+    detailId,
+    ...(backend ? { backend } : {}),
+  };
+}
+
+function readDiffRefBackend(
+  value: unknown,
+): AppServerThreadFileDiffRef["backend"] | undefined {
+  const backend = readString(value);
+  if (backend === "codex" || backend === "grok" || backend?.startsWith("acp:")) {
+    return backend as AppServerThreadFileDiffRef["backend"];
+  }
+  return undefined;
 }
 
 function readFirstString(

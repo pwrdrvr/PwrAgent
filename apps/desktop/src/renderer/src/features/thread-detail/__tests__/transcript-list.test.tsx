@@ -3150,12 +3150,12 @@ describe("TranscriptList", () => {
               label: "Add pwragent-pr-refresh-body.md",
               path: "/repo/pwragent/pwragent-pr-refresh-body.md",
               status: "in_progress",
-              fileDiff: {
-                kind: "add",
-                diff: "+Draft PR body",
-                additions: 1,
-                removals: 0,
-              },
+                fileDiff: {
+                  kind: "add",
+                  diff: "@@ -0,0 +1 @@\n+Draft PR body",
+                  additions: 1,
+                  removals: 0,
+                },
             },
           ],
         }}
@@ -3176,7 +3176,62 @@ describe("TranscriptList", () => {
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
     expect(screen.getByText(/Action: add/)).toBeInTheDocument();
     expect(screen.getByText(/File: pwragent-pr-refresh-body\.md/)).toBeInTheDocument();
-    expect(screen.getByText(/\+Draft PR body/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(screen.getByText(/Draft PR body/)).toBeInTheDocument();
+  });
+
+  it("keeps large approval diffs collapsed until the user expands them", () => {
+    const longLine = `+${"x".repeat(320)}`;
+
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/pwragent"]}
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "activity-call_123",
+          summary: "Updated 1 file, +1, -0",
+          status: "in_progress",
+          turn: { id: "turn-1", status: "in_progress" },
+          details: [
+            {
+              id: "call_123-1",
+              kind: "write",
+              label: "Update pwragent-pr-refresh-body.md",
+              path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+              status: "in_progress",
+              fileDiff: {
+                kind: "update",
+                diff: `@@ -1 +1 @@\n${longLine}`,
+                additions: 1,
+                removals: 0,
+              },
+            },
+          ],
+        }}
+        pendingRequest={{
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            requestId: "approval-1",
+            itemId: "call_123",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Show diff/ })).toBeInTheDocument();
+    expect(screen.queryByText(longLine.slice(1))).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Show diff/ }));
+
+    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(screen.getByText(longLine.slice(1))).toBeInTheDocument();
   });
 
   it("renders pending user input without approval actions", () => {
