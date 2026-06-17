@@ -12135,6 +12135,90 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
+  it("restores first-prompt capture after cancelling a Full Access new-thread warning", async () => {
+    let now = 1000;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("first prompt"));
+    const firstWarning = harness.delivered.at(-1);
+    expect(firstWarning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+
+    now += 90_000;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:cancel",
+        value: findAction(firstWarning, "full-access-risk:cancel").value,
+      }),
+    );
+    harness.startTurn.mockClear();
+    harness.materializeDirectoryLaunchpad.mockClear();
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second prompt"));
+
+    const secondWarning = harness.delivered.at(-1);
+    expect(secondWarning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(secondWarning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "second prompt",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
   it("delivers the normal start failure if approved Full Access prompt startup throws", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {

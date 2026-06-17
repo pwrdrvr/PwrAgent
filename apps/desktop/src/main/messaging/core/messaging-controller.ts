@@ -8472,7 +8472,11 @@ export class MessagingController {
           filter: session.query,
         });
         if (context.kind === "new-thread") {
-          await this.presentNewThreadPromptGate(session, event, navigation);
+          await this.presentNewThreadPromptGate(
+            this.withNewThreadPromptCaptureExpiry(session),
+            event,
+            navigation,
+          );
         } else {
           await this.renderResumeBrowser(session, navigation, event);
         }
