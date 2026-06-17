@@ -221,7 +221,9 @@ describe("buildApprovalIntent", () => {
               {
                 action: "add",
                 path: "/repo/pwragent/pwragent-pr-refresh-body.md",
-                diff: "+Draft PR body",
+                diff: "@@ -0,0 +1 @@\n+Draft PR body",
+                additions: 1,
+                removals: 0,
               },
             ],
           },
@@ -233,9 +235,11 @@ describe("buildApprovalIntent", () => {
       action: "add",
       path: "/repo/pwragent/pwragent-pr-refresh-body.md",
       displayPath: "pwragent-pr-refresh-body.md",
-      diff: "+Draft PR body",
+      diff: "@@ -0,0 +1 @@\n+Draft PR body",
     });
     expect(intent.body).toContain("Context:\nAction: add\nFile: pwragent-pr-refresh-body.md");
-    expect(intent.body).toContain("```diff\n+Draft PR body\n```");
+    expect(intent.body).toContain("Diff: 1 file, +1 -0");
+    expect(intent.body).not.toContain("```diff");
+    expect(intent.body).not.toContain("Draft PR body");
   });
 });

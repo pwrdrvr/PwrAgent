@@ -182,17 +182,105 @@ function approvalContextMarkdown(
   if (context.action) {
     lines.push(`Action: ${context.action}`);
   }
-  if (context.displayPath) {
+  const fileContexts = context.files?.length
+    ? context.files
+    : context.displayPath && context.path
+      ? [
+          {
+            action: context.action,
+            additions: undefined,
+            diff: context.diff,
+            displayPath: context.displayPath,
+            path: context.path,
+            removals: undefined,
+          },
+        ]
+      : [];
+
+  if (fileContexts.length === 1) {
+    const file = fileContexts[0]!;
+    if (file.action && file.action !== context.action) {
+      lines.push(`Action: ${file.action}`);
+    }
+    lines.push(`File: ${file.displayPath}`);
+  } else if (fileContexts.length > 1) {
+    lines.push("Files:");
+    for (const file of fileContexts) {
+      lines.push(`- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`);
+    }
+  } else if (context.displayPath) {
     lines.push(`File: ${context.displayPath}`);
   }
   if (context.displayGrantRoot) {
     lines.push(`Write root: ${context.displayGrantRoot}`);
   }
-  if (context.diff) {
-    lines.push(["Diff:", "```diff", context.diff, "```"].join("\n"));
+  const diffSummary = summarizeApprovalDiffs(fileContexts, context.diff);
+  if (diffSummary) {
+    lines.push(`Diff: ${diffSummary}`);
   }
 
   return lines.join("\n") || undefined;
+}
+
+function summarizeApprovalDiffs(
+  files: Array<{
+    additions?: number;
+    diff?: string;
+    diffRef?: unknown;
+    diffRefs?: unknown[];
+    omittedReason?: string;
+    removals?: number;
+  }>,
+  fallbackDiff: string | undefined,
+): string | undefined {
+  if (files.length) {
+    const filesWithDiff = files.filter((file) =>
+      Boolean(file.diff || file.diffRef || file.diffRefs?.length || file.omittedReason),
+    );
+    if (!filesWithDiff.length) {
+      return undefined;
+    }
+    const totals = filesWithDiff.reduce<{ additions: number; removals: number }>(
+      (sum, file) => {
+        const counted = countDiffLines(file.diff);
+        return {
+          additions: sum.additions + (file.additions ?? counted.additions),
+          removals: sum.removals + (file.removals ?? counted.removals),
+        };
+      },
+      { additions: 0, removals: 0 },
+    );
+    return `${filesWithDiff.length.toLocaleString()} file${
+      filesWithDiff.length === 1 ? "" : "s"
+    }, +${totals.additions.toLocaleString()} -${totals.removals.toLocaleString()}`;
+  }
+  if (!fallbackDiff) {
+    return undefined;
+  }
+  const counted = countDiffLines(fallbackDiff);
+  return `+${counted.additions.toLocaleString()} -${counted.removals.toLocaleString()}`;
+}
+
+function countDiffLines(diff: string | undefined): {
+  additions: number;
+  removals: number;
+} {
+  if (!diff) {
+    return { additions: 0, removals: 0 };
+  }
+  let additions = 0;
+  let removals = 0;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      removals += 1;
+    }
+  }
+  return { additions, removals };
 }
 
 function stripDisplayShellWrapper(command: string): string {
