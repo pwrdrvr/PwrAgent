@@ -3102,6 +3102,34 @@ describe("TranscriptList", () => {
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 
+  it("shows file-change approval paths relative to the thread directory", () => {
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/pwragent"]}
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            reason: "Write access is required.",
+            grantRoot: "/repo/pwragent",
+            path: "/repo/pwragent/.github/PULL_REQUEST_TEMPLATE.md",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Write access is required/)).toBeInTheDocument();
+    expect(screen.getByText(/File: \.github\/PULL_REQUEST_TEMPLATE\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/Write root: \./)).toBeInTheDocument();
+  });
+
   it("renders pending user input without approval actions", () => {
     render(
       <TranscriptList

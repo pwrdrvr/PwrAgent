@@ -1,5 +1,6 @@
 import {
   buildPendingRequestActions,
+  buildPendingRequestApprovalContext,
   type AppServerPendingRequestNotification,
   type PendingRequestAction,
 } from "@pwragent/shared";
@@ -15,12 +16,16 @@ import {
 export function buildApprovalIntent(params: {
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
+  directoryPaths?: string[];
   id: string;
   request: AppServerPendingRequestNotification;
 }): MessagingApprovalIntent {
   const prompt = stringField(params.request.params.prompt) ?? "Approve this action?";
   const command = extractCommand(params.request.params);
-  const fileContext = extractFileContext(params.request.params);
+  const context = buildPendingRequestApprovalContext(params.request, {
+    directoryPaths: params.directoryPaths,
+  });
+  const fileContext = approvalContextMarkdown(context);
   const decisions = applyActionCapabilityLimits(
     buildDecisions(params.request),
     params.capabilityProfile,
@@ -32,6 +37,7 @@ export function buildApprovalIntent(params: {
     kind: "approval",
     createdAt: params.createdAt,
     title: titleForRequest(params.request),
+    ...(context ? { context } : {}),
     body: [
       prompt,
       command
@@ -165,15 +171,28 @@ function isGenericShellToolTitle(command: string): boolean {
   return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
-function extractFileContext(
-  params: AppServerPendingRequestNotification["params"],
+function approvalContextMarkdown(
+  context: ReturnType<typeof buildPendingRequestApprovalContext>,
 ): string | undefined {
-  const path =
-    stringField(params.path) ??
-    stringField(params.filePath) ??
-    stringField(params.filename);
-  const action = stringField(params.action) ?? stringField(params.operation);
-  return [action, path].filter(Boolean).join(" ").trim() || undefined;
+  if (!context) {
+    return undefined;
+  }
+
+  const lines: string[] = [];
+  if (context.action) {
+    lines.push(`Action: ${context.action}`);
+  }
+  if (context.displayPath) {
+    lines.push(`File: ${context.displayPath}`);
+  }
+  if (context.displayGrantRoot) {
+    lines.push(`Write root: ${context.displayGrantRoot}`);
+  }
+  if (context.diff) {
+    lines.push(["Diff:", "```diff", context.diff, "```"].join("\n"));
+  }
+
+  return lines.join("\n") || undefined;
 }
 
 function stripDisplayShellWrapper(command: string): string {

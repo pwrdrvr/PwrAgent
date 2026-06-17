@@ -19,6 +19,86 @@ export type PendingRequestAction = {
   response: { decision: unknown };
 };
 
+export type PendingRequestApprovalContext = {
+  action?: string;
+  diff?: string;
+  displayGrantRoot?: string;
+  displayPath?: string;
+  grantRoot?: string;
+  path?: string;
+};
+
+export function buildPendingRequestApprovalContext(
+  request: AppServerPendingRequestNotification,
+  options: { directoryPaths?: string[] } = {},
+): PendingRequestApprovalContext | undefined {
+  const params = request.params;
+  const path = readFirstString(params, [
+    "path",
+    "filePath",
+    "file_path",
+    "filename",
+    "file",
+    "targetPath",
+    "target_path",
+  ]);
+  const grantRoot = readFirstString(params, [
+    "grantRoot",
+    "grant_root",
+    "writeRoot",
+    "write_root",
+  ]);
+  const action = readFirstString(params, ["action", "operation"]);
+  const diff = readFirstString(params, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const hasSubject = Boolean(path || grantRoot || diff);
+
+  const context: PendingRequestApprovalContext = {
+    ...(hasSubject && action ? { action } : {}),
+    ...(path
+      ? {
+          path,
+          displayPath: formatApprovalPath(path, options.directoryPaths),
+        }
+      : {}),
+    ...(grantRoot
+      ? {
+          grantRoot,
+          displayGrantRoot: formatApprovalPath(grantRoot, options.directoryPaths),
+        }
+      : {}),
+    ...(diff ? { diff } : {}),
+  };
+
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
+export function formatApprovalPath(
+  value: string,
+  directoryPaths: string[] | undefined,
+): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const roots = [...(directoryPaths ?? [])]
+    .map((root) => normalizePath(root))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  const normalizedValue = normalizePath(trimmed);
+
+  for (const root of roots) {
+    if (normalizedValue === root) {
+      return ".";
+    }
+    if (normalizedValue.startsWith(`${root}/`)) {
+      return normalizedValue.slice(root.length + 1) || ".";
+    }
+  }
+
+  return trimmed;
+}
+
 export function buildPendingRequestResponse(
   request: AppServerPendingRequestNotification,
   decision: PendingRequestDecision | PendingRequestAction,
@@ -433,4 +513,22 @@ function hasNetworkApprovalContext(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readFirstString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = readString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizePath(value: string): string {
+  const normalized = value.trim().replace(/\\/g, "/");
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }

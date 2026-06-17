@@ -22,7 +22,10 @@ import type {
   ThreadPermissionTransition,
   ThreadTurnFailure,
 } from "@pwragent/shared";
-import { buildPendingRequestActions } from "@pwragent/shared";
+import {
+  buildPendingRequestActions,
+  buildPendingRequestApprovalContext,
+} from "@pwragent/shared";
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -319,30 +322,65 @@ function isGenericShellToolTitle(command: string): boolean {
   return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
-function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
+function pendingRequestPrompt(
+  request: AppServerPendingRequestNotification,
+  directoryPaths?: string[],
+): string {
   const prompt =
     typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   const command = approvalDisplayCommand(request.params);
   const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
+  const contextBlock = approvalContextMarkdown(
+    buildPendingRequestApprovalContext(request, { directoryPaths }),
+  );
 
   if (prompt && commandBlock) {
-    return `${prompt}\n\n${commandBlock}`;
+    return [prompt, commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (prompt) {
-    return prompt;
+    return [prompt, contextBlock].filter(Boolean).join("\n\n");
   }
   if (reason && commandBlock) {
-    return `${reason}\n\n${commandBlock}`;
+    return [reason, commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (commandBlock) {
-    return commandBlock;
+    return [commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (reason) {
-    return reason;
+    return [reason, contextBlock].filter(Boolean).join("\n\n");
   }
 
-  return "This turn is waiting for approval before it can continue.";
+  return [
+    "This turn is waiting for approval before it can continue.",
+    contextBlock,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function approvalContextMarkdown(
+  context: ReturnType<typeof buildPendingRequestApprovalContext>,
+): string {
+  if (!context) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  if (context.action) {
+    lines.push(`Action: ${context.action}`);
+  }
+  if (context.displayPath) {
+    lines.push(`File: ${context.displayPath}`);
+  }
+  if (context.displayGrantRoot) {
+    lines.push(`Write root: ${context.displayGrantRoot}`);
+  }
+  if (context.diff) {
+    lines.push(`Diff:\n\n${markdownCodeBlock(context.diff, "diff")}`);
+  }
+
+  return lines.join("\n");
 }
 
 export function TranscriptList(props: TranscriptListProps) {
@@ -1036,7 +1074,10 @@ export function TranscriptList(props: TranscriptListProps) {
                 applications={props.applications}
                 className="transcript-request__prompt"
                 desktopApi={props.desktopApi}
-                text={pendingRequestPrompt(props.pendingRequest)}
+                text={pendingRequestPrompt(
+                  props.pendingRequest,
+                  props.directoryPaths,
+                )}
               />
               <div className="transcript-request__actions">
                 {pendingRequestActions.map((action) => (

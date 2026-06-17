@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AppServerPendingRequestNotification } from "../contracts/normalized-app-server";
 import {
   buildPendingRequestActions,
+  buildPendingRequestApprovalContext,
   buildPendingRequestResponse,
+  formatApprovalPath,
 } from "../pending-request-response";
 
 function createRequest(
@@ -238,5 +240,38 @@ describe("buildPendingRequestResponse", () => {
         style: "danger",
       }),
     ]);
+  });
+});
+
+describe("buildPendingRequestApprovalContext", () => {
+  it("formats file-change paths relative to known thread directories", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        action: "write",
+        path: "/repo/pwragent/apps/desktop/PR_DESCRIPTION.md",
+        grantRoot: "/repo/pwragent",
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+      }),
+    ).toMatchObject({
+      action: "write",
+      path: "/repo/pwragent/apps/desktop/PR_DESCRIPTION.md",
+      displayPath: "apps/desktop/PR_DESCRIPTION.md",
+      grantRoot: "/repo/pwragent",
+      displayGrantRoot: ".",
+    });
+  });
+
+  it("keeps absolute paths when they are outside known thread directories", () => {
+    expect(formatApprovalPath("/tmp/PR_DESCRIPTION.md", ["/repo/pwragent"])).toBe(
+      "/tmp/PR_DESCRIPTION.md",
+    );
   });
 });
