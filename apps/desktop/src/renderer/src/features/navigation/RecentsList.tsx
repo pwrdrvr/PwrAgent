@@ -21,6 +21,7 @@ import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  inputRequestThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -136,6 +137,7 @@ export function RecentsList(props: RecentsListProps) {
             <ThreadRow
               key={childKey}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              inputRequestThreadKeys={props.inputRequestThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               dropIndicator={
                 dropIndicator?.targetKey === rowDropKey
@@ -225,6 +227,7 @@ export function RecentsList(props: RecentsListProps) {
       <div key={key} className="thread-group">
         <ThreadRow
           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+          inputRequestThreadKeys={props.inputRequestThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
           dropIndicator={
             dropIndicator?.targetKey === key

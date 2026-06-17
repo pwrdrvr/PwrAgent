@@ -18676,7 +18676,7 @@ command = "pnpm dev"
       await registry.close();
     });
 
-    it("calls notifyAttention on item/tool/requestUserInput with the question title", async () => {
+    it("calls notifyAttention on item/tool/requestUserInput with input-needed copy", async () => {
       resetNotificationMocks();
       const registry = makeRegistry();
 
@@ -18694,9 +18694,17 @@ command = "pnpm dev"
       const call = desktopNotificationServiceMock.notifyAttention.mock.calls[0]?.[0];
       expect(call).toMatchObject({
         key: "codex:thread-q:req-q",
-        title: "PwrAgent question waiting",
+        title: "PwrAgent input needed",
+        body: "A turn needs your input.",
       });
       expect(call.onDecision).toBeUndefined();
+      expect(typeof call.onShow).toBe("function");
+
+      call.onShow?.();
+      expect(requestShowThreadMock).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-q",
+      });
 
       await registry.close();
     });

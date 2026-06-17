@@ -8,6 +8,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
+  hasInputRequest?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   thread: NavigationThreadSummary;
@@ -15,6 +16,7 @@ type ThreadMetaChipsProps = {
 
 export function ThreadMetaChips({
   hasApprovalRequest = false,
+  hasInputRequest = false,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
   thread,
@@ -130,6 +132,16 @@ export function ThreadMetaChips({
           title="Waiting for approval"
         >
           Waiting for approval
+        </span>
+      ) : null}
+
+      {hasInputRequest ? (
+        <span
+          aria-label="Input needed"
+          className="thread-row__chip thread-row__chip--input"
+          title="Input needed"
+        >
+          Input needed
         </span>
       ) : null}
 

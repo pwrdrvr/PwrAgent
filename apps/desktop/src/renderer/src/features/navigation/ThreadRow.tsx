@@ -32,6 +32,7 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  inputRequestThreadKeys?: Record<string, boolean>;
   /**
    * Identity key of the card the open composer was spawned from. When it
    * matches this row, the row renders as the orange "composing" source.
@@ -241,6 +242,7 @@ export function ThreadRow(props: ThreadRowProps) {
         >
           <ThreadMetaChips
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
+            hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             thread={props.thread}

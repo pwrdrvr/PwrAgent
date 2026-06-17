@@ -487,6 +487,26 @@ describe("DesktopNotificationService", () => {
     expect(shownNotifications.at(-1)?.body).toBe("Please approve again");
   });
 
+  it("focuses the relevant thread when clicking an attention notification", () => {
+    const service = new DesktopNotificationService();
+    const onShow = vi.fn();
+    getAllWindows.mockReturnValue([
+      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+    ]);
+
+    service.notifyAttention({
+      enabled: true,
+      key: "codex:thread-1:req-input",
+      title: "Input needed",
+      body: "A turn needs your input.",
+      onShow,
+    });
+
+    shownNotifications[0]?.instance.emitClick();
+
+    expect(onShow).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to a passive approval notification when action buttons are unsupported", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();

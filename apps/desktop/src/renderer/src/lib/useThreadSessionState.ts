@@ -2855,6 +2855,7 @@ export function useThreadSessionState(params: {
   pendingStatusText?: string;
   runningTurnUsageText?: string;
   approvalRequestThreadKeys: Record<string, boolean>;
+  inputRequestThreadKeys: Record<string, boolean>;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
   setActiveTurnId: (turnId?: string) => void;
@@ -4732,6 +4733,15 @@ export function useThreadSessionState(params: {
       ),
     [sessions]
   );
+  const inputRequestThreadKeys = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(sessions)
+          .filter(([, session]) => Boolean(session.pendingUserInput))
+          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+      ),
+    [sessions]
+  );
   const pendingStatusText =
     selectedSession?.pendingStatusText ??
     (selectedSession?.activeTurnId ? "Thinking" : undefined);
@@ -4759,6 +4769,7 @@ export function useThreadSessionState(params: {
       selectedSession?.pendingUsageActivityEntry
     ),
     approvalRequestThreadKeys,
+    inputRequestThreadKeys,
     removeOptimisticMessage,
     response: selectedSession?.response,
     setActiveTurnId,

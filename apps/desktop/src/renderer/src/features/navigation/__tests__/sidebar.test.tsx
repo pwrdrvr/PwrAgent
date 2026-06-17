@@ -1057,6 +1057,38 @@ describe("Sidebar", () => {
     expect(approvalChip).toHaveAttribute("title", "Waiting for approval");
   });
 
+  it("shows an input-needed chip for threads waiting on user input", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        inputRequestThreadKeys={{ "codex:thread-1": true }}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    const inputChip = within(threadButton).getByTitle("Input needed");
+    expect(inputChip).toHaveTextContent("Input needed");
+    expect(inputChip).not.toHaveTextContent("Approve");
+    expect(inputChip).toHaveAttribute("title", "Input needed");
+  });
+
   it("does not duplicate new-thread inbox membership as an attention marker in recents", () => {
     render(
       <Sidebar

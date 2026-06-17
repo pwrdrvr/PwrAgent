@@ -3490,14 +3490,16 @@ textarea,
   color: var(--accent-bright);
 }
 
-.thread-row__chip--approval {
+.thread-row__chip--approval,
+.thread-row__chip--input {
   border: 1px solid var(--accent-strong);
   background: var(--accent);
   color: var(--button-text);
   font-weight: 700;
 }
 
-.thread-row__chip--approval:hover {
+.thread-row__chip--approval:hover,
+.thread-row__chip--input:hover {
   background: var(--accent-strong);
 }
 
