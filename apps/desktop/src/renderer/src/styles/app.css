@@ -12417,8 +12417,8 @@ textarea,
 .composer__queued-env-action-summary {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -12467,8 +12467,17 @@ textarea,
   min-width: 0;
 }
 
-.composer__queued-env-action-dismiss {
+.composer__queued-env-action-actions .composer__queued-env-action-dismiss {
   flex: 0 0 auto;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.composer__queued-env-action-actions .composer__queued-env-action-dismiss:hover {
+  color: var(--text-primary);
 }
 
 .composer__queued-env-action-actions {
@@ -12478,11 +12487,11 @@ textarea,
   flex: 0 0 auto;
 }
 
-.composer__queued-env-action-control {
-  width: 30px;
-  min-width: 30px;
-  min-height: 30px;
-  height: 30px;
+.composer__queued-env-action-actions .composer__queued-env-action-control {
+  width: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  height: 26px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -12507,7 +12516,7 @@ textarea,
   color: var(--text-primary);
 }
 
-.composer__queued-env-action-terminate {
+.composer__queued-env-action-actions .composer__queued-env-action-terminate {
   color: color-mix(in srgb, var(--danger-text) 74%, var(--text-muted));
 }
 
