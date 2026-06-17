@@ -183,6 +183,14 @@ const browseModeLabels = {
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
+// The visible tab labels ("Updated" / "Created") describe only the sort, so a
+// custom viewport tooltip spells out what each lens actually shows.
+const browseModeTooltips = {
+  inbox: "All threads, most recently updated first",
+  recents: "All threads, newest created first",
+  directories: "Threads grouped by linked Git directory",
+} satisfies Record<BrowseMode, string>;
+
 export function Sidebar(props: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
@@ -755,7 +763,11 @@ export function Sidebar(props: SidebarProps) {
           <MastheadActionButton
             ariaLabel="Open settings"
             ariaPressed={props.settingsActive}
-            className={`sidebar__icon-button${props.settingsActive ? " is-active" : ""}`}
+            // `sidebar__masthead-settings` lets the gear drop out first when the
+            // rail is too narrow for the wordmark + all four actions — Settings
+            // is still reachable from the app menu (⌘,), so it's the safe one to
+            // shed before the (less reachable) brand wordmark.
+            className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}
             onClick={props.onOpenSettings}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -853,39 +865,13 @@ export function Sidebar(props: SidebarProps) {
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
           {(["inbox", "recents", "directories"] as const).map((mode) => (
-            <button
+            <LensTab
               key={mode}
-              // role="tab" + aria-selected is what makes the tablist a
-              // valid ARIA composite. Keyboard nav is unchanged (Tab still
-              // cycles through every button) since browsers don't auto-wire
-              // arrow-key navigation from role alone — adding role here only
-              // changes how screen readers announce the widget.
-              role="tab"
-              aria-selected={props.browseMode === mode}
-              className={`lens-switch__button${
-                props.browseMode === mode ? " is-active" : ""
-              }`}
-              type="button"
-              onClick={() => props.onBrowseModeChange(mode)}
-            >
-              {mode === "directories" ? (
-                // Two labels, one shown at a time by the .lens-switch
-                // container query: the full word while the column is wide
-                // enough, "Dirs" once it narrows. The hidden span drops out
-                // of the accessible name (display:none), so the visible text
-                // is always the tab's name.
-                <>
-                  <span className="lens-switch__label lens-switch__label--full">
-                    {browseModeLabels[mode]}
-                  </span>
-                  <span className="lens-switch__label lens-switch__label--abbrev">
-                    Dirs
-                  </span>
-                </>
-              ) : (
-                <span className="lens-switch__label">{browseModeLabels[mode]}</span>
-              )}
-            </button>
+              mode={mode}
+              active={props.browseMode === mode}
+              tooltipText={browseModeTooltips[mode]}
+              onSelect={() => props.onBrowseModeChange(mode)}
+            />
           ))}
         </div>
 
@@ -1496,6 +1482,56 @@ function ProfileIdentityButton(props: {
         onMouseLeave={tooltip.hide}
       >
         <span className="runtime-identity__text">{props.label}</span>
+      </button>
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
+function LensTab(props: {
+  mode: BrowseMode;
+  active: boolean;
+  tooltipText: string;
+  onSelect: () => void;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+
+  return (
+    <>
+      <button
+        // role="tab" + aria-selected is what makes the tablist a valid ARIA
+        // composite. Keyboard nav is unchanged (Tab still cycles through every
+        // button) since browsers don't auto-wire arrow-key navigation from role
+        // alone — adding role here only changes how screen readers announce it.
+        role="tab"
+        aria-selected={props.active}
+        className={`lens-switch__button${props.active ? " is-active" : ""}`}
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={() => {
+          tooltip.hide();
+          props.onSelect();
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
+        onMouseLeave={tooltip.hide}
+      >
+        {props.mode === "directories" ? (
+          // Two labels, one shown at a time by the .lens-switch container query:
+          // the full word while the column is wide enough, "Dirs" once it
+          // narrows. The hidden span drops out of the accessible name
+          // (display:none), so the visible text is always the tab's name.
+          <>
+            <span className="lens-switch__label lens-switch__label--full">
+              {browseModeLabels[props.mode]}
+            </span>
+            <span className="lens-switch__label lens-switch__label--abbrev">
+              Dirs
+            </span>
+          </>
+        ) : (
+          <span className="lens-switch__label">{browseModeLabels[props.mode]}</span>
+        )}
       </button>
       {tooltip.tooltipNode}
     </>

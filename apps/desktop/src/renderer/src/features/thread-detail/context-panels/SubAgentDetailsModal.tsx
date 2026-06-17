@@ -17,7 +17,7 @@ type SubAgentDetailsModalProps = {
 
 /**
  * Centered, in-window detail view for a single sub-agent — opened from the
- * card's Details button. Mirrors {@link TranscriptImageLightbox}: a fixed
+ * card's Details button. Mirrors {@link ImageLightbox}: a fixed
  * scrim that closes on backdrop click or Escape, portaled to the body so it
  * escapes the context rail's clipping + transforms. Surfaces the request,
  * final response, run timing, model, and token/pricing usage.

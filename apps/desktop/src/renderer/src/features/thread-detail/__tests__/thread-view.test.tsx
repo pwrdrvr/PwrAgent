@@ -340,7 +340,7 @@ describe("ThreadView", () => {
       <ThreadView {...commonProps} selectedThread={firstThread} />,
     );
 
-    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
 
     expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
       "data-thread-key",
@@ -350,7 +350,7 @@ describe("ThreadView", () => {
       "data-height",
       "260",
     );
-    expect(screen.getByTitle("Hide integrated terminal")).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -359,7 +359,7 @@ describe("ThreadView", () => {
 
     expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
-    expect(screen.getByTitle("Open integrated terminal")).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -370,17 +370,17 @@ describe("ThreadView", () => {
       "data-cwd",
       "/repo/a",
     );
-    expect(screen.getByTitle("Hide integrated terminal")).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
 
-    fireEvent.click(screen.getByTitle("Hide integrated terminal"));
+    fireEvent.click(screen.getByRole("button", { name: "Hide integrated terminal" }));
 
     expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
     fireEvent.click(await screen.findByTitle("Close terminal"));
 
     expect(closeIntegratedTerminal).toHaveBeenCalledWith({
@@ -424,11 +424,11 @@ describe("ThreadView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("Open integrated terminal"));
+    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
     fireEvent.click(await screen.findByText("Simulate terminal exit"));
 
     expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
-    expect(screen.getByTitle("Open integrated terminal")).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -1122,7 +1122,7 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Expanded transcript image" });
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByAltText("Transcript screenshot")).toHaveAttribute(
       "src",
@@ -1132,7 +1132,7 @@ describe("ThreadView", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+      screen.queryByRole("dialog", { name: "Expanded image" })
     ).not.toBeInTheDocument();
   });
 
@@ -1219,7 +1219,7 @@ describe("ThreadView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
-    expect(screen.getByRole("dialog", { name: "Expanded transcript image" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
 
     rerender(
       <ThreadView
@@ -1239,7 +1239,7 @@ describe("ThreadView", () => {
     );
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+      screen.queryByRole("dialog", { name: "Expanded image" })
     ).not.toBeInTheDocument();
   });
 

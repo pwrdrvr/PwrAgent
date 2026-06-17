@@ -1,3 +1,4 @@
+export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BranchIcon } from "./BranchIcon";
 export { ChevronLeftIcon } from "./ChevronLeftIcon";

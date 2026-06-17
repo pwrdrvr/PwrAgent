@@ -46,6 +46,7 @@ import {
   SearchIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
+import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -1876,20 +1877,7 @@ export function Composer(props: ComposerProps) {
   // undefined when the lightbox is closed.
   const [lightboxAttachment, setLightboxAttachment] =
     useState<ComposerImageAttachment>();
-  useEffect(() => {
-    if (!lightboxAttachment) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setLightboxAttachment(undefined);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [lightboxAttachment]);
+  // Escape-to-close is owned by `ImageLightbox` itself.
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
@@ -5167,39 +5155,13 @@ export function Composer(props: ComposerProps) {
         document.body,
       )
     : null;
-  const imageLightbox = lightboxAttachment
-    ? createPortal(
-        <div
-          className="composer__lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Expanded image"
-          onClick={() => setLightboxAttachment(undefined)}
-        >
-          <div
-            className="composer__lightbox-content"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <button
-              aria-label="Close image"
-              className="composer__lightbox-close"
-              type="button"
-              onClick={() => setLightboxAttachment(undefined)}
-            >
-              <CloseIcon size={18} aria-hidden="true" />
-            </button>
-            <img
-              className="composer__lightbox-image"
-              src={lightboxAttachment.url}
-              alt={formatPastedImageAlt(lightboxAttachment, 0)}
-            />
-          </div>
-        </div>,
-        document.body,
-      )
-    : null;
+  const imageLightbox = lightboxAttachment ? (
+    <ImageLightbox
+      src={lightboxAttachment.url}
+      alt={formatPastedImageAlt(lightboxAttachment, 0)}
+      onClose={() => setLightboxAttachment(undefined)}
+    />
+  ) : null;
   const workspaceHandoffDialog =
     handoffDialog && threadWorkspace
       ? createPortal(

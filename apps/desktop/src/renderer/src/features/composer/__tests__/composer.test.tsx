@@ -8879,7 +8879,7 @@ describe("Composer", () => {
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close image" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() =>
       expect(
         screen.queryByRole("dialog", { name: "Expanded image" })

@@ -806,6 +806,11 @@ textarea,
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
+  /* Named width-query container so the masthead's `@container sidebar (...)`
+     query targets the rail specifically and can't be retargeted by a future
+     nested container. Width is extrinsic (`--sidebar-width`), so inline-size
+     containment is safe. See `.sidebar__masthead`. */
+  container: sidebar / inline-size;
 }
 
 /* Thread-list quick-jump popup (⌘F while the sidebar is focused). Floats below
@@ -968,6 +973,24 @@ textarea,
   align-items: center;
   padding: 10px 0 0 80px;
   border-bottom: none;
+  /* Tighter than the shared 16px so the brand sits closer to its actions. */
+  gap: 8px;
+}
+
+/* When the rail gets too narrow for the wordmark + all four actions, the
+   Settings gear drops out — it's the one masthead action reachable elsewhere
+   (app menu → Settings…, ⌘,), so it's the safe one to shed. That alone frees
+   enough room for the wordmark + the remaining three buttons to coexist all the
+   way down to the minimum rail width, so the wordmark itself never has to hide.
+   `.sidebar` is the named width-query container (`sidebar`) — the same
+   mechanism the lens switch uses to swap "Directories" → "Dirs". */
+@container sidebar (max-width: 282px) {
+  /* Compound selector (.0,2,0) so this beats `.sidebar__icon-button`'s own
+     `display: inline-flex` (.0,1,0), which is declared later in the file and
+     would otherwise win the cascade and keep the gear visible. */
+  .sidebar__icon-button.sidebar__masthead-settings {
+    display: none;
+  }
 }
 
 /* macOS reserves 80px for the traffic-light stoplights. Every other
@@ -989,7 +1012,21 @@ textarea,
 .sidebar__masthead-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* Tight, even spacing — the icons read as one toolbar cluster, not four
+     separate framed controls. */
+  gap: 2px;
+  /* Pinned to the trailing edge whether or not the wordmark is present, so the
+     buttons don't jump left when it hides. Never shrink. */
+  margin-left: auto;
+  flex: 0 0 auto;
+  /* Pull 8px toward the wall so the trailing (new-thread) button lines up with
+     the per-directory launchpad (+) buttons below it. Those rows bleed
+     wall-to-wall via `.sidebar__scroll-region` and sit 8px off the wall
+     (`.directory-groups` right padding); the masthead instead carries the
+     sidebar's full 16px side padding, so without this the top button sits 8px
+     further in. Reclaiming the 8px also gives the wordmark more room before it
+     has to drop out. */
+  margin-right: -8px;
 }
 
 .sidebar__masthead-actions,
@@ -2274,27 +2311,44 @@ textarea,
 
 .sidebar__icon-button {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   appearance: none;
   cursor: pointer;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
+  /* Flat toolbar buttons: no resting box (border + filled panel), just the
+     icon with a hover/active tint. Tightened from the old chunky 34px box to a
+     comfortable 28px; the wordmark (not the buttons) is what yields at narrow
+     widths, so these never have to shrink to stay legible. */
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 16px;
   line-height: 1;
 }
 
-.sidebar__icon-button:hover,
-.sidebar__icon-button:focus-visible,
+.sidebar__icon-button:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.sidebar__icon-button:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .sidebar__icon-button.is-active {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-  outline: none;
+  /* Deliberately no `outline` reset here: this rule and `:focus-visible` share
+     specificity (0,2,0) and this one is declared later, so an `outline: none`
+     would win and swallow the keyboard focus ring on an active+focused button.
+     Leave the ring to `:focus-visible`. */
 }
 
 .sidebar__new-thread {
@@ -9317,18 +9371,37 @@ textarea,
 
 .edits-panel__dock-toggle {
   flex: 0 0 auto;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg-input);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
 }
 
 .edits-panel__dock-toggle:hover {
   border-color: var(--accent-border);
   color: var(--text-primary);
+}
+
+.edits-panel__dock-toggle:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Edits are also pinned above the composer — the up arrow reads "active"
+   (accent fill) so the toggle's current state is legible without a label. */
+.edits-panel__dock-toggle.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .transcript-activity {
@@ -9715,38 +9788,6 @@ textarea,
   border: 1px solid var(--accent-border);
   border-radius: 8px;
   background: var(--bg-row-active);
-}
-
-.transcript-image-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--scrim-opaque);
-}
-
-.transcript-image-lightbox__content {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  max-width: min(100%, 960px);
-}
-
-.transcript-image-lightbox__close {
-  align-self: flex-end;
-}
-
-.transcript-image-lightbox__image {
-  display: block;
-  max-width: min(100vw - 48px, 960px);
-  max-height: min(100vh - 120px, 800px);
-  border-radius: 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
 }
 
 .transcript-request__header,
@@ -12428,10 +12469,10 @@ textarea,
   white-space: nowrap;
 }
 
-/* Full-size preview overlay. Click the scrim or the X to close (Escape too).
-   Mirrors the transcript image lightbox, with a circular X like the
-   thumbnail remove control. */
-.composer__lightbox {
+/* The single full-size image viewer (`ImageLightbox`) — used for both pasted
+   composer attachments and sent transcript images. Click the scrim, the close
+   cookie, or Escape to dismiss. */
+.image-lightbox {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -12441,43 +12482,53 @@ textarea,
   padding: 24px;
   background: var(--scrim-opaque);
   cursor: zoom-out;
+  /* Portaled to <body>, but assert no-drag explicitly so the close cookie can
+     never be swallowed by an OS window-drag region it floats over. */
+  -webkit-app-region: no-drag;
 }
 
-.composer__lightbox-content {
+.image-lightbox__content {
   position: relative;
   display: flex;
   max-width: min(100%, 1100px);
   cursor: default;
 }
 
-.composer__lightbox-close {
+/* Close affordance: an accent "cookie" — same treatment as the scroll-to-bottom
+   CTA — floating just off the image's top-right corner, so it reads as an
+   unmistakable high-contrast control instead of blending into the scrim. The
+   content is `position: relative`, so this anchors to the image box. */
+.image-lightbox__close {
   position: absolute;
   top: -14px;
   right: -14px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: var(--bg-panel-elevated);
-  color: var(--text-primary);
-  box-shadow: 0 1px 3px var(--shadow-tint-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--button-text);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
-.composer__lightbox-close:hover {
-  background: var(--bg-panel-hover);
+.image-lightbox__close:hover {
+  background: var(--accent-strong);
+  color: var(--button-text);
 }
 
-.composer__lightbox-close:focus-visible {
-  outline: 2px solid var(--focus-ring);
+.image-lightbox__close:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.composer__lightbox-image {
+.image-lightbox__image {
   display: block;
   max-width: min(100vw - 48px, 1100px);
   max-height: min(100vh - 48px, 900px);
