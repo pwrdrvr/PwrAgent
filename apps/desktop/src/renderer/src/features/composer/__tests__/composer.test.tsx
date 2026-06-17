@@ -9470,6 +9470,64 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("clears stale thinking when Codex reports the thread is idle", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-stale"
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onPendingStatusChange={onPendingStatusChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "idle" },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    });
+    expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
+    expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
+  });
+
   it("releases the queued-turn lock when Stop repairs stale active state", async () => {
     const draftStore = createComposerDraftStore();
     const scopeKey = "thread:codex:thread-stale-queue";
@@ -9547,7 +9605,7 @@ describe("Composer", () => {
     );
   });
 
-  it("keeps the stop button visible when idle status arrives before completion", async () => {
+  it("clears stale thinking when idle status arrives before completion", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -9641,8 +9699,10 @@ describe("Composer", () => {
       });
     });
 
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
-    expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    });
+    expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
   });
 
   it("sends Codex turns with plan collaboration mode when plan mode is enabled", async () => {
