@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { RENDERER_PAYLOAD_STRING_LIMIT_CHARS } from "@pwragent/shared";
-import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
+import {
+  buildLiveDiffActivityEntry,
+  getLiveThreadFileDiff,
+} from "../app-server/live-diff-activity";
 
 describe("live diff activity normalization", () => {
   it("splits a live unified diff into pre-shaped per-file activity details", () => {
@@ -63,8 +65,14 @@ describe("live diff activity normalization", () => {
           },
         ],
       });
-      expect(entry?.details[0]?.fileDiff?.diff).toContain("diff --git a/src/one.ts");
-      expect(entry?.details[1]?.fileDiff?.diff).toContain("diff --git a/src/two.ts");
+      expect(entry?.details[0]?.fileDiff?.diff).toBe("");
+      expect(entry?.details[1]?.fileDiff?.diff).toBe("");
+      expect(
+        getLiveThreadFileDiff(entry!.details[0]!.fileDiff!.diffRef!),
+      ).toContain("diff --git a/src/one.ts");
+      expect(
+        getLiveThreadFileDiff(entry!.details[1]!.fileDiff!.diffRef!),
+      ).toContain("diff --git a/src/two.ts");
     } finally {
       vi.useRealTimers();
     }
@@ -104,7 +112,7 @@ describe("live diff activity normalization", () => {
     ]);
   });
 
-  it("caps aggregate inline diff text across many small file sections", () => {
+  it("keeps large live diff text behind refs instead of embedding it in events", () => {
     const sections = Array.from({ length: 80 }, (_, index) => {
       const fileName = `src/file-${index}.ts`;
       const addedLine = `+${"x".repeat(700)}`;
@@ -126,23 +134,22 @@ describe("live diff activity normalization", () => {
       },
     });
 
-    const totalInlineDiffChars =
-      entry?.details.reduce(
-        (total, detail) => total + (detail.fileDiff?.diff.length ?? 0),
-        0,
-      ) ?? 0;
-    const omittedDetails =
-      entry?.details.filter((detail) => detail.fileDiff?.omittedReason) ?? [];
-
     expect(entry?.details).toHaveLength(80);
     expect(entry?.summary).toBe("Edited 80 files, +80, -0");
-    expect(totalInlineDiffChars).toBeLessThanOrEqual(
-      RENDERER_PAYLOAD_STRING_LIMIT_CHARS,
-    );
-    expect(omittedDetails.length).toBeGreaterThan(0);
-    expect(omittedDetails[0]?.fileDiff).toMatchObject({
+    expect(
+      entry?.details.every((detail) => detail.fileDiff?.diff === ""),
+    ).toBe(true);
+    expect(entry?.details[0]?.fileDiff).toMatchObject({
       diff: "",
-      omittedReason: expect.stringContaining("cumulative diff exceeds"),
+      diffRef: expect.objectContaining({
+        source: "live",
+        threadId: "thread-large",
+        entryId: "live-diff-turn-large",
+        detailId: "live-diff-turn-large-1",
+      }),
     });
+    expect(
+      getLiveThreadFileDiff(entry!.details[0]!.fileDiff!.diffRef!),
+    ).toContain("diff --git a/src/file-0.ts");
   });
 });

@@ -3,17 +3,51 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadFileChangeKind,
+  AppServerThreadFileDiffRef,
 } from "@pwragent/shared";
-import { RENDERER_PAYLOAD_STRING_LIMIT_CHARS } from "@pwragent/shared";
 
-const LIVE_DIFF_INLINE_BUDGET_CHARS = RENDERER_PAYLOAD_STRING_LIMIT_CHARS;
+const MAX_LIVE_DIFF_CACHE_ENTRIES = 2_000;
 
-function liveDiffOmittedReason(originalLength: number): string {
-  return [
-    "Live diff omitted from inline view because the cumulative diff exceeds",
-    `${LIVE_DIFF_INLINE_BUDGET_CHARS.toLocaleString()} characters.`,
-    `Original section length: ${originalLength.toLocaleString()} characters.`,
-  ].join(" ");
+const liveDiffCache = new Map<string, { diff: string; storedAt: number }>();
+
+function buildLiveDiffRef(params: {
+  threadId: string;
+  entryId: string;
+  detailId: string;
+}): AppServerThreadFileDiffRef {
+  return {
+    source: "live",
+    key: `live:${params.threadId}:${params.entryId}:${params.detailId}`,
+    threadId: params.threadId,
+    entryId: params.entryId,
+    detailId: params.detailId,
+  };
+}
+
+function rememberLiveDiff(ref: AppServerThreadFileDiffRef, diff: string): void {
+  liveDiffCache.set(ref.key, { diff, storedAt: Date.now() });
+  if (liveDiffCache.size <= MAX_LIVE_DIFF_CACHE_ENTRIES) {
+    return;
+  }
+
+  const entriesByAge = [...liveDiffCache.entries()].sort(
+    (left, right) => left[1].storedAt - right[1].storedAt,
+  );
+  for (const [key] of entriesByAge.slice(
+    0,
+    liveDiffCache.size - MAX_LIVE_DIFF_CACHE_ENTRIES,
+  )) {
+    liveDiffCache.delete(key);
+  }
+}
+
+export function getLiveThreadFileDiff(
+  ref: AppServerThreadFileDiffRef,
+): string | undefined {
+  if (ref.source !== "live") {
+    return undefined;
+  }
+  return liveDiffCache.get(ref.key)?.diff;
 }
 
 function summarizeDiff(diff: string): { additions: number; removals: number } {
@@ -102,6 +136,7 @@ function formatChangedFileSummary(params: {
 export function extractLiveDiffActivityDetails(params: {
   diff: string;
   entryId: string;
+  threadId: string;
 }): AppServerThreadActivityDetail[] {
   const lines = params.diff.replace(/\r\n?/g, "\n").split("\n");
   const sections: Array<{ lines: string[] }> = [];
@@ -129,7 +164,6 @@ export function extractLiveDiffActivityDetails(params: {
 
   const normalizedSections = sections.length > 0 ? sections : [{ lines }];
   const details: AppServerThreadActivityDetail[] = [];
-  let remainingInlineDiffChars = LIVE_DIFF_INLINE_BUDGET_CHARS;
 
   for (const [index, section] of normalizedSections.entries()) {
     const rawBefore = section.lines.find((line) => line.startsWith("--- "))?.slice(4).trim();
@@ -143,27 +177,25 @@ export function extractLiveDiffActivityDetails(params: {
 
     const kind = inferDiffKind(section.lines);
     const diffSummary = summarizeDiff(diffText);
-    const includeInlineDiff = diffText.length <= remainingInlineDiffChars;
-    if (includeInlineDiff) {
-      remainingInlineDiffChars -= diffText.length;
-    }
+    const detailId = `${params.entryId}-${index + 1}`;
+    const diffRef = buildLiveDiffRef({
+      threadId: params.threadId,
+      entryId: params.entryId,
+      detailId,
+    });
+    rememberLiveDiff(diffRef, diffText);
 
     details.push({
-      id: `${params.entryId}-${index + 1}`,
+      id: detailId,
       kind: "write",
       label: buildDiffLabel(kind, path),
       ...(path ? { path } : {}),
       fileDiff: {
         kind,
-        diff: includeInlineDiff ? diffText : "",
+        diff: "",
+        diffRef,
         additions: diffSummary.additions,
         removals: diffSummary.removals,
-        ...(includeInlineDiff
-          ? {}
-          : {
-              omittedReason: liveDiffOmittedReason(diffText.length),
-              originalLength: diffText.length,
-            }),
       },
     });
   }
@@ -178,6 +210,7 @@ export function buildLiveDiffActivityEntry(
   const details = extractLiveDiffActivityDetails({
     diff: notification.params.diff,
     entryId,
+    threadId: notification.params.threadId,
   });
   if (details.length === 0) {
     return undefined;

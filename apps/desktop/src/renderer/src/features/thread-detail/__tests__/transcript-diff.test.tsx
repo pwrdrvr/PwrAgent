@@ -135,4 +135,35 @@ describe("TranscriptDiff", () => {
     expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
     expect(analyzeFocusedDiff).not.toHaveBeenCalled();
   });
+
+  it("fetches referenced live diff text only when the diff component renders", async () => {
+    const getThreadFileDiff = vi.fn(async () => ({ diff: ELIGIBLE_DIFF }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      getThreadFileDiff
+    };
+    const diffRef = {
+      source: "live" as const,
+      key: "live:thread-1:entry-1:detail-1",
+      threadId: "thread-1",
+      entryId: "entry-1",
+      detailId: "detail-1"
+    };
+
+    render(
+      <TranscriptDiff
+        detail={{
+          ...DETAIL,
+          fileDiff: {
+            ...DETAIL.fileDiff,
+            diff: "",
+            diffRef
+          }
+        }}
+      />
+    );
+
+    expect(screen.getByText("Loading diff...")).toBeInTheDocument();
+    await screen.findByText(/beta\/index/);
+    expect(getThreadFileDiff).toHaveBeenCalledWith({ ref: diffRef });
+  });
 });

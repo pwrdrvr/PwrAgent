@@ -390,6 +390,13 @@ describe("agent ipc", () => {
               label: "Update example.ts",
               path: "src/example.ts",
               fileDiff: expect.objectContaining({
+                diff: "",
+                diffRef: expect.objectContaining({
+                  source: "live",
+                  threadId: "thread-1",
+                  entryId: "live-diff-turn-1",
+                  detailId: "live-diff-turn-1-1",
+                }),
                 additions: 1,
                 removals: 0,
               }),

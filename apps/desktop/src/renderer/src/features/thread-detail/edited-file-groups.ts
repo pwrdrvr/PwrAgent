@@ -89,6 +89,16 @@ function mergeFileDiffDetail(
       : existing.fileDiff.kind === "add"
         ? "add"
         : detail.fileDiff.kind;
+  const mergedDiffText =
+    existing.fileDiff.diff || detail.fileDiff.diff
+      ? `${existing.fileDiff.diff}\n${detail.fileDiff.diff}`
+      : "";
+  const omittedReason =
+    detail.fileDiff.omittedReason ??
+    existing.fileDiff.omittedReason ??
+    (existing.fileDiff.diffRef || detail.fileDiff.diffRef
+      ? "Combined live diff is available in the per-turn edit view."
+      : undefined);
 
   return {
     ...existing,
@@ -96,12 +106,13 @@ function mergeFileDiffDetail(
     label: kind === existing.fileDiff.kind ? existing.label : detail.label,
     fileDiff: {
       kind,
-      diff: `${existing.fileDiff.diff}\n${detail.fileDiff.diff}`,
+      diff: mergedDiffText,
       additions: existing.fileDiff.additions + detail.fileDiff.additions,
       removals: existing.fileDiff.removals + detail.fileDiff.removals,
-      ...(detail.fileDiff.omittedReason
-        ? { omittedReason: detail.fileDiff.omittedReason }
-        : {}),
+      ...(mergedDiffText || !detail.fileDiff.diffRef
+        ? {}
+        : { diffRef: detail.fileDiff.diffRef }),
+      ...(omittedReason ? { omittedReason } : {}),
     },
   };
 }

@@ -42,6 +42,8 @@ import type {
   ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  GetThreadFileDiffRequest,
+  GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
   GetAutomationRunArtifactRequest,
@@ -356,6 +358,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  getThreadFileDiff?: (
+    request: GetThreadFileDiffRequest,
+  ) => Promise<GetThreadFileDiffResponse>;
   persistThreadUsageActivity?: (
     request: PersistThreadUsageActivityRequest,
   ) => Promise<PersistThreadUsageActivityResponse>;

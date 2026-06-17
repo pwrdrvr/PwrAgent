@@ -23,9 +23,19 @@ type TranscriptDiffProps = {
 export function TranscriptDiff(props: TranscriptDiffProps) {
   const [isZoomedIn, setIsZoomedIn] = useState(false);
   const [focusedView, setFocusedView] = useState<DiffView | null>(null);
+  const [fetchedDiff, setFetchedDiff] = useState<{
+    refKey?: string;
+    diff?: string;
+    omittedReason?: string;
+    loading: boolean;
+  }>({ loading: false });
   const diff = props.detail.fileDiff;
-  const diffText = diff?.omittedReason ? "" : diff?.diff ?? "";
   const desktopApi = useDesktopApi();
+  const diffRef = diff?.diffRef;
+  const inlineDiffText = diff?.omittedReason ? "" : diff?.diff ?? "";
+  const shouldFetchDiff = Boolean(diffRef && !diff?.diff && !diff?.omittedReason);
+  const diffText = shouldFetchDiff ? fetchedDiff.diff ?? "" : inlineDiffText;
+  const omittedReason = diff?.omittedReason ?? fetchedDiff.omittedReason;
   const parsed = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
   const eligibility = useMemo(() => getFocusedDiffEligibility(parsed), [parsed]);
   const hunkSummaries = useMemo(() => summarizeHunksForFocus(parsed), [parsed]);
@@ -34,10 +44,56 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   useEffect(() => {
     setIsZoomedIn(false);
     setFocusedView(null);
-  }, [diffText, props.detail.path]);
+  }, [diffText, diffRef?.key, props.detail.path]);
 
   useEffect(() => {
-    if (!diff || diff.omittedReason || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
+    if (!diffRef || !shouldFetchDiff) {
+      setFetchedDiff({ loading: false });
+      return;
+    }
+
+    const getThreadFileDiff = desktopApi?.getThreadFileDiff;
+    if (!getThreadFileDiff) {
+      setFetchedDiff({
+        refKey: diffRef.key,
+        loading: false,
+        omittedReason: "Diff is unavailable in this renderer.",
+      });
+      return;
+    }
+
+    let active = true;
+    setFetchedDiff({ refKey: diffRef.key, loading: true });
+    void getThreadFileDiff({ ref: diffRef })
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+        setFetchedDiff({
+          refKey: diffRef.key,
+          diff: response.diff,
+          omittedReason: response.omittedReason,
+          loading: false,
+        });
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setFetchedDiff({
+          refKey: diffRef.key,
+          loading: false,
+          omittedReason: "Diff is unavailable for this live update.",
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [desktopApi, diffRef, shouldFetchDiff]);
+
+  useEffect(() => {
+    if (!diff || omittedReason || !diffText || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
       return;
     }
 
@@ -71,7 +127,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     return () => {
       active = false;
     };
-  }, [desktopApi, diff, diffText, eligibility.eligible, hunkSummaries, parsed, props.detail.path]);
+  }, [desktopApi, diff, diffText, eligibility.eligible, hunkSummaries, omittedReason, parsed, props.detail.path]);
 
   const defaultView = useMemo(() => {
     if (!eligibility.eligible) {
@@ -86,7 +142,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     return null;
   }
 
-  if (diff.omittedReason) {
+  if (omittedReason) {
     return (
       <div className="transcript-diff transcript-diff--omitted">
         {props.detail.path && !props.compact ? (
@@ -94,7 +150,20 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
             {props.detail.path}
           </p>
         ) : null}
-        <p className="transcript-diff__omitted">{diff.omittedReason}</p>
+        <p className="transcript-diff__omitted">{omittedReason}</p>
+      </div>
+    );
+  }
+
+  if (fetchedDiff.loading && fetchedDiff.refKey === diffRef?.key) {
+    return (
+      <div className="transcript-diff transcript-diff--omitted">
+        {props.detail.path && !props.compact ? (
+          <p className="transcript-diff__path" title={props.detail.path}>
+            {props.detail.path}
+          </p>
+        ) : null}
+        <p className="transcript-diff__omitted">Loading diff...</p>
       </div>
     );
   }
