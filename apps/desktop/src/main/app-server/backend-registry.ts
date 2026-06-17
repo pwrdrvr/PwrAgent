@@ -13623,7 +13623,7 @@ export class DesktopBackendRegistry {
     const isQuestion =
       event.notification.method === "item/tool/requestUserInput";
     const title = isQuestion
-      ? "PwrAgent question waiting"
+      ? "PwrAgent input needed"
       : "PwrAgent approval needed";
     const threadTitle = this.notificationThreadTitles.get(
       `${event.backend}:${threadId}`,
@@ -13693,7 +13693,7 @@ export class DesktopBackendRegistry {
       return;
     }
     const baseBody = isQuestion
-      ? "waiting for your response"
+      ? "needs your input"
       : "waiting for your approval";
     const body = threadTitle ? `${threadTitle} · ${baseBody}.` : `A turn ${baseBody}.`;
     try {
@@ -13702,6 +13702,12 @@ export class DesktopBackendRegistry {
         key,
         title,
         body,
+        onShow: () => {
+          requestShowThread({
+            backend: event.backend,
+            threadId,
+          });
+        },
       });
     } catch (error) {
       backendRegistryLog.warn("native attention notification failed", {

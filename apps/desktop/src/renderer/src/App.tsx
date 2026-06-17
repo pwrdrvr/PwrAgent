@@ -1054,6 +1054,7 @@ function DesktopAppShell(props: {
           launchpadError={navigation.launchpadError}
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+          inputRequestThreadKeys={session.inputRequestThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}

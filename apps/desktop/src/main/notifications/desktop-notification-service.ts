@@ -54,6 +54,7 @@ export class DesktopNotificationService {
     key: string;
     title: string;
     body: string;
+    onShow?: () => void;
   }): void {
     if (!params.enabled || this.attentionKeys.has(params.key)) {
       return;
@@ -69,6 +70,7 @@ export class DesktopNotificationService {
       attentionKey: params.key,
       title: params.title,
       body: params.body,
+      onClick: params.onShow,
     });
   }
 

@@ -6177,6 +6177,10 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Waiting for input");
+    expect(result.current.inputRequestThreadKeys).toEqual({
+      "codex:thread-1": true,
+    });
+    expect(result.current.approvalRequestThreadKeys).toEqual({});
     expect(result.current.pendingRequest).toBeUndefined();
     expect(result.current.pendingUserInput).toMatchObject({
       method: "item/tool/requestUserInput",
@@ -6216,6 +6220,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.inputRequestThreadKeys).toEqual({});
     expect(result.current.pendingStatusText).toBe("Thinking");
   });
 

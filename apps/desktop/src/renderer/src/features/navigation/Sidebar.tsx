@@ -77,6 +77,7 @@ type SidebarProps = {
   threadSearchActive?: boolean;
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
+  inputRequestThreadKeys?: Record<string, boolean>;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   selectedItemKey?: string;
@@ -883,6 +884,7 @@ export function Sidebar(props: SidebarProps) {
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              inputRequestThreadKeys={props.inputRequestThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
@@ -910,6 +912,7 @@ export function Sidebar(props: SidebarProps) {
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                inputRequestThreadKeys={props.inputRequestThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}

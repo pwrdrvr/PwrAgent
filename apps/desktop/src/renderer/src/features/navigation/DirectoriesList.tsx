@@ -39,6 +39,7 @@ import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  inputRequestThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
@@ -475,6 +476,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             <ThreadRow
               key={`${directory.key}:${childKey}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              inputRequestThreadKeys={props.inputRequestThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
@@ -601,6 +603,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           <ThreadRow
             key={`${directory.key}:${threadKey}`}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+            inputRequestThreadKeys={props.inputRequestThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
             draggable={Boolean(props.onReorderThreadPins)}
@@ -904,6 +907,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          inputRequestThreadKeys={props.inputRequestThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           dropIndicator={
