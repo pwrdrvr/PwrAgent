@@ -237,9 +237,45 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
           );
         })()
       ) : (
-        <EditedFileList details={flattenEditedFileGroups(props.groups)} />
+        <EditedFileFlatSection groups={props.groups} />
       );
   }
+}
+
+function formatEditedFileCount(count: number): string {
+  return `Edited ${count.toLocaleString()} ${count === 1 ? "file" : "files"}`;
+}
+
+function EditedFileFlatSection(props: { groups: EditedFileGroup[] }) {
+  const details = useMemo(
+    () => flattenEditedFileGroups(props.groups),
+    [props.groups],
+  );
+  const totals = details.reduce(
+    (sum, detail) => ({
+      additions: sum.additions + (detail.fileDiff?.additions ?? 0),
+      removals: sum.removals + (detail.fileDiff?.removals ?? 0),
+    }),
+    { additions: 0, removals: 0 },
+  );
+
+  return (
+    <>
+      <div className="edited-file-groups__group-header edited-file-groups__flat-header">
+        <div className="edited-file-groups__flat-summary">
+          <span className="edited-file-groups__group-summary">
+            {formatEditedFileCount(details.length)}
+          </span>
+        </div>
+        <DiffStat
+          additions={totals.additions}
+          removals={totals.removals}
+          className="diff-stat--chip"
+        />
+      </div>
+      <EditedFileList details={details} />
+    </>
+  );
 }
 
 function formatGroupTimestamp(group: EditedFileGroup): string | undefined {

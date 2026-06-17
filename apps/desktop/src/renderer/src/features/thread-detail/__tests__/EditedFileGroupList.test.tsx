@@ -66,6 +66,50 @@ describe("EditedFileGroupList Show more / Show less", () => {
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
   });
 
+  it("shows aggregate added and removed totals above the All files list", () => {
+    const first = group(1);
+    const second = group(2);
+    const flatGroups: EditedFileGroup[] = [
+      {
+        ...second,
+        details: [
+          {
+            ...second.details[0],
+            fileDiff: {
+              kind: "update",
+              diff: "",
+              additions: 2,
+              removals: 1,
+            },
+          },
+        ],
+        additions: 2,
+        removals: 1,
+      },
+      {
+        ...first,
+        details: [
+          {
+            ...first.details[0],
+            fileDiff: {
+              kind: "update",
+              diff: "",
+              additions: 3,
+              removals: 3,
+            },
+          },
+        ],
+        additions: 3,
+        removals: 3,
+      },
+    ];
+
+    render(<EditedFileGroupList groups={flatGroups} view="files" />);
+
+    expect(screen.getByText("Edited 2 files")).toBeInTheDocument();
+    expect(screen.getByLabelText("+5 -4")).toBeInTheDocument();
+  });
+
   it("renders the git commit badge per group from the resolved states", () => {
     render(
       <EditedFileGroupList
