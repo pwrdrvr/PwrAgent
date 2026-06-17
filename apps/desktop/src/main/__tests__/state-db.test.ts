@@ -80,6 +80,78 @@ describe("StateDb", () => {
     ]);
   });
 
+  it("indexes thread usage pricing reads and rollups without full line-table scans", () => {
+    expect(indexNames("thread_usage_lines")).toEqual(
+      expect.arrayContaining([
+        "idx_thread_usage_lines_read_parent",
+        "idx_thread_usage_lines_read_thread",
+        "idx_thread_usage_lines_summary_parent",
+        "idx_thread_usage_lines_summary_thread",
+      ]),
+    );
+
+    const readPlan = queryPlanDetails(
+      `SELECT *
+       FROM (
+         SELECT *
+         FROM thread_usage_lines
+         WHERE backend = ?
+           AND status != 'superseded'
+           AND thread_id = ?
+         UNION ALL
+         SELECT *
+         FROM thread_usage_lines
+         WHERE backend = ?
+           AND status != 'superseded'
+           AND parent_thread_id = ?
+           AND thread_id != ?
+       )
+       ORDER BY created_at DESC, usage_line_id DESC`,
+      ["codex", "thread-1", "codex", "thread-1", "thread-1"],
+    );
+    expect(readPlan).toContain("idx_thread_usage_lines_read_thread");
+    expect(readPlan).toContain("idx_thread_usage_lines_read_parent");
+    expect(readPlan).not.toMatch(/\bSCAN thread_usage_lines\b/);
+
+    const summaryPlan = queryPlanDetails(
+      `SELECT
+         COUNT(*) AS usage_line_count,
+         COALESCE(SUM(total_cost_micros), 0) AS total_cost_micros
+       FROM (
+         SELECT *
+         FROM thread_usage_lines
+         WHERE provider = ?
+           AND backend = ?
+           AND currency = ?
+           AND status != 'superseded'
+           AND thread_id = ?
+         UNION ALL
+         SELECT *
+         FROM thread_usage_lines
+         WHERE provider = ?
+           AND backend = ?
+           AND currency = ?
+           AND status != 'superseded'
+           AND parent_thread_id = ?
+           AND thread_id != ?
+       )`,
+      [
+        "openai",
+        "codex",
+        "USD",
+        "thread-1",
+        "openai",
+        "codex",
+        "USD",
+        "thread-1",
+        "thread-1",
+      ],
+    );
+    expect(summaryPlan).toContain("idx_thread_usage_lines_summary_thread");
+    expect(summaryPlan).toContain("idx_thread_usage_lines_summary_parent");
+    expect(summaryPlan).not.toMatch(/\bSCAN thread_usage_lines\b/);
+  });
+
   it("migrates legacy thread usage pricing rows into provider-scoped usage turns", () => {
     stateDb.close();
 
@@ -520,6 +592,26 @@ function columnNames(
 ): string[] {
   const rows = readTableInfo(tableName);
   return rows.map((row) => row.name);
+}
+
+function indexNames(tableName: "thread_usage_lines"): string[] {
+  return (
+    stateDb.raw.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+      name: string;
+    }>
+  )
+    .map((row) => row.name)
+    .sort();
+}
+
+function queryPlanDetails(sql: string, params: unknown[]): string {
+  return (
+    stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+      detail: string;
+    }>
+  )
+    .map((row) => row.detail)
+    .join("\n");
 }
 
 function readTableInfo(

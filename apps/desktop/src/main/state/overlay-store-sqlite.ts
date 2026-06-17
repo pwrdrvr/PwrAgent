@@ -780,13 +780,30 @@ export class SqliteOverlayStore {
   }): Promise<{ lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] }> {
     const lineRows = this.stateDb.raw
       .prepare(
-        `SELECT * FROM thread_usage_lines
-         WHERE backend = ?
-           AND status != 'superseded'
-           AND (thread_id = ? OR parent_thread_id = ?)
+        `SELECT *
+         FROM (
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND thread_id = ?
+           UNION ALL
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND parent_thread_id = ?
+             AND thread_id != ?
+         )
          ORDER BY created_at DESC, usage_line_id DESC`,
       )
-      .all(params.backend, params.threadId, params.threadId) as ThreadUsageLineRow[];
+      .all(
+        params.backend,
+        params.threadId,
+        params.backend,
+        params.threadId,
+        params.threadId,
+      ) as ThreadUsageLineRow[];
     const summaryRows = this.stateDb.raw
       .prepare(
         `SELECT * FROM thread_pricing_summaries
@@ -1898,14 +1915,30 @@ export class SqliteOverlayStore {
            COALESCE(SUM(total_tokens), 0) AS total_tokens,
            COALESCE(SUM(CASE WHEN price_status = 'priced' THEN total_cost_micros ELSE 0 END), 0)
              AS total_cost_micros
-         FROM thread_usage_lines
-         WHERE provider = ?
-           AND backend = ?
-           AND currency = ?
-           AND status != 'superseded'
-           AND (thread_id = ? OR parent_thread_id = ?)`,
+         FROM (
+           SELECT *
+           FROM thread_usage_lines
+           WHERE provider = ?
+             AND backend = ?
+             AND currency = ?
+             AND status != 'superseded'
+             AND thread_id = ?
+           UNION ALL
+           SELECT *
+           FROM thread_usage_lines
+           WHERE provider = ?
+             AND backend = ?
+             AND currency = ?
+             AND status != 'superseded'
+             AND parent_thread_id = ?
+             AND thread_id != ?
+         )`,
       )
       .get(
+        params.provider,
+        params.backend,
+        params.currency,
+        params.threadId,
         params.provider,
         params.backend,
         params.currency,

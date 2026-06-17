@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 20;
+export const CURRENT_STATE_DB_USER_VERSION = 21;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -583,6 +583,18 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
   ON thread_usage_lines(provider, backend, thread_id, turn_id);
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
   ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
 
 CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
   provider                  TEXT NOT NULL DEFAULT 'openai',
@@ -770,6 +782,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 20) {
       db.transaction(() => {
         repairThreadUsageLineCreatedAt(db);
+        db.pragma("user_version = 20");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 21) {
+      db.transaction(() => {
+        ensureThreadUsagePricingIndexes(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1196,6 +1214,28 @@ WHERE source = 'live'
     WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
       AND thread_usage_turns.observed_at < thread_usage_lines.created_at
   )
+`);
+}
+
+function ensureThreadUsagePricingIndexes(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
 `);
 }
 
