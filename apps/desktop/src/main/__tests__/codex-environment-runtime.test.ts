@@ -209,9 +209,16 @@ describe("codex environment runtime", () => {
         return result;
       });
 
-      await expect(detachedExit).resolves.toMatchObject({
-        exitSignal: expect.any(String),
-      });
+      if (isWindows) {
+        await expect(detachedExit).resolves.toMatchObject({
+          exitCode: expect.any(Number),
+          exitSignal: null,
+        });
+      } else {
+        await expect(detachedExit).resolves.toMatchObject({
+          exitSignal: expect.any(String),
+        });
+      }
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

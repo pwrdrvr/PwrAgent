@@ -582,9 +582,13 @@ function runShellCommand(
           // (the actual command, e.g. `sleep`) linger, which keeps the `close`
           // event from firing (timeouts hang) and holds handles on the
           // workspace temp dir (EBUSY on cleanup). Kill the whole process tree.
-          spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-            stdio: "ignore",
-          });
+          // Match POSIX stop semantics: SIGTERM gets a non-forced taskkill,
+          // while SIGKILL is the immediate/fallback forced termination.
+          const taskkillArgs = ["/pid", String(child.pid), "/t"];
+          if (signal === "SIGKILL") {
+            taskkillArgs.push("/f");
+          }
+          spawnSync("taskkill", taskkillArgs, { stdio: "ignore" });
         }
       } catch (error) {
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
