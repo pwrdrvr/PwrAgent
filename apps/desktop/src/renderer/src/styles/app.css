@@ -806,11 +806,11 @@ textarea,
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
-  /* Width-query container so the masthead wordmark can drop out once the rail
-     is too narrow to fit it beside the action buttons (see
-     `.sidebar__masthead`). Width is extrinsic (`--sidebar-width`), so
-     inline-size containment is safe. */
-  container-type: inline-size;
+  /* Named width-query container so the masthead's `@container sidebar (...)`
+     query targets the rail specifically and can't be retargeted by a future
+     nested container. Width is extrinsic (`--sidebar-width`), so inline-size
+     containment is safe. See `.sidebar__masthead`. */
+  container: sidebar / inline-size;
 }
 
 /* Thread-list quick-jump popup (⌘F while the sidebar is focused). Floats below
@@ -982,9 +982,9 @@ textarea,
    (app menu → Settings…, ⌘,), so it's the safe one to shed. That alone frees
    enough room for the wordmark + the remaining three buttons to coexist all the
    way down to the minimum rail width, so the wordmark itself never has to hide.
-   `.sidebar` is the width-query container — the same mechanism the lens switch
-   uses to swap "Directories" → "Dirs". */
-@container (max-width: 282px) {
+   `.sidebar` is the named width-query container (`sidebar`) — the same
+   mechanism the lens switch uses to swap "Directories" → "Dirs". */
+@container sidebar (max-width: 282px) {
   /* Compound selector (.0,2,0) so this beats `.sidebar__icon-button`'s own
      `display: inline-flex` (.0,1,0), which is declared later in the file and
      would otherwise win the cascade and keep the gear visible. */
@@ -2345,7 +2345,10 @@ textarea,
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-  outline: none;
+  /* Deliberately no `outline` reset here: this rule and `:focus-visible` share
+     specificity (0,2,0) and this one is declared later, so an `outline: none`
+     would win and swallow the keyboard focus ring on an active+focused button.
+     Leave the ring to `:focus-visible`. */
 }
 
 .sidebar__new-thread {
