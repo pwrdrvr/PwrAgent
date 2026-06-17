@@ -125,6 +125,24 @@ Use the exact prior-train release tag as the branch point. For the first stable
    Write user-facing bullets from merged PRs and direct commits since the last
    release. Preserve the same substance in GitHub release notes.
 
+   Release notes must give context first, not just describe the code delta.
+   Start each bullet with the user-visible area or feature, then state whether
+   it was added, improved, or fixed. Keep bullets punchy and readable by
+   operators:
+
+   ```md
+   - Composer - Improved complex Markdown pastes with lists, inline code, and nested code blocks.
+   - Thread Search - Escape now dismisses search, pairing with Cmd/Ctrl+Shift+F to open it.
+   - Thread List Pull Request Info - Merged PR commits no longer show as unpushed work.
+   - Minor - Dependency updates and small UI polish.
+   ```
+
+   Avoid release-note bullets that only say "Improved handling", "Added
+   plumbing", "Updated dependencies", or "Fixed packaging" without naming the
+   feature surface and why users should care. Roll maintenance-only changes
+   into a short `Minor - ...` bullet unless they materially affect installs,
+   updates, or data safety.
+
 4. Run the metadata gate locally before committing:
 
    ```bash
