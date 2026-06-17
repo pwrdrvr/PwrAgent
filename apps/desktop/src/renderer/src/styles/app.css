@@ -5622,6 +5622,23 @@ textarea,
   opacity: 0;
 }
 
+/* Deprecation drawer: nested SettingsSection cards are inset from the group
+   card edges and rendered without the sticky/elevated header treatment so a
+   card-in-card stack reads as a calm sub-list rather than a pile of floating
+   panels. */
+.settings-section-group__body {
+  padding: 14px;
+}
+
+.settings-section-group__body .settings-stack {
+  gap: 12px;
+}
+
+.settings-section-group__body .settings-section__header-button {
+  position: static;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
 .settings-source {
   display: inline-flex;
   align-self: flex-start;

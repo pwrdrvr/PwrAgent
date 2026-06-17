@@ -3,6 +3,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionGroup,
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -91,6 +92,10 @@ export function ExperimentalSettings(props: {
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
   );
+  const discontinuedEnabledCount =
+    (condensation.enabled.value ? 1 : 0) +
+    (agentCoreGrok.value ? 1 : 0) +
+    (liveTranscriptEventFiltering.value ? 1 : 0);
 
   return (
     <SettingsSectionStack paneId="experimental" aria-label="Experimental settings">
@@ -99,75 +104,6 @@ export function ExperimentalSettings(props: {
         title="Experimental features"
         help="Opt-in features that may change shape or be removed without notice."
       />
-
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Diff Condensation"
-        description="Send focused-diff hunks to xAI for a judgment call on what to hide. Disabled by default — every diff renders in full and no xAI request fires."
-        chip={condensation.enabled.value ? "On" : "Off"}
-        chipKind={condensation.enabled.value ? "ok" : "default"}
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Enable diff condensation"
-            sub="When on, focused-diff requests fire an xAI judgment call to decide which hunks to elide."
-            source={sourceBadge(condensation.enabled)}
-            control={
-              <SettingsSwitch
-                checked={condensation.enabled.value}
-                disabled={props.saving}
-                label="Enable diff condensation"
-                onChange={(enabled) => {
-                  void props.onDiffCondensationEnabledChange(enabled);
-                }}
-              />
-            }
-          />
-
-          <SettingsField
-            label="Eliding model"
-            sub="Which model decides which hunks to elide."
-            help="Auto matches the thread's primary backend. Pinning a specific model uses it for every eliding request, regardless of backend."
-            source={sourceBadge(condensation.model)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Diff condensation model"
-              >
-                {DIFF_CONDENSATION_MODEL_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={condensation.model.value === option.value}
-                    className={`settings-segmented__button${
-                      condensation.model.value === option.value ? " is-active" : ""
-                    }`}
-                    disabled={props.saving || !condensation.enabled.value}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onDiffCondensationModelChange(option.value);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-                {!knownCondensationModel ? (
-                  <button
-                    aria-checked
-                    className="settings-segmented__button is-active"
-                    disabled
-                    role="radio"
-                    type="button"
-                  >
-                    {condensation.model.value} (custom)
-                  </button>
-                ) : null}
-              </div>
-            }
-          />
-        </div>
-      </SettingsSection>
 
       <SettingsSection
         eyebrow="Experimental"
@@ -251,57 +187,137 @@ export function ExperimentalSettings(props: {
         </div>
       </SettingsSection>
 
-      <SettingsSection
-        eyebrow="Experimental"
-        title="AgentCore - Grok"
-        description="Legacy direct-xAI Grok backend. Disabled by default. Prefer the Grok CLI (ACP) backend instead — set up under Settings → ACP Agents."
-        chip={agentCoreGrok.value ? "On" : "Off"}
-        chipKind={agentCoreGrok.value ? "ok" : "default"}
+      <SettingsSectionGroup
+        groupId="experimental-discontinued"
+        eyebrow="Deprecated"
+        title="Soon to be discontinued"
+        description="These features are being phased out and may be removed in a future release."
+        chip={discontinuedEnabledCount > 0 ? `${discontinuedEnabledCount} on` : "Off"}
+        chipKind={discontinuedEnabledCount > 0 ? "ok" : "default"}
+        defaultCollapsed
+        aria-label="Soon to be discontinued experimental settings"
       >
-        <div className="settings-fields">
-          <SettingsField
-            label="Enable AgentCore - Grok"
-            sub="When on, the legacy agent-core Grok backend appears in the backend picker. Uses the Grok API key from Settings → Models → Grok."
-            source={sourceBadge(agentCoreGrok)}
-            control={
-              <SettingsSwitch
-                checked={agentCoreGrok.value}
-                disabled={props.saving}
-                label="Enable AgentCore - Grok"
-                onChange={(enabled) => {
-                  void props.onAgentCoreGrokChange(enabled);
-                }}
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
+        <SettingsSection
+          eyebrow="Experimental"
+          title="Diff Condensation"
+          description="Send focused-diff hunks to xAI for a judgment call on what to hide. Disabled by default — every diff renders in full and no xAI request fires."
+          chip={condensation.enabled.value ? "On" : "Off"}
+          chipKind={condensation.enabled.value ? "ok" : "default"}
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="Enable diff condensation"
+              sub="When on, focused-diff requests fire an xAI judgment call to decide which hunks to elide."
+              source={sourceBadge(condensation.enabled)}
+              control={
+                <SettingsSwitch
+                  checked={condensation.enabled.value}
+                  disabled={props.saving}
+                  label="Enable diff condensation"
+                  onChange={(enabled) => {
+                    void props.onDiffCondensationEnabledChange(enabled);
+                  }}
+                />
+              }
+            />
 
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Live Transcript Event Filtering"
-        description="Reduce renderer work from live transcript notifications by ignoring unrelated thread-local events and skipping duplicate activity updates. Disabled by default."
-        chip={liveTranscriptEventFiltering.value ? "On" : "Off"}
-        chipKind={liveTranscriptEventFiltering.value ? "ok" : "default"}
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Enable live transcript event filtering"
-            sub="When on, live transcript notifications for other threads no longer update the focused thread view."
-            source={sourceBadge(liveTranscriptEventFiltering)}
-            control={
-              <SettingsSwitch
-                checked={liveTranscriptEventFiltering.value}
-                disabled={props.saving}
-                label="Enable live transcript event filtering"
-                onChange={(enabled) => {
-                  void props.onLiveTranscriptEventFilteringChange(enabled);
-                }}
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
+            <SettingsField
+              label="Eliding model"
+              sub="Which model decides which hunks to elide."
+              help="Auto matches the thread's primary backend. Pinning a specific model uses it for every eliding request, regardless of backend."
+              source={sourceBadge(condensation.model)}
+              control={
+                <div
+                  className="settings-segmented"
+                  role="radiogroup"
+                  aria-label="Diff condensation model"
+                >
+                  {DIFF_CONDENSATION_MODEL_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-checked={condensation.model.value === option.value}
+                      className={`settings-segmented__button${
+                        condensation.model.value === option.value ? " is-active" : ""
+                      }`}
+                      disabled={props.saving || !condensation.enabled.value}
+                      role="radio"
+                      type="button"
+                      onClick={() => {
+                        void props.onDiffCondensationModelChange(option.value);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  {!knownCondensationModel ? (
+                    <button
+                      aria-checked
+                      className="settings-segmented__button is-active"
+                      disabled
+                      role="radio"
+                      type="button"
+                    >
+                      {condensation.model.value} (custom)
+                    </button>
+                  ) : null}
+                </div>
+              }
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          eyebrow="Experimental"
+          title="AgentCore - Grok"
+          description="Legacy direct-xAI Grok backend. Disabled by default. Prefer the Grok CLI (ACP) backend instead — set up under Settings → ACP Agents."
+          chip={agentCoreGrok.value ? "On" : "Off"}
+          chipKind={agentCoreGrok.value ? "ok" : "default"}
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="Enable AgentCore - Grok"
+              sub="When on, the legacy agent-core Grok backend appears in the backend picker. Uses the Grok API key from Settings → Models → Grok."
+              source={sourceBadge(agentCoreGrok)}
+              control={
+                <SettingsSwitch
+                  checked={agentCoreGrok.value}
+                  disabled={props.saving}
+                  label="Enable AgentCore - Grok"
+                  onChange={(enabled) => {
+                    void props.onAgentCoreGrokChange(enabled);
+                  }}
+                />
+              }
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          eyebrow="Experimental"
+          title="Live Transcript Event Filtering"
+          description="Reduce renderer work from live transcript notifications by ignoring unrelated thread-local events and skipping duplicate activity updates. Disabled by default."
+          chip={liveTranscriptEventFiltering.value ? "On" : "Off"}
+          chipKind={liveTranscriptEventFiltering.value ? "ok" : "default"}
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="Enable live transcript event filtering"
+              sub="When on, live transcript notifications for other threads no longer update the focused thread view."
+              source={sourceBadge(liveTranscriptEventFiltering)}
+              control={
+                <SettingsSwitch
+                  checked={liveTranscriptEventFiltering.value}
+                  disabled={props.saving}
+                  label="Enable live transcript event filtering"
+                  onChange={(enabled) => {
+                    void props.onLiveTranscriptEventFilteringChange(enabled);
+                  }}
+                />
+              }
+            />
+          </div>
+        </SettingsSection>
+      </SettingsSectionGroup>
     </SettingsSectionStack>
   );
 }
