@@ -147,7 +147,7 @@ jobs:
 
       - name: Install ripgrep
         timeout-minutes: 5
-        run: choco install ripgrep -y --no-progress
+        uses: ./.github/actions/install-ripgrep
 
       - name: Type check
         timeout-minutes: 10
