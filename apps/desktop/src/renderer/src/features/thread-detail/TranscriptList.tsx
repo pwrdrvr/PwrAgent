@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ReactElement,
 } from "react";
 import type {
   AppServerPendingRequestNotification,
@@ -13,16 +15,22 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerThreadFileChangeKind,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   AutomationTimelineCard,
   DesktopApplicationsSnapshot,
   PendingRequestAction,
+  PendingRequestApprovalContext,
+  PendingRequestApprovalFileContext,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadTurnFailure,
 } from "@pwragent/shared";
-import { buildPendingRequestActions } from "@pwragent/shared";
+import {
+  buildPendingRequestActions,
+  buildPendingRequestApprovalContext,
+} from "@pwragent/shared";
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -41,6 +49,7 @@ import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
+import { TranscriptDiff } from "./TranscriptDiff";
 import type { PendingQuestionnaireState } from "./questionnaire";
 import type { PendingMcpInteractionState } from "./mcp-elicitation";
 import {
@@ -319,30 +328,226 @@ function isGenericShellToolTitle(command: string): boolean {
   return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
-function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
+function pendingRequestPrompt(
+  request: AppServerPendingRequestNotification,
+  context: PendingRequestApprovalContext | undefined,
+): string {
   const prompt =
     typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   const command = approvalDisplayCommand(request.params);
   const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
+  const contextBlock = approvalContextMarkdown(context);
 
   if (prompt && commandBlock) {
-    return `${prompt}\n\n${commandBlock}`;
+    return [prompt, commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (prompt) {
-    return prompt;
+    return [prompt, contextBlock].filter(Boolean).join("\n\n");
   }
   if (reason && commandBlock) {
-    return `${reason}\n\n${commandBlock}`;
+    return [reason, commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (commandBlock) {
-    return commandBlock;
+    return [commandBlock, contextBlock].filter(Boolean).join("\n\n");
   }
   if (reason) {
-    return reason;
+    return [reason, contextBlock].filter(Boolean).join("\n\n");
   }
 
-  return "This turn is waiting for approval before it can continue.";
+  return [
+    "This turn is waiting for approval before it can continue.",
+    contextBlock,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function approvalContextMarkdown(
+  context: ReturnType<typeof buildPendingRequestApprovalContext>,
+): string {
+  if (!context) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  if (context.action) {
+    lines.push(`Action: ${context.action}`);
+  }
+  const fileContexts = context.files?.length
+    ? context.files
+    : context.displayPath && context.path
+      ? [
+          {
+            action: context.action,
+            diff: context.diff,
+            displayPath: context.displayPath,
+            path: context.path,
+          },
+        ]
+      : [];
+
+  if (fileContexts.length === 1) {
+    const file = fileContexts[0]!;
+    if (file.action && file.action !== context.action) {
+      lines.push(`Action: ${file.action}`);
+    }
+    lines.push(`File: ${file.displayPath}`);
+  } else if (fileContexts.length > 1) {
+    lines.push("Files:");
+    for (const file of fileContexts) {
+      lines.push(`- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`);
+    }
+  } else if (context.displayPath) {
+    lines.push(`File: ${context.displayPath}`);
+  }
+  if (context.displayGrantRoot) {
+    lines.push(`Write root: ${context.displayGrantRoot}`);
+  }
+
+  return lines.join("\n");
+}
+
+const APPROVAL_DIFF_INLINE_MAX_CHARS = 2_000;
+const APPROVAL_DIFF_INLINE_MAX_LINES = 18;
+const APPROVAL_DIFF_INLINE_MAX_LINE_CHARS = 240;
+
+function shouldExpandApprovalDiffByDefault(
+  file: PendingRequestApprovalFileContext,
+): boolean {
+  if (file.omittedReason || file.diffRef || file.diffRefs?.length || !file.diff) {
+    return false;
+  }
+  if (file.diff.length > APPROVAL_DIFF_INLINE_MAX_CHARS) {
+    return false;
+  }
+  const lines = file.diff.split(/\r?\n/);
+  return (
+    lines.length <= APPROVAL_DIFF_INLINE_MAX_LINES &&
+    lines.every((line) => line.length <= APPROVAL_DIFF_INLINE_MAX_LINE_CHARS)
+  );
+}
+
+function countDiffLines(diff: string | undefined): {
+  additions: number;
+  removals: number;
+} {
+  if (!diff) {
+    return { additions: 0, removals: 0 };
+  }
+  let additions = 0;
+  let removals = 0;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      removals += 1;
+    }
+  }
+  return { additions, removals };
+}
+
+function normalizeFileChangeKind(
+  value: string | undefined,
+): AppServerThreadFileChangeKind {
+  return value === "add" || value === "delete" || value === "update"
+    ? value
+    : "update";
+}
+
+function ApprovalDiffDisclosure(props: {
+  file: PendingRequestApprovalFileContext;
+}): ReactElement | null {
+  const diffId = useId();
+  const defaultExpanded = shouldExpandApprovalDiffByDefault(props.file);
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const counts = countDiffLines(props.file.diff);
+  const additions = props.file.additions ?? counts.additions;
+  const removals = props.file.removals ?? counts.removals;
+  const hasDiff = Boolean(
+    props.file.diff ||
+      props.file.diffRef ||
+      props.file.diffRefs?.length ||
+      props.file.omittedReason,
+  );
+  if (!hasDiff) {
+    return null;
+  }
+
+  return (
+    <div className="transcript-request__diff">
+      <button
+        type="button"
+        className="transcript-request__diff-toggle"
+        aria-controls={diffId}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="transcript-request__diff-chev" aria-hidden="true" />
+        <span>{expanded ? "Hide diff" : "Show diff"}</span>
+        <span className="transcript-request__diff-stat">
+          +{additions.toLocaleString()} -{removals.toLocaleString()}
+        </span>
+      </button>
+      <div id={diffId} hidden={!expanded}>
+        {expanded ? (
+          <TranscriptDiff
+            compact
+            detail={{
+              id: `approval-diff:${props.file.path}`,
+              kind: "write",
+              label: props.file.displayPath,
+              path: props.file.path,
+              fileDiff: {
+                kind: normalizeFileChangeKind(props.file.action),
+                diff: props.file.omittedReason ? "" : props.file.diff ?? "",
+                ...(props.file.diffRef ? { diffRef: props.file.diffRef } : {}),
+                ...(props.file.diffRefs ? { diffRefs: props.file.diffRefs } : {}),
+                additions,
+                removals,
+                ...(props.file.omittedReason
+                  ? { omittedReason: props.file.omittedReason }
+                  : {}),
+              },
+            }}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ApprovalDiffDisclosures(props: {
+  context: PendingRequestApprovalContext | undefined;
+}): ReactElement | null {
+  const files = props.context?.files?.length
+    ? props.context.files
+    : props.context?.path && props.context.displayPath
+      ? [
+          {
+            action: props.context.action,
+            diff: props.context.diff,
+            displayPath: props.context.displayPath,
+            path: props.context.path,
+          },
+        ]
+      : [];
+  if (!files.length) {
+    return null;
+  }
+  return (
+    <div className="transcript-request__diffs">
+      {files.map((file) => (
+        <ApprovalDiffDisclosure
+          file={file}
+          key={`${file.path}:${file.diffRef?.key ?? file.diff ?? ""}`}
+        />
+      ))}
+    </div>
+  );
 }
 
 export function TranscriptList(props: TranscriptListProps) {
@@ -467,6 +672,16 @@ export function TranscriptList(props: TranscriptListProps) {
     props.permissionTransitions,
     props.turnFailures,
   ]);
+  const pendingApprovalContext = useMemo(
+    () =>
+      props.pendingRequest
+        ? buildPendingRequestApprovalContext(props.pendingRequest, {
+            directoryPaths: props.directoryPaths,
+            entries: transcriptEntries,
+          })
+        : undefined,
+    [props.directoryPaths, props.pendingRequest, transcriptEntries],
+  );
   const transcriptRenderItems = useMemo(
     () =>
       buildTranscriptRenderItems({
@@ -1036,8 +1251,12 @@ export function TranscriptList(props: TranscriptListProps) {
                 applications={props.applications}
                 className="transcript-request__prompt"
                 desktopApi={props.desktopApi}
-                text={pendingRequestPrompt(props.pendingRequest)}
+                text={pendingRequestPrompt(
+                  props.pendingRequest,
+                  pendingApprovalContext,
+                )}
               />
+              <ApprovalDiffDisclosures context={pendingApprovalContext} />
               <div className="transcript-request__actions">
                 {pendingRequestActions.map((action) => (
                   <button

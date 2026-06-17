@@ -1,4 +1,10 @@
-import type { AppServerPendingRequestNotification } from "./contracts/normalized-app-server";
+import type {
+  AppServerPendingRequestNotification,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+  AppServerThreadFileDiffRef,
+} from "./contracts/normalized-app-server";
 
 export type PendingRequestDecision = "approve" | "decline" | "cancel";
 export type PendingRequestActionDecision =
@@ -18,6 +24,329 @@ export type PendingRequestAction = {
   fallbackText: string;
   response: { decision: unknown };
 };
+
+export type PendingRequestApprovalContext = {
+  action?: string;
+  diff?: string;
+  displayGrantRoot?: string;
+  displayPath?: string;
+  files?: PendingRequestApprovalFileContext[];
+  grantRoot?: string;
+  path?: string;
+};
+
+export type PendingRequestApprovalFileContext = {
+  action?: string;
+  additions?: number;
+  diff?: string;
+  diffRef?: AppServerThreadFileDiffRef;
+  diffRefs?: AppServerThreadFileDiffRef[];
+  displayPath: string;
+  omittedReason?: string;
+  path: string;
+  removals?: number;
+};
+
+export function buildPendingRequestApprovalContext(
+  request: AppServerPendingRequestNotification,
+  options: { directoryPaths?: string[]; entries?: AppServerThreadEntry[] } = {},
+): PendingRequestApprovalContext | undefined {
+  const params = request.params;
+  const embeddedFiles = readEmbeddedApprovalFiles(params, options.directoryPaths);
+  const requestFiles = embeddedFiles.length
+    ? []
+    : readRequestApprovalFiles(params, options.directoryPaths);
+  const inferredFiles = embeddedFiles.length
+    ? embeddedFiles
+    : requestFiles.length
+      ? requestFiles
+    : inferFileChangeApprovalFiles(request, options);
+  const path = readFirstString(params, [
+    "path",
+    "filePath",
+    "file_path",
+    "filename",
+    "file",
+    "targetPath",
+    "target_path",
+  ]);
+  const grantRoot = readFirstString(params, [
+    "grantRoot",
+    "grant_root",
+    "writeRoot",
+    "write_root",
+  ]);
+  const action = readFirstString(params, ["action", "operation"]);
+  const diff = readFirstString(params, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const primaryFile = inferredFiles[0];
+  const resolvedPath = path ?? primaryFile?.path;
+  const resolvedAction = action ?? primaryFile?.action;
+  const resolvedDiff = diff ?? primaryFile?.diff;
+  const hasSubject = Boolean(resolvedPath || grantRoot || resolvedDiff || inferredFiles.length);
+
+  const context: PendingRequestApprovalContext = {
+    ...(hasSubject && resolvedAction ? { action: resolvedAction } : {}),
+    ...(resolvedPath
+      ? {
+          path: resolvedPath,
+          displayPath: formatApprovalPath(resolvedPath, options.directoryPaths),
+        }
+      : {}),
+    ...(inferredFiles.length ? { files: inferredFiles } : {}),
+    ...(grantRoot
+      ? {
+          grantRoot,
+          displayGrantRoot: formatApprovalPath(grantRoot, options.directoryPaths),
+        }
+      : {}),
+    ...(resolvedDiff ? { diff: resolvedDiff } : {}),
+  };
+
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
+function inferFileChangeApprovalFiles(
+  request: AppServerPendingRequestNotification,
+  options: { directoryPaths?: string[]; entries?: AppServerThreadEntry[] },
+): PendingRequestApprovalFileContext[] {
+  if (!request.method.includes("fileChange/requestApproval")) {
+    return [];
+  }
+
+  const entries = options.entries ?? [];
+  if (!entries.length) {
+    return [];
+  }
+
+  const itemId = readFirstString(request.params, ["itemId", "item_id", "callId", "call_id"]);
+  const turnId = readString(request.params.turnId);
+  const activities = entries
+    .filter((entry): entry is AppServerThreadActivityEntry => entry.type === "activity")
+    .filter((entry) => !turnId || entry.turn?.id === turnId);
+  const matchingActivities = itemId
+    ? activities.filter((entry) => activityMatchesItem(entry, itemId))
+    : [];
+  const sourceActivities = matchingActivities.length
+    ? matchingActivities
+    : activities
+        .filter((entry) => entry.details.some((detail) => detail.kind === "write"))
+        .slice(-1);
+
+  const files = sourceActivities.flatMap((entry) =>
+    entry.details
+      .filter((detail) => detail.kind === "write")
+      .filter((detail) => !itemId || detailMatchesItem(detail, itemId) || !matchingActivities.length)
+      .map((detail) => fileContextFromActivityDetail(detail, options.directoryPaths))
+      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+  );
+
+  return dedupeApprovalFiles(files);
+}
+
+function readEmbeddedApprovalFiles(
+  params: Record<string, unknown>,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext[] {
+  const context =
+    asRecord(params._pwragentApprovalContext) ??
+    asRecord(params.approvalContext) ??
+    asRecord(params.fileChangeContext);
+  const rawFiles = context?.files;
+  if (!Array.isArray(rawFiles)) {
+    return [];
+  }
+
+  return dedupeApprovalFiles(
+    rawFiles
+      .map((entry) => {
+        const record = asRecord(entry);
+        return fileContextFromApprovalRecord(record, directoryPaths);
+      })
+      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+  );
+}
+
+function readRequestApprovalFiles(
+  params: Record<string, unknown>,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext[] {
+  const item = asRecord(params.item);
+  const rawFiles = [
+    params.files,
+    params.fileChanges,
+    params.file_changes,
+    params.changes,
+    item?.changes,
+  ]
+    .filter((entry): entry is unknown[] => Array.isArray(entry))
+    .flat();
+  if (!rawFiles.length) {
+    return [];
+  }
+
+  return dedupeApprovalFiles(
+    rawFiles
+      .map((entry) =>
+        fileContextFromApprovalRecord(asRecord(entry), directoryPaths),
+      )
+      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+  );
+}
+
+function fileContextFromApprovalRecord(
+  record: Record<string, unknown> | undefined,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext | undefined {
+  const path = readFirstString(record ?? {}, [
+    "path",
+    "filePath",
+    "file_path",
+    "filename",
+    "file",
+    "targetPath",
+    "target_path",
+  ]);
+  if (!record || !path) {
+    return undefined;
+  }
+
+  const kind = asRecord(record.kind);
+  const action =
+    readFirstString(kind ?? {}, ["type", "action", "operation"]) ??
+    readFirstString(record, ["action", "operation", "kind", "type"]);
+  const directDiff =
+    readFirstString(kind ?? {}, ["diff", "patch", "unifiedDiff", "unified_diff"]) ??
+    readFirstString(record, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const content =
+    readOptionalString(kind?.content) ?? readOptionalString(record.content);
+  const generatedDiff =
+    directDiff ?? contentDiffForApproval({ action, content, path });
+
+  return {
+    ...(action ? { action } : {}),
+    ...(readNumber(record.additions) !== undefined
+      ? { additions: readNumber(record.additions) }
+      : {}),
+    ...(generatedDiff ? { diff: generatedDiff } : {}),
+    ...readDiffRefFields(record),
+    displayPath: formatApprovalPath(
+      readString(record.displayPath) ?? path,
+      directoryPaths,
+    ),
+    ...(readString(record.omittedReason)
+      ? { omittedReason: readString(record.omittedReason) }
+      : {}),
+    path,
+    ...(readNumber(record.removals) !== undefined
+      ? { removals: readNumber(record.removals) }
+      : {}),
+  };
+}
+
+function contentDiffForApproval(params: {
+  action: string | undefined;
+  content: string | undefined;
+  path: string;
+}): string | undefined {
+  if (
+    params.content === undefined ||
+    (params.action !== "add" && params.action !== "delete")
+  ) {
+    return undefined;
+  }
+  const path = params.path.replace(/^\/+/, "") || "file";
+  const lines = params.content.length ? params.content.split("\n") : [];
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const hunkLineCount = lines.length;
+  const header =
+    params.action === "add"
+      ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.action === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function activityMatchesItem(
+  entry: AppServerThreadActivityEntry,
+  itemId: string,
+): boolean {
+  return entry.id === itemId ||
+    entry.id === `activity-${itemId}` ||
+    entry.details.some((detail) => detailMatchesItem(detail, itemId));
+}
+
+function detailMatchesItem(
+  detail: AppServerThreadActivityDetail,
+  itemId: string,
+): boolean {
+  return detail.id === itemId || detail.id.startsWith(`${itemId}-`);
+}
+
+function fileContextFromActivityDetail(
+  detail: AppServerThreadActivityDetail,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext | undefined {
+  const path = readString(detail.path);
+  if (!path) {
+    return undefined;
+  }
+  return {
+    action: detail.fileDiff?.kind,
+    additions: detail.fileDiff?.additions,
+    diff: detail.fileDiff?.diff,
+    diffRef: detail.fileDiff?.diffRef,
+    diffRefs: detail.fileDiff?.diffRefs,
+    displayPath: formatApprovalPath(path, directoryPaths),
+    omittedReason: detail.fileDiff?.omittedReason,
+    path,
+    removals: detail.fileDiff?.removals,
+  };
+}
+
+function dedupeApprovalFiles(
+  files: PendingRequestApprovalFileContext[],
+): PendingRequestApprovalFileContext[] {
+  const seen = new Set<string>();
+  const result: PendingRequestApprovalFileContext[] = [];
+  for (const file of files) {
+    const key = `${file.path}\0${file.diff ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(file);
+  }
+  return result;
+}
+
+export function formatApprovalPath(
+  value: string,
+  directoryPaths: string[] | undefined,
+): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const roots = [...(directoryPaths ?? [])]
+    .map((root) => normalizePath(root))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  const normalizedValue = normalizePath(trimmed);
+
+  for (const root of roots) {
+    if (normalizedValue === root) {
+      return ".";
+    }
+    if (normalizedValue.startsWith(`${root}/`)) {
+      return normalizedValue.slice(root.length + 1) || ".";
+    }
+  }
+
+  return trimmed;
+}
 
 export function buildPendingRequestResponse(
   request: AppServerPendingRequestNotification,
@@ -433,4 +762,91 @@ function hasNetworkApprovalContext(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readDiffRefFields(
+  record: Record<string, unknown> | undefined,
+): Pick<PendingRequestApprovalFileContext, "diffRef" | "diffRefs"> {
+  if (!record) {
+    return {};
+  }
+  const diffRef = readDiffRef(record.diffRef);
+  const diffRefs = Array.isArray(record.diffRefs)
+    ? record.diffRefs
+        .map((entry) => readDiffRef(entry))
+        .filter((entry): entry is AppServerThreadFileDiffRef => Boolean(entry))
+    : undefined;
+  return {
+    ...(diffRef ? { diffRef } : {}),
+    ...(diffRefs?.length ? { diffRefs } : {}),
+  };
+}
+
+function readDiffRef(value: unknown): AppServerThreadFileDiffRef | undefined {
+  const record = asRecord(value);
+  const source = readString(record?.source);
+  const key = readString(record?.key);
+  const threadId = readString(record?.threadId);
+  const entryId = readString(record?.entryId);
+  const detailId = readString(record?.detailId);
+  if (
+    (source !== "live" && source !== "thread") ||
+    !key ||
+    !threadId ||
+    !entryId ||
+    !detailId
+  ) {
+    return undefined;
+  }
+  const backend = readDiffRefBackend(record?.backend);
+  return {
+    source,
+    key,
+    threadId,
+    entryId,
+    detailId,
+    ...(backend ? { backend } : {}),
+  };
+}
+
+function readDiffRefBackend(
+  value: unknown,
+): AppServerThreadFileDiffRef["backend"] | undefined {
+  const backend = readString(value);
+  if (backend === "codex" || backend === "grok" || backend?.startsWith("acp:")) {
+    return backend as AppServerThreadFileDiffRef["backend"];
+  }
+  return undefined;
+}
+
+function readFirstString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = readString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizePath(value: string): string {
+  const normalized = value.trim().replace(/\\/g, "/");
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }

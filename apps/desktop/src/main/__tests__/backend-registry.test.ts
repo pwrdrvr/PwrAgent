@@ -18538,6 +18538,83 @@ command = "pnpm dev"
       await registry.close();
     });
 
+    it("embeds nested file-change diffs in native approval intents", async () => {
+      resetNotificationMocks();
+      const registry = makeRegistry();
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "file-change-1",
+              type: "fileChange",
+              status: "inProgress",
+              changes: [
+                {
+                  path: "/Users/huntharo/huntharo_rocks.txt",
+                  kind: {
+                    type: "update",
+                    unified_diff:
+                      "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
+                  },
+                },
+                {
+                  path: "/tmp/huntharo_rocks.txt",
+                  kind: {
+                    type: "add",
+                    content: "first dumb line\nsecond dumb line\n",
+                  },
+                },
+              ],
+            },
+          },
+        } as AppServerNotification,
+      });
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "file-change-1",
+            requestId: "approval-1",
+            prompt: "Approve file edit?",
+          },
+        } as AppServerNotification,
+      });
+
+      const call = desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
+      expect(call?.intent.context).toMatchObject({
+        action: "update",
+        path: "/Users/huntharo/huntharo_rocks.txt",
+        diff: "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
+      });
+      expect(call?.intent.context?.files).toEqual([
+        expect.objectContaining({
+          action: "update",
+          path: "/Users/huntharo/huntharo_rocks.txt",
+          diff: "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
+        }),
+        expect.objectContaining({
+          action: "add",
+          path: "/tmp/huntharo_rocks.txt",
+          diff: expect.stringContaining("+second dumb line"),
+        }),
+      ]);
+      expect(call?.intent.body).toContain("Files:");
+      expect(call?.intent.body).toContain("- /Users/huntharo/huntharo_rocks.txt (update)");
+      expect(call?.intent.body).toContain("- /tmp/huntharo_rocks.txt (add)");
+      expect(call?.intent.body).toContain("Diff: 2 files, +3 -1");
+
+      await registry.close();
+    });
+
     it("notification approval for a later request resolves that request, not the first request on the thread", async () => {
       resetNotificationMocks();
       const codexClient = new MockBackendClient({

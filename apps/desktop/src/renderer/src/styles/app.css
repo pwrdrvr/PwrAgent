@@ -9881,6 +9881,62 @@ textarea,
   white-space: pre-wrap;
 }
 
+.transcript-request__diffs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transcript-request__diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transcript-request__diff-toggle {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.transcript-request__diff-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.transcript-request__diff-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-request__diff-chev {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.transcript-request__diff-toggle[aria-expanded="true"] .transcript-request__diff-chev {
+  transform: rotate(45deg);
+}
+
+.transcript-request__diff-stat {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .transcript-request__actions,
 .transcript-questionnaire__actions,
 .transcript-mcp__actions {

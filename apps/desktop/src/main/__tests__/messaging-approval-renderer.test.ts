@@ -177,6 +177,7 @@ describe("buildApprovalIntent", () => {
     const intent = buildApprovalIntent({
       id: "approval-3",
       createdAt: 1000,
+      directoryPaths: ["/repo/pwragent"],
       request: {
         method: "item/fileChange/requestApproval",
         params: {
@@ -184,13 +185,61 @@ describe("buildApprovalIntent", () => {
           requestId: "request-3",
           prompt: "Write file?",
           action: "write",
-          path: "src/app.ts",
+          path: "/repo/pwragent/src/app.ts",
+          grantRoot: "/repo/pwragent",
         },
       },
     });
 
     expect(intent.title).toBe("File Change Approval");
-    expect(intent.body).toContain("Context:\nwrite src/app.ts");
+    expect(intent.context).toMatchObject({
+      action: "write",
+      path: "/repo/pwragent/src/app.ts",
+      displayPath: "src/app.ts",
+      grantRoot: "/repo/pwragent",
+      displayGrantRoot: ".",
+    });
+    expect(intent.body).toContain(
+      "Context:\nAction: write\nFile: src/app.ts\nWrite root: .",
+    );
     expect(intent.body).not.toContain("```shell");
+  });
+
+  it("renders file-change context embedded on the approval request", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-4",
+      createdAt: 1000,
+      directoryPaths: ["/repo/pwragent"],
+      request: {
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-4",
+          prompt: "Write file?",
+          _pwragentApprovalContext: {
+            files: [
+              {
+                action: "add",
+                path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+                diff: "@@ -0,0 +1 @@\n+Draft PR body",
+                additions: 1,
+                removals: 0,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(intent.context).toMatchObject({
+      action: "add",
+      path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+      displayPath: "pwragent-pr-refresh-body.md",
+      diff: "@@ -0,0 +1 @@\n+Draft PR body",
+    });
+    expect(intent.body).toContain("Context:\nAction: add\nFile: pwragent-pr-refresh-body.md");
+    expect(intent.body).toContain("Diff: 1 file, +1 -0");
+    expect(intent.body).not.toContain("```diff");
+    expect(intent.body).not.toContain("Draft PR body");
   });
 });

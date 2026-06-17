@@ -148,6 +148,7 @@ import {
   isThreadSearchContentMode,
   isThreadSearchSemanticMode,
   type PendingRequestDecision,
+  type PendingRequestApprovalContext,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -1245,6 +1246,98 @@ function readNotificationProjectLabel(
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readFileChangeApprovalFile(
+  value: unknown,
+): NonNullable<PendingRequestApprovalContext["files"]>[number] | undefined {
+  const record = readRecord(value);
+  const filePath = readNonEmptyString(record?.path);
+  if (!record || !filePath) {
+    return undefined;
+  }
+  const kind = readRecord(record.kind);
+  const action =
+    readNonEmptyString(kind?.type) ??
+    readNonEmptyString(record.kind) ??
+    readNonEmptyString(record.action);
+  const directDiff =
+    readNonEmptyString(kind?.unified_diff) ??
+    readNonEmptyString(kind?.unifiedDiff) ??
+    readFileChangeApprovalDiff(record) ??
+    readFileChangeApprovalDiff(kind);
+  const content =
+    readOptionalString(kind?.content) ?? readOptionalString(record.content);
+  const diff =
+    buildFileChangeApprovalContentDiff({ action, content, filePath }) ??
+    directDiff;
+  return {
+    ...(action ? { action } : {}),
+    ...(diff ? { diff } : {}),
+    displayPath: filePath,
+    path: filePath,
+  };
+}
+
+function readFileChangeApprovalDiff(
+  record: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const direct =
+    readNonEmptyString(record.diff) ??
+    readNonEmptyString(record.patch) ??
+    readNonEmptyString(record.unifiedDiff) ??
+    readNonEmptyString(record.unified_diff);
+  if (direct) {
+    return direct;
+  }
+  return readFileChangeApprovalDiff(readRecord(record.diff));
+}
+
+function buildFileChangeApprovalContentDiff(params: {
+  action: string | undefined;
+  content: string | undefined;
+  filePath: string;
+}): string | undefined {
+  if (
+    params.content === undefined ||
+    (params.action !== "add" && params.action !== "delete")
+  ) {
+    return undefined;
+  }
+
+  const lines = params.content.length ? params.content.split("\n") : [];
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const hunkLineCount = lines.length;
+  const displayPath = params.filePath.replace(/^\/+/, "") || "file";
+  const header =
+    params.action === "add"
+      ? [`--- /dev/null`, `+++ b/${displayPath}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${displayPath}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.action === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function fileChangeApprovalContextKey(params: {
+  backend: AppServerBackendKind;
+  itemId?: string;
+  threadId: string;
+  turnId?: string;
+}): string {
+  return [
+    params.backend,
+    params.threadId,
+    params.turnId ?? "",
+    params.itemId ?? "__latest__",
+  ].join(":");
 }
 
 function isAcpPermissionRequest(
@@ -3383,6 +3476,10 @@ export class DesktopBackendRegistry {
   private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+  private readonly fileChangeApprovalContexts = new Map<
+    string,
+    PendingRequestApprovalContext
+  >();
   private readonly pendingTitleGenerations = new Map<
     string,
     {
@@ -13706,7 +13803,129 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private rememberFileChangeApprovalContext(event: AgentEvent): void {
+    if (
+      event.notification.method !== "item/started" &&
+      event.notification.method !== "item/completed"
+    ) {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const item = readRecord(params?.item);
+    const itemType = readNonEmptyString(item?.type)?.toLowerCase();
+    if (!params || !item || itemType !== "filechange") {
+      return;
+    }
+    const threadId = readNonEmptyString(params.threadId);
+    const turnId = readNonEmptyString(params.turnId);
+    const itemId = readNonEmptyString(item.id);
+    if (!threadId || !itemId) {
+      return;
+    }
+
+    const files = Array.isArray(item.changes)
+      ? item.changes
+          .map((change) => readFileChangeApprovalFile(change))
+          .filter(
+            (
+              file,
+            ): file is NonNullable<PendingRequestApprovalContext["files"]>[number] =>
+              Boolean(file),
+          )
+      : [];
+    if (!files.length) {
+      return;
+    }
+
+    const primary = files[0]!;
+    const context: PendingRequestApprovalContext = {
+      ...(primary.action ? { action: primary.action } : {}),
+      ...(primary.diff ? { diff: primary.diff } : {}),
+      displayPath: primary.displayPath,
+      files,
+      path: primary.path,
+    };
+    this.fileChangeApprovalContexts.set(
+      fileChangeApprovalContextKey({
+        backend: event.backend,
+        threadId,
+        turnId,
+        itemId,
+      }),
+      context,
+    );
+    this.fileChangeApprovalContexts.set(
+      fileChangeApprovalContextKey({
+        backend: event.backend,
+        threadId,
+        turnId,
+      }),
+      context,
+    );
+    if (this.fileChangeApprovalContexts.size > 500) {
+      const oldestKey = this.fileChangeApprovalContexts.keys().next().value;
+      if (oldestKey) {
+        this.fileChangeApprovalContexts.delete(oldestKey);
+      }
+    }
+  }
+
+  private withEmbeddedFileChangeApprovalContext(event: AgentEvent): AgentEvent {
+    if (event.notification.method !== "item/fileChange/requestApproval") {
+      return event;
+    }
+    const request = event.notification as AppServerPendingRequestNotification;
+    if (request.params._pwragentApprovalContext) {
+      return event;
+    }
+    const threadId = readNonEmptyString(request.params.threadId);
+    const turnId = readNonEmptyString(request.params.turnId);
+    const itemId =
+      readNonEmptyString(request.params.itemId) ??
+      readNonEmptyString(request.params.item_id) ??
+      readNonEmptyString(request.params.callId) ??
+      readNonEmptyString(request.params.call_id);
+    if (!threadId) {
+      return event;
+    }
+    const context =
+      (itemId
+        ? this.fileChangeApprovalContexts.get(
+            fileChangeApprovalContextKey({
+              backend: event.backend,
+              threadId,
+              turnId,
+              itemId,
+            }),
+          )
+        : undefined) ??
+      this.fileChangeApprovalContexts.get(
+        fileChangeApprovalContextKey({
+          backend: event.backend,
+          threadId,
+          turnId,
+        }),
+      );
+    if (!context) {
+      return event;
+    }
+
+    return {
+      ...event,
+      notification: {
+        ...request,
+        params: {
+          ...request.params,
+          _pwragentApprovalContext: context,
+        },
+      } as AppServerPendingRequestNotification,
+    };
+  }
+
   private async emit(event: AgentEvent): Promise<void> {
+    this.rememberFileChangeApprovalContext(event);
+    event = this.withEmbeddedFileChangeApprovalContext(event);
+
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
     }

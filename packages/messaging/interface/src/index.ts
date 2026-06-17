@@ -6,6 +6,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
+  PendingRequestApprovalContext,
   MessagingBindingTargetKind,
   MessagingDeliveryScope,
   MessagingToolUpdateMode,
@@ -967,6 +968,7 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   kind: "approval";
   title: string;
   body: string;
+  context?: PendingRequestApprovalContext;
   decisions: Array<
     MessagingSurfaceAction & {
       decision: MessagingApprovalDecision;

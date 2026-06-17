@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AppServerPendingRequestNotification } from "../contracts/normalized-app-server";
 import {
   buildPendingRequestActions,
+  buildPendingRequestApprovalContext,
   buildPendingRequestResponse,
+  formatApprovalPath,
 } from "../pending-request-response";
 
 function createRequest(
@@ -238,5 +240,161 @@ describe("buildPendingRequestResponse", () => {
         style: "danger",
       }),
     ]);
+  });
+});
+
+describe("buildPendingRequestApprovalContext", () => {
+  it("formats file-change paths relative to known thread directories", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        action: "write",
+        path: "/repo/pwragent/apps/desktop/PR_DESCRIPTION.md",
+        grantRoot: "/repo/pwragent",
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+      }),
+    ).toMatchObject({
+      action: "write",
+      path: "/repo/pwragent/apps/desktop/PR_DESCRIPTION.md",
+      displayPath: "apps/desktop/PR_DESCRIPTION.md",
+      grantRoot: "/repo/pwragent",
+      displayGrantRoot: ".",
+    });
+  });
+
+  it("keeps absolute paths when they are outside known thread directories", () => {
+    expect(formatApprovalPath("/tmp/PR_DESCRIPTION.md", ["/repo/pwragent"])).toBe(
+      "/tmp/PR_DESCRIPTION.md",
+    );
+  });
+
+  it("infers file-change context from the matching transcript activity item", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        itemId: "call_123",
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+        entries: [
+          {
+            type: "activity",
+            id: "activity-call_123",
+            summary: "Added 1 file, +1, -0",
+            status: "in_progress",
+            turn: { id: "turn-1", status: "in_progress" },
+            details: [
+              {
+                id: "call_123-1",
+                kind: "write",
+                label: "Add pwragent-pr-refresh-body.md",
+                path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+                status: "in_progress",
+                fileDiff: {
+                  kind: "add",
+                  diff: "+Draft PR body",
+                  additions: 1,
+                  removals: 0,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      action: "add",
+      path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+      displayPath: "pwragent-pr-refresh-body.md",
+      diff: "+Draft PR body",
+      files: [
+        {
+          action: "add",
+          path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+          displayPath: "pwragent-pr-refresh-body.md",
+          diff: "+Draft PR body",
+        },
+      ],
+    });
+  });
+
+  it("reads file-change context embedded by the desktop event bus", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        _pwragentApprovalContext: {
+          files: [
+            {
+              action: "update",
+              path: "/repo/pwragent/src/app.ts",
+              diff: "-old\n+new",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+      }),
+    ).toMatchObject({
+      action: "update",
+      path: "/repo/pwragent/src/app.ts",
+      displayPath: "src/app.ts",
+      diff: "-old\n+new",
+    });
+  });
+
+  it("reads file-change context from changes on the approval request", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        changes: [
+          {
+            path: "/Users/huntharo/huntharo_rocks.txt",
+            kind: {
+              type: "update",
+              unified_diff: "@@ -1 +1 @@\n-old\n+new",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+      }),
+    ).toMatchObject({
+      action: "update",
+      path: "/Users/huntharo/huntharo_rocks.txt",
+      displayPath: "/Users/huntharo/huntharo_rocks.txt",
+      diff: "@@ -1 +1 @@\n-old\n+new",
+      files: [
+        {
+          action: "update",
+          path: "/Users/huntharo/huntharo_rocks.txt",
+          displayPath: "/Users/huntharo/huntharo_rocks.txt",
+          diff: "@@ -1 +1 @@\n-old\n+new",
+        },
+      ],
+    });
   });
 });
