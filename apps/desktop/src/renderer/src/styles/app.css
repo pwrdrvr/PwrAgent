@@ -9462,6 +9462,12 @@ textarea,
   gap: 10px;
 }
 
+.env-action-runs--composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   padding: 12px 0 0;
