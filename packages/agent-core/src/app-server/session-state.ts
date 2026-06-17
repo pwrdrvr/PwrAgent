@@ -89,6 +89,12 @@ function buildReplayPagination(
   };
 }
 
+function stripUndefinedRecord<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+  ) as T;
+}
+
 export class AppServerSessionState {
   private readonly store?: AppServerSessionStore;
   private readonly threads = new Map<string, ThreadState>();
@@ -363,17 +369,14 @@ export class AppServerSessionState {
         thread,
         messages: [],
         items: [],
-        pagination: {
-          supportsPagination: false,
-          hasPreviousPage: false,
-        },
       };
     }
 
     const limitedItems = pageReplayItems(items, options);
+    const isPagedRead = limitedItems !== items;
     const replayMessages =
-      limitedItems === items
-        ? messages
+      !isPagedRead
+        ? messages.map((message) => stripUndefinedRecord(message))
         : limitedItems.flatMap((item) =>
             item.role && item.text
               ? [
@@ -403,10 +406,12 @@ export class AppServerSessionState {
       threadId,
       thread,
       messages: replayMessages,
-      items: limitedItems,
+      items: limitedItems.map((item) => normalizeReplayItem(item)),
       lastUserMessage,
       lastAssistantMessage,
-      pagination: buildReplayPagination(items, limitedItems),
+      ...(isPagedRead
+        ? { pagination: buildReplayPagination(items, limitedItems) }
+        : {}),
     };
   }
 

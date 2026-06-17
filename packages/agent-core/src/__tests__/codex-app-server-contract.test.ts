@@ -264,10 +264,6 @@ describe("Codex app-server contract", () => {
       ],
       lastUserMessage: "Ship it",
       lastAssistantMessage: "Done.",
-      pagination: {
-        supportsPagination: false,
-        hasPreviousPage: false,
-      },
     });
   });
 
