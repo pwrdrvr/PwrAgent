@@ -192,7 +192,7 @@ export function ExperimentalSettings(props: {
         eyebrow="Deprecated"
         title="Soon to be discontinued"
         description="These features are being phased out and may be removed in a future release."
-        chip={discontinuedEnabledCount > 0 ? `${discontinuedEnabledCount} on` : "Off"}
+        chip={discontinuedEnabledCount > 0 ? `${discontinuedEnabledCount} on` : "All off"}
         chipKind={discontinuedEnabledCount > 0 ? "ok" : "default"}
         defaultCollapsed
         aria-label="Soon to be discontinued experimental settings"

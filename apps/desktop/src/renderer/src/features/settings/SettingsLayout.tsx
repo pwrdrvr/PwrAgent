@@ -436,7 +436,8 @@ export function SettingsSection(props: {
  */
 export function SettingsSectionGroup(props: {
   /** Stable id used both to persist collapse state and to seed the nested
-   *  pane id — must be unique within the surface. */
+   *  pane id. Must be globally unique — collapse state is keyed by this id in
+   *  a module-level map shared across every group in the app. */
   groupId: string;
   title: string;
   eyebrow?: string;
@@ -468,6 +469,10 @@ export function SettingsSectionGroup(props: {
     });
   };
 
+  // Disclosure-style: Enter/Space toggle. Unlike `SettingsSection`, the group
+  // is not registered in a pane, so it intentionally omits the Arrow/Home/End
+  // roving navigation — it is a standalone control reached via Tab, and its
+  // children get their own arrow-key ring inside the nested stack.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -476,9 +481,11 @@ export function SettingsSectionGroup(props: {
   };
 
   return (
+    // The outer region is named by its heading (`aria-labelledby`); the
+    // `aria-label` prop instead names the nested stack below so we don't end up
+    // with two identically-named region landmarks.
     <section
       aria-labelledby={headingId}
-      aria-label={props["aria-label"]}
       className={`settings-panel settings-panel--has-body settings-panel--collapsible settings-section-group${
         collapsed ? " settings-panel--is-collapsed" : ""
       }`}
