@@ -3130,6 +3130,42 @@ describe("TranscriptList", () => {
     expect(screen.getByText(/Write root: \./)).toBeInTheDocument();
   });
 
+  it("shows file-change approval context carried by the request before activity exists", () => {
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/pwragent"]}
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            prompt: "Approve file edit?",
+            changes: [
+              {
+                path: "/Users/huntharo/huntharo_rocks.txt",
+                kind: {
+                  type: "update",
+                  unified_diff:
+                    "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
+                },
+              },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/File: \/Users\/huntharo\/huntharo_rocks\.txt/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(screen.getByText(/new dumb sentence/)).toBeInTheDocument();
+  });
+
   it("shows file-change approval context inferred from the matching activity", () => {
     render(
       <TranscriptList

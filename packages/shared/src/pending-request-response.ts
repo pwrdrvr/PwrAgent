@@ -53,8 +53,13 @@ export function buildPendingRequestApprovalContext(
 ): PendingRequestApprovalContext | undefined {
   const params = request.params;
   const embeddedFiles = readEmbeddedApprovalFiles(params, options.directoryPaths);
+  const requestFiles = embeddedFiles.length
+    ? []
+    : readRequestApprovalFiles(params, options.directoryPaths);
   const inferredFiles = embeddedFiles.length
     ? embeddedFiles
+    : requestFiles.length
+      ? requestFiles
     : inferFileChangeApprovalFiles(request, options);
   const path = readFirstString(params, [
     "path",
@@ -155,34 +160,112 @@ function readEmbeddedApprovalFiles(
     rawFiles
       .map((entry) => {
         const record = asRecord(entry);
-        const path = readString(record?.path);
-        if (!path) {
-          return undefined;
-        }
-        return {
-          ...(readString(record?.action)
-            ? { action: readString(record?.action) }
-            : {}),
-          ...(readNumber(record?.additions) !== undefined
-            ? { additions: readNumber(record?.additions) }
-            : {}),
-          ...(readString(record?.diff) ? { diff: readString(record?.diff) } : {}),
-          ...readDiffRefFields(record),
-          displayPath: formatApprovalPath(
-            readString(record?.displayPath) ?? path,
-            directoryPaths,
-          ),
-          ...(readString(record?.omittedReason)
-            ? { omittedReason: readString(record?.omittedReason) }
-            : {}),
-          path,
-          ...(readNumber(record?.removals) !== undefined
-            ? { removals: readNumber(record?.removals) }
-            : {}),
-        };
+        return fileContextFromApprovalRecord(record, directoryPaths);
       })
       .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
   );
+}
+
+function readRequestApprovalFiles(
+  params: Record<string, unknown>,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext[] {
+  const item = asRecord(params.item);
+  const rawFiles = [
+    params.files,
+    params.fileChanges,
+    params.file_changes,
+    params.changes,
+    item?.changes,
+  ]
+    .filter((entry): entry is unknown[] => Array.isArray(entry))
+    .flat();
+  if (!rawFiles.length) {
+    return [];
+  }
+
+  return dedupeApprovalFiles(
+    rawFiles
+      .map((entry) =>
+        fileContextFromApprovalRecord(asRecord(entry), directoryPaths),
+      )
+      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+  );
+}
+
+function fileContextFromApprovalRecord(
+  record: Record<string, unknown> | undefined,
+  directoryPaths: string[] | undefined,
+): PendingRequestApprovalFileContext | undefined {
+  const path = readFirstString(record ?? {}, [
+    "path",
+    "filePath",
+    "file_path",
+    "filename",
+    "file",
+    "targetPath",
+    "target_path",
+  ]);
+  if (!record || !path) {
+    return undefined;
+  }
+
+  const kind = asRecord(record.kind);
+  const action =
+    readFirstString(kind ?? {}, ["type", "action", "operation"]) ??
+    readFirstString(record, ["action", "operation", "kind", "type"]);
+  const directDiff =
+    readFirstString(kind ?? {}, ["diff", "patch", "unifiedDiff", "unified_diff"]) ??
+    readFirstString(record, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const content =
+    readOptionalString(kind?.content) ?? readOptionalString(record.content);
+  const generatedDiff =
+    directDiff ?? contentDiffForApproval({ action, content, path });
+
+  return {
+    ...(action ? { action } : {}),
+    ...(readNumber(record.additions) !== undefined
+      ? { additions: readNumber(record.additions) }
+      : {}),
+    ...(generatedDiff ? { diff: generatedDiff } : {}),
+    ...readDiffRefFields(record),
+    displayPath: formatApprovalPath(
+      readString(record.displayPath) ?? path,
+      directoryPaths,
+    ),
+    ...(readString(record.omittedReason)
+      ? { omittedReason: readString(record.omittedReason) }
+      : {}),
+    path,
+    ...(readNumber(record.removals) !== undefined
+      ? { removals: readNumber(record.removals) }
+      : {}),
+  };
+}
+
+function contentDiffForApproval(params: {
+  action: string | undefined;
+  content: string | undefined;
+  path: string;
+}): string | undefined {
+  if (
+    params.content === undefined ||
+    (params.action !== "add" && params.action !== "delete")
+  ) {
+    return undefined;
+  }
+  const path = params.path.replace(/^\/+/, "") || "file";
+  const lines = params.content.length ? params.content.split("\n") : [];
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const hunkLineCount = lines.length;
+  const header =
+    params.action === "add"
+      ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.action === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
 }
 
 function activityMatchesItem(
@@ -679,6 +762,10 @@ function hasNetworkApprovalContext(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function readNumber(value: unknown): number | undefined {

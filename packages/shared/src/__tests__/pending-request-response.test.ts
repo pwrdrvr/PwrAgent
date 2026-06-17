@@ -359,4 +359,42 @@ describe("buildPendingRequestApprovalContext", () => {
       diff: "-old\n+new",
     });
   });
+
+  it("reads file-change context from changes on the approval request", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        changes: [
+          {
+            path: "/Users/huntharo/huntharo_rocks.txt",
+            kind: {
+              type: "update",
+              unified_diff: "@@ -1 +1 @@\n-old\n+new",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["/repo/pwragent"],
+      }),
+    ).toMatchObject({
+      action: "update",
+      path: "/Users/huntharo/huntharo_rocks.txt",
+      displayPath: "/Users/huntharo/huntharo_rocks.txt",
+      diff: "@@ -1 +1 @@\n-old\n+new",
+      files: [
+        {
+          action: "update",
+          path: "/Users/huntharo/huntharo_rocks.txt",
+          displayPath: "/Users/huntharo/huntharo_rocks.txt",
+          diff: "@@ -1 +1 @@\n-old\n+new",
+        },
+      ],
+    });
+  });
 });
