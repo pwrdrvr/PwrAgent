@@ -149,6 +149,30 @@ export type TokenUsageCostEstimate = {
   uncachedInputUsd: number;
 };
 
+export type TokenUsageCreditEstimate = {
+  cachedInputCreditMicros: number;
+  cachedInputCredits: number;
+  cachedInputCreditsPerMillion: number;
+  catalogId: string;
+  catalogVersion: string;
+  displayName: string;
+  effectiveFrom: number;
+  effectiveTo?: number;
+  inputCreditsPerMillion: number;
+  model: string;
+  outputCreditMicros: number;
+  outputCredits: number;
+  outputCreditsPerMillion: number;
+  provider: "openai";
+  rateId: string;
+  serviceTier: TokenUsagePricingServiceTier;
+  totalCreditMicros: number;
+  totalCredits: number;
+  uncachedInputCreditMicros: number;
+  uncachedInputCredits: number;
+  unit: "codex_credits";
+};
+
 type PricingCatalogEntry = {
   cachedInputUsdPerMillion: number;
   catalogId: string;
@@ -164,9 +188,27 @@ type PricingCatalogEntry = {
   serviceTier: TokenUsagePricingServiceTier;
 };
 
+type CodexCreditsCatalogEntry = {
+  cachedInputCreditsPerMillion: number;
+  catalogId: string;
+  catalogVersion: string;
+  displayModel: string;
+  displayTier: string;
+  effectiveFrom: number;
+  effectiveTo?: number;
+  fastRateMultiplier?: number;
+  inputCreditsPerMillion: number;
+  model: string;
+  outputCreditsPerMillion: number;
+  provider: "openai";
+  serviceTier: TokenUsagePricingServiceTier;
+};
+
 const OPENAI_PRICING_CATALOG_ID = "openai-api";
 const OPENAI_PRICING_CATALOG_VERSION = "2026-06-16";
 const OPENAI_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 5, 16);
+const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
+const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
@@ -246,6 +288,76 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     inputUsdPerMillion: 1.5,
     cachedInputUsdPerMillion: 0.15,
     outputUsdPerMillion: 9,
+  },
+];
+
+const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
+  {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-5.5",
+    displayModel: "GPT-5.5",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputCreditsPerMillion: 125,
+    cachedInputCreditsPerMillion: 12.5,
+    outputCreditsPerMillion: 750,
+  },
+  {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-5.5",
+    displayModel: "GPT-5.5",
+    displayTier: "Fast",
+    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2.5,
+    provider: "openai",
+    serviceTier: "priority",
+    inputCreditsPerMillion: 312.5,
+    cachedInputCreditsPerMillion: 31.25,
+    outputCreditsPerMillion: 1875,
+  },
+  {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-5.4",
+    displayModel: "GPT-5.4",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputCreditsPerMillion: 62.5,
+    cachedInputCreditsPerMillion: 6.25,
+    outputCreditsPerMillion: 375,
+  },
+  {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-5.4",
+    displayModel: "GPT-5.4",
+    displayTier: "Fast",
+    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: 2,
+    provider: "openai",
+    serviceTier: "priority",
+    inputCreditsPerMillion: 125,
+    cachedInputCreditsPerMillion: 12.5,
+    outputCreditsPerMillion: 750,
+  },
+  {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
+    model: "gpt-5.4-mini",
+    displayModel: "GPT-5.4 mini",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputCreditsPerMillion: 18.75,
+    cachedInputCreditsPerMillion: 1.875,
+    outputCreditsPerMillion: 113,
   },
 ];
 
@@ -344,6 +456,79 @@ export function estimateOpenAiTokenUsageCost(params: {
     totalUsd: microsToCurrencyUnits(totalCostMicros),
     uncachedInputCostMicros,
     uncachedInputUsd,
+  };
+}
+
+export function estimateOpenAiCodexCreditUsage(params: {
+  cachedInputTokens: number;
+  at?: number;
+  fastMode?: boolean;
+  outputTokensIncludeReasoning?: boolean;
+  model?: string;
+  outputTokens: number;
+  reasoningOutputTokens?: number;
+  serviceTier?: string;
+  uncachedInputTokens: number;
+}): TokenUsageCreditEstimate | undefined {
+  const model = params.model?.trim();
+  if (!model) {
+    return undefined;
+  }
+
+  const serviceTier = resolveOpenAiPricingServiceTier({
+    fastMode: params.fastMode,
+    serviceTier: params.serviceTier,
+  });
+  const entry = OPENAI_CODEX_CREDITS_CATALOG.find(
+    (candidate) =>
+      candidate.model === model &&
+      candidate.serviceTier === serviceTier &&
+      pricingEntryAppliesAt(candidate, params.at),
+  );
+  if (!entry) {
+    return undefined;
+  }
+
+  const uncachedInputCreditMicros = calculateTokenCreditMicros(
+    params.uncachedInputTokens,
+    entry.inputCreditsPerMillion,
+  );
+  const cachedInputCreditMicros = calculateTokenCreditMicros(
+    params.cachedInputTokens,
+    entry.cachedInputCreditsPerMillion,
+  );
+  const billedOutputTokens = params.outputTokensIncludeReasoning
+    ? params.outputTokens
+    : params.outputTokens + Math.max(0, params.reasoningOutputTokens ?? 0);
+  const outputCreditMicros = calculateTokenCreditMicros(
+    billedOutputTokens,
+    entry.outputCreditsPerMillion,
+  );
+  const totalCreditMicros =
+    uncachedInputCreditMicros + cachedInputCreditMicros + outputCreditMicros;
+
+  return {
+    cachedInputCreditMicros,
+    cachedInputCredits: microsToCurrencyUnits(cachedInputCreditMicros),
+    cachedInputCreditsPerMillion: entry.cachedInputCreditsPerMillion,
+    catalogId: entry.catalogId,
+    catalogVersion: entry.catalogVersion,
+    displayName: `${entry.displayModel} ${entry.displayTier}`,
+    effectiveFrom: entry.effectiveFrom,
+    ...(entry.effectiveTo ? { effectiveTo: entry.effectiveTo } : {}),
+    inputCreditsPerMillion: entry.inputCreditsPerMillion,
+    model,
+    outputCreditMicros,
+    outputCredits: microsToCurrencyUnits(outputCreditMicros),
+    outputCreditsPerMillion: entry.outputCreditsPerMillion,
+    provider: entry.provider,
+    rateId: buildCodexCreditRateId(entry),
+    serviceTier: entry.serviceTier,
+    totalCreditMicros,
+    totalCredits: microsToCurrencyUnits(totalCreditMicros),
+    uncachedInputCreditMicros,
+    uncachedInputCredits: microsToCurrencyUnits(uncachedInputCreditMicros),
+    unit: "codex_credits",
   };
 }
 
@@ -456,7 +641,10 @@ function toPublicRate(entry: PricingCatalogEntry): TokenUsagePricingCatalogRate 
   };
 }
 
-function pricingEntryAppliesAt(entry: PricingCatalogEntry, at: number | undefined): boolean {
+function pricingEntryAppliesAt(
+  entry: Pick<PricingCatalogEntry, "effectiveFrom" | "effectiveTo">,
+  at: number | undefined,
+): boolean {
   if (at === undefined) {
     return entry.effectiveTo === undefined;
   }
@@ -472,11 +660,28 @@ function buildPricingRateId(entry: PricingCatalogEntry): string {
   ].join(":");
 }
 
+function buildCodexCreditRateId(entry: CodexCreditsCatalogEntry): string {
+  return [
+    entry.provider,
+    entry.catalogVersion,
+    "codex-credits",
+    entry.model,
+    entry.serviceTier,
+  ].join(":");
+}
+
 function calculateTokenCostMicros(tokens: number, usdPerMillion: number): number {
   if (tokens <= 0 || usdPerMillion <= 0) {
     return 0;
   }
   return Math.round((tokens * dollarsToMicros(usdPerMillion)) / 1_000_000);
+}
+
+function calculateTokenCreditMicros(tokens: number, creditsPerMillion: number): number {
+  if (tokens <= 0 || creditsPerMillion <= 0) {
+    return 0;
+  }
+  return Math.round((tokens * creditsPerMillion * 1_000_000) / 1_000_000);
 }
 
 function dollarsToMicros(value: number): number {

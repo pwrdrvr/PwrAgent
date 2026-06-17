@@ -1662,10 +1662,20 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.experimental.threadPricingDisplayUsd).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(initial.experimental.threadPricingDisplayCodexCredits).toEqual({
+      value: false,
+      source: "default",
+    });
 
     await service.writeConfigPatch({
       experimental: {
         threadPricingSummary: true,
+        threadPricingDisplayUsd: false,
+        threadPricingDisplayCodexCredits: true,
       },
     });
 
@@ -1674,8 +1684,22 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(updated.experimental.threadPricingDisplayUsd).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(updated.experimental.threadPricingDisplayCodexCredits).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_summary = true",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_display_usd = false",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_display_codex_credits = true",
     );
   });
 

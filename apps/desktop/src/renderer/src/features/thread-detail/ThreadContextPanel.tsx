@@ -97,6 +97,10 @@ type ThreadContextPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  pricingDisplayOptions?: {
+    codexCredits: boolean;
+    usd: boolean;
+  };
   threadPricingSummaryEnabled?: boolean;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
@@ -646,6 +650,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <PricingPanel
             pricing={props.pricing}
+            displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
           />
         );

@@ -414,6 +414,16 @@ function SettingsSectionBody(props: {
             experimental: { threadPricingSummary: enabled },
           });
         }}
+        onThreadPricingDisplayUsdChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingDisplayUsd: enabled },
+          });
+        }}
+        onThreadPricingDisplayCodexCreditsChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingDisplayCodexCredits: enabled },
+          });
+        }}
         onCodexDefaultModeRequestUserInputChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { codexDefaultModeRequestUserInput: enabled },

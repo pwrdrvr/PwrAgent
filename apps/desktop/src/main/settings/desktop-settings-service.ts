@@ -559,6 +559,14 @@ export class DesktopSettingsService {
           config.experimental?.threadPricingSummary,
           false,
         ),
+        threadPricingDisplayUsd: this.resolveConfigBoolean(
+          config.experimental?.threadPricingDisplayUsd,
+          true,
+        ),
+        threadPricingDisplayCodexCredits: this.resolveConfigBoolean(
+          config.experimental?.threadPricingDisplayCodexCredits,
+          false,
+        ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
           false,

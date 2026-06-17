@@ -118,6 +118,7 @@ type PanelOverrides = Partial<
     | "editedFilesDock"
     | "onEditedFilesDockChange"
     | "pricing"
+    | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
   >
 >;
@@ -447,6 +448,77 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
     expect(screen.getByText("Running total: $0.042 list price")).toBeInTheDocument();
+  });
+
+  it("renders Codex Credits as an optional pricing display unit", () => {
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      totalCostMicros: 9_500,
+      usageLineCount: 1,
+      pricedUsageLineCount: 1,
+      unpricedUsageLineCount: 0,
+      provider: "openai",
+      updatedAt: 1_800_000_000_000,
+    };
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      scope: "turn",
+      source: "hydration",
+      status: "finalized",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeTotalCostMicros: 42_000,
+      uncachedInputCostMicros: 7_500,
+      cachedInputCostMicros: 500,
+      outputCostMicros: 1_500,
+      totalCostMicros: 9_500,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+      completedAt: 1_800_000_001_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [summary],
+      },
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: true,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("$0.010 · 1.3 Codex Credits")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.010 list price this turn · 1.3 Codex Credits this turn"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.042 list price · 1.3 Codex Credits"),
+    ).toBeInTheDocument();
   });
 
   it("makes pricing row timestamps scroll the transcript to their turn", () => {

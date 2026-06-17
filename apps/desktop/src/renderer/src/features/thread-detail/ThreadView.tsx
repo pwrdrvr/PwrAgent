@@ -847,6 +847,10 @@ export type ThreadViewProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  pricingDisplayOptions?: {
+    codexCredits: boolean;
+    usd: boolean;
+  };
   threadPricingSummaryEnabled?: boolean;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
@@ -2672,6 +2676,7 @@ export function ThreadView(props: ThreadViewProps) {
           platform={props.platform}
           thread={selectedThread!}
           pricing={props.pricing}
+          pricingDisplayOptions={props.pricingDisplayOptions}
           threadPricingSummaryEnabled={threadPricingSummaryEnabled}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}

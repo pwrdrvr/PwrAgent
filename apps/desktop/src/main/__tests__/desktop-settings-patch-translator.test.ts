@@ -129,6 +129,8 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {
         threadPricingSummary: true,
+        threadPricingDisplayUsd: false,
+        threadPricingDisplayCodexCredits: true,
       },
     });
 
@@ -136,6 +138,16 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       {
         op: "set",
         path: ["experimental", "thread_pricing_summary"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_display_usd"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_display_codex_credits"],
         value: true,
       },
     ]);

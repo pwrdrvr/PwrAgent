@@ -128,6 +128,14 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      threadPricingDisplayUsd: {
+        value: true,
+        source: "default",
+      },
+      threadPricingDisplayCodexCredits: {
+        value: false,
+        source: "default",
+      },
       codexDefaultModeRequestUserInput: {
         value: false,
         source: "default",
@@ -622,6 +630,12 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingSummary: true },
       });
     });
+    expect(
+      screen.getByRole("switch", { name: "Display USD" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: "Display Codex Credits" }),
+    ).toBeDisabled();
 
     fireEvent.click(
       screen.getByRole("switch", {
@@ -799,6 +813,45 @@ describe("SettingsScreen", () => {
         general: {
           hotCpuProfilingHeapSnapshotLimit: 3,
         },
+      });
+    });
+  });
+
+  it("saves thread pricing display unit toggles", async () => {
+    const baseSnapshot = createSnapshot();
+    const settings = createSettingsState(
+      createSnapshot({
+        experimental: {
+          ...baseSnapshot.experimental,
+          threadPricingSummary: { value: true, source: "config" },
+          threadPricingDisplayUsd: { value: true, source: "default" },
+          threadPricingDisplayCodexCredits: { value: false, source: "default" },
+        },
+      }),
+    );
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
+
+    const usdSwitch = screen.getByRole("switch", { name: "Display USD" });
+    const creditsSwitch = screen.getByRole("switch", {
+      name: "Display Codex Credits",
+    });
+    expect(usdSwitch).not.toBeDisabled();
+    expect(creditsSwitch).not.toBeDisabled();
+
+    fireEvent.click(usdSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { threadPricingDisplayUsd: false },
+      });
+    });
+
+    fireEvent.click(creditsSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
   });

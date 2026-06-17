@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  estimateOpenAiCodexCreditUsage,
   estimateOpenAiTokenUsageCost,
   listOpenAiTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
@@ -117,5 +118,56 @@ describe("token usage pricing", () => {
         serviceTier: "standard",
       }),
     );
+  });
+
+  it("estimates Codex Credits from the Codex token rate card", () => {
+    const credits = estimateOpenAiCodexCreditUsage({
+      cachedInputTokens: 1_000,
+      model: "gpt-5.5",
+      outputTokens: 2_000,
+      uncachedInputTokens: 3_000,
+    });
+
+    expect(credits).toMatchObject({
+      catalogId: "openai-codex-credits",
+      catalogVersion: "2026-06-16",
+      provider: "openai",
+      rateId: "openai:2026-06-16:codex-credits:gpt-5.5:standard",
+      serviceTier: "standard",
+      unit: "codex_credits",
+      uncachedInputCreditMicros: 375_000,
+      cachedInputCreditMicros: 12_500,
+      outputCreditMicros: 1_500_000,
+      totalCreditMicros: 1_887_500,
+      totalCredits: 1.8875,
+    });
+  });
+
+  it("estimates Fast Codex Credits with model-specific speed multipliers", () => {
+    const credits = estimateOpenAiCodexCreditUsage({
+      cachedInputTokens: 1_000,
+      fastMode: true,
+      model: "gpt-5.4",
+      outputTokens: 2_000,
+      uncachedInputTokens: 3_000,
+    });
+
+    expect(credits).toMatchObject({
+      rateId: "openai:2026-06-16:codex-credits:gpt-5.4:priority",
+      serviceTier: "priority",
+      totalCreditMicros: 1_887_500,
+    });
+  });
+
+  it("does not invent Codex Credit rates for unsupported Fast models", () => {
+    expect(
+      estimateOpenAiCodexCreditUsage({
+        cachedInputTokens: 1_000,
+        fastMode: true,
+        model: "gpt-5.4-mini",
+        outputTokens: 2_000,
+        uncachedInputTokens: 3_000,
+      }),
+    ).toBeUndefined();
   });
 });

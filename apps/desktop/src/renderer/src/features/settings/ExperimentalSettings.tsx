@@ -46,6 +46,16 @@ const DEFAULT_THREAD_PRICING_SUMMARY = {
   source: "default" as const,
 };
 
+const DEFAULT_THREAD_PRICING_DISPLAY_USD = {
+  value: true,
+  source: "default" as const,
+};
+
+const DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -53,6 +63,8 @@ export function ExperimentalSettings(props: {
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -65,6 +77,12 @@ export function ExperimentalSettings(props: {
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
     DEFAULT_THREAD_PRICING_SUMMARY;
+  const threadPricingDisplayUsd =
+    props.snapshot.experimental.threadPricingDisplayUsd ??
+    DEFAULT_THREAD_PRICING_DISPLAY_USD;
+  const threadPricingDisplayCodexCredits =
+    props.snapshot.experimental.threadPricingDisplayCodexCredits ??
+    DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -170,6 +188,36 @@ export function ExperimentalSettings(props: {
                 label="Enable thread pricing summary"
                 onChange={(enabled) => {
                   void props.onThreadPricingSummaryChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Display USD"
+            sub="Show OpenAI API list-price estimates in USD."
+            source={sourceBadge(threadPricingDisplayUsd)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingDisplayUsd.value}
+                disabled={props.saving || !threadPricingSummary.value}
+                label="Display USD"
+                onChange={(enabled) => {
+                  void props.onThreadPricingDisplayUsdChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Display Codex Credits"
+            sub="Show Codex Credits estimates from Codex's token-based credit rate card."
+            source={sourceBadge(threadPricingDisplayCodexCredits)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingDisplayCodexCredits.value}
+                disabled={props.saving || !threadPricingSummary.value}
+                label="Display Codex Credits"
+                onChange={(enabled) => {
+                  void props.onThreadPricingDisplayCodexCreditsChange(enabled);
                 }}
               />
             }
