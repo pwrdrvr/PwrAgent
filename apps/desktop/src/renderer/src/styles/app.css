@@ -9074,6 +9074,15 @@ textarea,
   color: var(--text-primary);
 }
 
+.edited-file-groups__flat-summary {
+  grid-area: summary;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 /* Badge cell (commit lifecycle / "This turn"). In the sidebar's second row it
    sits under the summary text, so it's indented past the chevron + gap. */
 .edited-file-groups__group-badge {

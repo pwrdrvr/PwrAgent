@@ -165,6 +165,10 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
     props.groups.length === 1 && props.showSingleGroupHeader;
   const effectiveView = preserveSingleGroupHeader ? "turns" : view;
   const [showAllTurns, setShowAllTurns] = useState(false);
+  const flattenedDetails = useMemo(
+    () => flattenEditedFileGroups(props.groups),
+    [props.groups],
+  );
 
   // Union of gitignored paths across every resolved group, so a row in any
   // view (grouped / flattened / single) can flag itself as ignored.
@@ -237,9 +241,43 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
           );
         })()
       ) : (
-        <EditedFileList details={flattenEditedFileGroups(props.groups)} />
+        <EditedFileFlatSection details={flattenedDetails} />
       );
   }
+}
+
+function formatEditedFileCount(count: number): string {
+  return `Edited ${count.toLocaleString()} ${count === 1 ? "file" : "files"}`;
+}
+
+function EditedFileFlatSection(props: {
+  details: AppServerThreadActivityDetail[];
+}) {
+  const totals = props.details.reduce(
+    (sum, detail) => ({
+      additions: sum.additions + (detail.fileDiff?.additions ?? 0),
+      removals: sum.removals + (detail.fileDiff?.removals ?? 0),
+    }),
+    { additions: 0, removals: 0 },
+  );
+
+  return (
+    <>
+      <div className="edited-file-groups__group-header edited-file-groups__flat-header">
+        <div className="edited-file-groups__flat-summary">
+          <span className="edited-file-groups__group-summary">
+            {formatEditedFileCount(props.details.length)}
+          </span>
+        </div>
+        <DiffStat
+          additions={totals.additions}
+          removals={totals.removals}
+          className="diff-stat--chip"
+        />
+      </div>
+      <EditedFileList details={props.details} />
+    </>
+  );
 }
 
 function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
