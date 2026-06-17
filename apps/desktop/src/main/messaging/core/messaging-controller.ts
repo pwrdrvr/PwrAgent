@@ -57,6 +57,7 @@ import type {
   MessagingChannelKind,
   MessagingChannelRef,
   MessagingConfirmationIntent,
+  MessagingDefaultAgentAssignmentRecord,
   MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
@@ -317,6 +318,7 @@ type AutomationTurnMessagingContext = {
 
 type ActiveAgentMessagingOrigin = {
   binding: MessagingBindingRecord;
+  controlBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
 };
 
@@ -1030,7 +1032,7 @@ export class MessagingController {
       return;
     }
 
-    const bindings = this.filterBindingsForChannel(
+    let bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend: event.backend,
         threadId,
@@ -1095,10 +1097,17 @@ export class MessagingController {
     const markdownFileArtifactSelection =
       this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
+    bindings = this.deliveryBindingsForAgentTurn({
+      bindings,
+      backend: event.backend,
+      threadId,
+      turnId: turnIdForBackendEvent(event) ?? lifecycle?.turnId,
+    });
     const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
       ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
       : undefined;
     for (const binding of bindings) {
+      const isControlBinding = this.isEphemeralAgentControlBinding(binding);
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
       const eventTurnId = turnIdForBackendEvent(event);
@@ -1240,6 +1249,9 @@ export class MessagingController {
       }
 
       if (isThreadNameUpdatedEvent(event)) {
+        if (isControlBinding) {
+          continue;
+        }
         await this.renderBindingStatus(
           binding,
           undefined,
@@ -1249,6 +1261,10 @@ export class MessagingController {
       }
 
       if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
+        if (isControlBinding) {
+          await this.startNextQueuedTurn(binding);
+          continue;
+        }
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
           force: true,
@@ -1331,12 +1347,18 @@ export class MessagingController {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<void> {
-    const bindings = this.filterBindingsForChannel(
+    let bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend,
         threadId: request.params.threadId,
       }),
     );
+    bindings = this.deliveryBindingsForAgentTurn({
+      bindings,
+      backend,
+      threadId: request.params.threadId,
+      turnId: request.params.turnId ?? undefined,
+    });
 
     for (const binding of bindings) {
       const intent = this.intentForPendingRequest(request);
@@ -1504,6 +1526,11 @@ export class MessagingController {
       return;
     }
     if (verb === "agent") {
+      const controlRequest = parseAgentControlRequest(event.args);
+      if (controlRequest) {
+        await this.handleAgentControlRequest(event, controlRequest);
+        return;
+      }
       await this.presentAgentBrowser(event);
       return;
     }
@@ -2098,8 +2125,10 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
+    originBinding?: MessagingBindingRecord;
     preview: string;
     queueOnConcurrentStart?: boolean;
+    renderStatus?: boolean;
     threadKey: string;
   }): Promise<PreparedInputStartResult> {
     this.turnAdmission.markStarting(params.threadKey);
@@ -2179,12 +2208,15 @@ export class MessagingController {
         binding: params.binding,
         event: params.event,
         navigation,
+        originBinding: params.originBinding,
         turnId: started.turnId,
       });
-      await this.signalTurnActivity(params.binding, activeTurn, {
-        force: true,
-      });
-      await this.renderBindingStatus(params.binding, undefined, navigation);
+      if (params.renderStatus !== false) {
+        await this.signalTurnActivity(params.binding, activeTurn, {
+          force: true,
+        });
+        await this.renderBindingStatus(params.binding, undefined, navigation);
+      }
       return "started";
     } catch (error) {
       if (turnStarted) {
@@ -2200,7 +2232,9 @@ export class MessagingController {
             binding: params.binding,
             event: params.event,
             input: params.input,
+            originBinding: params.originBinding,
             preview: params.preview,
+            renderStatus: params.renderStatus,
             threadKey: params.threadKey,
           });
           return "queued";
@@ -2281,7 +2315,9 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
+    originBinding?: MessagingBindingRecord;
     preview: string;
+    renderStatus?: boolean;
     threadKey: string;
   }): Promise<void> {
     const queued = this.turnAdmission.enqueue(params);
@@ -2328,8 +2364,32 @@ export class MessagingController {
     return Boolean(
       this.options.backend.steerTurn &&
         activeTurn &&
-        ["working", "waiting"].includes(activeTurn.status),
+        ["working", "waiting"].includes(activeTurn.status) &&
+        this.canQueuedEntrySteerActiveTurn(entry, activeTurn.turnId),
     );
+  }
+
+  private canQueuedEntrySteerActiveTurn(
+    entry: MessagingQueuedTurnEntry,
+    turnId: string,
+  ): boolean {
+    if (entry.binding.targetKind !== "agent_thread") {
+      return true;
+    }
+    if (!entry.event) {
+      return false;
+    }
+    const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(
+        entry.binding.backend,
+        entry.binding.threadId,
+        turnId,
+      ),
+    );
+    if (!origin) {
+      return false;
+    }
+    return sameMessagingTurnOwner(entry.event, origin.event);
   }
 
   private async retireQueuedTurnNotice(
@@ -2422,6 +2482,20 @@ export class MessagingController {
       );
       return;
     }
+    if (!this.canQueuedEntrySteerActiveTurn(entry, activeTurn.turnId)) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("queued-turn-steer-owner-mismatch"),
+          createdAt: this.now(),
+          title: "Steer unavailable",
+          body: "Only the messaging surface that started the active Agent turn can steer it. The message is still queued.",
+          recoverable: true,
+        }),
+        entry.binding,
+        event,
+      );
+      return;
+    }
 
     try {
       await this.options.backend.steerTurn({
@@ -2471,8 +2545,10 @@ export class MessagingController {
       binding: entry.binding,
       event: entry.event,
       input: entry.input,
+      originBinding: entry.originBinding,
       preview: entry.preview,
       queueOnConcurrentStart: false,
+      renderStatus: entry.renderStatus,
       threadKey,
     });
     if (startResult !== "started") {
@@ -3866,7 +3942,120 @@ export class MessagingController {
     await this.renderResumeBrowser(session, navigation, event);
   }
 
-  private async presentAgentBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+  private async handleAgentControlRequest(
+    event: MessagingInboundCommandEvent,
+    prompt: string,
+  ): Promise<void> {
+    const assignment =
+      await this.options.store.findActiveDefaultAgentAssignmentForChannel(
+        event.channel,
+      );
+    if (!assignment) {
+      await this.presentAgentBrowser({
+        ...event,
+        args: [],
+        rawText: "/agent",
+      }, {
+        agentPrompt: prompt,
+        agentSelectionMode: "default_control",
+      });
+      return;
+    }
+
+    await this.submitAgentControlRequest({ assignment, event, prompt });
+  }
+
+  private async submitAgentControlRequest(params: {
+    assignment: MessagingDefaultAgentAssignmentRecord;
+    event: MessagingInboundCommandEvent | MessagingInboundCallbackEvent;
+    prompt: string;
+  }): Promise<void> {
+    const text = params.prompt.trim();
+    if (!text) {
+      await this.presentAgentBrowser(params.event as MessagingInboundCommandEvent);
+      return;
+    }
+
+    const controlEvent: MessagingInboundTextEvent = {
+      ...params.event,
+      id: `${params.event.id}:agent-control`,
+      kind: "text",
+      receivedAt: params.event.receivedAt,
+      text,
+    };
+    const binding = this.defaultAgentControlBinding(params.assignment, controlEvent);
+    const originBinding =
+      await this.options.store.findActiveBindingForChannel(params.event.channel);
+    const prepared = await this.prepareTurnInput([controlEvent], binding, controlEvent);
+    if (!prepared) {
+      return;
+    }
+    const threadKey = this.threadKeyForBinding(binding);
+    if (await this.isTurnOccupied(binding, threadKey)) {
+      await this.queuePreparedInput({
+        binding,
+        event: controlEvent,
+        input: prepared.input,
+        originBinding: originBinding ?? binding,
+        preview: prepared.preview,
+        renderStatus: false,
+        threadKey,
+      });
+      return;
+    }
+
+    await this.startPreparedInput({
+      binding,
+      event: controlEvent,
+      input: prepared.input,
+      originBinding: originBinding ?? binding,
+      preview: prepared.preview,
+      renderStatus: false,
+      threadKey,
+    });
+  }
+
+  private defaultAgentControlBinding(
+    assignment: MessagingDefaultAgentAssignmentRecord,
+    event: MessagingInboundEvent,
+  ): MessagingBindingRecord {
+    return {
+      id: `agent-control:${assignment.id}:${event.id}`,
+      authorizedActorIds: [event.actor.platformUserId],
+      backend: assignment.backend,
+      channel: event.channel,
+      createdAt: this.now(),
+      routingState: event.routingState ?? assignment.routingState,
+      targetKind: "agent_thread",
+      threadId: assignment.threadId,
+      updatedAt: this.now(),
+    };
+  }
+
+  private async setDefaultAgentAssignmentForSelection(params: {
+    event: MessagingInboundEvent;
+    target: { backend: AppServerBackendKind; threadId: ThreadIdentifier };
+  }): Promise<MessagingDefaultAgentAssignmentRecord> {
+    return await this.options.store.upsertDefaultAgentAssignment({
+      id: this.newIntentId("default-agent"),
+      backend: params.target.backend,
+      channel: params.event.channel,
+      channelKind: params.event.channel.channel,
+      createdAt: this.now(),
+      routingState: params.event.routingState,
+      scopeKind: "conversation",
+      threadId: params.target.threadId,
+      updatedAt: this.now(),
+    });
+  }
+
+  private async presentAgentBrowser(
+    event: MessagingInboundCommandEvent,
+    options?: {
+      agentPrompt?: string;
+      agentSelectionMode?: MessagingBrowseSessionRecord["agentSelectionMode"];
+    },
+  ): Promise<void> {
     const parsed = parseResumeCommandArgs(event.args);
     if (parsed.error) {
       await this.deliver(
@@ -3906,6 +4095,8 @@ export class MessagingController {
       : undefined;
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("browse"),
+      agentPrompt: options?.agentPrompt,
+      agentSelectionMode: options?.agentSelectionMode,
       allowedActorIds: [event.actor.platformUserId],
       backend: selectedBackend?.kind,
       channel: event.channel,
@@ -4563,6 +4754,43 @@ export class MessagingController {
       );
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      if (
+        session.mode === "agents" &&
+        session.agentSelectionMode === "default_control"
+      ) {
+        const assignment = await this.setDefaultAgentAssignmentForSelection({
+          event,
+          target,
+        });
+        await this.options.store.deleteBrowseSession(session.id);
+        if (session.agentPrompt?.trim()) {
+          await this.submitAgentControlRequest({
+            assignment,
+            event,
+            prompt: session.agentPrompt,
+          });
+        } else {
+          await this.deliver(
+            buildConfirmationIntent({
+              id: this.newIntentId("default-agent-set"),
+              capabilityProfile: this.capabilityProfile,
+              createdAt: this.now(),
+              delivery: session.surface
+                ? {
+                    mode: "update",
+                    replaceMarkup: true,
+                  }
+                : undefined,
+              title: "Default Agent set",
+              body: "Future /agent requests from this conversation will use the selected Agent.",
+              targetSurface: session.surface,
+            }),
+            undefined,
+            event,
+          );
+        }
         return;
       }
       if (
@@ -10867,6 +11095,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    originBinding?: MessagingBindingRecord;
     turnId: string;
   }): void {
     if (
@@ -10882,10 +11111,34 @@ export class MessagingController {
         params.turnId,
       ),
       {
-        binding: params.binding,
+        binding: params.originBinding ?? params.binding,
+        controlBinding: params.originBinding ? params.binding : undefined,
         event: params.event,
       },
     );
+  }
+
+  private deliveryBindingsForAgentTurn(params: {
+    bindings: MessagingBindingRecord[];
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    turnId?: string;
+  }): MessagingBindingRecord[] {
+    if (!params.turnId) {
+      return params.bindings;
+    }
+    const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(params.backend, params.threadId, params.turnId),
+    );
+    const controlBinding = origin?.controlBinding;
+    if (!controlBinding) {
+      return params.bindings;
+    }
+    return this.isChannelInScope(controlBinding.channel) ? [controlBinding] : [];
+  }
+
+  private isEphemeralAgentControlBinding(binding: MessagingBindingRecord): boolean {
+    return binding.id.startsWith("agent-control:");
   }
 
   private forgetAgentMessagingOrigin(
@@ -12629,6 +12882,25 @@ function parseMonitorBooleanArg(arg: string | undefined): boolean | undefined {
     return false;
   }
   return undefined;
+}
+
+function parseAgentControlRequest(args: readonly string[]): string | undefined {
+  if (args.length === 0 || args[0]?.startsWith("-")) {
+    return undefined;
+  }
+  const prompt = args.join(" ").trim();
+  return prompt.length > 0 ? prompt : undefined;
+}
+
+function sameMessagingTurnOwner(
+  left: MessagingInboundEvent,
+  right: MessagingInboundEvent,
+): boolean {
+  return (
+    left.actor.platformUserId === right.actor.platformUserId &&
+    buildMessagingConversationKey(left.channel) ===
+      buildMessagingConversationKey(right.channel)
+  );
 }
 
 function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {

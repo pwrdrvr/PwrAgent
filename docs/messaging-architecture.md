@@ -105,6 +105,35 @@ is intentionally separate from bound-thread user input: a Datadog Slack post can
 start or queue work in one Agent thread without requiring that Slack channel to
 be bound to the thread as a normal conversation.
 
+### Default Agent control routing
+
+Messaging conversations may have two independent routing facts:
+
+- the active thread binding, which decides where ordinary text and media go
+- the default Agent assignment, which decides where explicit `/agent <request>`
+  control-plane requests go
+
+The default Agent assignment is deliberately not a second active
+`MessagingBinding`. One conversation still has at most one active binding, so a
+work-bound channel can keep sending ordinary text to its work thread while
+`/agent fork this and attach it here` starts an Agent-thread turn. The
+assignment is stored separately and resolves from the most specific known scope
+to broader fallbacks: conversation, provider, then profile default.
+
+When `/agent <request>` starts a side-channel Agent turn, the controller uses an
+ephemeral Agent-thread binding for turn admission and response delivery. The
+recorded Agent origin still points at the originating messaging event and the
+conversation's real binding, if one exists, so Agent tools such as
+`pwragent_messaging.get_current_location` and
+`pwragent_messaging.attach_thread_here` interpret "here" as the surface that
+asked the Agent.
+
+Multiple surfaces can target the same Agent thread. The surface and actor that
+started the active Agent turn own steering for that turn. Other surfaces may
+queue follow-up Agent input, but they cannot steer a turn they did not start.
+Mention-based natural-language Agent routing remains provider-specific follow-up
+work; the portable control-plane route is the explicit `/agent` command.
+
 ### Outbound (agent produces output)
 
 ```mermaid
@@ -163,7 +192,9 @@ graph LR
 Why this shape:
 - Each controller owns one capability profile, so producers can adapt deterministically.
 - A thread bound to both Telegram and Discord renders independently per channel — Discord users see Discord-native buttons, Telegram users see Telegram-native buttons. No cross-channel contamination.
-- Shared state lives only in the sqlite `MessagingStore` (bindings, browse sessions, callback handles). Both controllers read/write the same store but never reach into each other's runtime state.
+- Shared state lives only in the sqlite `MessagingStore` (bindings, default
+  Agent assignments, browse sessions, callback handles). Both controllers
+  read/write the same store but never reach into each other's runtime state.
 
 ## Callback delivery models
 
@@ -394,7 +425,9 @@ This is enforced by package boundaries (`pnpm lint:boundaries`) and reinforced i
 
 ## Canonical command catalog
 
-The channel-neutral command surface — `resume`, `new`, `status`, `detach`, `monitor`, `help` — is defined in a single catalog at [`apps/desktop/src/main/messaging/core/messaging-command-catalog.ts`](../apps/desktop/src/main/messaging/core/messaging-command-catalog.ts).
+The channel-neutral command surface — `resume`, `agent`, `new`, `status`,
+`detach`, `monitor`, `help` — is defined in a single catalog at
+[`apps/desktop/src/main/messaging/core/messaging-command-catalog.ts`](../apps/desktop/src/main/messaging/core/messaging-command-catalog.ts).
 
 Four things consume the catalog:
 
@@ -411,6 +444,12 @@ To add a new canonical verb:
 4. For each provider adapter that registers native slash commands, add the verb to its own canonical-bases array (Discord's `DISCORD_APPLICATION_COMMANDS`, Mattermost's `CANONICAL_COMMAND_BASES`, etc.).
 
 The help surface and unknown-command fallback automatically pick up the new verb from the catalog — no string-list to update separately.
+
+`/agent` has two controller paths. With no free-form request, it opens the
+existing Agent picker/binding flow. With free-form text, `/agent <request>`
+routes that text to the conversation's default Agent without changing the
+conversation's active work-thread binding. Option-style invocations such as
+`/agent --new` remain picker/start flows rather than Agent prompts.
 
 ## How to add a provider
 
@@ -445,7 +484,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-resume-browser.ts` | Producer for resume browser (`/resume`) — picker pagination, project/thread filtering |
 | `apps/desktop/src/main/messaging/core/messaging-approval-renderer.ts` | Producer for approval prompts |
 | `apps/desktop/src/main/messaging/core/messaging-attachment-processor.ts` | Inbound attachment normalization (size caps, MIME sniffing, image conversion) |
-| `apps/desktop/src/main/messaging/core/messaging-store.ts` | Persistence interface (bindings, browse sessions, callback handles, pending intents) |
+| `apps/desktop/src/main/messaging/core/messaging-store.ts` | Persistence interface (bindings, default Agent assignments, browse sessions, callback handles, pending intents) |
 | `apps/desktop/src/main/state/messaging-store-sqlite.ts` | Sqlite implementation of the store |
 
 ## Cross-references

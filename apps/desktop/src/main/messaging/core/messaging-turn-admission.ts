@@ -27,7 +27,9 @@ export type MessagingQueuedTurnEntry = {
   event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
+  originBinding?: MessagingBindingRecord;
   preview: string;
+  renderStatus?: boolean;
   status: "queued" | "steered" | "cancelled" | "submitted" | "failed";
   surface?: MessagingSurfaceRef;
   threadKey: string;

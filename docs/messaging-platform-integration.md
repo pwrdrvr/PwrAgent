@@ -64,6 +64,22 @@ should keep these checks in sync with tests:
   After binding, the status card reports the backend identity and does
   not offer a Provider switch.
 
+## Default Agent control smoke
+
+Contributor checks for `/agent` routing:
+
+- `/agent` with no free-form request opens the Agent picker/binding flow.
+- `/agent --new` still starts the existing new-Agent picker flow.
+- `/agent <request>` routes the request to the conversation's default
+  Agent assignment without replacing any active work-thread binding.
+- If no default Agent is configured, `/agent <request>` opens the Agent
+  picker, preserves the request, stores the selected Agent as the
+  conversation default, and submits the preserved request.
+- Ordinary text in a work-bound conversation still routes to the work
+  thread. Mention-only Agent routing is deferred and provider-specific.
+- When two surfaces target the same Agent thread, the surface that
+  started the active Agent turn may steer it; other surfaces queue.
+
 ## Chat SDK decision (contributor context)
 
 Vercel Chat SDK is not the runtime boundary for PwrAgent. The current

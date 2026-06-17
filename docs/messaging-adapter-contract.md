@@ -49,6 +49,14 @@ turn admission policy that coalesces split input, prevents overlapping
 `turn/start` calls, queues follow-ups during active turns, and maps queued
 input to `turn/steer` or a later `turn/start`.
 
+Explicit Agent control routing is also controller-owned. Adapters should
+normalize `/agent <request>` as a `command` event with `command: "agent"` and
+the remaining tokens in `args`; they must not decide whether the request goes
+to a work thread, an Agent thread, or a default Agent assignment. Mention-based
+Agent routing is not part of the generic adapter contract yet. Providers should
+continue to normalize mentions according to their existing command/text rules
+until a provider-specific mention policy is added.
+
 The `actor.platformUserId` must be the stable platform ID used for
 authorization. Mutable usernames and display names may be included for audit or
 operator visibility only.
@@ -91,6 +99,11 @@ long-lived sqlite records:
   conversation, the full `allowedActorIds` set, and
   `intent.audit?.bindingId ?? intent.bindingId`; a single intent/action may be
   delivered to multiple bindings with the same platform handle.
+
+Default Agent assignment state follows the same opaque-state rule as bindings:
+workflow code may persist and echo `MessagingChannelRef` plus adapter-owned
+routing state, but only the adapter may parse platform-native workspace,
+channel, topic, thread, or message IDs.
 
 ## Rendering Policy
 

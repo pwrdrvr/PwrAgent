@@ -1467,6 +1467,8 @@ export type MessagingBrowseReturnTarget = {
 
 export type MessagingBrowseSessionRecord = {
   id: string;
+  agentSelectionMode?: "bind" | "default_control";
+  agentPrompt?: string;
   allowedActorIds: string[];
   backend?: AppServerBackendKind;
   bindingId?: string;
