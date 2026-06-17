@@ -3,7 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentEvent,
   AppServerNotification,
+  AppServerThreadActivityEntry,
   AppServerPendingRequestNotification,
   MessagingPlatformStatus,
   NavigationDirectorySummary,
@@ -38,6 +40,50 @@ vi.mock("../IntegratedTerminal", () => ({
 }));
 
 import { ThreadView } from "../ThreadView";
+
+function buildRendererLiveDiffEvent(params: {
+  additions: number;
+  diff: string;
+  path: string;
+  removals: number;
+  threadId: string;
+  turnId: string;
+}): AgentEvent {
+  const entryId = `live-diff-${params.turnId}`;
+  const basename = params.path.split(/[\\/]/).at(-1) ?? params.path;
+  const rendererActivityEntry: AppServerThreadActivityEntry = {
+    type: "activity",
+    id: entryId,
+    createdAt: 1_000,
+    summary: `Edited 1 file, +${params.additions}, -${params.removals}`,
+    details: [
+      {
+        id: `${entryId}-1`,
+        kind: "write",
+        label: `Update ${basename}`,
+        path: params.path,
+        fileDiff: {
+          kind: "update",
+          diff: params.diff,
+          additions: params.additions,
+          removals: params.removals,
+        },
+      },
+    ],
+  };
+  return {
+    backend: "codex",
+    notification: {
+      method: "turn/diff/updated",
+      params: {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        diff: params.diff,
+      },
+    },
+    rendererActivityEntry,
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -1474,12 +1520,7 @@ describe("ThreadView", () => {
         { step: "Verify the thread view", status: "pending" as const }
       ]
     };
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: AppServerNotification;
-        }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
     const { rerender } = render(
       <ThreadView
@@ -1662,12 +1703,7 @@ describe("ThreadView", () => {
         inInbox: false
       }
     };
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: AppServerNotification;
-        }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
     const { rerender } = render(
       <ThreadView
@@ -2007,12 +2043,7 @@ describe("ThreadView", () => {
         inInbox: false
       }
     };
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: AppServerNotification;
-        }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
     render(
       <ThreadView
@@ -2121,12 +2152,7 @@ describe("ThreadView", () => {
       "-function appendMessageEntries(",
       "+function messageMatchesOptimisticEntry("
     ].join("\n");
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: AppServerNotification;
-        }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
     const { rerender } = render(
       <ThreadView
@@ -2193,17 +2219,16 @@ describe("ThreadView", () => {
     );
 
     await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "turn/diff/updated",
-          params: {
-            threadId: "thread-2",
-            turnId: "turn-1",
-            diff: liveDiff
-          }
-        },
-      });
+      agentEventHandler?.(
+        buildRendererLiveDiffEvent({
+          additions: 1,
+          diff: liveDiff,
+          path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+          removals: 2,
+          threadId: "thread-2",
+          turnId: "turn-1",
+        }),
+      );
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -4106,9 +4131,7 @@ describe("ThreadView", () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    let agentEventHandler:
-      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
     const liveDiff = [
       "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
       "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
@@ -4174,13 +4197,16 @@ describe("ThreadView", () => {
       // During the active turn, the rail (h3 heading) is the single
       // display surface for the cumulative diff.
       await act(async () => {
-        agentEventHandler?.({
-          backend: "codex",
-          notification: {
-            method: "turn/diff/updated",
-            params: { threadId: "thread-dupe", turnId: "turn-1", diff: liveDiff },
-          },
-        });
+        agentEventHandler?.(
+          buildRendererLiveDiffEvent({
+            additions: 1,
+            diff: liveDiff,
+            path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+            removals: 2,
+            threadId: "thread-dupe",
+            turnId: "turn-1",
+          }),
+        );
       });
       // Rail title carries the summary (the section h3 was merged into
       // the rail title in the #495 follow-up).
@@ -4240,9 +4266,7 @@ describe("ThreadView", () => {
   });
 
   it("keeps the prior turn's uncommitted edits in the rail when a new turn starts", async () => {
-    let agentEventHandler:
-      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
     const liveDiff = [
       "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
       "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
@@ -4306,13 +4330,16 @@ describe("ThreadView", () => {
     render(<Harness />);
 
     await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "turn/diff/updated",
-          params: { threadId: "thread-pin", turnId: "turn-1", diff: liveDiff },
-        },
-      });
+      agentEventHandler?.(
+        buildRendererLiveDiffEvent({
+          additions: 1,
+          diff: liveDiff,
+          path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+          removals: 0,
+          threadId: "thread-pin",
+          turnId: "turn-1",
+        }),
+      );
     });
     await act(async () => {
       agentEventHandler?.({
@@ -4361,9 +4388,7 @@ describe("ThreadView", () => {
   });
 
   it("retains a failed turn's edits in the rail instead of dropping them", async () => {
-    let agentEventHandler:
-      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
-      | undefined;
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
     const liveDiff = [
       "diff --git a/src/example.ts b/src/example.ts",
       "--- a/src/example.ts",
@@ -4415,13 +4440,16 @@ describe("ThreadView", () => {
     render(<Harness />);
 
     await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "turn/diff/updated",
-          params: { threadId: "thread-fail", turnId: "turn-1", diff: liveDiff },
-        },
-      });
+      agentEventHandler?.(
+        buildRendererLiveDiffEvent({
+          additions: 1,
+          diff: liveDiff,
+          path: "src/example.ts",
+          removals: 0,
+          threadId: "thread-fail",
+          turnId: "turn-1",
+        }),
+      );
     });
     await act(async () => {
       agentEventHandler?.({

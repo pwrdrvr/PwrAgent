@@ -48,6 +48,7 @@ import {
   type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
@@ -253,12 +254,23 @@ function coalescedAgentEventLogKey(
   });
 }
 
+function withRendererActivityEntry(event: AgentEvent): AgentEvent {
+  if (event.backend !== "codex" || event.notification.method !== "turn/diff/updated") {
+    return event;
+  }
+
+  const rendererActivityEntry = buildLiveDiffActivityEntry(
+    event.notification as Extract<AgentEvent["notification"], { method: "turn/diff/updated" }>,
+  );
+  return rendererActivityEntry ? { ...event, rendererActivityEntry } : event;
+}
+
 function broadcastAgentEvent(event: AgentEvent): void {
   const eventSummary = summarizeAgentEvent(event);
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
-  const rendererEvent = sanitizeRendererPayload(event);
+  const rendererEvent = sanitizeRendererPayload(withRendererActivityEntry(event));
 
   // Only deliver to windows that registered for this channel.
   // Secondary windows (e.g. the Messaging Activity window) opt out by

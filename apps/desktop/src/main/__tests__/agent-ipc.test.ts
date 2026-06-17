@@ -349,4 +349,56 @@ describe("agent ipc", () => {
 
     disposeAgentIpcHandlers();
   });
+
+  it("attaches pre-shaped live diff activity before broadcasting to renderer subscribers", async () => {
+    const {
+      registerAgentIpcHandlers,
+      disposeAgentIpcHandlers,
+    } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const diff = [
+      "diff --git a/src/example.ts b/src/example.ts",
+      "--- a/src/example.ts",
+      "+++ b/src/example.ts",
+      "@@ -1,1 +1,2 @@",
+      " existing",
+      "+added",
+    ].join("\n");
+
+    registerAgentIpcHandlers();
+
+    await registryListener?.({
+      backend: "codex",
+      notification: {
+        method: "turn/diff/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          diff,
+        },
+      },
+    } as AgentEvent);
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        rendererActivityEntry: expect.objectContaining({
+          id: "live-diff-turn-1",
+          summary: "Edited 1 file, +1, -0",
+          details: [
+            expect.objectContaining({
+              label: "Update example.ts",
+              path: "src/example.ts",
+              fileDiff: expect.objectContaining({
+                additions: 1,
+                removals: 0,
+              }),
+            }),
+          ],
+        }),
+      }),
+    );
+
+    disposeAgentIpcHandlers();
+  });
 });
