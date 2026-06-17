@@ -84,6 +84,52 @@ describe("EditsPanel", () => {
     expect(screen.getByText("Pushed")).toBeInTheDocument();
   });
 
+  it("excludes live turn files with repo-relative paths from other changes", async () => {
+    const listWorktreeOtherChanges = vi.fn(async () => ({
+      changes: [],
+      totalChanges: 0,
+      truncated: false,
+      maxFiles: 50,
+    }));
+    const group: EditedFileGroup = {
+      ...editedGroup(),
+      key: "live-turn",
+      live: true,
+      details: [
+        {
+          id: "live-detail-1",
+          kind: "write",
+          label: "Update ipc.ts",
+          path: "apps/desktop/src/shared/ipc.ts",
+          fileDiff: {
+            kind: "update",
+            diff: "@@ -1 +1 @@\n+hello\n",
+            additions: 1,
+            removals: 0,
+          },
+        },
+      ],
+    };
+
+    render(
+      <EditsPanel
+        groups={[group]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        desktopApi={{ listWorktreeOtherChanges }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(listWorktreeOtherChanges).toHaveBeenCalledWith({
+        worktreePath: "/repo",
+        excludePaths: ["/repo/apps/desktop/src/shared/ipc.ts"],
+        maxFiles: 50,
+      });
+    });
+  });
+
   it("shows non-turn worktree changes first and fetches their diff only when expanded", async () => {
     const listWorktreeOtherChanges = vi.fn(async () => ({
       changes: [

@@ -43,7 +43,32 @@ type EditsPanelProps = {
 const OTHER_CHANGES_MAX_FILES = 50;
 const OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
 
-function collectEditedPaths(groups: readonly EditedFileGroup[]): string[] {
+function isAbsolutePathLike(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function toWorktreeAbsolutePath(
+  path: string,
+  worktreeRoot?: string,
+): string | undefined {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (isAbsolutePathLike(trimmed)) {
+    return trimmed;
+  }
+  const root = worktreeRoot?.trim().replace(/[\\/]+$/, "");
+  if (!root) {
+    return undefined;
+  }
+  return `${root}/${trimmed.replace(/^[\\/]+/, "")}`;
+}
+
+function collectEditedPaths(
+  groups: readonly EditedFileGroup[],
+  worktreeRoot?: string,
+): string[] {
   return [
     ...new Set(
       groups.flatMap((group) =>
@@ -52,7 +77,10 @@ function collectEditedPaths(groups: readonly EditedFileGroup[]): string[] {
           .filter((path): path is string => Boolean(path)),
       ),
     ),
-  ];
+  ].flatMap((path) => {
+    const absolutePath = toWorktreeAbsolutePath(path, worktreeRoot);
+    return absolutePath ? [absolutePath] : [path];
+  });
 }
 
 function useOtherWorktreeChanges(params: {
@@ -201,8 +229,8 @@ export function EditsPanel(props: EditsPanelProps) {
   const hasGroups = props.groups.length > 0;
   const showViewToggle = props.groups.length > 1;
   const editedPaths = useMemo(
-    () => collectEditedPaths(props.groups),
-    [props.groups],
+    () => collectEditedPaths(props.groups, props.worktreeRoot),
+    [props.groups, props.worktreeRoot],
   );
   const otherChanges = useOtherWorktreeChanges({
     desktopApi: props.desktopApi,
