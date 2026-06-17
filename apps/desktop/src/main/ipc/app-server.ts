@@ -525,6 +525,19 @@ type PrLookupSubscriber = {
   previousPrs: PrSummary[];
 };
 
+type PrLookupRefreshClaim =
+  | {
+      refreshKey: string;
+      skippedReason?: undefined;
+    }
+  | {
+      refreshKey?: undefined;
+      skippedReason: "cooldown" | "scheduled-token-bucket";
+      ageMs?: number;
+      minIntervalMs?: number;
+      nextAllowedInMs?: number;
+    };
+
 class PrStatusTokenBucket {
   private tokens = PR_STATUS_TOKEN_BUCKET_CAPACITY;
   private updatedAt = Date.now();
@@ -545,6 +558,42 @@ class PrStatusTokenBucket {
     this.tokens -= 1;
     return true;
   }
+}
+
+function prLogIds(prs: PrSummary[]): string[] {
+  return prs.map((pr) => getPrStatusKey(pr));
+}
+
+function userPrRefreshLogPayload(params: {
+  backend: AppServerBackendKind;
+  branch: string;
+  directoryPathCount: number;
+  existingLookupMatches?: boolean;
+  ghAvailable?: boolean;
+  lookupCacheHit?: boolean;
+  lookupKey?: string;
+  previousPrs?: PrSummary[];
+  provider: string;
+  reason?: string;
+  requestKey?: string;
+  threadId: string;
+  trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>;
+}): Record<string, unknown> {
+  return {
+    backend: params.backend,
+    branch: params.branch,
+    directoryPathCount: params.directoryPathCount,
+    existingLookupMatches: params.existingLookupMatches,
+    ghAvailable: params.ghAvailable,
+    lookupCacheHit: params.lookupCacheHit,
+    lookupKey: params.lookupKey,
+    previousPrIds: prLogIds(params.previousPrs ?? []),
+    provider: params.provider,
+    reason: params.reason,
+    requestKey: params.requestKey,
+    threadId: params.threadId,
+    trigger: params.trigger,
+  };
 }
 
 class DesktopAppServerService {
@@ -1680,6 +1729,16 @@ class DesktopAppServerService {
     const requestKey = getThreadPullRequestsRequestKey(backend, request);
     const pending = this.pendingThreadPullRequestRefreshes.get(requestKey);
     if (pending) {
+      if (request.trigger === "user") {
+        logDebug("threadPullRequestsRefresh:coalesced-request", {
+          backend,
+          branch: request.branch.trim(),
+          directoryPathCount: request.directoryPaths.length,
+          requestKey,
+          threadId: request.threadId,
+          trigger: request.trigger,
+        });
+      }
       return await pending;
     }
 
@@ -1702,9 +1761,23 @@ class DesktopAppServerService {
     requestKey: string,
   ): Promise<RefreshThreadPullRequestsResponse> {
     const provider = normalizePullRequestProvider(request.provider);
+    const trigger = request.trigger ?? "scheduled";
     const fetcher = this.getPrFetcher();
     const ghAvailable = await fetcher.isGhAvailable();
     if (!ghAvailable) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch: request.branch.trim(),
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable,
+          provider,
+          reason: "gh-unavailable",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
       return {
         backend,
         threadId: request.threadId,
@@ -1747,6 +1820,22 @@ class DesktopAppServerService {
         ? existingPrs
         : [];
     const knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    if (trigger === "user") {
+      logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
+        backend,
+        branch,
+        directoryPathCount: request.directoryPaths.length,
+        existingLookupMatches,
+        ghAvailable,
+        lookupCacheHit: Boolean(lookupEntry),
+        lookupKey,
+        previousPrs: knownPrs,
+        provider,
+        requestKey,
+        threadId: request.threadId,
+        trigger,
+      }));
+    }
     if (lookupEntry && lookupEntry.fetchedAt > 0) {
       await this.persistPullRequestLookupHit({
         backend,
@@ -1793,6 +1882,20 @@ class DesktopAppServerService {
     }
 
     if (!branch || request.directoryPaths.length === 0) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch,
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable: true,
+          previousPrs: knownPrs,
+          provider,
+          reason: !branch ? "missing-branch" : "missing-directory-paths",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
       return {
         backend,
         threadId: request.threadId,
@@ -1928,38 +2031,110 @@ class DesktopAppServerService {
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
   }): void {
+    const trigger = params.request.trigger ?? "scheduled";
+    const provider = normalizePullRequestProvider(params.request.provider);
     const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
     if (pending) {
       this.addPullRequestLookupSubscriber(params.lookupKey, params);
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:coalesced-background", userPrRefreshLogPayload({
+          backend: params.backend,
+          branch: params.request.branch.trim(),
+          directoryPathCount: params.request.directoryPaths.length,
+          lookupKey: params.lookupKey,
+          previousPrs: params.previousPrs,
+          provider,
+          requestKey: params.requestKey,
+          threadId: params.request.threadId,
+          trigger,
+        }));
+      }
       return;
     }
 
-    const refreshKey = this.claimPullRequestLookupRefreshKey(
+    const claim = this.claimPullRequestLookupRefreshKey(
       params.lookupKey,
-      params.request.trigger ?? "scheduled",
-      normalizePullRequestProvider(params.request.provider),
+      trigger,
+      provider,
       params.previousPrs.length > 0
         && params.previousPrs.every(
           (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
         ),
     );
-    if (!refreshKey) {
+    if (claim.skippedReason) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", {
+          ...userPrRefreshLogPayload({
+            backend: params.backend,
+            branch: params.request.branch.trim(),
+            directoryPathCount: params.request.directoryPaths.length,
+            lookupKey: params.lookupKey,
+            previousPrs: params.previousPrs,
+            provider,
+            reason: claim.skippedReason,
+            requestKey: params.requestKey,
+            threadId: params.request.threadId,
+            trigger,
+          }),
+          ageMs: claim.ageMs,
+          minIntervalMs: claim.minIntervalMs,
+          nextAllowedInMs: claim.nextAllowedInMs,
+        });
+      }
       return;
     }
+    const refreshKey = claim.refreshKey;
 
     this.addPullRequestLookupSubscriber(params.lookupKey, params);
+    if (trigger === "user") {
+      logDebug("threadPullRequestsRefresh:background-start", userPrRefreshLogPayload({
+        backend: params.backend,
+        branch: params.request.branch.trim(),
+        directoryPathCount: params.request.directoryPaths.length,
+        lookupKey: params.lookupKey,
+        previousPrs: params.previousPrs,
+        provider,
+        requestKey: params.requestKey,
+        threadId: params.request.threadId,
+        trigger,
+      }));
+    }
     const promise = this.fetchPullRequestLookup(params)
       .then(async ({ prs, fetchedAt }) => {
-        await this.persistPullRequestLookupSubscribers({
+        const publishResult = await this.persistPullRequestLookupSubscribers({
           lookupKey: params.lookupKey,
           prs,
           fetchedAt,
         });
+        if (trigger === "user") {
+          logDebug("threadPullRequestsRefresh:background-complete", {
+            ...userPrRefreshLogPayload({
+              backend: params.backend,
+              branch: params.request.branch.trim(),
+              directoryPathCount: params.request.directoryPaths.length,
+              lookupKey: params.lookupKey,
+              previousPrs: params.previousPrs,
+              provider,
+              requestKey: params.requestKey,
+              threadId: params.request.threadId,
+              trigger,
+            }),
+            changedThreadCount: publishResult.changedThreadCount,
+            fetchedAt,
+            fetchedPrIds: prLogIds(prs),
+            subscriberCount: publishResult.subscriberCount,
+          });
+        }
       })
       .catch((error) => {
         appServerLog.warn("background PR lookup refresh failed", {
           threadId: params.request.threadId,
+          branch: params.request.branch.trim(),
+          previousPrIds: prLogIds(params.previousPrs),
+          provider,
           refreshKey,
+          requestKey: params.requestKey,
+          trigger,
           error: error instanceof Error ? error.message : String(error),
         });
       })
@@ -2000,12 +2175,13 @@ class DesktopAppServerService {
     lookupKey: string;
     prs: PrSummary[];
     fetchedAt: number;
-  }): Promise<void> {
+  }): Promise<{ changedThreadCount: number; subscriberCount: number }> {
     const subscribers = this.prLookupSubscribers.get(params.lookupKey);
     if (!subscribers?.size) {
-      return;
+      return { changedThreadCount: 0, subscriberCount: 0 };
     }
 
+    let changedThreadCount = 0;
     await Promise.all(
       [...subscribers.values()].map(async (subscriber) => {
         const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
@@ -2018,6 +2194,7 @@ class DesktopAppServerService {
         });
 
         if (!prSummariesEqual(subscriber.previousPrs, nextPrs)) {
+          changedThreadCount += 1;
           await this.publishThreadPullRequestsUpdated({
             backend: subscriber.backend,
             threadId: subscriber.threadId,
@@ -2026,6 +2203,7 @@ class DesktopAppServerService {
         }
       }),
     );
+    return { changedThreadCount, subscriberCount: subscribers.size };
   }
 
   private async persistPullRequestLookupHit(params: {
@@ -2067,7 +2245,7 @@ class DesktopAppServerService {
     trigger: NonNullable<RefreshThreadPullRequestsRequest["trigger"]>,
     provider: string,
     terminalOnly: boolean,
-  ): string | undefined {
+  ): PrLookupRefreshClaim {
     const now = Date.now();
     const minInterval =
       trigger === "post-turn"
@@ -2086,12 +2264,18 @@ class DesktopAppServerService {
       entry?.[timestampField] ?? 0,
       entry?.fetchedAt ?? 0,
     );
-    const due = now - lastRequestedAt >= minInterval;
+    const ageMs = now - lastRequestedAt;
+    const due = ageMs >= minInterval;
     if (!due) {
-      return undefined;
+      return {
+        skippedReason: "cooldown",
+        ageMs,
+        minIntervalMs: minInterval,
+        nextAllowedInMs: minInterval - ageMs,
+      };
     }
     if (trigger === "scheduled" && !this.prStatusTokenBucket.tryTake(now)) {
-      return undefined;
+      return { skippedReason: "scheduled-token-bucket" };
     }
 
     if (entry) {
@@ -2107,7 +2291,7 @@ class DesktopAppServerService {
       });
     }
 
-    return lookupKey;
+    return { refreshKey: lookupKey };
   }
 
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
