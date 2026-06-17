@@ -9193,9 +9193,8 @@ textarea,
   color: var(--accent-bright);
 }
 
-/* Per-group git lifecycle: uncommitted → committed (with copyable SHA chip)
-   → pushed, plus a "N ignored" hint for gitignored files. Mirrors the
-   group-tag pill scale. */
+/* Current worktree-state hint for the newest edited-file group, plus a
+   "N ignored" hint for gitignored files. Mirrors the group-tag pill scale. */
 .edit-commit-badge {
   flex: 0 0 auto;
   display: inline-flex;
@@ -9214,6 +9213,7 @@ textarea,
   border-radius: 999px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: help;
 }
 
 .edit-commit-badge__status--uncommitted {
@@ -9244,40 +9244,13 @@ textarea,
   letter-spacing: 0;
 }
 
-.edit-commit-badge__ignored::before {
+.edit-commit-badge__ignored:not(:first-child)::before {
   content: "· ";
 }
 
-.edit-commit-badge__sha {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  background: var(--bg-panel-elevated);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 10px;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.edit-commit-badge__sha:hover {
-  background: var(--bg-panel-hover);
-  color: var(--text-primary);
-}
-
-.edit-commit-badge__sha:focus-visible {
+.edit-commit-badge__status:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
-}
-
-.edit-commit-badge__sha-value {
-  font-family: var(--font-mono);
-  letter-spacing: 0.02em;
 }
 
 .edited-file-groups__group-time {

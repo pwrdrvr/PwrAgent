@@ -219,6 +219,7 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
                   key={group.key}
                   group={group}
                   commitState={props.commitStatesByKey?.[group.key]}
+                  showCommitStatus={index === 0}
                   defaultExpanded={index === 0}
                   onScrollToTurn={props.onScrollToTurn}
                 />
@@ -313,6 +314,7 @@ function useMeasuredHeight(ref: RefObject<HTMLElement | null>): number | undefin
 function EditedFileGroupSection(props: {
   group: EditedFileGroup;
   commitState?: EditGroupCommitState;
+  showCommitStatus: boolean;
   defaultExpanded: boolean;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 }) {
@@ -363,7 +365,10 @@ function EditedFileGroupSection(props: {
               This turn
             </span>
           ) : (
-            <EditGroupCommitBadge state={props.commitState} />
+            <EditGroupCommitBadge
+              state={props.commitState}
+              showStatus={props.showCommitStatus}
+            />
           )}
         </div>
         <DiffStat

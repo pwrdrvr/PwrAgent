@@ -110,7 +110,7 @@ describe("EditedFileGroupList Show more / Show less", () => {
     expect(screen.getByLabelText("+5 -4")).toBeInTheDocument();
   });
 
-  it("renders the git commit badge per group from the resolved states", () => {
+  it("renders the git status badge only for the newest turn group", () => {
     render(
       <EditedFileGroupList
         groups={groups(2)}
@@ -121,27 +121,28 @@ describe("EditedFileGroupList Show more / Show less", () => {
             commitSha: "a".repeat(40),
             shortSha: "aaaaaaa",
             pushed: true,
+            ignoredPaths: ["src/file-1.ts"],
           },
         }}
       />,
     );
 
     expect(screen.getByText("Uncommitted")).toBeInTheDocument();
-    expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
-    expect(screen.getByText("Pushed")).toBeInTheDocument();
-    // Pushed implies committed, so "Pushed" replaces "Committed" — never both.
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pushed")).not.toBeInTheDocument();
     expect(screen.queryByText("Committed")).not.toBeInTheDocument();
+    expect(screen.getByText("1 ignored")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: `Copy commit ${"a".repeat(40)}` }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: `Copy commit ${"a".repeat(40)}` }),
+    ).not.toBeInTheDocument();
   });
 
-  it("shows a plain Committed badge for an unpushed commit", () => {
+  it("shows a plain Committed badge for an unpushed newest group", () => {
     render(
       <EditedFileGroupList
         groups={groups(2)}
         commitStatesByKey={{
-          "turn-1": {
+          "turn-2": {
             committed: true,
             commitSha: "f".repeat(40),
             shortSha: "fffffff",
@@ -155,8 +156,93 @@ describe("EditedFileGroupList Show more / Show less", () => {
     // No "Pushed" for a local-only commit, and no separate "Local" pill.
     expect(screen.queryByText("Pushed")).not.toBeInTheDocument();
     expect(screen.queryByText("Local")).not.toBeInTheDocument();
-    // turn-2 has no resolved state yet → no badge (avoids a wrong flash).
+    expect(screen.queryByText("fffffff")).not.toBeInTheDocument();
+  });
+
+  it("shows no git status badge in the All files view", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(2)}
+        view="files"
+        commitStatesByKey={{
+          "turn-2": { committed: false },
+          "turn-1": {
+            committed: true,
+            commitSha: "a".repeat(40),
+            shortSha: "aaaaaaa",
+            pushed: true,
+          },
+        }}
+      />,
+    );
+
     expect(screen.queryByText("Uncommitted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pushed")).not.toBeInTheDocument();
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
+  });
+
+  it("explains the Uncommitted status on focus", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(1)}
+        showSingleGroupHeader={true}
+        commitStatesByKey={{
+          "turn-1": { committed: false },
+        }}
+      />,
+    );
+
+    fireEvent.focus(screen.getByText("Uncommitted"));
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Files in this set have uncommitted changes. Changes may be unrelated to this turn's edits.",
+    );
+  });
+
+  it("explains the Committed status on focus", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(1)}
+        showSingleGroupHeader={true}
+        commitStatesByKey={{
+          "turn-1": {
+            committed: true,
+            commitSha: "f".repeat(40),
+            shortSha: "fffffff",
+            pushed: false,
+          },
+        }}
+      />,
+    );
+
+    fireEvent.focus(screen.getByText("Committed"));
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Files in this set currently have no uncommitted changes. Verify that changes from this turn were committed.",
+    );
+  });
+
+  it("explains the Pushed status on focus", () => {
+    render(
+      <EditedFileGroupList
+        groups={groups(1)}
+        showSingleGroupHeader={true}
+        commitStatesByKey={{
+          "turn-1": {
+            committed: true,
+            commitSha: "a".repeat(40),
+            shortSha: "aaaaaaa",
+            pushed: true,
+          },
+        }}
+      />,
+    );
+
+    fireEvent.focus(screen.getByText("Pushed"));
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Most recent commit touching some files in this set was pushed.",
+    );
   });
 
   it("does not show the turn-overflow toggle in the All files view", () => {
@@ -188,6 +274,7 @@ describe("EditedFileGroupList Show more / Show less", () => {
 
     // Group-level hint on the badge ("· 1 ignored" — the dot is CSS).
     expect(screen.getByText("1 ignored")).toBeInTheDocument();
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
     // Per-file chip on the ignored row.
     expect(screen.getByText("Ignored")).toBeInTheDocument();
   });

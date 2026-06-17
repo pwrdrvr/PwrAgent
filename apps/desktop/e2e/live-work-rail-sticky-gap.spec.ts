@@ -5,14 +5,13 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-// Asserts the sticky file-toggle pins flush with the rail body's top
-// edge (no leftover padding gap). Before this fix, `.live-work-rail__body`
-// had `padding: 8px`, so `position: sticky; top: 0` engaged at the
-// content-edge top — 8px below the rail header's border-bottom. Visually
-// that produced a strip of empty rail-card background between the
-// header divider and the sticky toggle when scrolling through a long
-// diff.
-test("LiveWorkRail sticky file-toggle pins flush with the rail body's top edge", async () => {
+// Asserts the sticky edit-group header pins flush with the rail body's top
+// edge, and the sticky file-toggle pins flush beneath that group header (no
+// leftover padding gap). Before #510, `.live-work-rail__body` had
+// `padding: 8px`, so sticky children engaged 8px below the rail header's
+// border-bottom and left a strip of empty rail-card background while
+// scrolling through a long diff.
+test("LiveWorkRail sticky edit header and file-toggle pin without a gap", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -56,19 +55,27 @@ test("LiveWorkRail sticky file-toggle pins flush with the rail body's top edge",
       el.scrollTop = 200;
     });
 
-    // After scrolling, the toggle should pin at the same top
-    // coordinate as the body's content area's top edge (= the body's
-    // border-edge top, since we removed the body's padding-top in
-    // the fix). Before the fix the toggle would pin 8px below.
+    // After scrolling, the edit-group header should pin at the rail body's
+    // top edge, and the file toggle should pin flush beneath that header. The
+    // no-gap assertion now targets the header->row seam because the transcript
+    // rail keeps the edit-group header even for a single group.
+    const groupHeader = rail.locator("css=.edited-file-groups__group-header");
     const toggleTop = await fileToggle.evaluate(
       (el) => el.getBoundingClientRect().top,
     );
     const bodyTop = await railBody.evaluate(
       (el) => el.getBoundingClientRect().top,
     );
+    const headerTop = await groupHeader.evaluate(
+      (el) => el.getBoundingClientRect().top,
+    );
+    const headerBottom = await groupHeader.evaluate(
+      (el) => el.getBoundingClientRect().bottom,
+    );
 
     // Allow 1px slack for sub-pixel rounding.
-    expect(Math.abs(toggleTop - bodyTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(headerTop - bodyTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(toggleTop - headerBottom)).toBeLessThanOrEqual(1);
   } finally {
     await app.close();
   }

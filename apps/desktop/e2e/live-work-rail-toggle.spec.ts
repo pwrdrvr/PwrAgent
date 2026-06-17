@@ -58,11 +58,10 @@ test("LiveWorkRail chevron actually collapses the body in a real CSS engine", as
     // click flipped the React state and the [hidden] attribute, but
     // `.live-work-rail__body { display: flex }` silently overrode the
     // UA `[hidden] { display: none }` so the body kept rendering.
-    // The collapse button's accessible name is the rail title
-    // ("Edited 2 files, ..."); the file-row toggles are named after
-    // their files ("Update AGENTS.md", "Update README.md") so this
-    // role+name match is unambiguous.
-    const chevron = rail.getByRole("button", { name: /^Edited 2 files/ });
+    // The rail-level collapse button shares the same summary text as the
+    // per-turn edit-group toggle when the body keeps its group header, so use
+    // the rail chrome class to target the outer chevron specifically.
+    const chevron = rail.locator("css=.live-work-rail__collapse");
     await chevron.click();
 
     // Body actually disappears now — in real CSS, [hidden] resolves

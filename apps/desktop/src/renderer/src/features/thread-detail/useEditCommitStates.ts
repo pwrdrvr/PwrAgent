@@ -11,13 +11,12 @@ import { editGroupPaths, type EditedFileGroup } from "./edited-file-groups";
 const RESOLVE_DEBOUNCE_MS = 300;
 
 /**
- * Resolve the git commit lifecycle (uncommitted → committed → pushed/local)
- * of a thread's edited-file groups against the live worktree, via the main
- * process. Re-resolves (debounced) when the group set changes or the
- * worktree's working state shifts (`refreshKey` — pass a signature of the
- * thread's `gitWorkingState` so a commit/push flips the badges). Pass an empty
- * `groups` array when the edits surface isn't shown to skip resolution
- * entirely. Returns an empty map until the first resolution lands.
+ * Resolve current Git file state for edited-file groups against the live
+ * worktree, via the main process. Re-resolves (debounced) when the group set
+ * changes or the worktree's working state shifts (`refreshKey` — pass a
+ * signature of the thread's `gitWorkingState` so status badges can update).
+ * Pass an empty `groups` array when the edits surface isn't shown to skip
+ * resolution entirely. Returns an empty map until the first resolution lands.
  */
 export function useEditCommitStates(params: {
   desktopApi?: Pick<DesktopApi, "resolveEditCommitStates">;

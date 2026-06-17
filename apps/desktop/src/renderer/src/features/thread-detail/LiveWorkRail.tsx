@@ -74,7 +74,8 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
 
   // Title carries the full summary for each present section (e.g.
   // "Edited 2 files, +5, -2 · Changed 1 file") joined by a midline
-  // dot so there's no redundant section heading inside the body.
+  // dot. The edited-files body may still keep its per-turn group header
+  // so the newest group can show live worktree status metadata.
   // Plan delegates to TranscriptPlan's own header rendering — its
   // contribution here is just the word "Plan" since the detail lives
   // inside the section.
@@ -148,6 +149,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
               groups={editedFileGroups}
               commitStatesByKey={props.editedFileCommitStates}
               view={editedView}
+              showSingleGroupHeader={true}
               worktreeRoot={props.editedFilesWorktreeRoot}
               onOpenFile={props.onOpenEditedFile}
               preferredEditor={resolvePreferredEditor(props.applications)}

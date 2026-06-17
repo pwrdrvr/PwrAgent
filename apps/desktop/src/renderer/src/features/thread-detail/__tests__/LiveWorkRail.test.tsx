@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadPlanEntry,
+  EditGroupCommitState,
 } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { LiveWorkRail } from "../LiveWorkRail";
@@ -130,6 +131,33 @@ describe("LiveWorkRail", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the newest group's live worktree status in the transcript rail", () => {
+    const groups = buildEditedFileGroups();
+    const firstGroup = groups[0];
+    if (!firstGroup) {
+      throw new Error("expected edited-file test fixture to build a group");
+    }
+    const commitStates: Record<string, EditGroupCommitState> = {
+      [firstGroup.key]: {
+        committed: true,
+        commitSha: "a".repeat(40),
+        shortSha: "aaaaaaa",
+        pushed: true,
+      },
+    };
+
+    render(
+      <LiveWorkRail
+        pinned={false}
+        editedFileGroups={groups}
+        editedFileCommitStates={commitStates}
+      />,
+    );
+
+    expect(screen.getByText("Pushed")).toBeInTheDocument();
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
+  });
+
   it("suffixes the aria label with (last turn) when pinned but keeps the same summary text in the visible title", () => {
     render(
       <LiveWorkRail pinned={true} editedFileGroups={buildEditedFileGroups()} />,
@@ -161,8 +189,8 @@ describe("LiveWorkRail", () => {
     render(
       <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
     );
-    // Section heading is gone — the rail title carries the summary
-    // (see "uses the section summary as the rail title" above).
+    // There is no separate section heading; the rail title carries the
+    // summary while the body keeps the per-turn group header metadata.
     expect(
       screen.queryByRole("heading", { level: 3, name: /Edited 2 files/i }),
     ).not.toBeInTheDocument();

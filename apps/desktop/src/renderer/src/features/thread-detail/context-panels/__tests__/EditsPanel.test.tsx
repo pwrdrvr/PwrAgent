@@ -62,7 +62,7 @@ describe("EditsPanel", () => {
         name: /Scroll the transcript to this turn/,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
     expect(screen.getByText("Pushed")).toBeInTheDocument();
   });
 
@@ -80,7 +80,7 @@ describe("EditsPanel", () => {
         name: /Scroll the transcript to this turn/,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("aaaaaaa")).toBeInTheDocument();
+    expect(screen.queryByText("aaaaaaa")).not.toBeInTheDocument();
     expect(screen.getByText("Pushed")).toBeInTheDocument();
   });
 
