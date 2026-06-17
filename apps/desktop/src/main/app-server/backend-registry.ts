@@ -413,6 +413,7 @@ type BackendClient = {
     threadId: string;
     includeTurns?: boolean;
     before?: string;
+    includeTurns?: boolean;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
@@ -1648,6 +1649,14 @@ type CodexNativeSubAgentCall = {
   tool: string;
 };
 
+type CodexNativeSubAgentReconciliation = {
+  attempts: number;
+  parentThreadId: string;
+  receiverThreadId: string;
+  startedAt: number;
+  timer?: NodeJS.Timeout;
+};
+
 const CODEX_NATIVE_SUBAGENT_TOOLS = new Set<CodexNativeSubAgentTool>([
   "spawnAgent",
   "sendInput",
@@ -1655,6 +1664,12 @@ const CODEX_NATIVE_SUBAGENT_TOOLS = new Set<CodexNativeSubAgentTool>([
   "wait",
   "closeAgent",
 ]);
+
+const CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS = 10_000;
+const CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS = 2_000;
+const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS = 30;
+const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS = 30 * 60 * 1000;
+const CODEX_NATIVE_SUBAGENT_FINAL_READ_LIMIT = 12;
 
 function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentTool {
   return CODEX_NATIVE_SUBAGENT_TOOLS.has(tool as CodexNativeSubAgentTool);
@@ -1942,6 +1957,16 @@ function codexNativeSubAgentOutcome(
 
 function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
+}
+
+function codexNativeSubAgentNextReconciliationDelayMs(attempts: number): number {
+  if (attempts <= 1) {
+    return 15_000;
+  }
+  if (attempts <= 3) {
+    return 30_000;
+  }
+  return 60_000;
 }
 
 function codexNativeSubAgentTask(params: {
@@ -3918,6 +3943,10 @@ export class DesktopBackendRegistry {
     ReviewSubAgentRecord
   >();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
+  private readonly codexNativeSubAgentReconciliations = new Map<
+    string,
+    CodexNativeSubAgentReconciliation
+  >();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
@@ -9673,6 +9702,12 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
+    for (const reconciliation of this.codexNativeSubAgentReconciliations.values()) {
+      if (reconciliation.timer) {
+        clearTimeout(reconciliation.timer);
+      }
+    }
+    this.codexNativeSubAgentReconciliations.clear();
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
@@ -11365,6 +11400,13 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (!codexNativeSubAgentIsTerminal(existing.status)) {
+      this.scheduleCodexNativeSubAgentReconciliation({
+        delayMs: CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS,
+        parentThreadId,
+        receiverThreadId: event.notification.params.threadId,
+      });
+    }
   }
 
   private async persistExistingReviewSubAgentUsage(params: {
@@ -11558,6 +11600,196 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (codexNativeSubAgentIsTerminal(status)) {
+      this.clearCodexNativeSubAgentReconciliation(params.receiverThreadId);
+    } else {
+      this.scheduleCodexNativeSubAgentReconciliation({
+        delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
+        parentThreadId: params.parentThreadId,
+        receiverThreadId: params.receiverThreadId,
+      });
+    }
+  }
+
+  private scheduleCodexNativeSubAgentReconciliation(params: {
+    delayMs: number;
+    parentThreadId: string;
+    receiverThreadId: string;
+  }): void {
+    const existing = this.codexNativeSubAgentReconciliations.get(
+      params.receiverThreadId,
+    );
+    if (existing?.timer) {
+      clearTimeout(existing.timer);
+    }
+    const reconciliation: CodexNativeSubAgentReconciliation = existing ?? {
+      attempts: 0,
+      parentThreadId: params.parentThreadId,
+      receiverThreadId: params.receiverThreadId,
+      startedAt: Date.now(),
+    };
+    reconciliation.parentThreadId = params.parentThreadId;
+    const timer = setTimeout(() => {
+      const scheduled = this.codexNativeSubAgentReconciliations.get(
+        params.receiverThreadId,
+      );
+      if (scheduled) {
+        scheduled.timer = undefined;
+      }
+      void this.reconcileCodexNativeSubAgent(params.receiverThreadId);
+    }, params.delayMs);
+    timer.unref?.();
+    reconciliation.timer = timer;
+    this.codexNativeSubAgentReconciliations.set(
+      params.receiverThreadId,
+      reconciliation,
+    );
+  }
+
+  private clearCodexNativeSubAgentReconciliation(receiverThreadId: string): void {
+    const reconciliation =
+      this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (reconciliation?.timer) {
+      clearTimeout(reconciliation.timer);
+    }
+    this.codexNativeSubAgentReconciliations.delete(receiverThreadId);
+  }
+
+  private async reconcileCodexNativeSubAgent(
+    receiverThreadId: string,
+  ): Promise<void> {
+    const reconciliation =
+      this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (!reconciliation) {
+      return;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: reconciliation.parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(receiverThreadId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    if (!existing || codexNativeSubAgentIsTerminal(existing.status)) {
+      this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      reconciliation.attempts >= CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS ||
+      now - reconciliation.startedAt > CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS
+    ) {
+      this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+      return;
+    }
+
+    try {
+      const probe = await this.withCodexThreadClient(
+        receiverThreadId,
+        async (client) =>
+          await client.readThread({
+            threadId: receiverThreadId,
+            includeTurns: false,
+            limit: 0,
+          }),
+        undefined,
+        false,
+      );
+      reconciliation.attempts += 1;
+      const status = probe.threadStatus;
+
+      if (status === "idle") {
+        const completed = await this.completeCodexNativeSubAgentFromThread({
+          existing,
+          parentThreadId: reconciliation.parentThreadId,
+          receiverThreadId,
+        });
+        if (completed) {
+          this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+          return;
+        }
+      }
+    } catch (error) {
+      backendRegistryLog.debug("codex native subagent reconciliation failed", {
+        error: error instanceof Error ? error.message : String(error),
+        parentThreadId: reconciliation.parentThreadId,
+        receiverThreadId,
+      });
+    }
+
+    const latest = this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (!latest) {
+      return;
+    }
+    this.scheduleCodexNativeSubAgentReconciliation({
+      delayMs: codexNativeSubAgentNextReconciliationDelayMs(latest.attempts),
+      parentThreadId: latest.parentThreadId,
+      receiverThreadId,
+    });
+  }
+
+  private async completeCodexNativeSubAgentFromThread(params: {
+    existing: ThreadSubAgentSummary;
+    parentThreadId: string;
+    receiverThreadId: string;
+  }): Promise<boolean> {
+    const replay = await this.withCodexThreadClient(
+      params.receiverThreadId,
+      async (client) =>
+        await client.readThread({
+          threadId: params.receiverThreadId,
+          includeTurns: true,
+          limit: CODEX_NATIVE_SUBAGENT_FINAL_READ_LIMIT,
+        }),
+      undefined,
+      false,
+    );
+    if (replay.threadStatus === "active") {
+      return false;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(params.receiverThreadId);
+    const existing =
+      overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId) ??
+      params.existing;
+    if (codexNativeSubAgentIsTerminal(existing.status)) {
+      return true;
+    }
+
+    const now = Date.now();
+    const lastMessage = replay.lastAssistantMessage
+      ? truncateSubAgentText(replay.lastAssistantMessage, 360)
+      : "Codex native sub-agent completed.";
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: params.parentThreadId,
+      subAgent: {
+        ...existing,
+        status: "success",
+        outcome: "success",
+        completedAt: existing.completedAt ?? now,
+        lastMessage,
+        updatedAt: now,
+      },
+    });
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.parentThreadId,
+        },
+      },
+    });
+    return true;
   }
 
   private async persistTaskMonitorSubAgent(

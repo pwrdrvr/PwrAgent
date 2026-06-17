@@ -795,8 +795,15 @@ class MockBackendClient {
   lastReadThreadParams?: {
     threadId: string;
     before?: string;
+    includeTurns?: boolean;
     limit?: number;
   };
+  readThreadCalls: Array<{
+    threadId: string;
+    before?: string;
+    includeTurns?: boolean;
+    limit?: number;
+  }> = [];
   injectedThreadItems: Array<{ threadId: string; items: unknown[] }> = [];
   lastStartThreadParams?: {
     cwd?: string;
@@ -937,6 +944,7 @@ class MockBackendClient {
       initializeError?: Error;
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
+      readThreadReplays?: AppServerThreadReplay[];
       skills?: Array<{
         commands?: AppServerAvailableCommandSummary[];
         cwd?: string;
@@ -1078,9 +1086,17 @@ class MockBackendClient {
   async readThread(_params?: {
     threadId: string;
     before?: string;
+    includeTurns?: boolean;
     limit?: number;
   }): Promise<AppServerThreadReplay> {
     this.lastReadThreadParams = _params;
+    if (_params) {
+      this.readThreadCalls.push(_params);
+    }
+    const replay = this.options.readThreadReplays?.shift();
+    if (replay) {
+      return replay;
+    }
     return this.options.replay ?? {
       entries: [],
       messages: [],
@@ -12068,6 +12084,124 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  it("reconciles no-wait Codex native sub-agents from child thread status", async () => {
+    vi.useFakeTimers();
+    const nativeThreadId = "019ebb70-2c58-7143-850e-0a699607c755";
+    const replay = (
+      threadStatus: AppServerThreadReplay["threadStatus"],
+      lastAssistantMessage?: string,
+    ): AppServerThreadReplay => ({
+      entries: [],
+      messages: lastAssistantMessage
+        ? [
+            {
+              id: "assistant-final",
+              role: "assistant",
+              text: lastAssistantMessage,
+            },
+          ]
+        : [],
+      ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      ...(threadStatus ? { threadStatus } : {}),
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "turn/start"] },
+      readThreadReplays: [
+        replay("active"),
+        replay("idle"),
+        replay("idle", "PR #783 checks are passing."),
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          item: {
+            id: "collab-spawn-1",
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            receiverThreadIds: [nativeThreadId],
+            prompt: "Check the status of PR #783.",
+            model: "gpt-5.4-mini",
+            agentsStates: {
+              [nativeThreadId]: {
+                status: "running",
+              },
+            },
+          },
+        },
+      } as AppServerNotification);
+
+      expect(codexClient.readThreadCalls).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(codexClient.readThreadCalls).toEqual([
+        {
+          threadId: nativeThreadId,
+          includeTurns: false,
+          limit: 0,
+        },
+      ]);
+
+      let overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+      expect(overlay?.subAgents?.[0]).toMatchObject({
+        status: "running",
+        lastMessage: "Spawned by Codex native spawnAgent.",
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(codexClient.readThreadCalls).toEqual([
+        {
+          threadId: nativeThreadId,
+          includeTurns: false,
+          limit: 0,
+        },
+        {
+          threadId: nativeThreadId,
+          includeTurns: false,
+          limit: 0,
+        },
+        {
+          threadId: nativeThreadId,
+          includeTurns: true,
+          limit: 12,
+        },
+      ]);
+
+      overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+      expect(overlay?.subAgents?.[0]).toMatchObject({
+        outcome: "success",
+        status: "success",
+        lastMessage: "PR #783 checks are passing.",
+        completedAt: expect.any(Number),
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
   });
 
   it("interrupts Codex reviews with the backend active turn id", async () => {
