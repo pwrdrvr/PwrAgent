@@ -226,7 +226,7 @@ describe("Codex app-server contract", () => {
     });
 
     expect(turn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
-    expect(replay).toEqual({
+    expect(replay).toMatchObject({
       threadId: "thread-1",
       thread: {
         threadId: "thread-1",
@@ -264,6 +264,95 @@ describe("Codex app-server contract", () => {
       ],
       lastUserMessage: "Ship it",
       lastAssistantMessage: "Done.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
     });
+  });
+
+  it("honors metadata-only and bounded thread/read requests", async () => {
+    const provider = new FakeProvider();
+    const { server } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    const firstTurn = await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "First ask" }],
+      collaborationMode: { mode: "default" },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "First answer.",
+      providerResponseId: "resp_1",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Second ask" }],
+      collaborationMode: { mode: "default" },
+    });
+    provider.runs[1]?.deferred.resolve({
+      assistantText: "Second answer.",
+      providerResponseId: "resp_2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(
+      server.request("thread/read", {
+        threadId: "thread-1",
+        includeTurns: false,
+      })
+    ).resolves.toMatchObject({
+      threadId: "thread-1",
+      thread: {
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+      },
+      messages: [],
+      items: [],
+    });
+
+    const latestPage = (await server.request("thread/read", {
+      threadId: "thread-1",
+      includeTurns: true,
+      limit: 2,
+    })) as { pagination: { previousCursor?: string } };
+
+    expect(latestPage).toMatchObject({
+      messages: [
+        { role: "user", text: "Second ask" },
+        { role: "assistant", text: "Second answer." },
+      ],
+      items: [
+        { type: "userMessage", text: "Second ask" },
+        { type: "agentMessage", text: "Second answer." },
+      ],
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+      },
+    });
+
+    await expect(
+      server.request("thread/read", {
+        threadId: "thread-1",
+        includeTurns: true,
+        before: latestPage.pagination.previousCursor,
+        limit: 2,
+      })
+    ).resolves.toMatchObject({
+      messages: [
+        { role: "user", text: "First ask" },
+        { role: "assistant", text: "First answer." },
+      ],
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: false,
+      },
+    });
+    expect(firstTurn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
   });
 });

@@ -154,6 +154,14 @@ function readString(
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readBoolean(
+  record: Record<string, unknown> | undefined,
+  key: string
+): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function readTimestamp(
   record: Record<string, unknown>,
   ...keys: string[]
@@ -286,10 +294,7 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
 }
 
 function extractThreadReplay(value: unknown): AppServerThreadReplay {
-  const pagination = {
-    supportsPagination: false,
-    hasPreviousPage: false,
-  } as const;
+  const pagination = extractReplayPagination(value);
 
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
@@ -336,6 +341,17 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   }
 
   return withThreadStatus(buildReplayFromMessages([], pagination), value);
+}
+
+function extractReplayPagination(value: unknown): AppServerThreadReplay["pagination"] {
+  const record = asRecord(value);
+  const pagination = asRecord(record?.pagination);
+  const previousCursor = readString(pagination, "previousCursor");
+  return {
+    supportsPagination: readBoolean(pagination, "supportsPagination") ?? Boolean(previousCursor),
+    hasPreviousPage: readBoolean(pagination, "hasPreviousPage") ?? Boolean(previousCursor),
+    ...(previousCursor ? { previousCursor } : {}),
+  };
 }
 
 function fallbackLastMessages(record: {
@@ -939,17 +955,24 @@ export class GrokAppServerClient {
 
   async readThread(params: {
     threadId: string;
+    includeTurns?: boolean;
     before?: string;
     limit?: number;
   }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
-    const result = await this.request("thread/read", {
+    const request: Record<string, unknown> = {
       threadId: params.threadId,
-      includeTurns: true,
-      before: params.before,
-      limit: params.limit,
-    });
+      includeTurns: params.includeTurns ?? true,
+    };
+    if (params.before) {
+      request.before = params.before;
+    }
+    if (params.limit !== undefined) {
+      request.limit = params.limit;
+    }
+
+    const result = await this.request("thread/read", request);
 
     return extractThreadReplay(result);
   }

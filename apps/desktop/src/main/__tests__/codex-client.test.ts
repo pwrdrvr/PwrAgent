@@ -3017,6 +3017,34 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards metadata-only thread/read requests to Codex", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.readThread({
+      threadId: "thread-2",
+      includeTurns: false
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const readRequest = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/read");
+
+    expect(readRequest?.params).toMatchObject({
+      threadId: "thread-2",
+      includeTurns: false
+    });
+
+    await client.close();
+  });
+
   it("preserves image parts from Codex thread/read messages", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

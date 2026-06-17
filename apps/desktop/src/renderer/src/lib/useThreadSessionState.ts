@@ -167,6 +167,8 @@ type ThinkingStateReason = {
 
 type ThreadSessionState = Record<string, ThreadSessionEntry>;
 
+const INITIAL_THREAD_HISTORY_LIMIT = 5;
+
 function createEmptyThreadSessionEntry(): ThreadSessionEntry {
   return {
     completionHydrationRetries: 0,
@@ -3013,6 +3015,7 @@ export function useThreadSessionState(params: {
         });
         const response = normalizeResponseImageBoundaryText(await readThread({
           backend: targetThread.source,
+          limit: INITIAL_THREAD_HISTORY_LIMIT,
           threadId: targetThread.id,
         }));
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {

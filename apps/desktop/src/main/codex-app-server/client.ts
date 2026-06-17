@@ -5123,12 +5123,13 @@ type CodexThreadReadPayload = CodexThreadReadParams & {
 
 function buildThreadReadPayload(params: {
   threadId: string;
+  includeTurns?: boolean;
   before?: string;
   limit?: number;
 }): CodexThreadReadPayload {
   const payload: CodexThreadReadPayload = {
     threadId: params.threadId,
-    includeTurns: true,
+    includeTurns: params.includeTurns ?? true,
   };
 
   if (params.before) {
@@ -5934,6 +5935,7 @@ export class CodexAppServerClient {
 
   async readThread(params: {
     threadId: string;
+    includeTurns?: boolean;
     before?: string;
     limit?: number;
   }): Promise<AppServerThreadReplay> {

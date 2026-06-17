@@ -636,6 +636,7 @@ export type RenameThreadResponse = {
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  includeTurns?: boolean;
   before?: string;
   limit?: number;
 };

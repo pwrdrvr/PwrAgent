@@ -403,6 +403,7 @@ type BackendClient = {
   ): () => void;
   readThread(params: {
     threadId: string;
+    includeTurns?: boolean;
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
@@ -3337,6 +3338,68 @@ function buildCodexParentDynamicToolSpecs(
   ];
 }
 
+function pageNormalizedReplay(
+  replay: AppServerThreadReplay,
+  options: {
+    before?: string;
+    includeTurns?: boolean;
+    limit?: number;
+  },
+): AppServerThreadReplay {
+  if (options.includeTurns === false) {
+    return {
+      ...replay,
+      entries: [],
+      messages: [],
+      lastUserMessage: undefined,
+      lastAssistantMessage: undefined,
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    };
+  }
+
+  if (options.limit === undefined && !options.before) {
+    return replay;
+  }
+
+  const endIndex = options.before
+    ? replay.entries.findIndex((entry) => entry.id === options.before)
+    : replay.entries.length;
+  const boundedEndIndex = endIndex >= 0 ? endIndex : replay.entries.length;
+  const limit =
+    options.limit === undefined ? undefined : Math.max(0, Math.floor(options.limit));
+  const startIndex = limit === undefined ? 0 : Math.max(0, boundedEndIndex - limit);
+  const entries = replay.entries.slice(startIndex, boundedEndIndex);
+  const messages = entries.flatMap((entry) =>
+    entry.type === "message"
+      ? [
+          {
+            id: entry.id,
+            role: entry.role,
+            text: entry.text,
+            ...(entry.parts ? { parts: entry.parts } : {}),
+            ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
+          },
+        ]
+      : [],
+  );
+  const firstEntry = entries[0];
+  const hasPreviousPage = startIndex > 0;
+
+  return {
+    ...replay,
+    entries,
+    messages,
+    pagination: {
+      supportsPagination: true,
+      hasPreviousPage,
+      ...(hasPreviousPage && firstEntry ? { previousCursor: firstEntry.id } : {}),
+    },
+  };
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -4642,7 +4705,10 @@ export class DesktopBackendRegistry {
       throw new Error(`ACP session not found: ${request.threadId}`);
     }
 
-    const replay = await this.acpBackend.readReplay(backend, request.threadId);
+    const replay = pageNormalizedReplay(
+      await this.acpBackend.readReplay(backend, request.threadId),
+      request,
+    );
     return {
       backend,
       fetchedAt: Date.now(),
@@ -5736,6 +5802,7 @@ export class DesktopBackendRegistry {
             async (client) =>
               await client.readThread({
                 threadId: request.threadId,
+                includeTurns: request.includeTurns,
                 before: request.before,
                 limit: request.limit,
               }),
@@ -5746,11 +5813,12 @@ export class DesktopBackendRegistry {
           )
         : await this.grokClient.readThread({
             threadId: request.threadId,
+            includeTurns: request.includeTurns,
             before: request.before,
             limit: request.limit,
           });
 
-    if (backend === "codex" && !request.before) {
+    if (backend === "codex" && !request.before && request.includeTurns !== false) {
       await this.repairCodexThreadDirectoryRelationship({
         reason: "selected-thread",
         threadId: request.threadId,
@@ -5761,17 +5829,21 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.threadId,
     });
-    const replayWithEnvironment = appendCodexEnvironmentSetupActivity({
-      replay,
-      runtime: overlay?.codexEnvironmentRuntime,
-    });
-    const replayWithImmutableUsage = request.before
-      ? replayWithEnvironment
-      : mergeImmutableUsageActivities({
-          replay: replayWithEnvironment,
-          activities: overlay?.immutableUsageActivities,
-        });
-    if (!request.before) {
+    const shouldAppendTranscriptOverlays = request.includeTurns !== false;
+    const replayWithEnvironment = shouldAppendTranscriptOverlays
+      ? appendCodexEnvironmentSetupActivity({
+          replay,
+          runtime: overlay?.codexEnvironmentRuntime,
+        })
+      : replay;
+    const replayWithImmutableUsage =
+      request.before || !shouldAppendTranscriptOverlays
+        ? replayWithEnvironment
+        : mergeImmutableUsageActivities({
+            replay: replayWithEnvironment,
+            activities: overlay?.immutableUsageActivities,
+          });
+    if (!request.before && shouldAppendTranscriptOverlays) {
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const pricing =
@@ -13316,6 +13388,7 @@ export class DesktopBackendRegistry {
       }
       const status = await this.readThread({
         backend: request.args.backend,
+        includeTurns: false,
         limit: 0,
         threadId,
       })

@@ -42,6 +42,8 @@ function messageMatchesOptimisticEntry(
   );
 }
 
+const INITIAL_THREAD_HISTORY_LIMIT = 5;
+
 export function useThreadTranscript(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
@@ -101,6 +103,7 @@ export function useThreadTranscript(params: {
     try {
       const nextResponse = await desktopApi.readThread({
         backend: thread.source,
+        limit: INITIAL_THREAD_HISTORY_LIMIT,
         threadId: thread.id
       });
       if (requestVersionRef.current !== requestVersion) {

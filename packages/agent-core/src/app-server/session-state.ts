@@ -36,6 +36,59 @@ type CreateThreadParams = {
 
 type ThreadMutation = Partial<Omit<ThreadState, "threadId" | "createdAt">>;
 
+function normalizeReadLimit(limit: number | undefined): number | undefined {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(limit));
+}
+
+function pageReplayItems(
+  items: ThreadReplayItem[],
+  options: {
+    before?: string;
+    limit?: number;
+  },
+): ThreadReplayItem[] {
+  const limit = normalizeReadLimit(options.limit);
+  if (limit === undefined && !options.before) {
+    return items;
+  }
+
+  const endIndex = options.before
+    ? items.findIndex((item) => item.id === options.before)
+    : items.length;
+  const boundedEndIndex = endIndex >= 0 ? endIndex : items.length;
+  const startIndex =
+    limit === undefined ? 0 : Math.max(0, boundedEndIndex - limit);
+  return items.slice(startIndex, boundedEndIndex);
+}
+
+function buildReplayPagination(
+  allItems: ThreadReplayItem[],
+  pageItems: ThreadReplayItem[],
+): ThreadReplay["pagination"] {
+  if (pageItems === allItems) {
+    return {
+      supportsPagination: false,
+      hasPreviousPage: false,
+    };
+  }
+
+  const firstPageItem = pageItems[0];
+  const firstPageIndex = firstPageItem
+    ? allItems.findIndex((item) => item.id === firstPageItem.id)
+    : allItems.length;
+  const hasPreviousPage = firstPageIndex > 0;
+  return {
+    supportsPagination: true,
+    hasPreviousPage,
+    ...(hasPreviousPage && firstPageItem
+      ? { previousCursor: firstPageItem.id }
+      : {}),
+  };
+}
+
 export class AppServerSessionState {
   private readonly store?: AppServerSessionStore;
   private readonly threads = new Map<string, ThreadState>();
@@ -292,7 +345,11 @@ export class AppServerSessionState {
     });
   }
 
-  readThread(threadId: string): ThreadReplay {
+  readThread(threadId: string, options: {
+    before?: string;
+    includeTurns?: boolean;
+    limit?: number;
+  } = {}): ThreadReplay {
     this.refreshFromStore();
     const thread = this.threads.get(threadId);
     if (!thread) {
@@ -300,6 +357,34 @@ export class AppServerSessionState {
     }
     const messages = [...(this.messages.get(threadId) ?? [])];
     const items = [...(this.items.get(threadId) ?? [])];
+    if (options.includeTurns === false) {
+      return {
+        threadId,
+        thread,
+        messages: [],
+        items: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      };
+    }
+
+    const limitedItems = pageReplayItems(items, options);
+    const replayMessages =
+      limitedItems === items
+        ? messages
+        : limitedItems.flatMap((item) =>
+            item.role && item.text
+              ? [
+                  {
+                    role: item.role,
+                    text: item.text,
+                    ...(item.parts ? { parts: item.parts } : {}),
+                  },
+                ]
+              : []
+          );
     let lastUserMessage: string | undefined;
     let lastAssistantMessage: string | undefined;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -317,10 +402,11 @@ export class AppServerSessionState {
     return {
       threadId,
       thread,
-      messages,
-      items,
+      messages: replayMessages,
+      items: limitedItems,
       lastUserMessage,
       lastAssistantMessage,
+      pagination: buildReplayPagination(items, limitedItems),
     };
   }
 
