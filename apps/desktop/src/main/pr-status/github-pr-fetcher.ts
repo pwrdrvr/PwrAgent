@@ -479,19 +479,15 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
     if (check.conclusion && failingConclusions.has(check.conclusion)) {
       return "failing";
     }
-    if (
-      check.status
-      && check.status !== "COMPLETED"
-      // Some legacy StatusContext entries omit status entirely.
-      && check.status !== "STATUS_CONTEXT"
-    ) {
-      pendingCount += 1;
-    } else if (!check.conclusion) {
-      pendingCount += 1;
-    } else if (!passingConclusions.has(check.conclusion)) {
-      // Conclusion we don't recognize as either pass or fail — be conservative.
-      return "unknown";
+    if (check.conclusion && passingConclusions.has(check.conclusion)) {
+      continue;
     }
+    if (!check.conclusion) {
+      pendingCount += 1;
+      continue;
+    }
+    // Conclusion we don't recognize as either pass or fail — be conservative.
+    return "unknown";
   }
   if (pendingCount > 0) return "pending";
   return "passing";

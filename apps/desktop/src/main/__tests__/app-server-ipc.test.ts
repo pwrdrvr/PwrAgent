@@ -17,6 +17,13 @@ import type {
   RestoreThreadRequest,
 } from "@pwragent/shared";
 
+const mockAppServerLog = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
@@ -382,6 +389,10 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => mockAppServerLog),
+}));
+
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
@@ -484,6 +495,10 @@ describe("app server ipc", () => {
     fetchPullRequestByUrl.mockResolvedValue(undefined);
     detectPullRequestsForThread.mockReset();
     detectPullRequestsForThread.mockResolvedValue([]);
+    mockAppServerLog.debug.mockClear();
+    mockAppServerLog.error.mockClear();
+    mockAppServerLog.info.mockClear();
+    mockAppServerLog.warn.mockClear();
   });
 
   afterEach(async () => {
@@ -1004,6 +1019,83 @@ describe("app server ipc", () => {
         pr: refreshedPrs[1],
       },
     ]);
+  });
+
+  it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
+      trigger: "user",
+      branch: "fix/live-diff-activity-normalization",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: request.threadId,
+      branch: request.branch,
+      directoryPaths: request.directoryPaths,
+    });
+    const stalePr = githubPr({
+      number: 845,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/845",
+    });
+    const passingPr = githubPr({
+      number: 845,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/845",
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: request.threadId,
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [stalePr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([passingPr]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      "threadPullRequestsRefresh:requested",
+      expect.objectContaining({
+        branch: "fix/live-diff-activity-normalization",
+        previousPrIds: ["github.com/pwrdrvr/pwragent#845"],
+        threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
+        trigger: "user",
+      }),
+    );
+    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      "threadPullRequestsRefresh:background-start",
+      expect.objectContaining({
+        previousPrIds: ["github.com/pwrdrvr/pwragent#845"],
+        threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
+        trigger: "user",
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(mockAppServerLog.info).toHaveBeenCalledWith(
+        "threadPullRequestsRefresh:background-complete",
+        expect.objectContaining({
+          changedThreadCount: 1,
+          fetchedPrIds: ["github.com/pwrdrvr/pwragent#845"],
+          previousPrIds: ["github.com/pwrdrvr/pwragent#845"],
+          subscriberCount: 1,
+          threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
+          trigger: "user",
+        }),
+      );
+    });
   });
 
   it("serves the same canonical PR state across different thread overlays", async () => {
@@ -2235,11 +2327,33 @@ describe("app server ipc", () => {
       await vi.waitFor(() => {
         expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
       });
+      await vi.waitFor(() => {
+        expect(mockAppServerLog.info).toHaveBeenCalledWith(
+          "threadPullRequestsRefresh:background-complete",
+          expect.objectContaining({
+            fetchedPrIds: ["github.com/pwrdrvr/pwragent#434"],
+            threadId: "thread-1",
+            trigger: "user",
+          }),
+        );
+      });
+      mockAppServerLog.info.mockClear();
 
       vi.setSystemTime(2_000_000 + 9_000);
       await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
       await Promise.resolve();
       expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+      expect(mockAppServerLog.info).toHaveBeenCalledWith(
+        "threadPullRequestsRefresh:skipped",
+        expect.objectContaining({
+          minIntervalMs: 10_000,
+          nextAllowedInMs: 1_000,
+          previousPrIds: ["github.com/pwrdrvr/pwragent#434"],
+          reason: "cooldown",
+          threadId: "thread-1",
+          trigger: "user",
+        }),
+      );
 
       vi.setSystemTime(2_000_000 + 10_000);
       await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);

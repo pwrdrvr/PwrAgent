@@ -159,6 +159,29 @@ describe("derive PR states", () => {
     ).toBe("passing");
   });
 
+  it("treats a successful conclusion as final even when gh reports stale progress status", () => {
+    expect(
+      deriveChipState({
+        ...rawMergedPr(),
+        state: "OPEN",
+        statusCheckRollup: [
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "IN_PROGRESS",
+            name: "Install Dependencies",
+          },
+          {
+            __typename: "CheckRun",
+            conclusion: "SUCCESS",
+            status: "COMPLETED",
+            name: "Test",
+          },
+        ],
+      }),
+    ).toBe("passing");
+  });
+
   it("returns failing when any check FAILED / CANCELLED / TIMED_OUT", () => {
     for (const conclusion of ["FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"]) {
       expect(
