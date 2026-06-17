@@ -5351,6 +5351,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.compactThread({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
       });
       updateActiveTurnId(response.turnId);
@@ -6143,6 +6145,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.steerTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         expectedTurnId: turnId,
         input: payload.input,
@@ -6616,6 +6620,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.interruptTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         turnId,
       });
@@ -7699,6 +7705,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.runCodexEnvironmentAction({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         actionId: action.id,
         ...(cwd ? { cwd } : {}),
@@ -7734,6 +7742,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setCodexThreadEnvironment({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         environmentId,
         actionId,

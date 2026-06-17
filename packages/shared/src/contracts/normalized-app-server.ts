@@ -750,6 +750,7 @@ export type ThreadWorkspaceHandoffStashSummary = {
 
 export type HandoffThreadWorkspaceRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
   strategy?: ThreadWorkspaceHandoffStrategy;
