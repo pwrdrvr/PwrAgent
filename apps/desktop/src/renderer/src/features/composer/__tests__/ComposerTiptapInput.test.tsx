@@ -385,6 +385,42 @@ describe("ComposerTiptapInput", () => {
     );
   });
 
+  it("pressing ArrowUp at the start of an initial code block creates a paragraph above it", async () => {
+    const value = "```ts\nconst answer = 42;\n```";
+    const { container, onChange } = renderTiptapInput({ value });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, 0);
+    fireEvent.keyDown(textbox, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(`\n\n${value}`, []);
+    });
+    const editorChildren = [
+      ...(container.querySelector(".composer-tiptap-input__editor")?.children ?? []),
+    ];
+    expect(editorChildren[0]?.tagName).toBe("P");
+    expect(editorChildren[1]?.tagName).toBe("PRE");
+  });
+
+  it("pressing ArrowLeft at the start of an initial code block creates a paragraph above it", async () => {
+    const value = "```ts\nconst answer = 42;\n```";
+    const { container, onChange } = renderTiptapInput({ value });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, 0);
+    fireEvent.keyDown(textbox, { key: "ArrowLeft" });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(`\n\n${value}`, []);
+    });
+    const editorChildren = [
+      ...(container.querySelector(".composer-tiptap-input__editor")?.children ?? []),
+    ];
+    expect(editorChildren[0]?.tagName).toBe("P");
+    expect(editorChildren[1]?.tagName).toBe("PRE");
+  });
+
   // The `is-empty` class on `.composer-tiptap-input` is the contract
   // hook for empty-state styling — currently used for the placeholder
   // appearance, but reserved for any future CSS that distinguishes

@@ -827,6 +827,33 @@ function insertPlainSpaceAtTextblockEnd(editor: TiptapEditor): boolean {
   return true;
 }
 
+function insertParagraphBeforeInitialCodeBlock(editor: TiptapEditor): boolean {
+  const { selection, schema } = editor.state;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const currentPos = selection.$from;
+  if (
+    currentPos.depth !== 1 ||
+    currentPos.parent.type.name !== "codeBlock" ||
+    currentPos.parentOffset !== 0 ||
+    currentPos.before(currentPos.depth) !== 0
+  ) {
+    return false;
+  }
+
+  const paragraph = schema.nodes.paragraph?.createAndFill();
+  if (!paragraph) {
+    return false;
+  }
+
+  const transaction = editor.state.tr.insert(0, paragraph);
+  editor.view.dispatch(transaction);
+  editor.commands.setTextSelection(1);
+  return true;
+}
+
 function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
   return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
 }
@@ -1569,6 +1596,21 @@ export const ComposerTiptapInput = forwardRef<
 
           if (
             propsRef.current.markdownConversion &&
+            (event.key === "ArrowLeft" || event.key === "ArrowUp") &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            const currentEditor = editorRef.current;
+            if (currentEditor && insertParagraphBeforeInitialCodeBlock(currentEditor)) {
+              event.preventDefault();
+              return true;
+            }
+          }
+
+          if (
+            propsRef.current.markdownConversion &&
             event.key === "ArrowRight" &&
             !event.metaKey &&
             !event.ctrlKey &&
@@ -1941,6 +1983,19 @@ export const ComposerTiptapInput = forwardRef<
           return;
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          if (
+            props.markdownConversion &&
+            event.key === "ArrowUp" &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.shiftKey &&
+            insertParagraphBeforeInitialCodeBlock(editor)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           if (event.defaultPrevented) {
             event.stopPropagation();
