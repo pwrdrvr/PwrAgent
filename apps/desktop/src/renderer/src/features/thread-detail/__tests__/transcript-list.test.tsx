@@ -3130,6 +3130,55 @@ describe("TranscriptList", () => {
     expect(screen.getByText(/Write root: \./)).toBeInTheDocument();
   });
 
+  it("shows file-change approval context inferred from the matching activity", () => {
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/pwragent"]}
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "activity-call_123",
+          summary: "Added 1 file, +1, -0",
+          status: "in_progress",
+          turn: { id: "turn-1", status: "in_progress" },
+          details: [
+            {
+              id: "call_123-1",
+              kind: "write",
+              label: "Add pwragent-pr-refresh-body.md",
+              path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+              status: "in_progress",
+              fileDiff: {
+                kind: "add",
+                diff: "+Draft PR body",
+                additions: 1,
+                removals: 0,
+              },
+            },
+          ],
+        }}
+        pendingRequest={{
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            requestId: "approval-1",
+            itemId: "call_123",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Action: add/)).toBeInTheDocument();
+    expect(screen.getByText(/File: pwragent-pr-refresh-body\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/\+Draft PR body/)).toBeInTheDocument();
+  });
+
   it("renders pending user input without approval actions", () => {
     render(
       <TranscriptList

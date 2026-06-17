@@ -204,4 +204,38 @@ describe("buildApprovalIntent", () => {
     );
     expect(intent.body).not.toContain("```shell");
   });
+
+  it("renders file-change context embedded on the approval request", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-4",
+      createdAt: 1000,
+      directoryPaths: ["/repo/pwragent"],
+      request: {
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-4",
+          prompt: "Write file?",
+          _pwragentApprovalContext: {
+            files: [
+              {
+                action: "add",
+                path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+                diff: "+Draft PR body",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(intent.context).toMatchObject({
+      action: "add",
+      path: "/repo/pwragent/pwragent-pr-refresh-body.md",
+      displayPath: "pwragent-pr-refresh-body.md",
+      diff: "+Draft PR body",
+    });
+    expect(intent.body).toContain("Context:\nAction: add\nFile: pwragent-pr-refresh-body.md");
+    expect(intent.body).toContain("```diff\n+Draft PR body\n```");
+  });
 });

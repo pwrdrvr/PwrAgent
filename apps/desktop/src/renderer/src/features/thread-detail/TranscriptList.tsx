@@ -324,6 +324,7 @@ function isGenericShellToolTitle(command: string): boolean {
 
 function pendingRequestPrompt(
   request: AppServerPendingRequestNotification,
+  entries: AppServerThreadEntry[],
   directoryPaths?: string[],
 ): string {
   const prompt =
@@ -332,7 +333,7 @@ function pendingRequestPrompt(
   const command = approvalDisplayCommand(request.params);
   const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
   const contextBlock = approvalContextMarkdown(
-    buildPendingRequestApprovalContext(request, { directoryPaths }),
+    buildPendingRequestApprovalContext(request, { directoryPaths, entries }),
   );
 
   if (prompt && commandBlock) {
@@ -370,13 +371,39 @@ function approvalContextMarkdown(
   if (context.action) {
     lines.push(`Action: ${context.action}`);
   }
-  if (context.displayPath) {
+  const fileContexts = context.files?.length
+    ? context.files
+    : context.displayPath && context.path
+      ? [
+          {
+            action: context.action,
+            diff: context.diff,
+            displayPath: context.displayPath,
+            path: context.path,
+          },
+        ]
+      : [];
+
+  if (fileContexts.length === 1) {
+    const file = fileContexts[0]!;
+    if (file.action && file.action !== context.action) {
+      lines.push(`Action: ${file.action}`);
+    }
+    lines.push(`File: ${file.displayPath}`);
+  } else if (fileContexts.length > 1) {
+    lines.push("Files:");
+    for (const file of fileContexts) {
+      lines.push(`- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`);
+    }
+  } else if (context.displayPath) {
     lines.push(`File: ${context.displayPath}`);
   }
   if (context.displayGrantRoot) {
     lines.push(`Write root: ${context.displayGrantRoot}`);
   }
-  if (context.diff) {
+  if (fileContexts.length === 1 && fileContexts[0]?.diff) {
+    lines.push(`Diff:\n\n${markdownCodeBlock(fileContexts[0].diff, "diff")}`);
+  } else if (context.diff) {
     lines.push(`Diff:\n\n${markdownCodeBlock(context.diff, "diff")}`);
   }
 
@@ -1076,6 +1103,7 @@ export function TranscriptList(props: TranscriptListProps) {
                 desktopApi={props.desktopApi}
                 text={pendingRequestPrompt(
                   props.pendingRequest,
+                  transcriptEntries,
                   props.directoryPaths,
                 )}
               />
