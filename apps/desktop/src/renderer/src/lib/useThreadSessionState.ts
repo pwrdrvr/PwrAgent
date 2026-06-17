@@ -1846,7 +1846,14 @@ function findKnownTurnUsageMetadata(
     ...(session.response?.replay.entries ?? []),
     ...session.optimisticEntries,
   ];
-  const entry = entries.find((candidate) => candidate.turn?.id === turnId);
+  const turnUsageEntry = entries.find(
+    (candidate) =>
+      candidate.turn?.id === turnId &&
+      candidate.type === "activity" &&
+      isTokenUsageActivityEntry(candidate) &&
+      tokenUsageActivityScope(candidate) === "turn"
+  );
+  const entry = turnUsageEntry ?? entries.find((candidate) => candidate.turn?.id === turnId);
   const entryIsTurnUsage =
     entry?.type === "activity" &&
     isTokenUsageActivityEntry(entry) &&

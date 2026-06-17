@@ -11346,6 +11346,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11366,7 +11367,9 @@ command = "pnpm dev"
         return overlay?.subAgents?.[0]?.monitorUsage;
       })
       .toMatchObject({
-        summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+        summary: expect.stringContaining(
+          "800 uncached in · 200 cached · 50 out (10 reasoning)"
+        ),
         tokenUsage: {
           cachedInputTokens: 200,
           inputTokens: 1_000,
@@ -11376,6 +11379,20 @@ command = "pnpm dev"
           uncachedInputTokens: 800,
         },
       });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-1",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await codexClient.emit({
       method: "turn/completed",
@@ -11453,6 +11470,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11478,7 +11496,9 @@ command = "pnpm dev"
         status: "success",
         lastMessage: "Review completed.",
         monitorUsage: {
-          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          summary: expect.stringContaining(
+            "800 uncached in · 200 cached · 50 out (10 reasoning)"
+          ),
           tokenUsage: {
             cachedInputTokens: 200,
             inputTokens: 1_000,
@@ -11489,6 +11509,20 @@ command = "pnpm dev"
           },
         },
       });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-1",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await registry.close();
   });
@@ -11536,6 +11570,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-review",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11562,7 +11597,9 @@ command = "pnpm dev"
         outcome: "success",
         status: "success",
         monitorUsage: {
-          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          summary: expect.stringContaining(
+            "800 uncached in · 200 cached · 50 out (10 reasoning)"
+          ),
         },
       });
     const reviewOverlay = await overlayStore.getThreadOverlayState({
@@ -11570,6 +11607,20 @@ command = "pnpm dev"
       threadId: "thread-review",
     });
     expect(reviewOverlay?.subAgents).toBeUndefined();
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-parent",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-review",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await registry.close();
   });

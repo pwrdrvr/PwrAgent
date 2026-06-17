@@ -4876,6 +4876,21 @@ describe("useThreadSessionState", () => {
         replay: {
           entries: [
             {
+              type: "message" as const,
+              id: "assistant-turn-old",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Older assistant answer.",
+              createdAt: 1_781_630_430_000,
+              turn: {
+                id: "turn-old",
+                status: "completed" as const,
+                startedAt: 1_781_630_372_000,
+                completedAt: 1_781_630_444_000,
+                durationMs: 10_000,
+              },
+            },
+            {
               type: "activity" as const,
               id: "live-turn-usage-turn-old",
               createdAt: 1_781_630_444_000,
@@ -4959,6 +4974,7 @@ describe("useThreadSessionState", () => {
       }),
     });
     expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older assistant answer.",
       "activity:Turn usage: 1,000 uncached in · 9,000 cached · 100 out (20 reasoning)",
     ]);
     expect(result.current.runningTurnUsageText).toBeUndefined();

@@ -1518,8 +1518,11 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   backend: Exclude<AppServerBackendKind, AcpBackendId>;
   createdAt: number;
+  fastMode?: boolean;
   latestUsage?: TaskMonitorUsageSnapshot;
+  model?: string;
   parentThreadId: string;
+  serviceTier?: string;
   reviewThreadId: string;
   task: string;
   turnId: string;
@@ -2031,6 +2034,26 @@ function readUsageString(value: unknown, keys: string[]): string | undefined {
 function readUsageBoolean(value: unknown, keys: string[]): boolean | undefined {
   const nested = findNestedUsageValue(value, keys);
   return typeof nested === "boolean" ? nested : undefined;
+}
+
+function readTaskMonitorUsageModel(params: {
+  notificationModel?: unknown;
+  tokenUsage: unknown;
+}): string | undefined {
+  return (
+    (typeof params.notificationModel === "string" && params.notificationModel.trim()
+      ? params.notificationModel.trim()
+      : undefined) ??
+    readUsageString(params.tokenUsage, ["model", "modelId", "model_id"])
+  );
+}
+
+function readTaskMonitorUsageServiceTier(tokenUsage: unknown): string | undefined {
+  return readUsageString(tokenUsage, ["serviceTier", "service_tier"]);
+}
+
+function readTaskMonitorUsageFastMode(tokenUsage: unknown): boolean | undefined {
+  return readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]);
 }
 
 function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
@@ -6747,8 +6770,11 @@ export class DesktopBackendRegistry {
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
+      ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
+      ...(modelSettings.model ? { model: modelSettings.model } : {}),
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
+      ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
       task: reviewTaskLabel(params.target),
       turnId: result.turnId,
     };
@@ -10362,7 +10388,26 @@ export class DesktopBackendRegistry {
         notification.params.turnId,
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const model =
+        readTaskMonitorUsageModel({
+          notificationModel: notification.params.model,
+          tokenUsage: notification.params.tokenUsage,
+        }) ??
+        reviewRecord?.model ??
+        completedReviewRecord?.model;
+      const serviceTier =
+        readTaskMonitorUsageServiceTier(notification.params.tokenUsage) ??
+        reviewRecord?.serviceTier ??
+        completedReviewRecord?.serviceTier;
+      const fastMode =
+        readTaskMonitorUsageFastMode(notification.params.tokenUsage) ??
+        reviewRecord?.fastMode ??
+        completedReviewRecord?.fastMode;
       const usageSnapshot = buildTaskMonitorUsageSnapshot({
+        fastMode,
+        model,
+        serviceTier,
         tokenUsage: notification.params.tokenUsage,
       });
       if (!usageSnapshot) {
@@ -10376,10 +10421,13 @@ export class DesktopBackendRegistry {
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
             backend: event.backend,
+            fastMode,
+            model,
             monitorId: reviewSubAgentId(reviewRecord.turnId),
             monitorThreadId: reviewRecord.reviewThreadId,
             monitorTurnId: reviewRecord.turnId,
             parentThreadId: reviewRecord.parentThreadId,
+            serviceTier,
             source: "monitor",
             usage: usageSnapshot,
           });
@@ -10392,7 +10440,6 @@ export class DesktopBackendRegistry {
         }
         return;
       }
-      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
         backend: event.backend,
         parentThreadId:
@@ -10406,12 +10453,15 @@ export class DesktopBackendRegistry {
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
             backend: event.backend,
+            fastMode,
+            model,
             monitorId: reviewSubAgentId(notification.params.turnId),
             monitorThreadId:
               completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
             monitorTurnId: notification.params.turnId,
             parentThreadId:
               completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+            serviceTier,
             source: "monitor",
             usage: usageSnapshot,
           });
