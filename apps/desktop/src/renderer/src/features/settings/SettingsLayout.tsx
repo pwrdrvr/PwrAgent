@@ -65,6 +65,7 @@ const SettingsSectionPaneContext =
 
 const savedCollapsedSectionsByPane = new Map<string, Record<string, boolean>>();
 const savedVisitedSectionByPane = new Map<string, string>();
+const savedGroupCollapsed = new Map<string, boolean>();
 
 function slugForSettingsId(value: string): string {
   return value
@@ -414,6 +415,117 @@ export function SettingsSection(props: {
         inert={collapsed ? true : undefined}
       >
         <div className="settings-section__body">{props.children}</div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Collapsible drawer that wraps a set of `SettingsSection` cards under a
+ * single section-style header. Unlike `SettingsSection`, the group owns its
+ * own collapse state (so it can start collapsed without a first-paint flash
+ * or a special case in the pane reducer), and it renders its children inside
+ * a fresh `SettingsSectionStack`. That nested stack gives the child sections
+ * their own pane so they keep full collapsible headers without registering
+ * into — and polluting the "Collapse all / Expand all" controls and arrow-key
+ * navigation of — the parent pane.
+ *
+ * Header chrome reuses the same class hierarchy as `SettingsSection` so the
+ * eyebrow / title / chevron / chip read identically (see the chrome-reuse
+ * rule in CLAUDE.md).
+ */
+export function SettingsSectionGroup(props: {
+  /** Stable id used both to persist collapse state and to seed the nested
+   *  pane id. Must be globally unique — collapse state is keyed by this id in
+   *  a module-level map shared across every group in the app. */
+  groupId: string;
+  title: string;
+  eyebrow?: string;
+  description?: ReactNode;
+  children: ReactNode;
+  /** Optional right-side chip in the group header. */
+  chip?: ReactNode;
+  chipKind?: SettingsChipTone;
+  /** Initial collapse state on first mount (before any user toggle). */
+  defaultCollapsed?: boolean;
+  "aria-label"?: string;
+}) {
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => savedGroupCollapsed.get(props.groupId) ?? props.defaultCollapsed ?? false,
+  );
+  const headingId = `settings-group-${props.groupId}-heading`;
+  const bodyId = `settings-group-${props.groupId}-body`;
+
+  const chipClass =
+    props.chipKind && props.chipKind !== "default" && props.chipKind !== "muted"
+      ? `settings-card__chip settings-card__chip--${props.chipKind}`
+      : "settings-card__chip";
+
+  const toggle = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      savedGroupCollapsed.set(props.groupId, next);
+      return next;
+    });
+  };
+
+  // Disclosure-style: Enter/Space toggle. Unlike `SettingsSection`, the group
+  // is not registered in a pane, so it intentionally omits the Arrow/Home/End
+  // roving navigation — it is a standalone control reached via Tab, and its
+  // children get their own arrow-key ring inside the nested stack.
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
+    }
+  };
+
+  return (
+    // The outer region is named by its heading (`aria-labelledby`); the
+    // `aria-label` prop instead names the nested stack below so we don't end up
+    // with two identically-named region landmarks.
+    <section
+      aria-labelledby={headingId}
+      className={`settings-panel settings-panel--has-body settings-panel--collapsible settings-section-group${
+        collapsed ? " settings-panel--is-collapsed" : ""
+      }`}
+    >
+      <div
+        aria-controls={bodyId}
+        aria-expanded={!collapsed}
+        aria-label={props.title}
+        className="settings-panel__header settings-section__header-button"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={handleKeyDown}
+      >
+        <span className="settings-section__chevron" aria-hidden="true" />
+        <div className="settings-section__header-main">
+          {props.eyebrow ? <p className="eyebrow">{props.eyebrow}</p> : null}
+          <h2 id={headingId}>{props.title}</h2>
+          {props.description ? (
+            <p className="settings-section__description">{props.description}</p>
+          ) : null}
+        </div>
+        <span className="settings-section__header-actions">
+          {props.chip ? <span className={chipClass}>{props.chip}</span> : null}
+        </span>
+      </div>
+      <div
+        id={bodyId}
+        aria-hidden={collapsed}
+        className="settings-section__body-clip"
+        inert={collapsed ? true : undefined}
+      >
+        <div className="settings-section__body settings-section-group__body">
+          <SettingsSectionStack
+            aria-label={props["aria-label"] ?? props.title}
+            paneId={`${props.groupId}-nested`}
+          >
+            {props.children}
+          </SettingsSectionStack>
+        </div>
       </div>
     </section>
   );
