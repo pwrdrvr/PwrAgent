@@ -11725,6 +11725,46 @@ textarea,
   color: var(--text-secondary);
 }
 
+.pricing-usage-row {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.pricing-running-total {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.pricing-running-total__summary {
+  cursor: pointer;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.pricing-running-total__summary::-webkit-details-marker {
+  display: none;
+}
+
+.pricing-running-total__summary::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-running-total[open] .pricing-running-total__summary::before {
+  transform: rotate(90deg);
+}
+
+.pricing-running-total__tokens {
+  margin-top: 4px;
+}
+
 /* Sub-agent Details modal — a centered, in-window dialog (mirrors the
    transcript image lightbox) portaled to the body so it escapes the rail's
    clipping. Opened from the card's Details button. */

@@ -355,6 +355,14 @@ describe("Tangerine Terminal theme contract", () => {
     expect(copyButtonRule).toContain("opacity: 1;");
   });
 
+  it("keeps pricing usage cards selectable and directly copyable", () => {
+    const pricingRowRule = extractRuleBody(css, ".pricing-usage-row");
+    const pricingRunningTotalRule = extractRuleBody(css, ".pricing-running-total");
+
+    expect(pricingRowRule).toContain("user-select: text;");
+    expect(pricingRunningTotalRule).toContain("user-select: text;");
+  });
+
   it("anchors the context rail below the header and reserves one shared width for the chat", () => {
     // The rail is anchored to `.thread-view__layout` (absolute), NOT the
     // window, so it starts below the thread header. The header therefore owns

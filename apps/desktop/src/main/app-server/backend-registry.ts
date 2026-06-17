@@ -2162,17 +2162,6 @@ function buildLiveThreadUsageLine(params: {
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
-  const cumulativeCost = cumulativeTokens
-    ? estimateOpenAiTokenUsageCost({
-        cachedInputTokens: cumulativeTokens.cachedInputTokens,
-        fastMode: params.fastMode,
-        model: params.model,
-        outputTokens: cumulativeTokens.outputTokens,
-        reasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
-        serviceTier: params.serviceTier,
-        uncachedInputTokens: cumulativeTokens.uncachedInputTokens,
-      })
-    : undefined;
   const pricingServiceTier = resolveOpenAiPricingServiceTier({
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
@@ -2199,9 +2188,6 @@ function buildLiveThreadUsageLine(params: {
           cumulativeInputTokens: cumulativeTokens.inputTokens,
           cumulativeOutputTokens: cumulativeTokens.outputTokens,
           cumulativeReasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
-          ...(cumulativeCost
-            ? { cumulativeTotalCostMicros: cumulativeCost.totalCostMicros }
-            : {}),
           cumulativeTotalTokens: cumulativeTokens.totalTokens,
           cumulativeUncachedInputTokens: cumulativeTokens.uncachedInputTokens,
         }

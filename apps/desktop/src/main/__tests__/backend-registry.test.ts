@@ -11408,6 +11408,7 @@ command = "pnpm dev"
       turnId: "turn-2",
       uncachedInputTokens: 800,
     });
+    expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
 
     await registry.close();
   });

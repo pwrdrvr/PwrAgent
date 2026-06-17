@@ -408,13 +408,7 @@ describe("ThreadContextPanel", () => {
       totalTokens: 2_420,
       priceStatus: "priced",
       currency: "USD",
-      cumulativeCachedInputTokens: 5_000,
-      cumulativeInputTokens: 8_000,
-      cumulativeOutputTokens: 700,
-      cumulativeReasoningOutputTokens: 240,
       cumulativeTotalCostMicros: 42_000,
-      cumulativeTotalTokens: 8_940,
-      cumulativeUncachedInputTokens: 3_000,
       uncachedInputCostMicros: 7_500,
       cachedInputCostMicros: 500,
       outputCostMicros: 1_500,
@@ -438,7 +432,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
-    expect(screen.getAllByText("$0.010")[0]).toBeInTheDocument();
+    expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
     expect(
       screen.queryByText("gpt-5.5 · high · Fast · priority"),
@@ -447,7 +441,7 @@ describe("ThreadContextPanel", () => {
       screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
-    expect(screen.getByText("Running total: $0.042 list price")).toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
   });
 
   it("renders Codex Credits as an optional pricing display unit", () => {
@@ -513,11 +507,274 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText("$0.010 · 1.3 Codex Credits")).toBeInTheDocument();
+    expect(screen.queryByText("$0.042 · 1.3 Codex Credits")).not.toBeInTheDocument();
     expect(
       screen.getByText("$0.010 list price this turn · 1.3 Codex Credits this turn"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Running total: $0.042 list price · 1.3 Codex Credits"),
+      screen.queryByText("Running total: $0.042 list price · 1.3 Codex Credits"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.010 list price · 1.3 Codex Credits"),
+    ).toBeInTheDocument();
+  });
+
+  it("uses cumulative token gaps but ignores cumulative aggregate cost fields", () => {
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 722_086,
+      uncachedInputTokens: 96_934,
+      cachedInputTokens: 625_152,
+      outputTokens: 3_601,
+      reasoningOutputTokens: 255,
+      totalTokens: 725_942,
+      totalCostMicros: 749_421,
+      usageLineCount: 3,
+      pricedUsageLineCount: 3,
+      unpricedUsageLineCount: 0,
+      provider: "openai",
+      updatedAt: 1_800_000_060_000,
+    };
+    const latestLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-latest",
+      threadId: "thread-1",
+      turnId: "turn-latest",
+      scope: "turn",
+      source: "hydration",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 493_365,
+      uncachedInputTokens: 76_981,
+      cachedInputTokens: 416_384,
+      outputTokens: 2_124,
+      reasoningOutputTokens: 154,
+      totalTokens: 495_643,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeCachedInputTokens: 70_463_104,
+      cumulativeInputTokens: 73_251_863,
+      cumulativeOutputTokens: 221_675,
+      cumulativeReasoningOutputTokens: 37_030,
+      cumulativeTotalCostMicros: 21_440_000,
+      cumulativeTotalTokens: 73_510_568,
+      cumulativeUncachedInputTokens: 2_788_759,
+      uncachedInputCostMicros: 620_000,
+      cachedInputCostMicros: 5_000,
+      outputCostMicros: 45_000,
+      totalCostMicros: 670_000,
+      provider: "openai",
+      createdAt: 1_800_000_060_000,
+    };
+    const monitorLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "monitor-line",
+      threadId: "monitor-thread",
+      parentThreadId: "thread-1",
+      turnId: "monitor-turn",
+      scope: "monitor",
+      source: "monitor",
+      status: "finalized",
+      model: "gpt-5.4-mini",
+      inputTokens: 162_816,
+      uncachedInputTokens: 18_944,
+      cachedInputTokens: 143_872,
+      outputTokens: 1_150,
+      reasoningOutputTokens: 55,
+      totalTokens: 164_021,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 10_000,
+      cachedInputCostMicros: 8_000,
+      outputCostMicros: 12_421,
+      totalCostMicros: 30_421,
+      provider: "openai",
+      createdAt: 1_800_000_030_000,
+    };
+    const previousLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-previous",
+      threadId: "thread-1",
+      turnId: "turn-previous",
+      scope: "turn",
+      source: "hydration",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 65_905,
+      uncachedInputTokens: 1_009,
+      cachedInputTokens: 64_896,
+      outputTokens: 327,
+      reasoningOutputTokens: 46,
+      totalTokens: 66_278,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeTotalCostMicros: 20_770_000,
+      uncachedInputCostMicros: 30_000,
+      cachedInputCostMicros: 1_000,
+      outputCostMicros: 18_000,
+      totalCostMicros: 49_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [latestLine, monitorLine, previousLine],
+        summaries: [summary],
+      },
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: true,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
+    expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("2,807,703 uncached, 70,606,976 cached"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("222,825 (37,085 reasoning)")).toBeInTheDocument();
+    expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
+    expect(
+      screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Running total: $56.98 list price · 1,424 Codex Credits (includes estimates)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.080 list price · 2 Codex Credits"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Running tokens: 2,788,759 uncached in · 70,463,104 cached · 221,675 out (37,030 reasoning)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Running total: $20.77 list price · 1.2 Codex Credits"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.049 list price · 1.2 Codex Credits")).toBeInTheDocument();
+  });
+
+  it("inserts estimated historical gap rows from unexplained cumulative token jumps", () => {
+    const firstObservedLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-first-observed",
+      threadId: "thread-1",
+      turnId: "turn-first-observed",
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      model: "gpt-5.5",
+      serviceTier: "priority",
+      fastMode: true,
+      inputTokens: 150,
+      uncachedInputTokens: 100,
+      cachedInputTokens: 50,
+      outputTokens: 10,
+      reasoningOutputTokens: 0,
+      totalTokens: 160,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeInputTokens: 3_150,
+      cumulativeCachedInputTokens: 2_050,
+      cumulativeUncachedInputTokens: 1_100,
+      cumulativeOutputTokens: 110,
+      cumulativeReasoningOutputTokens: 20,
+      cumulativeTotalTokens: 3_280,
+      uncachedInputCostMicros: 10_000,
+      cachedInputCostMicros: 1_000,
+      outputCostMicros: 4_000,
+      totalCostMicros: 15_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+    const laterObservedLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-later-observed",
+      threadId: "thread-1",
+      turnId: "turn-later-observed",
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      model: "gpt-5.5",
+      serviceTier: "standard",
+      fastMode: false,
+      inputTokens: 50,
+      uncachedInputTokens: 20,
+      cachedInputTokens: 30,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+      totalTokens: 55,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeInputTokens: 4_700,
+      cumulativeCachedInputTokens: 3_080,
+      cumulativeUncachedInputTokens: 1_620,
+      cumulativeOutputTokens: 165,
+      cumulativeReasoningOutputTokens: 20,
+      cumulativeTotalTokens: 4_885,
+      uncachedInputCostMicros: 1_000,
+      cachedInputCostMicros: 100,
+      outputCostMicros: 900,
+      totalCostMicros: 2_000,
+      provider: "openai",
+      createdAt: 1_800_000_060_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [laterObservedLine, firstObservedLine],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 80,
+            currency: "USD",
+            inputTokens: 200,
+            outputTokens: 15,
+            pricedUsageLineCount: 2,
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            threadId: "thread-1",
+            totalCostMicros: 17_000,
+            totalTokens: 215,
+            uncachedInputTokens: 120,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_060_000,
+            usageLineCount: 2,
+          },
+        ],
+      },
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: true,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("$0.032 · 0.4 Codex Credits estimated")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("4 (4 priced, 0 unpriced)");
+    expect(screen.getAllByText("Historical usage estimate")).toHaveLength(2);
+    expect(screen.getByText("1,000 uncached in · 2,000 cached · 100 out (20 reasoning)")).toBeInTheDocument();
+    expect(screen.getByText("500 uncached in · 1,000 cached · 50 out")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.010 estimated list price · 0.2 Codex Credits estimated"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.005 estimated list price · 0.1 Codex Credits estimated"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Running total: $0.032 list price · 0.4 Codex Credits (includes estimates)",
+      ),
     ).toBeInTheDocument();
   });
 
