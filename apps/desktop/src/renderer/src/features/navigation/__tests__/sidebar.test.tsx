@@ -291,6 +291,48 @@ describe("Sidebar", () => {
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 
+  it("describes each thread lens with a custom tooltip and preserves selection", async () => {
+    const onBrowseModeChange = vi.fn();
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={onBrowseModeChange}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const updatedTab = screen.getByRole("tab", { name: "Updated" });
+    fireEvent.mouseEnter(updatedTab);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "All threads, most recently updated first"
+    );
+    fireEvent.mouseLeave(updatedTab);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    const createdTab = screen.getByRole("tab", { name: "Created" });
+    fireEvent.focus(createdTab);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "All threads, newest created first"
+    );
+
+    // Selecting a lens still works and the tooltip dismisses on click.
+    fireEvent.click(createdTab);
+    expect(onBrowseModeChange).toHaveBeenCalledWith("recents");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
     const onCreateThread = vi.fn(async () => undefined);
     const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
