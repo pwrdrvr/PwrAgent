@@ -156,6 +156,10 @@ export function migrateIfNeeded(options?: {
         migrated.callbackHandles,
       );
       counts.deliveries = migrateDeliveries(stateDb.raw, migrated.deliveries);
+      counts.default_agent_assignments = migrateDefaultAgentAssignments(
+        stateDb.raw,
+        migrated.defaultAgentAssignments,
+      );
     }
 
     if (overlayData) {
@@ -347,6 +351,43 @@ function migrateDeliveries(
   return count;
 }
 
+function migrateDefaultAgentAssignments(
+  db: BetterSqlite3.Database,
+  assignments: Record<string, unknown>,
+): number {
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO messaging_default_agent_assignments(assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, revoked_at, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  let count = 0;
+  const insert = db.transaction(() => {
+    for (const [id, raw] of Object.entries(assignments)) {
+      const assignment = raw as Record<string, unknown>;
+      const channel = assignment.channel as Record<string, unknown> | undefined;
+      const scopeKind = (assignment.scopeKind as string | undefined) ?? "profile";
+      const channelKind =
+        (assignment.channelKind as string | undefined) ??
+        (channel?.channel as string | undefined);
+      stmt.run(
+        id,
+        scopeKind,
+        defaultAgentScopeKey(scopeKind, channel, channelKind),
+        channelKind ?? null,
+        (assignment.backend as string) ?? "",
+        (assignment.threadId as string) ?? "",
+        assignment.revokedAt ? "revoked" : "active",
+        assignment.createdAt ?? Date.now(),
+        assignment.updatedAt ?? Date.now(),
+        assignment.revokedAt ?? null,
+        JSON.stringify(assignment),
+      );
+      count++;
+    }
+  });
+  insert();
+  return count;
+}
+
 function migrateBackends(
   db: BetterSqlite3.Database,
   backends: unknown,
@@ -486,6 +527,20 @@ function channelId(channel: Record<string, unknown> | undefined): string {
   return [conv.kind ?? "", conv.parentId ?? "", conv.id ?? ""].join(":");
 }
 
+function defaultAgentScopeKey(
+  scopeKind: string,
+  channel: Record<string, unknown> | undefined,
+  channelKind: string | undefined,
+): string {
+  if (scopeKind === "conversation" && channel) {
+    return `conversation:${channel.channel ?? ""}:${channelId(channel)}`;
+  }
+  if (scopeKind === "provider" && channelKind) {
+    return `provider:${channelKind}`;
+  }
+  return "profile";
+}
+
 function copyConfig(
   srcPath: string | undefined,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string; cliProfile?: string },
@@ -522,6 +577,10 @@ function verifyCounts(dbPath: string): Record<string, number> {
   try {
     const tableCountQueries = [
       ["bindings", "SELECT COUNT(*) as count FROM bindings"],
+      [
+        "default_agent_assignments",
+        "SELECT COUNT(*) as count FROM messaging_default_agent_assignments",
+      ],
       ["pending_intents", "SELECT COUNT(*) as count FROM pending_intents"],
       ["browse_sessions", "SELECT COUNT(*) as count FROM browse_sessions"],
       ["callback_handles", "SELECT COUNT(*) as count FROM callback_handles"],

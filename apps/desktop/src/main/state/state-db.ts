@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 28;
+export const CURRENT_STATE_DB_USER_VERSION = 29;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -417,6 +417,26 @@ CREATE TABLE IF NOT EXISTS messaging_activity_summary (
   last_response_at INTEGER,
   updated_at       INTEGER NOT NULL
 );
+`;
+
+const MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_default_agent_assignments (
+  assignment_id TEXT PRIMARY KEY,
+  scope_kind    TEXT NOT NULL,
+  scope_key     TEXT NOT NULL,
+  channel_kind  TEXT,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  revoked_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_scope
+  ON messaging_default_agent_assignments(scope_key, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_thread
+  ON messaging_default_agent_assignments(backend, thread_id, status);
 `;
 
 const THREAD_SEARCH_SCHEMA = `
@@ -933,6 +953,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 28) {
       db.transaction(() => {
         repairOpenAiThreadUsagePricing(db);
+        db.pragma("user_version = 28");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 29) {
+      db.transaction(() => {
+        db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1081,6 +1107,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+    db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);

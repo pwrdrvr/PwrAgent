@@ -2,6 +2,7 @@ import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
+  MessagingDefaultAgentAssignmentRecord,
   MessagingDeliveryResult,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
@@ -32,6 +33,7 @@ export type MessagingStoreData = {
   version: number;
   browseSessions: Record<string, MessagingBrowseSessionRecord>;
   bindings: Record<string, MessagingBindingRecord>;
+  defaultAgentAssignments: Record<string, MessagingDefaultAgentAssignmentRecord>;
   callbackHandles: Record<string, MessagingCallbackHandleRecord>;
   monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord>;
   topicCleanupProposals: Record<string, MessagingTopicCleanupProposalRecord>;
@@ -45,6 +47,7 @@ const EMPTY_MESSAGING_STORE_DATA: MessagingStoreData = {
   version: CURRENT_MESSAGING_STORE_VERSION,
   browseSessions: {},
   bindings: {},
+  defaultAgentAssignments: {},
   callbackHandles: {},
   monitorSubscriptions: {},
   topicCleanupProposals: {},
@@ -64,6 +67,10 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     version: CURRENT_MESSAGING_STORE_VERSION,
     browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
     bindings: migrateBindingRecords(record.bindings),
+    defaultAgentAssignments: migrateRecord(
+      record.defaultAgentAssignments,
+      isMessagingDefaultAgentAssignmentRecord,
+    ),
     callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
     monitorSubscriptions: migrateRecord(
       record.monitorSubscriptions,
@@ -78,6 +85,27 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
+}
+
+function isMessagingDefaultAgentAssignmentRecord(
+  value: unknown,
+): value is MessagingDefaultAgentAssignmentRecord {
+  const record = asRecord(value);
+  const channel = asRecord(record?.channel);
+  const conversation = asRecord(channel?.conversation);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      typeof record.scopeKind === "string" &&
+      typeof record.backend === "string" &&
+      typeof record.threadId === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      (!record.channel ||
+        (typeof channel?.channel === "string" &&
+          typeof conversation?.id === "string" &&
+          typeof conversation?.kind === "string")),
+  );
 }
 
 function migrateBindingRecords(value: unknown): Record<string, MessagingBindingRecord> {

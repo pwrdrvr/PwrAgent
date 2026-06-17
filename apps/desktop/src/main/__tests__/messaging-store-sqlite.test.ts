@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
+  MessagingDefaultAgentAssignmentRecord,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
@@ -40,6 +41,21 @@ function buildBinding(
     backend: "codex",
     threadId: "thread-1",
     authorizedActorIds: ["user-1"],
+    createdAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildDefaultAgentAssignment(
+  overrides: Partial<MessagingDefaultAgentAssignmentRecord> = {},
+): MessagingDefaultAgentAssignmentRecord {
+  return {
+    id: "default-agent-1",
+    scopeKind: "conversation",
+    channel: buildBinding().channel,
+    backend: "codex",
+    threadId: "agent-thread-1",
     createdAt: 1000,
     updatedAt: 1000,
     ...overrides,
@@ -194,6 +210,99 @@ describe("SqliteMessagingStore", () => {
       id: "binding-1",
       targetKind: "agent_thread",
     });
+  });
+
+  it("keeps default Agent assignments separate from active bindings", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({ threadId: "work-thread-1" }));
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+
+    await expect(store.findActiveBindingForChannel(buildBinding().channel)).resolves
+      .toMatchObject({
+        id: "binding-1",
+        threadId: "work-thread-1",
+      });
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "default-agent-1",
+      threadId: "agent-thread-1",
+    });
+  });
+
+  it("resolves the most specific active default Agent assignment", async () => {
+    const store = await createStore();
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "profile-default",
+        scopeKind: "profile",
+        channel: undefined,
+        channelKind: undefined,
+        threadId: "profile-agent",
+      }),
+    );
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "provider-default",
+        scopeKind: "provider",
+        channel: undefined,
+        channelKind: "telegram",
+        threadId: "provider-agent",
+        createdAt: 1100,
+        updatedAt: 1100,
+      }),
+    );
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "conversation-default",
+        threadId: "conversation-agent",
+        createdAt: 1200,
+        updatedAt: 1200,
+      }),
+    );
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "conversation-default",
+      threadId: "conversation-agent",
+    });
+
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "conversation-default",
+      revokedAt: 1300,
+    });
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "provider-default",
+      threadId: "provider-agent",
+    });
+  });
+
+  it("replaces active default Agent assignments within the same scope", async () => {
+    const store = await createStore();
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "default-agent-2",
+        threadId: "agent-thread-2",
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "default-agent-2",
+      threadId: "agent-thread-2",
+    });
+    await expect(store.getDefaultAgentAssignment("default-agent-1")).resolves
+      .toMatchObject({
+        revokedAt: 2000,
+      });
   });
 
   it("persists pending skill selections on bindings", async () => {

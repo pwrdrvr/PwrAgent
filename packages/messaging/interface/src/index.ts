@@ -1408,6 +1408,24 @@ export type MessagingBindingRecord = {
   threadDisplay?: MessagingThreadDisplaySummary;
 };
 
+export type MessagingDefaultAgentAssignmentScopeKind =
+  | "profile"
+  | "provider"
+  | "conversation";
+
+export type MessagingDefaultAgentAssignmentRecord = {
+  id: string;
+  scopeKind: MessagingDefaultAgentAssignmentScopeKind;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  createdAt: number;
+  updatedAt: number;
+  revokedAt?: number;
+  channelKind?: MessagingChannelKind;
+  channel?: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+};
+
 export type MessagingPendingIntentRecord = {
   id: string;
   bindingId?: string;
