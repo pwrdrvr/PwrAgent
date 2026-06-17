@@ -89,6 +89,20 @@ function mergeFileDiffDetail(
       : existing.fileDiff.kind === "add"
         ? "add"
         : detail.fileDiff.kind;
+  const mergedDiffText =
+    existing.fileDiff.diff || detail.fileDiff.diff
+      ? `${existing.fileDiff.diff}\n${detail.fileDiff.diff}`
+      : "";
+  const fileDiffRefs = (
+    fileDiff: AppServerThreadActivityDetail["fileDiff"],
+  ) => fileDiff?.diffRefs ?? (fileDiff?.diffRef ? [fileDiff.diffRef] : []);
+  const diffRefs = [
+    ...fileDiffRefs(existing.fileDiff),
+    ...fileDiffRefs(detail.fileDiff),
+  ];
+  const omittedReason =
+    detail.fileDiff.omittedReason ??
+    existing.fileDiff.omittedReason;
 
   return {
     ...existing,
@@ -96,12 +110,16 @@ function mergeFileDiffDetail(
     label: kind === existing.fileDiff.kind ? existing.label : detail.label,
     fileDiff: {
       kind,
-      diff: `${existing.fileDiff.diff}\n${detail.fileDiff.diff}`,
+      diff: mergedDiffText,
       additions: existing.fileDiff.additions + detail.fileDiff.additions,
       removals: existing.fileDiff.removals + detail.fileDiff.removals,
-      ...(detail.fileDiff.omittedReason
-        ? { omittedReason: detail.fileDiff.omittedReason }
-        : {}),
+      ...(mergedDiffText || diffRefs.length === 0
+        ? {}
+        : {
+            diffRef: diffRefs[diffRefs.length - 1],
+            diffRefs,
+          }),
+      ...(omittedReason ? { omittedReason } : {}),
     },
   };
 }

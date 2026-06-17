@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { AppServerThreadFileDiffRef } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptDiff } from "../TranscriptDiff";
 
@@ -134,5 +135,96 @@ describe("TranscriptDiff", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
     expect(analyzeFocusedDiff).not.toHaveBeenCalled();
+  });
+
+  it("fetches referenced live diff text only when the diff component renders", async () => {
+    const getThreadFileDiff = vi.fn(async () => ({ diff: ELIGIBLE_DIFF }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      getThreadFileDiff
+    };
+    const diffRef = {
+      source: "live" as const,
+      key: "live:thread-1:entry-1:detail-1",
+      threadId: "thread-1",
+      entryId: "entry-1",
+      detailId: "detail-1"
+    };
+
+    render(
+      <TranscriptDiff
+        detail={{
+          ...DETAIL,
+          fileDiff: {
+            ...DETAIL.fileDiff,
+            diff: "",
+            diffRef
+          }
+        }}
+      />
+    );
+
+    expect(screen.getByText("Loading diff...")).toBeInTheDocument();
+    await screen.findByText(/beta\/index/);
+    expect(getThreadFileDiff).toHaveBeenCalledWith({ ref: diffRef });
+  });
+
+  it("fetches and stacks multiple referenced diff chunks for merged rows", async () => {
+    const firstDiff = [
+      "@@ -1,1 +1,2 @@",
+      " alpha",
+      "+beta",
+    ].join("\n");
+    const secondDiff = [
+      "@@ -4,1 +5,2 @@",
+      " gamma",
+      "+delta",
+    ].join("\n");
+    const refs: AppServerThreadFileDiffRef[] = [
+      {
+        source: "thread" as const,
+        key: "thread:thread-1:entry-1:detail-1",
+        backend: "codex" as const,
+        threadId: "thread-1",
+        entryId: "entry-1",
+        detailId: "detail-1",
+      },
+      {
+        source: "thread" as const,
+        key: "thread:thread-1:entry-2:detail-1",
+        backend: "codex" as const,
+        threadId: "thread-1",
+        entryId: "entry-2",
+        detailId: "detail-1",
+      },
+    ];
+    const getThreadFileDiff = vi.fn(
+      async ({ ref }: { ref: AppServerThreadFileDiffRef }) => ({
+      diff: ref.key.endsWith("entry-1:detail-1") ? firstDiff : secondDiff,
+    }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      getThreadFileDiff,
+    };
+
+    render(
+      <TranscriptDiff
+        detail={{
+          ...DETAIL,
+          fileDiff: {
+            ...DETAIL.fileDiff,
+            diff: "",
+            diffRef: refs[1],
+            diffRefs: refs,
+            additions: 2,
+            removals: 0,
+          },
+        }}
+      />
+    );
+
+    await screen.findByText("beta");
+    expect(screen.getByText("delta")).toBeInTheDocument();
+    expect(getThreadFileDiff).toHaveBeenCalledTimes(2);
+    expect(getThreadFileDiff).toHaveBeenNthCalledWith(1, { ref: refs[0] });
+    expect(getThreadFileDiff).toHaveBeenNthCalledWith(2, { ref: refs[1] });
   });
 });

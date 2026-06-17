@@ -370,9 +370,20 @@ export type AppServerSource = {
 
 export type AppServerThreadFileChangeKind = "add" | "delete" | "update";
 
+export type AppServerThreadFileDiffRef = {
+  source: "live" | "thread";
+  key: string;
+  threadId: string;
+  entryId: string;
+  detailId: string;
+  backend?: AppServerBackendKind;
+};
+
 export type AppServerThreadFileDiff = {
   kind: AppServerThreadFileChangeKind;
   diff: string;
+  diffRef?: AppServerThreadFileDiffRef;
+  diffRefs?: AppServerThreadFileDiffRef[];
   additions: number;
   removals: number;
   omittedReason?: string;
@@ -410,6 +421,15 @@ export type AppServerThreadActivityEntry = {
   details: AppServerThreadActivityDetail[];
   turn?: AppServerThreadTurnMetadata;
   usageLine?: ThreadUsageLineRecord;
+};
+
+export type GetThreadFileDiffRequest = {
+  ref: AppServerThreadFileDiffRef;
+};
+
+export type GetThreadFileDiffResponse = {
+  diff?: string;
+  omittedReason?: string;
 };
 
 export type AppServerThreadPlanStepStatus =

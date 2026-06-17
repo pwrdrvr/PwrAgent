@@ -1,6 +1,8 @@
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
+export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
+  "app-server:get-thread-file-diff";
 export const APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL =
   "app-server:persist-thread-usage-activity";
 export const APP_SERVER_LIST_SKILLS_CHANNEL = "app-server:list-skills";

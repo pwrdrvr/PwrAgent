@@ -19,6 +19,7 @@ function fileDiffDetail(params: {
   additions?: number;
   removals?: number;
   kind?: "add" | "delete" | "update";
+  diffRefKey?: string;
 }): AppServerThreadActivityDetail {
   detailCounter += 1;
   const kind = params.kind ?? "update";
@@ -29,7 +30,19 @@ function fileDiffDetail(params: {
     path: params.path,
     fileDiff: {
       kind,
-      diff: `diff for ${params.path} (#${detailCounter})`,
+      diff: params.diffRefKey ? "" : `diff for ${params.path} (#${detailCounter})`,
+      ...(params.diffRefKey
+        ? {
+            diffRef: {
+              source: "thread" as const,
+              key: params.diffRefKey,
+              backend: "codex" as const,
+              threadId: "thread-1",
+              entryId: "entry-1",
+              detailId: `detail-${detailCounter}`,
+            },
+          }
+        : {}),
       additions: params.additions ?? 1,
       removals: params.removals ?? 0,
     },
@@ -100,6 +113,43 @@ describe("collectEditedFileGroups", () => {
     expect(groups[1].summary).toBe("Edited 1 file");
     expect(groups[1].additions).toBe(5);
     expect(groups[1].removals).toBe(1);
+  });
+
+  it("keeps merged lazy diff refs fetchable instead of marking the row omitted", () => {
+    const groups = collectEditedFileGroups({
+      entries: [
+        activityEntry({
+          id: "a1",
+          turnId: "turn-1",
+          details: [
+            fileDiffDetail({
+              path: "src/a.ts",
+              additions: 2,
+              diffRefKey: "thread:one",
+            }),
+            fileDiffDetail({
+              path: "src/a.ts",
+              additions: 3,
+              removals: 1,
+              diffRefKey: "thread:two",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const fileDiff = groups[0]?.details[0]?.fileDiff;
+    expect(fileDiff).toMatchObject({
+      diff: "",
+      additions: 5,
+      removals: 1,
+      diffRef: expect.objectContaining({ key: "thread:two" }),
+      diffRefs: [
+        expect.objectContaining({ key: "thread:one" }),
+        expect.objectContaining({ key: "thread:two" }),
+      ],
+    });
+    expect(fileDiff?.omittedReason).toBeUndefined();
   });
 
   it("prefers a turn's live cumulative diff entry over its per-edit entries", () => {

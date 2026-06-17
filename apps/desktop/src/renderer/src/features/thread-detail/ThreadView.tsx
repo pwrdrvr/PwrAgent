@@ -82,8 +82,6 @@ import {
   type PendingMcpInteractionState,
 } from "./mcp-elicitation";
 import {
-  formatChangedFileSummary,
-  getBasename,
   mergeActivityDetails,
   readRendererSequence,
   summarizeActivityStatus,
@@ -404,34 +402,6 @@ function arePlanEntriesEquivalent(
   });
 }
 
-function summarizeDiff(diff: string): { additions: number; removals: number } {
-  let additions = 0;
-  let removals = 0;
-
-  for (const line of diff.split("\n")) {
-    if (
-      !line ||
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@") ||
-      line.startsWith("\\")
-    ) {
-      continue;
-    }
-
-    if (line.startsWith("+")) {
-      additions += 1;
-      continue;
-    }
-
-    if (line.startsWith("-")) {
-      removals += 1;
-    }
-  }
-
-  return { additions, removals };
-}
-
 function getPlanNotificationItemId(params: Record<string, unknown>): string | undefined {
   if (typeof params.itemId === "string") {
     return params.itemId;
@@ -607,128 +577,6 @@ function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
   });
 }
 
-function normalizeDiffPath(path: string | undefined): string | undefined {
-  if (!path || path === "/dev/null") {
-    return undefined;
-  }
-
-  return path.replace(/^[ab]\//, "");
-}
-
-function inferDiffKind(lines: string[]): "add" | "delete" | "update" {
-  const beforeLine = lines.find((line) => line.startsWith("--- "));
-  const afterLine = lines.find((line) => line.startsWith("+++ "));
-
-  if (beforeLine?.slice(4).trim() === "/dev/null") {
-    return "add";
-  }
-
-  if (afterLine?.slice(4).trim() === "/dev/null") {
-    return "delete";
-  }
-
-  return "update";
-}
-
-function buildDiffLabel(kind: "add" | "delete" | "update", path?: string): string {
-  const verb = kind[0]?.toUpperCase() + kind.slice(1);
-  return `${verb} ${path ? getBasename(path) : "file"}`;
-}
-
-function extractDiffDetails(
-  diff: string,
-  entryId: string
-): AppServerThreadActivityDetail[] {
-  const lines = diff.replace(/\r\n?/g, "\n").split("\n");
-  const sections: Array<{ lines: string[] }> = [];
-  let currentSection: { lines: string[] } | undefined;
-
-  for (const line of lines) {
-    if (line.startsWith("diff --git ")) {
-      if (currentSection?.lines.length) {
-        sections.push(currentSection);
-      }
-      currentSection = { lines: [line] };
-      continue;
-    }
-
-    if (!currentSection) {
-      currentSection = { lines: [] };
-    }
-
-    currentSection.lines.push(line);
-  }
-
-  if (currentSection?.lines.length) {
-    sections.push(currentSection);
-  }
-
-  const normalizedSections = sections.length > 0 ? sections : [{ lines }];
-  const details: AppServerThreadActivityDetail[] = [];
-
-  for (const [index, section] of normalizedSections.entries()) {
-    const rawBefore = section.lines.find((line) => line.startsWith("--- "))?.slice(4).trim();
-    const rawAfter = section.lines.find((line) => line.startsWith("+++ "))?.slice(4).trim();
-    const path = normalizeDiffPath(rawAfter) ?? normalizeDiffPath(rawBefore);
-    const diffText = section.lines.join("\n").trim();
-
-    if (!diffText) {
-      continue;
-    }
-
-    const kind = inferDiffKind(section.lines);
-    const diffSummary = summarizeDiff(diffText);
-
-    details.push({
-      id: `${entryId}-${index + 1}`,
-      kind: "write",
-      label: buildDiffLabel(kind, path),
-      ...(path ? { path } : {}),
-      fileDiff: {
-        kind,
-        diff: diffText,
-        additions: diffSummary.additions,
-        removals: diffSummary.removals,
-      },
-    });
-  }
-
-  return details;
-}
-
-function buildPendingDiffEntry(params: {
-  diff: string;
-  id: string;
-  turn?: AppServerThreadTurnMetadata;
-}): AppServerThreadActivityEntry | undefined {
-  const details = extractDiffDetails(params.diff, params.id);
-  if (details.length === 0) {
-    return undefined;
-  }
-  const additions = details.reduce(
-    (total, detail) => total + (detail.fileDiff?.additions ?? 0),
-    0
-  );
-  const removals = details.reduce(
-    (total, detail) => total + (detail.fileDiff?.removals ?? 0),
-    0
-  );
-
-  return {
-    type: "activity",
-    id: params.id,
-    createdAt: Date.now(),
-    summary: formatChangedFileSummary({
-      count: details.length,
-      prefix: "Edited",
-      additions,
-      removals,
-    }),
-    details,
-    ...(params.turn ? { turn: params.turn } : {}),
-  };
-}
-
 function buildWarningActivityEntry(params: {
   id: string;
   message: string;
@@ -810,12 +658,36 @@ function activityContainsDiff(
   pendingEntry: AppServerThreadActivityEntry
 ): boolean {
   return pendingEntry.details.every((pendingDetail) => {
-    const pendingDiff = pendingDetail.fileDiff?.diff;
-    if (!pendingDiff) {
+    const pendingFileDiff = pendingDetail.fileDiff;
+    if (!pendingFileDiff) {
       return false;
     }
 
-    return candidate.details.some((detail) => detail.fileDiff?.diff === pendingDiff);
+    return candidate.details.some((detail) => {
+      const candidateFileDiff = detail.fileDiff;
+      if (!candidateFileDiff) {
+        return false;
+      }
+
+      if (pendingFileDiff.diff) {
+        return candidateFileDiff.diff === pendingFileDiff.diff;
+      }
+
+      if (!pendingFileDiff.diffRef) {
+        return false;
+      }
+
+      const sameFile =
+        pendingDetail.path && detail.path
+          ? pendingDetail.path === detail.path
+          : pendingDetail.label === detail.label;
+      return (
+        sameFile &&
+        candidateFileDiff.kind === pendingFileDiff.kind &&
+        candidateFileDiff.additions === pendingFileDiff.additions &&
+        candidateFileDiff.removals === pendingFileDiff.removals
+      );
+    });
   });
 }
 
@@ -1970,31 +1842,23 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       if (event.notification.method === "turn/diff/updated") {
-        if (typeof event.notification.params.diff !== "string") {
+        if (!event.rendererActivityEntry) {
           return;
         }
 
-        setPendingActivityEntry(
-          buildPendingDiffEntry({
-            diff: event.notification.params.diff,
-            id: `live-diff-${
+        const turn = buildLiveTurnMetadata({
+          turnId:
+            liveNotificationTurnId(
               typeof event.notification.params.turnId === "string"
                 ? event.notification.params.turnId
-                : typeof event.notification.params.turnId === "string"
-                  ? event.notification.params.turnId
-                  : selectedThread.id
-            }`,
-            turn: buildLiveTurnMetadata({
-              turnId:
-                liveNotificationTurnId(
-                  typeof event.notification.params.turnId === "string"
-                    ? event.notification.params.turnId
-                    : undefined
-                ),
-              activeTurnStartedAt: props.activeTurnStartedAt,
-            }),
-          })
-        );
+                : undefined
+            ),
+          activeTurnStartedAt: props.activeTurnStartedAt,
+        });
+        setPendingActivityEntry({
+          ...event.rendererActivityEntry,
+          ...(turn ? { turn } : {}),
+        });
         return;
       }
 

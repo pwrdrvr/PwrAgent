@@ -29,6 +29,8 @@ import {
   type PersistThreadUsageActivityResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type GetThreadFileDiffRequest,
+  type GetThreadFileDiffResponse,
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
   type FocusedDiffAnalysisRequest,
@@ -124,6 +126,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
   THREAD_MIGRATION_RETRY_CHANNEL,
@@ -166,6 +169,11 @@ import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-s
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
+import { getLiveThreadFileDiff } from "../app-server/live-diff-activity";
+import {
+  getThreadReplayFileDiff,
+  shapeReadThreadFileDiffsForRenderer,
+} from "../app-server/thread-file-diff-cache";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -798,8 +806,9 @@ class DesktopAppServerService {
       threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
+    const materialized = await materializeTranscriptImageUrlsForRenderer(response);
     return sanitizeRendererPayload(
-      await materializeTranscriptImageUrlsForRenderer(response),
+      shapeReadThreadFileDiffsForRenderer(materialized),
     );
   }
 
@@ -3129,6 +3138,21 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+    async (
+      _event,
+      request: GetThreadFileDiffRequest,
+    ): Promise<GetThreadFileDiffResponse> => {
+      const diff =
+        getLiveThreadFileDiff(request.ref) ??
+        getThreadReplayFileDiff(request.ref);
+      return diff === undefined
+        ? { omittedReason: "Diff is no longer available for this thread entry." }
+        : { diff };
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.handle(
     APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
@@ -3509,6 +3533,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);

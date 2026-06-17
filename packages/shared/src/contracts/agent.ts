@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerMcpElicitationResponse,
   AppServerNotification,
+  AppServerThreadActivityEntry,
   LinkedDirectorySummary,
   ThreadExecutionMode,
   AppServerReviewDelivery,
@@ -632,6 +633,11 @@ export type RegisterDirectoryFromDiskResponse =
 export type AgentEvent = {
   backend: AppServerBackendKind;
   notification: AppServerNotification;
+  /**
+   * Optional main-process display model for live protocol notifications whose
+   * raw params are expensive for React to parse on every update.
+   */
+  rendererActivityEntry?: AppServerThreadActivityEntry;
 };
 
 export type LatestCodexConfigWarningResponse = {
