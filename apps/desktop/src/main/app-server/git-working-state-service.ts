@@ -1,4 +1,5 @@
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -9,7 +10,7 @@ import type {
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
-import { runGitCommand } from "./git-executable";
+import { resolveGitExecutable, runGitCommand } from "./git-executable";
 
 function normalizeAbsolutePath(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
@@ -19,14 +20,18 @@ function normalizeAbsolutePath(value: string): string {
 const EDIT_COMMIT_RESOLVE_CONCURRENCY = 4;
 const DEFAULT_OTHER_CHANGES_MAX_FILES = 50;
 const HARD_OTHER_CHANGES_MAX_FILES = 100;
+const OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL = 20;
 const DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
 const HARD_OTHER_CHANGE_DIFF_MAX_BYTES = 500_000;
+const UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES = 128_000;
+const UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS = 1_500;
 
 type GitCommandRunner = (
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
+type UntrackedPathFilter = (repoPath: string) => boolean;
 
 type AcceptedPushedCommitOptions = {
   acceptedPushedCommitShas?: string[];
@@ -192,6 +197,49 @@ function parseStatusPorcelain(
   return entries;
 }
 
+function isCollapsedUntrackedDirectoryEntry(
+  entry: WorktreeOtherChangeEntry,
+): boolean {
+  return entry.status === "untracked" && entry.repoPath.endsWith("/");
+}
+
+function topLevelChangeBucket(repoPath: string): string {
+  const normalized = normalizeGitRelativePath(repoPath).replace(/\/+$/, "");
+  return normalized.split("/").filter(Boolean)[0] ?? normalized;
+}
+
+function makeUntrackedEntry(
+  cwd: string,
+  repoPath: string,
+): WorktreeOtherChangeEntry | undefined {
+  const normalizedRepoPath = normalizeGitRelativePath(repoPath);
+  if (!normalizedRepoPath || normalizedRepoPath.endsWith("/")) {
+    return undefined;
+  }
+  return {
+    path: normalizeAbsolutePath(path.resolve(cwd, normalizedRepoPath)),
+    repoPath: normalizedRepoPath,
+    status: "untracked",
+    staged: false,
+    unstaged: true,
+  };
+}
+
+function parseLimitedNulRecords(
+  output: string,
+  limit: number,
+  includeRepoPath: UntrackedPathFilter = () => true,
+): { records: string[]; truncated: boolean } {
+  const records = output
+    .split("\0")
+    .map(normalizeGitRelativePath)
+    .filter((record) => record && includeRepoPath(record));
+  return {
+    records: records.slice(0, limit),
+    truncated: records.length > limit,
+  };
+}
+
 function parseNumstatByPath(
   output: string,
 ): Map<string, { additions?: number; removals?: number; binary?: boolean }> {
@@ -288,6 +336,150 @@ async function enrichUntrackedChangeStats(
     // Summary stats are best-effort; expansion can still report a precise
     // omitted/unavailable reason for the single requested file.
   }
+}
+
+async function listUntrackedDirectoryFilesWithRunner(
+  cwd: string,
+  repoPath: string,
+  limit: number,
+  includeRepoPath: UntrackedPathFilter,
+  runGit: GitCommandRunner,
+  gitEnv?: NodeJS.ProcessEnv,
+): Promise<{ repoPaths: string[]; truncated: boolean }> {
+  const output = await runGit(
+    cwd,
+    [
+      "--no-optional-locks",
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      repoPath,
+    ],
+    gitEnv,
+  ).catch(() => "");
+  const parsed = parseLimitedNulRecords(output, limit, includeRepoPath);
+  return {
+    repoPaths: parsed.records,
+    truncated: parsed.truncated,
+  };
+}
+
+async function listUntrackedDirectoryFilesLimited(
+  cwd: string,
+  repoPath: string,
+  limit: number,
+  includeRepoPath: UntrackedPathFilter,
+  gitEnv?: NodeJS.ProcessEnv,
+): Promise<{ repoPaths: string[]; truncated: boolean }> {
+  if (limit <= 0) {
+    return { repoPaths: [], truncated: true };
+  }
+
+  const git = await resolveGitExecutable(gitEnv ?? process.env);
+  return await new Promise((resolve) => {
+    const repoPaths: string[] = [];
+    let pending = "";
+    let bytesRead = 0;
+    let truncated = false;
+    let settled = false;
+
+    const child = spawn(
+      git,
+      [
+        "-C",
+        cwd,
+        "--no-optional-locks",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        repoPath,
+      ],
+      { env: gitEnv ?? process.env },
+    );
+
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ repoPaths: repoPaths.slice(0, limit), truncated });
+    };
+
+    const stop = () => {
+      truncated = true;
+      child.kill();
+    };
+
+    const timeout = setTimeout(stop, UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (settled || truncated) {
+        return;
+      }
+      bytesRead += Buffer.byteLength(chunk);
+      pending += chunk;
+
+      let separatorIndex = pending.indexOf("\0");
+      while (separatorIndex >= 0) {
+        const record = pending.slice(0, separatorIndex);
+        pending = pending.slice(separatorIndex + 1);
+        const normalized = normalizeGitRelativePath(record);
+        if (normalized && includeRepoPath(normalized)) {
+          repoPaths.push(normalized);
+          if (repoPaths.length > limit) {
+            stop();
+            return;
+          }
+        }
+        separatorIndex = pending.indexOf("\0");
+      }
+
+      if (bytesRead > UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES) {
+        stop();
+      }
+    });
+    child.once("error", finish);
+    child.once("close", finish);
+  });
+}
+
+async function expandUntrackedDirectoryEntry(
+  cwd: string,
+  entry: WorktreeOtherChangeEntry,
+  limit: number,
+  includeRepoPath: UntrackedPathFilter,
+  runGit: GitCommandRunner,
+  gitEnv?: NodeJS.ProcessEnv,
+): Promise<{ changes: WorktreeOtherChangeEntry[]; truncated: boolean }> {
+  const listing =
+    runGit === defaultRunGit
+      ? await listUntrackedDirectoryFilesLimited(
+          cwd,
+          entry.repoPath,
+          limit,
+          includeRepoPath,
+          gitEnv,
+        )
+      : await listUntrackedDirectoryFilesWithRunner(
+          cwd,
+          entry.repoPath,
+          limit,
+          includeRepoPath,
+          runGit,
+          gitEnv,
+        );
+  return {
+    changes: listing.repoPaths
+      .map((repoPath) => makeUntrackedEntry(cwd, repoPath))
+      .filter((change): change is WorktreeOtherChangeEntry => Boolean(change)),
+    truncated: listing.truncated,
+  };
 }
 
 async function summarizeUntrackedChanges(
@@ -561,8 +753,8 @@ export class GitWorkingStateService {
   /**
    * List worktree changes that are not already represented by turn-level
    * edited-file groups. This is intentionally summary-only: file count is
-   * capped, untracked directories stay collapsed by git's default status mode,
-   * and no patch text is generated here.
+   * capped overall and per top-level directory, collapsed untracked directories
+   * are expanded only up to those caps, and no patch text is generated here.
    */
   async listOtherChanges(
     worktreePath: string,
@@ -600,10 +792,80 @@ export class GitWorkingStateService {
         .filter(Boolean)
         .map(normalizeAbsolutePath),
     );
-    const allChanges = parseStatusPorcelain(output, cwd).filter(
-      (entry) => !excluded.has(normalizeAbsolutePath(entry.path)),
-    );
+    const includeRepoPath = (repoPath: string): boolean =>
+      !excluded.has(normalizeAbsolutePath(path.resolve(cwd, repoPath)));
+    const allChanges: WorktreeOtherChangeEntry[] = [];
+    const changesByTopLevel = new Map<string, number>();
+    let stoppedBeforeEnd = false;
+    let expansionTruncated = false;
+    let topLevelTruncated = false;
+    const addChange = (
+      entry: WorktreeOtherChangeEntry,
+    ): "added" | "total-capped" | "top-level-capped" => {
+      if (allChanges.length >= maxFiles + 1) {
+        return "total-capped";
+      }
+      const bucket = topLevelChangeBucket(entry.repoPath);
+      const bucketCount = changesByTopLevel.get(bucket) ?? 0;
+      if (bucketCount >= OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL) {
+        return "top-level-capped";
+      }
+      changesByTopLevel.set(bucket, bucketCount + 1);
+      allChanges.push(entry);
+      return "added";
+    };
+    const parsedChanges = parseStatusPorcelain(output, cwd);
+    for (const entry of parsedChanges) {
+      if (excluded.has(normalizeAbsolutePath(entry.path))) {
+        continue;
+      }
+      if (!isCollapsedUntrackedDirectoryEntry(entry)) {
+        const result = addChange(entry);
+        if (result === "top-level-capped") {
+          topLevelTruncated = true;
+        }
+      } else {
+        const bucket = topLevelChangeBucket(entry.repoPath);
+        const remainingForTopLevel =
+          OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL -
+          (changesByTopLevel.get(bucket) ?? 0);
+        if (remainingForTopLevel <= 0) {
+          topLevelTruncated = true;
+          continue;
+        }
+        const remaining = Math.min(
+          maxFiles + 1 - allChanges.length,
+          remainingForTopLevel + 1,
+        );
+        const expanded = await expandUntrackedDirectoryEntry(
+          cwd,
+          entry,
+          remaining,
+          includeRepoPath,
+          this.runGit,
+          this.gitEnv,
+        );
+        expansionTruncated ||= expanded.truncated;
+        for (const expandedEntry of expanded.changes) {
+          const result = addChange(expandedEntry);
+          if (result === "top-level-capped") {
+            topLevelTruncated = true;
+          }
+          if (result !== "added") {
+            break;
+          }
+        }
+      }
+      if (allChanges.length > maxFiles) {
+        stoppedBeforeEnd = true;
+        break;
+      }
+    }
     const visible = allChanges.slice(0, maxFiles);
+    const totalChanges =
+      (expansionTruncated || topLevelTruncated) && allChanges.length <= maxFiles
+        ? allChanges.length + 1
+        : allChanges.length;
 
     const trackedPaths = visible
       .filter((entry) => entry.status !== "untracked")
@@ -639,8 +901,12 @@ export class GitWorkingStateService {
 
     return {
       changes: visible,
-      totalChanges: allChanges.length,
-      truncated: allChanges.length > visible.length,
+      totalChanges,
+      truncated:
+        expansionTruncated ||
+        topLevelTruncated ||
+        stoppedBeforeEnd ||
+        allChanges.length > visible.length,
       maxFiles,
     };
   }
@@ -685,7 +951,7 @@ export class GitWorkingStateService {
       try {
         const fileStat = await stat(absolutePath);
         if (!fileStat.isFile()) {
-          omittedReason = "Diff omitted for untracked directory.";
+          return {};
         } else if (fileStat.size > maxBytes) {
           omittedReason = `Diff omitted for large untracked file (${fileStat.size.toLocaleString()} bytes).`;
         } else {
