@@ -5,6 +5,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadMessage,
+  AppServerThreadMessageEntry,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -41,6 +43,53 @@ function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
         ? `activity:${entry.summary}`
         : entry.type
   );
+}
+
+function messageEntry(params: {
+  createdAt: number;
+  id: string;
+  role?: AppServerThreadMessage["role"];
+  text: string;
+}): AppServerThreadMessageEntry {
+  return {
+    type: "message",
+    id: params.id,
+    role: params.role ?? "assistant",
+    text: params.text,
+    createdAt: params.createdAt,
+  };
+}
+
+function readThreadResponse(params: {
+  entries: AppServerThreadEntry[];
+  fetchedAt?: number;
+  hasPreviousPage: boolean;
+  previousCursor?: string;
+  supportsPagination?: boolean;
+  threadId?: string;
+}): AppServerReadThreadResponse {
+  return {
+    backend: "codex",
+    fetchedAt: params.fetchedAt ?? Date.now(),
+    threadId: params.threadId ?? "thread-1",
+    threadStatus: "idle",
+    replay: {
+      entries: params.entries,
+      messages: params.entries
+        .filter(
+          (entry): entry is AppServerThreadMessageEntry =>
+            entry.type === "message"
+        )
+        .map(({ type: _type, ...message }) => message),
+      pagination: {
+        supportsPagination: params.supportsPagination ?? true,
+        hasPreviousPage: params.hasPreviousPage,
+        ...(params.previousCursor
+          ? { previousCursor: params.previousCursor }
+          : {}),
+      },
+    },
+  };
 }
 
 function diffActivity(params: {
@@ -194,6 +243,98 @@ describe("useThreadSessionState", () => {
       limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
       threadId: "thread-1",
     });
+  });
+
+  it("preserves loaded older transcript pages across limited refreshes", async () => {
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({ id: "recent-1", text: "Recent 1", createdAt: 300 }),
+        messageEntry({ id: "recent-2", text: "Recent 2", createdAt: 400 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({ id: "older-1", text: "Older 1", createdAt: 100 }),
+        messageEntry({ id: "older-2", text: "Older 2", createdAt: 200 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "oldest-page",
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        messageEntry({ id: "recent-1", text: "Recent 1", createdAt: 300 }),
+        messageEntry({ id: "recent-2", text: "Recent 2", createdAt: 400 }),
+        messageEntry({ id: "recent-3", text: "Recent 3", createdAt: 500 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page-again",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      {
+        initialProps: { updatedAt: 1_000 },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Recent 1",
+      "message:Recent 2",
+    ]);
+
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Older 1",
+        "message:Older 2",
+        "message:Recent 1",
+        "message:Recent 2",
+      ]);
+    });
+    expect(result.current.response?.replay.pagination.previousCursor).toBe(
+      "oldest-page"
+    );
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+
+    expect(readThread).toHaveBeenLastCalledWith({
+      backend: "codex",
+      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      threadId: "thread-1",
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older 1",
+      "message:Older 2",
+      "message:Recent 1",
+      "message:Recent 2",
+      "message:Recent 3",
+    ]);
+    expect(result.current.response?.replay.pagination.previousCursor).toBe(
+      "oldest-page"
+    );
   });
 
   it("rehydrates the selected thread when the initial history limit changes", async () => {

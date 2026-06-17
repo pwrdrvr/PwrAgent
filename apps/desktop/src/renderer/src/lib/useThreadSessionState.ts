@@ -134,6 +134,7 @@ type ThreadSessionEntry = {
   hydratedUpdatedAt?: number;
   interacted: boolean;
   lastTouchedAt: number;
+  loadedOlderHistory: boolean;
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
@@ -175,6 +176,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
+    loadedOlderHistory: false,
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
@@ -538,6 +540,36 @@ function mergeTranscriptMessages(
   }
 
   return merged;
+}
+
+function preserveLoadedTranscriptHistory(
+  response: AppServerReadThreadResponse,
+  retainedResponse: AppServerReadThreadResponse | undefined,
+  shouldPreserve: boolean
+): AppServerReadThreadResponse {
+  if (
+    !shouldPreserve ||
+    !retainedResponse ||
+    !response.replay.pagination.supportsPagination
+  ) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: mergeItems(
+        retainedResponse.replay.entries,
+        response.replay.entries
+      ),
+      messages: mergeItems(
+        retainedResponse.replay.messages,
+        response.replay.messages
+      ),
+      pagination: retainedResponse.replay.pagination,
+    },
+  };
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -3043,9 +3075,14 @@ export function useThreadSessionState(params: {
             [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
             liveTranscriptSources
           );
+          const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
+            orderedResponse,
+            current.response,
+            current.loadedOlderHistory
+          );
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
-            orderedResponse
+            responseWithLoadedHistory
           );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
@@ -3067,7 +3104,7 @@ export function useThreadSessionState(params: {
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,
-              response: orderedResponse,
+              response: responseWithLoadedHistory,
               targetThreadKey,
             });
           }
@@ -3094,7 +3131,7 @@ export function useThreadSessionState(params: {
             needsHydrationAfterCompletion,
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
-              orderedResponse
+              responseWithLoadedHistory
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -3102,7 +3139,7 @@ export function useThreadSessionState(params: {
             pendingStatusText: shouldClearStaleThinking
               ? undefined
               : current.pendingStatusText,
-            response: orderedResponse,
+            response: responseWithLoadedHistory,
           };
         });
       } catch (error) {
@@ -4434,6 +4471,7 @@ export function useThreadSessionState(params: {
               },
             }
           : olderResponse,
+        loadedOlderHistory: Boolean(current.response),
       }));
     } catch (error) {
       if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {
