@@ -8,6 +8,7 @@ import {
   formatDurationMs,
   formatRunningDurationMs,
 } from "../Composer";
+import { EnvActionRunsView } from "../../thread-detail/EnvActionRunsView";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -35,7 +36,7 @@ function buildRun(
 
 describe("EnvActionAnchorEntry", () => {
   describe("status branches", () => {
-    it("renders the running label with always-visible Dismiss while started", () => {
+    it("renders the running label with Stop and Terminate while started", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(1_700_000_000_750));
       render(
@@ -48,11 +49,12 @@ describe("EnvActionAnchorEntry", () => {
       expect(
         screen.getByLabelText("Env action running"),
       ).toBeInTheDocument();
-      // Dismiss is always available now, regardless of status — a
-      // long-running action that the user no longer cares about
-      // should be clearable without having to wait for it to exit.
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
       expect(
-        screen.getByRole("button", { name: "Dismiss" }),
+        screen.getByRole("button", { name: "Stop" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Terminate" }),
       ).toBeInTheDocument();
       // The pid meta and the command echo land in the same anchor.
       expect(screen.getByText(/pid 12345/)).toBeInTheDocument();
@@ -213,6 +215,82 @@ describe("EnvActionAnchorEntry", () => {
     });
   });
 
+  describe("stop interaction", () => {
+    it("uses the shared styled tooltip for icon action controls", async () => {
+      render(
+        <EnvActionRunsView
+          runs={[buildRun({ status: "started" })]}
+          placement="composer"
+          onMoveToSidebar={() => {}}
+          onStop={() => {}}
+        />,
+      );
+
+      const stopButton = screen.getByRole("button", { name: "Stop" });
+      expect(stopButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(stopButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Stop gracefully");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Sends SIGTERM first");
+
+      fireEvent.mouseLeave(stopButton);
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+
+      const terminateButton = screen.getByRole("button", { name: "Terminate" });
+      expect(terminateButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(terminateButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Terminate now");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Force-kills");
+
+      fireEvent.mouseLeave(terminateButton);
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+
+      const sidebarButton = screen.getByRole("button", {
+        name: "Move action to the sidebar Actions panel",
+      });
+      expect(sidebarButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(sidebarButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Show in sidebar");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Actions panel");
+    });
+
+    it("invokes onStop with graceful stop when the user clicks Stop", () => {
+      const onStop = vi.fn();
+      const run = buildRun({ status: "started" });
+      render(
+        <EnvActionAnchorEntry
+          run={run}
+          environmentName={undefined}
+          onDismiss={() => {}}
+          onStop={onStop}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(onStop).toHaveBeenCalledWith(run, "stop");
+    });
+
+    it("invokes onStop with terminate when the user clicks Terminate", () => {
+      const onStop = vi.fn();
+      const run = buildRun({ status: "started" });
+      render(
+        <EnvActionAnchorEntry
+          run={run}
+          environmentName={undefined}
+          onDismiss={() => {}}
+          onStop={onStop}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Terminate" }));
+      expect(onStop).toHaveBeenCalledWith(run, "terminate");
+    });
+  });
+
   describe("environment-name decoration", () => {
     it("appends environmentName when provided", () => {
       render(
@@ -321,26 +399,42 @@ describe("EnvActionAnchorList", () => {
     }
   });
 
-  it("stops ticking after the only running anchor is dismissed", async () => {
+  it("stops ticking after the only running anchor exits and is dismissed", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     const clearIntervalSpy = vi.spyOn(window, "clearInterval");
     try {
-      render(
+      const runtime = {
+        environmentName: "PwrAgnt",
+        actionRuns: [
+          buildRun({
+            runId: "dismissed-running-run",
+            startedAt: Date.now(),
+            status: "started",
+          }),
+        ],
+      };
+      const { rerender } = render(
         <EnvActionAnchorList
-          runtime={{
-            environmentName: "PwrAgnt",
-            actionRuns: [
-              buildRun({
-                runId: "dismissed-running-run",
-                startedAt: Date.now(),
-                status: "started",
-              }),
-            ],
-          }}
+          runtime={runtime}
         />,
       );
 
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      rerender(
+        <EnvActionAnchorList
+          runtime={{
+            ...runtime,
+            actionRuns: [
+              {
+                ...runtime.actionRuns[0],
+                status: "failed",
+                exitSignal: "SIGTERM",
+                exitedAt: Date.now(),
+              },
+            ],
+          }}
+        />,
+      );
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
       await waitFor(() => {

@@ -43,6 +43,7 @@ import {
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
+  type CodexEnvironmentActionRun,
   type CodexEnvironmentOption,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
@@ -78,6 +79,8 @@ import {
   type RetainThreadBranchDriftResponse,
   type RunCodexEnvironmentActionRequest,
   type RunCodexEnvironmentActionResponse,
+  type StopCodexEnvironmentActionRequest,
+  type StopCodexEnvironmentActionResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetCodexThreadEnvironmentResponse,
   type SetAcpSessionRuntimeOptionRequest,
@@ -264,6 +267,7 @@ import {
   applyLocalCodexEnvironmentSelection,
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
+  stopCodexEnvironmentDetachedCommand,
   type CodexEnvironmentCommandRunner,
   type CodexEnvironmentDetachedExit,
   type CodexEnvironmentDetachedOutput,
@@ -8469,6 +8473,82 @@ export class DesktopBackendRegistry {
     );
   }
 
+  async stopCodexEnvironmentAction(
+    request: StopCodexEnvironmentActionRequest,
+  ): Promise<StopCodexEnvironmentActionResponse> {
+    return this.withCodexEnvironmentRuntimeLock(
+      request.backend,
+      request.threadId,
+      async () => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: request.backend,
+          threadId: request.threadId,
+        });
+        const runtime = overlay?.codexEnvironmentRuntime;
+        if (!runtime) {
+          throw new Error("This thread does not have a selected environment.");
+        }
+
+        const currentRuns = readCodexEnvironmentActionRuns(runtime);
+        const matchingRun = currentRuns.find((run) => run.runId === request.runId);
+        if (!matchingRun) {
+          throw new Error("This environment action run is no longer available.");
+        }
+        if (matchingRun.status !== "started") {
+          return {
+            backend: request.backend,
+            threadId: request.threadId,
+            codexEnvironmentRuntime: runtime,
+          };
+        }
+
+        const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
+          kind: "patch",
+          runId: request.runId,
+          patch: {
+            terminationMode: request.mode,
+            terminationRequestedAt:
+              matchingRun.terminationRequestedAt ?? Date.now(),
+          },
+        });
+        const nextRuntime: CodexThreadEnvironmentRuntime = {
+          ...runtime,
+          actionRuns: nextRuns,
+        };
+        await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: nextRuntime,
+        });
+        this.invalidateThreadListCache(request.backend);
+        await this.emitCodexEnvironmentRuntimeUpdated({
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: nextRuntime,
+        });
+
+        const result = stopCodexEnvironmentDetachedCommand(
+          request.runId,
+          request.mode,
+        );
+        if (!result.found) {
+          backendRegistryLog.warn("codex-environment-action-stop-missing-process", {
+            backend: request.backend,
+            threadId: request.threadId,
+            runId: request.runId,
+            mode: request.mode,
+          });
+        }
+
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: nextRuntime,
+        };
+      },
+    );
+  }
+
   private async refreshCodexEnvironmentRuntimeActions(
     runtime: CodexThreadEnvironmentRuntime,
     _actionId: string,
@@ -8745,10 +8825,25 @@ export class DesktopBackendRegistry {
           if (matching.output === params.event.output) {
             return;
           }
+          // A null/null close can come from a wrapper path while the useful
+          // descendant is still producing output. Fresh output proves the run
+          // is not terminal, so keep the UI in a controllable running state.
+          const ambiguousTerminalFailure =
+            matching.status === "failed" &&
+            matching.exitCode === undefined &&
+            matching.exitSignal === undefined;
+          const patch: Partial<CodexEnvironmentActionRun> = {
+            output: params.event.output,
+          };
+          if (ambiguousTerminalFailure) {
+            patch.status = "started";
+            patch.durationMs = undefined;
+            patch.exitedAt = undefined;
+          }
           const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
             kind: "patch",
             runId: params.runId,
-            patch: { output: params.event.output },
+            patch,
           });
           const next: CodexThreadEnvironmentRuntime = {
             ...current,

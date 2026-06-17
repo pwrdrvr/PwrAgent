@@ -514,15 +514,17 @@ export type DesktopSettingsSnapshot = {
    * open, and which context-rail tab was last active. `activeContextTab`
    * is a plain string here; the renderer validates it against its known
    * tab ids and falls back to the default when unrecognized.
-   * `editedFilesDock` follows the same plain-string + renderer-validated
+   * `editedFilesDock` and `actionRunsDock` follow the same plain-string +
+   * renderer-validated
    * pattern: "above" (default, edited files render above the composer)
-   * or "sidebar" (edited files only show in the context-rail Edits tab).
+   * or "sidebar" (the content only shows in its context-rail tab).
    */
   ui: {
     sidebarHidden: DesktopSettingsValue<boolean>;
     contextRailPinned: DesktopSettingsValue<boolean>;
     activeContextTab: DesktopSettingsValue<string>;
     editedFilesDock: DesktopSettingsValue<string>;
+    actionRunsDock: DesktopSettingsValue<string>;
   };
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
@@ -728,6 +730,7 @@ export type DesktopSettingsConfigPatch = {
     contextRailPinned?: boolean;
     activeContextTab?: string;
     editedFilesDock?: string;
+    actionRunsDock?: string;
   };
   messaging?: {
     enabled?: boolean;

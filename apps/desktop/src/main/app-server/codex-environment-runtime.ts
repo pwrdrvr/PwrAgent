@@ -135,6 +135,11 @@ export type CodexEnvironmentCommandParams = {
    * `onDetachedExit.output`, so callers don't need to merge.
    */
   onDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
+  /**
+   * Stable key used by the UI/backend to stop a detached process tree.
+   * Intended to be the action runId.
+   */
+  detachedTerminationKey?: string;
 };
 
 export type CodexEnvironmentDetachedExit = {
@@ -150,6 +155,7 @@ export type CodexEnvironmentDetachedOutput = {
 };
 
 export const DETACHED_OUTPUT_SNAPSHOT_MS = 500;
+const DETACHED_STOP_SIGKILL_GRACE_MS = 2_000;
 
 export type CodexEnvironmentCommandResult = {
   durationMs?: number;
@@ -167,6 +173,53 @@ type ShellEnvironmentCaptureTarget = {
 export type CodexEnvironmentCommandRunner = (
   params: CodexEnvironmentCommandParams,
 ) => Promise<CodexEnvironmentCommandResult>;
+
+type DetachedCommandProcess = {
+  killTree: (signal: NodeJS.Signals) => void;
+  closed: () => boolean;
+  killHandle?: NodeJS.Timeout;
+};
+
+const detachedCommandProcesses = new Map<string, DetachedCommandProcess>();
+
+export type CodexEnvironmentDetachedCommandStopMode = "stop" | "terminate";
+
+export type CodexEnvironmentDetachedCommandStopResult = {
+  found: boolean;
+  alreadyClosed: boolean;
+};
+
+export function stopCodexEnvironmentDetachedCommand(
+  terminationKey: string,
+  mode: CodexEnvironmentDetachedCommandStopMode,
+): CodexEnvironmentDetachedCommandStopResult {
+  const processEntry = detachedCommandProcesses.get(terminationKey);
+  if (!processEntry) {
+    return { found: false, alreadyClosed: false };
+  }
+  if (processEntry.closed()) {
+    detachedCommandProcesses.delete(terminationKey);
+    return { found: true, alreadyClosed: true };
+  }
+
+  if (processEntry.killHandle) {
+    clearTimeout(processEntry.killHandle);
+    processEntry.killHandle = undefined;
+  }
+
+  if (mode === "terminate") {
+    processEntry.killTree("SIGKILL");
+    return { found: true, alreadyClosed: false };
+  }
+
+  processEntry.killTree("SIGTERM");
+  processEntry.killHandle = setTimeout(() => {
+    if (!processEntry.closed()) {
+      processEntry.killTree("SIGKILL");
+    }
+  }, DETACHED_STOP_SIGKILL_GRACE_MS);
+  return { found: true, alreadyClosed: false };
+}
 
 export async function applyLocalCodexEnvironmentSelection(params: {
   commandRunner?: CodexEnvironmentCommandRunner;
@@ -347,6 +400,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         command: selection.action.command,
         env: actionEnv,
         mode: "detach",
+        detachedTerminationKey: runId,
         onDetachedExit: params.onActionDetachedExit,
         onDetachedOutput: params.onActionDetachedOutput,
       });
@@ -425,6 +479,7 @@ export async function startLocalCodexEnvironmentAction(params: {
       command: action.command,
       env: actionEnv,
       mode: "detach",
+      detachedTerminationKey: params.runId,
       onDetachedExit: params.onDetachedExit,
       onDetachedOutput: params.onDetachedOutput,
     });
@@ -527,9 +582,13 @@ function runShellCommand(
           // (the actual command, e.g. `sleep`) linger, which keeps the `close`
           // event from firing (timeouts hang) and holds handles on the
           // workspace temp dir (EBUSY on cleanup). Kill the whole process tree.
-          spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-            stdio: "ignore",
-          });
+          // Match POSIX stop semantics: SIGTERM gets a non-forced taskkill,
+          // while SIGKILL is the immediate/fallback forced termination.
+          const taskkillArgs = ["/pid", String(child.pid), "/t"];
+          if (signal === "SIGKILL") {
+            taskkillArgs.push("/f");
+          }
+          spawnSync("taskkill", taskkillArgs, { stdio: "ignore" });
         }
       } catch (error) {
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
@@ -538,6 +597,16 @@ function runShellCommand(
           message: error instanceof Error ? error.message : String(error),
         });
       }
+    };
+
+    const registerDetachedProcess = () => {
+      if (params.mode !== "detach" || !params.detachedTerminationKey) {
+        return;
+      }
+      detachedCommandProcesses.set(params.detachedTerminationKey, {
+        killTree: terminateChild,
+        closed: () => closed,
+      });
     };
 
     const settle = (callback: () => void) => {
@@ -673,6 +742,7 @@ function runShellCommand(
 
     if (params.mode === "detach") {
       child.once("spawn", () => {
+        registerDetachedProcess();
         // Let the parent exit independently of this child. child.unref()
         // alone doesn't suffice when stdio is "pipe": the libuv pipe
         // handles on child.stdout/stderr also keep the parent's event
@@ -707,6 +777,16 @@ function runShellCommand(
       // onDetachedExit so callers can persist the exit details to
       // overlay state for the anchored env-action output UI.
       child.once("close", (code, signal) => {
+        closed = true;
+        if (params.detachedTerminationKey) {
+          const processEntry = detachedCommandProcesses.get(
+            params.detachedTerminationKey,
+          );
+          if (processEntry?.killHandle) {
+            clearTimeout(processEntry.killHandle);
+          }
+          detachedCommandProcesses.delete(params.detachedTerminationKey);
+        }
         // Cancel any pending throttled snapshot so it doesn't race past
         // onDetachedExit's final-output write to the overlay.
         if (snapshotTimer) {

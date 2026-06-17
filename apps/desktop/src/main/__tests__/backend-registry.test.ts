@@ -8359,6 +8359,118 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
     }
   });
 
+  it("restores an ambiguously failed detached action to running when output continues", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-live-output-"));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: root,
+            setupEnabled: false,
+            actions: [
+              {
+                id: "dev",
+                name: "Dev",
+                command: "pnpm dev",
+              },
+            ],
+          },
+        },
+      },
+    });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
+    });
+
+    try {
+      const response = await registry.runCodexEnvironmentAction({
+        backend: "codex",
+        threadId: "thread-1",
+        actionId: "dev",
+      });
+      const runId = response.codexEnvironmentRuntime?.actionRuns?.[0]?.runId;
+      expect(runId).toBeTruthy();
+      expect(commandParams).toBeTruthy();
+
+      commandParams?.onDetachedOutput?.({ output: "booting" });
+      await expectEventually(
+        async () =>
+          (
+            await overlayStore.getThreadOverlayState({
+              backend: "codex",
+              threadId: "thread-1",
+            })
+          )?.codexEnvironmentRuntime?.actionRuns?.[0]?.output,
+        "booting",
+      );
+
+      commandParams?.onDetachedExit?.({
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 7_000,
+        output: "booting",
+      });
+      await expectEventually(
+        async () =>
+          (
+            await overlayStore.getThreadOverlayState({
+              backend: "codex",
+              threadId: "thread-1",
+            })
+          )?.codexEnvironmentRuntime?.actionRuns?.[0]?.status,
+        "failed",
+      );
+
+      commandParams?.onDetachedOutput?.({ output: "booting\nready" });
+      await expectEventually(
+        async () =>
+          (
+            await overlayStore.getThreadOverlayState({
+              backend: "codex",
+              threadId: "thread-1",
+            })
+          )?.codexEnvironmentRuntime?.actionRuns?.[0]?.status,
+        "started",
+      );
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      const run = overlay?.codexEnvironmentRuntime?.actionRuns?.[0];
+      expect(run).toMatchObject({
+        runId,
+        status: "started",
+        output: "booting\nready",
+      });
+      expect(run?.durationMs).toBeUndefined();
+      expect(run?.exitedAt).toBeUndefined();
+      expect(run?.exitCode).toBeUndefined();
+      expect(run?.exitSignal).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("attributes output to the right run when two env actions run concurrently on the same thread", async () => {
     // Multi-instance regression test: Start + Test (or E2E + Unit) workflows
     // require independent run tracking, otherwise a second concurrent run

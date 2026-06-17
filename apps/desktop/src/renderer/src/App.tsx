@@ -32,9 +32,12 @@ import {
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import {
   DEFAULT_CONTEXT_TAB,
+  DEFAULT_ACTION_RUNS_DOCK,
   DEFAULT_EDITED_FILES_DOCK,
+  isActionRunsDock,
   isContextTabId,
   isEditedFilesDock,
+  type ActionRunsDock,
   type ContextTabId,
   type EditedFilesDock,
 } from "./features/thread-detail/context-panels/context-tab";
@@ -194,6 +197,9 @@ function DesktopAppShell(props: {
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
   const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
     DEFAULT_EDITED_FILES_DOCK,
+  );
+  const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
+    DEFAULT_ACTION_RUNS_DOCK,
   );
   const [mainView, setMainView] = useState<
     "thread" | "settings" | "automations" | "search"
@@ -415,6 +421,13 @@ function DesktopAppShell(props: {
     },
     [writeConfig],
   );
+  const setActionRunsDockPersisted = useCallback(
+    (dock: ActionRunsDock) => {
+      setActionRunsDock(dock);
+      void writeConfig({ ui: { actionRunsDock: dock } });
+    },
+    [writeConfig],
+  );
 
   // Adopt the persisted layout prefs once the settings snapshot arrives.
   // Guarded so later snapshot refreshes never clobber an in-session toggle.
@@ -433,6 +446,10 @@ function DesktopAppShell(props: {
     const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
     if (isEditedFilesDock(editedFilesDockPref)) {
       setEditedFilesDock(editedFilesDockPref);
+    }
+    const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
+    if (isActionRunsDock(actionRunsDockPref)) {
+      setActionRunsDock(actionRunsDockPref);
     }
   }, [uiPrefs]);
 
@@ -863,6 +880,8 @@ function DesktopAppShell(props: {
     onActiveContextTabChange: setActiveContextTabPersisted,
     editedFilesDock,
     onEditedFilesDockChange: setEditedFilesDockPersisted,
+    actionRunsDock,
+    onActionRunsDockChange: setActionRunsDockPersisted,
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,

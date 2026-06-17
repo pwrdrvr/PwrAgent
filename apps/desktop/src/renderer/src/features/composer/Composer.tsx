@@ -75,6 +75,12 @@ import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
+  EnvActionRunEntry,
+  EnvActionRunsView,
+  formatDurationMs,
+  formatRunningDurationMs,
+} from "../thread-detail/EnvActionRunsView";
+import {
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
@@ -127,6 +133,14 @@ type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  onMoveEnvActionsToSidebar?: () => void;
+  onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
+  onStopEnvActionRun?: (
+    run: CodexEnvironmentActionRun,
+    mode: "stop" | "terminate"
+  ) => void;
+  hiddenEnvActionRunIds?: ReadonlySet<string>;
+  showEnvActionAnchors?: boolean;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
@@ -576,56 +590,13 @@ function QueuedImageAttachments(props: {
   );
 }
 
-const ENV_ACTION_OUTPUT_MAX_LINES = 500;
 const ENV_ACTION_RUN_CONFIRMATION_MS = 5_000;
-
-function tailLines(text: string, maxLines: number): string {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) return text;
-  const dropped = lines.length - maxLines;
-  return [
-    `[…${dropped} earlier lines truncated]`,
-    ...lines.slice(-maxLines),
-  ].join("\n");
-}
-
-type EnvActionOutputChunk = {
-  id: number;
-  text: string;
-};
-
-type EnvActionOutputState = {
-  rawOutput: string;
-  chunks: EnvActionOutputChunk[];
-  nextChunkId: number;
-};
 
 type ThreadEnvActionStartingKey = {
   actionId: string;
   backend: NavigationThreadSummary["source"];
   threadId: string;
 };
-
-function buildEnvActionOutputState(
-  output: string,
-  nextChunkId = 1,
-): EnvActionOutputState {
-  const text = tailLines(output, ENV_ACTION_OUTPUT_MAX_LINES);
-  return {
-    rawOutput: output,
-    chunks: text ? [{ id: nextChunkId - 1, text }] : [],
-    nextChunkId,
-  };
-}
-
-function trimEnvActionOutputChunks(
-  chunks: EnvActionOutputChunk[],
-): EnvActionOutputChunk[] {
-  const text = chunks.map((chunk) => chunk.text).join("");
-  const trimmed = tailLines(text, ENV_ACTION_OUTPUT_MAX_LINES);
-  if (trimmed === text) return chunks;
-  return [{ id: chunks.at(-1)?.id ?? 0, text: trimmed }];
-}
 
 function sameThreadEnvActionStartingKey(
   left: ThreadEnvActionStartingKey | undefined,
@@ -639,60 +610,7 @@ function sameThreadEnvActionStartingKey(
   );
 }
 
-function elementContainsSelection(element: HTMLElement | null): boolean {
-  if (!element) return false;
-  const selection = element.ownerDocument.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return false;
-  }
-  for (let index = 0; index < selection.rangeCount; index += 1) {
-    const range = selection.getRangeAt(index);
-    if (
-      element.contains(range.startContainer) ||
-      element.contains(range.endContainer)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Exported for unit testing; the existing call sites import via the
-// in-file identifier.
-export function formatDurationMs(
-  ms?: number,
-  options?: { coarseAfterMinute?: boolean },
-): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  if (ms < 1_000) return `${Math.round(ms)}ms`;
-  // Always integer seconds — the previous `toFixed(1)` for elapsed < 10s
-  // produced "0.9s" / "1.9s" displays that kept changing the last digit
-  // every render even when the second hadn't actually advanced.
-  const totalSeconds = Math.round(ms / 1_000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  // Convert via totalSeconds rather than `Math.round(seconds % 60)`,
-  // which would have flipped `seconds=119.5` into `"1m 60s"` because of
-  // half-up rounding at the 60-second boundary.
-  const minutes = Math.floor(totalSeconds / 60);
-  // For live counters (e.g., the "running for Xm" anchor meta),
-  // coarseAfterMinute drops the seconds portion entirely past 1m so
-  // the display only changes on minute boundaries — otherwise the
-  // ticking "Xm Ys" with sub-minute updates was a distracting noise
-  // floor for long-running actions like `pnpm dev`. Static one-shot
-  // displays (e.g., "ran 2m 30s" on an already-exited run) leave the
-  // option off and keep full precision since the value never changes
-  // after first paint.
-  if (options?.coarseAfterMinute) return `${minutes}m`;
-  const remainder = totalSeconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
-}
-
-export function formatRunningDurationMs(ms?: number): string {
-  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
-  const totalSeconds = Math.floor(ms / 1_000);
-  if (totalSeconds < 1) return "0s";
-  return formatDurationMs(totalSeconds * 1_000);
-}
+export { formatDurationMs, formatRunningDurationMs };
 
 /**
  * Set of run identities the user has explicitly dismissed in this session.
@@ -717,9 +635,14 @@ const envActionAnchorSessionStartedAt = Date.now();
 // reach the anchor through the Composer.
 export function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
+  hiddenRunIds?: ReadonlySet<string>;
+  onDismissRun?: (run: CodexEnvironmentActionRun) => void;
+  onMoveToSidebar?: () => void;
+  onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
   const visible = runs.filter((run) => {
+    if (props.hiddenRunIds?.has(run.runId)) return false;
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
     const latestActivityAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
     // Anything not started during this renderer session is treated as
@@ -736,15 +659,6 @@ export function EnvActionAnchorList(props: {
     }
     return true;
   });
-  const hasVisibleStartedRun = visible.some((run) => run.status === "started");
-  const [, setElapsedTick] = useState(0);
-  useEffect(() => {
-    if (!hasVisibleStartedRun) return undefined;
-    const handle = setInterval(() => {
-      setElapsedTick((tick) => tick + 1);
-    }, 1_000);
-    return () => clearInterval(handle);
-  }, [hasVisibleStartedRun]);
   // Bumped after dismissal to force a re-render (the dismissed-set lives
   // outside React state).
   const [, setDismissTick] = useState(0);
@@ -752,19 +666,18 @@ export function EnvActionAnchorList(props: {
   if (visible.length === 0) return null;
 
   return (
-    <>
-      {visible.map((run) => (
-        <EnvActionAnchorEntry
-          key={run.runId}
-          run={run}
-          environmentName={props.runtime?.environmentName}
-          onDismiss={() => {
-            dismissedEnvActionAnchorKeys.add(run.runId);
-            setDismissTick((tick) => tick + 1);
-          }}
-        />
-      ))}
-    </>
+    <EnvActionRunsView
+      environmentName={props.runtime?.environmentName}
+      onDismiss={(run) => {
+        dismissedEnvActionAnchorKeys.add(run.runId);
+        props.onDismissRun?.(run);
+        setDismissTick((tick) => tick + 1);
+      }}
+      onMoveToSidebar={props.onMoveToSidebar}
+      onStop={props.onStopRun}
+      placement="composer"
+      runs={visible}
+    />
   );
 }
 
@@ -774,158 +687,16 @@ export function EnvActionAnchorEntry(props: {
   run: CodexEnvironmentActionRun;
   environmentName: string | undefined;
   onDismiss: () => void;
+  onStop?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
-  const { run } = props;
-  const status = run.status;
-  const label =
-    status === "started"
-      ? "Env action running"
-      : status === "exited"
-        ? "Env action exited"
-        : "Env action failed";
-
-  const meta: string[] = [];
-  if (run.pid) meta.push(`pid ${run.pid}`);
-  if (status === "started" && typeof run.startedAt === "number") {
-    meta.push(
-      `running for ${formatRunningDurationMs(Date.now() - run.startedAt)}`,
-    );
-  }
-  if (status !== "started") {
-    if (typeof run.exitCode === "number") {
-      meta.push(`exit ${run.exitCode}`);
-    } else if (run.exitSignal) {
-      meta.push(`signal ${run.exitSignal}`);
-    }
-    if (run.durationMs) {
-      meta.push(`ran ${formatDurationMs(run.durationMs)}`);
-    }
-  }
-
-  const output = (run.output ?? "").trim();
-  const outputLineCount = output
-    ? tailLines(output, ENV_ACTION_OUTPUT_MAX_LINES).split("\n").length
-    : 0;
-  const modifier =
-    status === "failed"
-      ? "composer__queued--env-action-failed"
-      : status === "exited"
-        ? "composer__queued--env-action-exited"
-        : "composer__queued--env-action-running";
-
   return (
-    <details
-      className={`composer__queued composer__queued--env-action ${modifier}`}
-      aria-label={label}
-    >
-      <summary className="composer__queued-env-action-summary">
-        <span
-          className="composer__queued-env-action-chevron"
-          aria-hidden="true"
-        />
-        <span className="composer__queued-env-action-summary-text">
-          <span className="composer__queued-label">{label}</span>
-          <span className="composer__queued-text">
-            {run.actionName}
-            {props.environmentName ? ` · ${props.environmentName}` : ""}
-            {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
-          </span>
-        </span>
-        <button
-          className="composer__secondary-action composer__queued-env-action-dismiss"
-          type="button"
-          onClick={(event) => {
-            // Prevent the click from toggling the surrounding <details>.
-            event.preventDefault();
-            event.stopPropagation();
-            props.onDismiss();
-          }}
-        >
-          Dismiss
-        </button>
-      </summary>
-      <div className="composer__queued-env-action-body">
-        {run.command ? (
-          <div className="composer__queued-env-action-section">
-            <div className="composer__queued-env-action-section-label">
-              Command
-            </div>
-            <pre className="composer__queued-env-action-command-block">
-              <code>$ {run.command}</code>
-            </pre>
-          </div>
-        ) : null}
-        <div className="composer__queued-env-action-section">
-          <div className="composer__queued-env-action-section-label">
-            Output
-            {outputLineCount
-              ? ` · ${outputLineCount} line${
-                  outputLineCount === 1 ? "" : "s"
-                }`
-              : ""}
-          </div>
-          <EnvActionOutputBlock output={output} status={status} />
-        </div>
-      </div>
-    </details>
-  );
-}
-
-function EnvActionOutputBlock(props: {
-  output: string;
-  status: CodexEnvironmentActionRun["status"];
-}): ReactNode {
-  const outputRef = useRef<HTMLPreElement | null>(null);
-  const [state, setState] = useState<EnvActionOutputState>(() =>
-    buildEnvActionOutputState(props.output),
-  );
-
-  useLayoutEffect(() => {
-    setState((current) => {
-      if (current.rawOutput === props.output) {
-        return current;
-      }
-
-      if (
-        current.rawOutput &&
-        props.output.startsWith(current.rawOutput)
-      ) {
-        const appended = props.output.slice(current.rawOutput.length);
-        if (!appended) {
-          return { ...current, rawOutput: props.output };
-        }
-        const nextChunks = [
-          ...current.chunks,
-          { id: current.nextChunkId, text: appended },
-        ];
-        return {
-          rawOutput: props.output,
-          chunks: elementContainsSelection(outputRef.current)
-            ? nextChunks
-            : trimEnvActionOutputChunks(nextChunks),
-          nextChunkId: current.nextChunkId + 1,
-        };
-      }
-
-      return buildEnvActionOutputState(props.output, current.nextChunkId + 1);
-    });
-  }, [props.output]);
-
-  const placeholder =
-    props.status === "started"
-      ? "(no output yet — waiting for the command to print something)"
-      : "(no output captured)";
-
-  return (
-    <pre className="composer__queued-env-action-output" ref={outputRef}>
-      <code>
-        {state.chunks.length > 0
-          ? state.chunks.map((chunk) => (
-              <span key={chunk.id}>{chunk.text}</span>
-            ))
-          : placeholder}
-      </code>
-    </pre>
+    <EnvActionRunEntry
+      environmentName={props.environmentName}
+      onDismiss={() => props.onDismiss()}
+      onStop={props.onStop}
+      placement="composer"
+      run={props.run}
+    />
   );
 }
 
@@ -5369,7 +5140,15 @@ export function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
-      <EnvActionAnchorList runtime={props.thread?.codexEnvironmentRuntime} />
+      {props.showEnvActionAnchors === false ? null : (
+        <EnvActionAnchorList
+          runtime={props.thread?.codexEnvironmentRuntime}
+          hiddenRunIds={props.hiddenEnvActionRunIds}
+          onDismissRun={props.onDismissEnvActionRun}
+          onMoveToSidebar={props.onMoveEnvActionsToSidebar}
+          onStopRun={props.onStopEnvActionRun}
+        />
+      )}
 
       {pendingSteer ? (
         <div
