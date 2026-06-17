@@ -778,6 +778,251 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows estimated cold and hot context replay counts on pricing cards", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-context-replays",
+      threadId: "thread-1",
+      turnId: "turn-context-replays",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 550_000,
+      uncachedInputTokens: 100_000,
+      cachedInputTokens: 450_000,
+      outputTokens: 2_000,
+      reasoningOutputTokens: 500,
+      totalTokens: 552_500,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 500_000,
+      cachedInputCostMicros: 225_000,
+      outputCostMicros: 75_000,
+      totalCostMicros: 800_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 450_000,
+            currency: "USD",
+            inputTokens: 550_000,
+            outputTokens: 2_000,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 500,
+            threadId: "thread-1",
+            totalCostMicros: 800_000,
+            totalTokens: 552_500,
+            uncachedInputTokens: 100_000,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_000,
+            usageLineCount: 1,
+          },
+        ],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 1 (100,000 uncached · $0.50)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 5 (~90,000 cached avg; 450,000 cached bucket · $0.23)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("splits replay estimates that exceed a plausible context window size", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-large-context-replays",
+      threadId: "thread-1",
+      turnId: "turn-large-context-replays",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 3_714_407,
+      uncachedInputTokens: 453_351,
+      cachedInputTokens: 3_261_056,
+      outputTokens: 13_156,
+      reasoningOutputTokens: 4_891,
+      totalTokens: 3_732_454,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 2_266_755,
+      cachedInputCostMicros: 1_630_528,
+      outputCostMicros: 543_000,
+      totalCostMicros: 4_440_283,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 2 (~226,676 uncached avg; 453,351 uncached bucket · $2.27)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 15 (~217,404 cached avg; 3,261,056 cached bucket · $1.64)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("honors pricing display options for replay estimate costs", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-replay-display-options",
+      threadId: "thread-1",
+      turnId: "turn-replay-display-options",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 550_000,
+      uncachedInputTokens: 100_000,
+      cachedInputTokens: 450_000,
+      outputTokens: 2_000,
+      reasoningOutputTokens: 500,
+      totalTokens: 552_500,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 500_000,
+      cachedInputCostMicros: 225_000,
+      outputCostMicros: 75_000,
+      totalCostMicros: 800_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    const { rerender } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: false,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 1 (100,000 uncached · 13 Codex Credits)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 5 (~90,000 cached avg; 450,000 cached bucket · 5.6 Codex Credits)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.50/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.23/)).not.toBeInTheDocument();
+
+    rerender(
+      <ThreadContextPanel
+        activeTab="pricing"
+        backends={[baseBackend]}
+        onActiveTabChange={() => {}}
+        pinned
+        pricing={{
+          lines: [line],
+          summaries: [],
+        }}
+        pricingDisplayOptions={{
+          codexCredits: true,
+          usd: true,
+        }}
+        thread={baseThread}
+        threadPricingSummaryEnabled
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 1 (100,000 uncached · $0.50 · 13 Codex Credits)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 5 (~90,000 cached avg; 450,000 cached bucket · $0.23 · 5.6 Codex Credits)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not estimate context replays for historical gap rows", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-with-gap",
+      threadId: "thread-1",
+      turnId: "turn-with-gap",
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      model: "gpt-5.5",
+      inputTokens: 150,
+      uncachedInputTokens: 100,
+      cachedInputTokens: 50,
+      outputTokens: 10,
+      reasoningOutputTokens: 0,
+      totalTokens: 160,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeInputTokens: 300_150,
+      cumulativeCachedInputTokens: 200_050,
+      cumulativeUncachedInputTokens: 100_100,
+      cumulativeOutputTokens: 10,
+      cumulativeReasoningOutputTokens: 0,
+      cumulativeTotalTokens: 300_160,
+      uncachedInputCostMicros: 1_000,
+      cachedInputCostMicros: 100,
+      outputCostMicros: 900,
+      totalCostMicros: 2_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
+    expect(screen.queryByText(/cold context replays/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/hot context replays/)).not.toBeInTheDocument();
+  });
+
   it("makes pricing row timestamps scroll the transcript to their turn", () => {
     const onScrollToTurn = vi.fn();
 
