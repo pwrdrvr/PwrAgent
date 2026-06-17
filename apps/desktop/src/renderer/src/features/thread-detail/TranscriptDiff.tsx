@@ -31,9 +31,15 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   }>({ loading: false });
   const diff = props.detail.fileDiff;
   const desktopApi = useDesktopApi();
-  const diffRef = diff?.diffRef;
+  const diffRefs = useMemo(
+    () => diff?.diffRefs ?? (diff?.diffRef ? [diff.diffRef] : []),
+    [diff?.diffRef, diff?.diffRefs],
+  );
+  const diffRefKey = diffRefs.map((ref) => ref.key).join("|");
   const inlineDiffText = diff?.omittedReason ? "" : diff?.diff ?? "";
-  const shouldFetchDiff = Boolean(diffRef && !diff?.diff && !diff?.omittedReason);
+  const shouldFetchDiff = Boolean(
+    diffRefs.length > 0 && !diff?.diff && !diff?.omittedReason,
+  );
   const diffText = shouldFetchDiff ? fetchedDiff.diff ?? "" : inlineDiffText;
   const omittedReason = diff?.omittedReason ?? fetchedDiff.omittedReason;
   const parsed = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
@@ -44,10 +50,10 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   useEffect(() => {
     setIsZoomedIn(false);
     setFocusedView(null);
-  }, [diffText, diffRef?.key, props.detail.path]);
+  }, [diffText, diffRefKey, props.detail.path]);
 
   useEffect(() => {
-    if (!diffRef || !shouldFetchDiff) {
+    if (diffRefs.length === 0 || !shouldFetchDiff) {
       setFetchedDiff({ loading: false });
       return;
     }
@@ -55,7 +61,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     const getThreadFileDiff = desktopApi?.getThreadFileDiff;
     if (!getThreadFileDiff) {
       setFetchedDiff({
-        refKey: diffRef.key,
+        refKey: diffRefKey,
         loading: false,
         omittedReason: "Diff is unavailable in this renderer.",
       });
@@ -63,16 +69,22 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     }
 
     let active = true;
-    setFetchedDiff({ refKey: diffRef.key, loading: true });
-    void getThreadFileDiff({ ref: diffRef })
-      .then((response) => {
+    setFetchedDiff({ refKey: diffRefKey, loading: true });
+    void Promise.all(diffRefs.map((ref) => getThreadFileDiff({ ref })))
+      .then((responses) => {
         if (!active) {
           return;
         }
+        const omitted = responses.find((response) => response.omittedReason);
         setFetchedDiff({
-          refKey: diffRef.key,
-          diff: response.diff,
-          omittedReason: response.omittedReason,
+          refKey: diffRefKey,
+          diff: omitted
+            ? undefined
+            : responses
+                .map((response) => response.diff)
+                .filter((value): value is string => Boolean(value))
+                .join("\n"),
+          omittedReason: omitted?.omittedReason,
           loading: false,
         });
       })
@@ -81,16 +93,16 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
           return;
         }
         setFetchedDiff({
-          refKey: diffRef.key,
+          refKey: diffRefKey,
           loading: false,
-          omittedReason: "Diff is unavailable for this live update.",
+          omittedReason: "Diff is unavailable for this thread entry.",
         });
       });
 
     return () => {
       active = false;
     };
-  }, [desktopApi, diffRef, shouldFetchDiff]);
+  }, [desktopApi, diffRefKey, diffRefs, shouldFetchDiff]);
 
   useEffect(() => {
     if (!diff || omittedReason || !diffText || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
@@ -155,7 +167,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
     );
   }
 
-  if (fetchedDiff.loading && fetchedDiff.refKey === diffRef?.key) {
+  if (fetchedDiff.loading && fetchedDiff.refKey === diffRefKey) {
     return (
       <div className="transcript-diff transcript-diff--omitted">
         {props.detail.path && !props.compact ? (

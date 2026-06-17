@@ -376,6 +376,7 @@ export type AppServerThreadFileDiff = {
   kind: AppServerThreadFileChangeKind;
   diff: string;
   diffRef?: AppServerThreadFileDiffRef;
+  diffRefs?: AppServerThreadFileDiffRef[];
   additions: number;
   removals: number;
   omittedReason?: string;
