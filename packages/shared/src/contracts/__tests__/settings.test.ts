@@ -118,6 +118,7 @@ describe("desktop settings contracts", () => {
         contextRailPinned: { value: false, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
+        actionRunsDock: { value: "above", source: "default" },
       },
       messaging: {
         enabled: {

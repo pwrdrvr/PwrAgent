@@ -270,8 +270,8 @@ export function EnvActionRunEntry(props: {
             <button
               className="composer__secondary-action composer__queued-env-action-sidebar"
               type="button"
-              aria-label="Move action run to the sidebar Actions panel"
-              title="Move action run to the sidebar Actions panel"
+              aria-label="Move action to the sidebar Actions panel"
+              title="Move action to the sidebar Actions panel"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
