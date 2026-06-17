@@ -12039,6 +12039,84 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("completes no-wait Codex native sub-agents from async transcript notifications", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    const nativeThreadId = "019ed784-fd83-7c43-9c5a-cad810e5bee8";
+
+    try {
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          item: {
+            id: "collab-spawn-1",
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            receiverThreadIds: [nativeThreadId],
+            prompt: "Check the status of PR #783.",
+            model: "gpt-5.4-mini",
+            agentsStates: {
+              [nativeThreadId]: {
+                status: "running",
+              },
+            },
+          },
+        },
+      } as AppServerNotification);
+
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          item: {
+            id: "subagent-notification-1",
+            type: "agentMessage",
+            text:
+              "<subagent_notification>\n" +
+              JSON.stringify({
+                agent_path: nativeThreadId,
+                status: {
+                  completed: "PR #783 checks are all green.",
+                },
+              }) +
+              "\n</subagent_notification>",
+          },
+        },
+      } as AppServerNotification);
+
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+      expect(overlay?.subAgents?.[0]).toMatchObject({
+        completedAt: expect.any(Number),
+        lastMessage: "PR #783 checks are all green.",
+        outcome: "success",
+        status: "success",
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(codexClient.readThreadCalls).toHaveLength(0);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("updates Codex native sub-agent summaries from later wait calls", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
