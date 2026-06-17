@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { RENDERER_PAYLOAD_STRING_LIMIT_CHARS } from "@pwragent/shared";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 
 describe("live diff activity normalization", () => {
@@ -101,5 +102,47 @@ describe("live diff activity normalization", () => {
       "Add new.ts",
       "Delete old.ts",
     ]);
+  });
+
+  it("caps aggregate inline diff text across many small file sections", () => {
+    const sections = Array.from({ length: 80 }, (_, index) => {
+      const fileName = `src/file-${index}.ts`;
+      const addedLine = `+${"x".repeat(700)}`;
+      return [
+        `diff --git a/${fileName} b/${fileName}`,
+        `--- a/${fileName}`,
+        `+++ b/${fileName}`,
+        "@@ -1,1 +1,2 @@",
+        " existing",
+        addedLine,
+      ].join("\n");
+    });
+    const entry = buildLiveDiffActivityEntry({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-large",
+        turnId: "turn-large",
+        diff: sections.join("\n"),
+      },
+    });
+
+    const totalInlineDiffChars =
+      entry?.details.reduce(
+        (total, detail) => total + (detail.fileDiff?.diff.length ?? 0),
+        0,
+      ) ?? 0;
+    const omittedDetails =
+      entry?.details.filter((detail) => detail.fileDiff?.omittedReason) ?? [];
+
+    expect(entry?.details).toHaveLength(80);
+    expect(entry?.summary).toBe("Edited 80 files, +80, -0");
+    expect(totalInlineDiffChars).toBeLessThanOrEqual(
+      RENDERER_PAYLOAD_STRING_LIMIT_CHARS,
+    );
+    expect(omittedDetails.length).toBeGreaterThan(0);
+    expect(omittedDetails[0]?.fileDiff).toMatchObject({
+      diff: "",
+      omittedReason: expect.stringContaining("cumulative diff exceeds"),
+    });
   });
 });

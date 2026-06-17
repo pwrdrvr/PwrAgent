@@ -4,6 +4,17 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadFileChangeKind,
 } from "@pwragent/shared";
+import { RENDERER_PAYLOAD_STRING_LIMIT_CHARS } from "@pwragent/shared";
+
+const LIVE_DIFF_INLINE_BUDGET_CHARS = RENDERER_PAYLOAD_STRING_LIMIT_CHARS;
+
+function liveDiffOmittedReason(originalLength: number): string {
+  return [
+    "Live diff omitted from inline view because the cumulative diff exceeds",
+    `${LIVE_DIFF_INLINE_BUDGET_CHARS.toLocaleString()} characters.`,
+    `Original section length: ${originalLength.toLocaleString()} characters.`,
+  ].join(" ");
+}
 
 function summarizeDiff(diff: string): { additions: number; removals: number } {
   let additions = 0;
@@ -118,6 +129,7 @@ export function extractLiveDiffActivityDetails(params: {
 
   const normalizedSections = sections.length > 0 ? sections : [{ lines }];
   const details: AppServerThreadActivityDetail[] = [];
+  let remainingInlineDiffChars = LIVE_DIFF_INLINE_BUDGET_CHARS;
 
   for (const [index, section] of normalizedSections.entries()) {
     const rawBefore = section.lines.find((line) => line.startsWith("--- "))?.slice(4).trim();
@@ -131,6 +143,10 @@ export function extractLiveDiffActivityDetails(params: {
 
     const kind = inferDiffKind(section.lines);
     const diffSummary = summarizeDiff(diffText);
+    const includeInlineDiff = diffText.length <= remainingInlineDiffChars;
+    if (includeInlineDiff) {
+      remainingInlineDiffChars -= diffText.length;
+    }
 
     details.push({
       id: `${params.entryId}-${index + 1}`,
@@ -139,9 +155,15 @@ export function extractLiveDiffActivityDetails(params: {
       ...(path ? { path } : {}),
       fileDiff: {
         kind,
-        diff: diffText,
+        diff: includeInlineDiff ? diffText : "",
         additions: diffSummary.additions,
         removals: diffSummary.removals,
+        ...(includeInlineDiff
+          ? {}
+          : {
+              omittedReason: liveDiffOmittedReason(diffText.length),
+              originalLength: diffText.length,
+            }),
       },
     });
   }
