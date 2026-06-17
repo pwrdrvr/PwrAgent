@@ -1644,6 +1644,7 @@ type CodexNativeSubAgentTool =
 type CodexNativeSubAgentCall = {
   item: Record<string, unknown>;
   itemId?: string;
+  parentTurnId?: string;
   receiverThreadIds: string[];
   receiverThreadNames: Map<string, string>;
   tool: string;
@@ -1732,6 +1733,19 @@ function normalizeCodexNativeAgentName(value: unknown): string | undefined {
   }
   const normalized = value.replace(/\s+/g, " ").trim().replace(/^@+/, "");
   return normalized ? truncateSubAgentText(normalized, 80) : undefined;
+}
+
+function extractCodexNativeSpawnedAgentNames(text: string): string[] {
+  const names: string[] = [];
+  const pattern =
+    /Spawned\s+sub-agent\s+(?:`([^`]+)`|@?([A-Za-z][A-Za-z0-9_.-]{0,79}))/gi;
+  for (const match of text.matchAll(pattern)) {
+    const name = normalizeCodexNativeAgentName(match[1] ?? match[2]);
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 function readCodexNativeAgentNameFromSource(
@@ -1837,6 +1851,9 @@ function readCodexNativeSubAgentCalls(
     candidates.push(item);
   }
   const turn = readRecord(params?.turn);
+  const notificationTurnId =
+    readOptionalString(params, ["turnId", "turn_id"]) ??
+    readOptionalString(turn, ["id", "turnId", "turn_id"]);
   const turnItems = Array.isArray(turn?.items) ? turn.items : [];
   for (const turnItem of turnItems) {
     const record = readRecord(turnItem);
@@ -1861,6 +1878,9 @@ function readCodexNativeSubAgentCalls(
       {
         item: candidate,
         itemId: readOptionalString(candidate, ["id", "itemId", "item_id"]),
+        parentTurnId:
+          readOptionalString(candidate, ["turnId", "turn_id"]) ??
+          notificationTurnId,
         receiverThreadIds: readStringArrayLike(candidate, [
           "receiverThreadIds",
           "receiver_thread_ids",
@@ -11497,6 +11517,67 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async recordCodexNativeSubAgentNamesFromTurn(event: AgentEvent): Promise<void> {
+    if (event.backend !== "codex" || event.notification.method !== "turn/completed") {
+      return;
+    }
+    const parentThreadId = event.notification.params.threadId;
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    const text = finalTextFromTerminalNotification(event.notification);
+    if (!parentThreadId || !turnId || !text) {
+      return;
+    }
+    const names = extractCodexNativeSpawnedAgentNames(text);
+    if (names.length === 0) {
+      return;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: parentThreadId,
+    });
+    const candidates = (overlay?.subAgents ?? [])
+      .filter(
+        (subAgent) =>
+          subAgent.monitorId.startsWith("codex-native:") &&
+          subAgent.monitorTurnId === turnId &&
+          !subAgent.agentName,
+      )
+      .sort((left, right) => left.createdAt - right.createdAt);
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const count = Math.min(candidates.length, names.length);
+    const now = Date.now();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidates[index];
+      const agentName = names[index];
+      if (!candidate || !agentName) {
+        continue;
+      }
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: "codex",
+        threadId: parentThreadId,
+        subAgent: {
+          ...candidate,
+          agentName,
+          updatedAt: now,
+        },
+      });
+    }
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: parentThreadId,
+        },
+      },
+    });
+  }
+
   private async persistCodexNativeSubAgent(params: {
     call: CodexNativeSubAgentCall;
     parentThreadId: string;
@@ -11564,6 +11645,11 @@ export class DesktopBackendRegistry {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       monitorThreadId: params.receiverThreadId,
+      ...(params.call.parentTurnId
+        ? { monitorTurnId: params.call.parentTurnId }
+        : existing?.monitorTurnId
+          ? { monitorTurnId: existing.monitorTurnId }
+          : {}),
       ...(agentName ? { agentName } : {}),
       ...(model
         ? { preferredModel: model }
@@ -15174,6 +15260,7 @@ export class DesktopBackendRegistry {
 
     await this.recordLiveThreadUsage(event);
     await this.recordCodexNativeSubAgentActivity(event);
+    await this.recordCodexNativeSubAgentNamesFromTurn(event);
     await this.recordTaskMonitorUsage(event);
 
     this.rememberThreadTitleFromEvent(event);

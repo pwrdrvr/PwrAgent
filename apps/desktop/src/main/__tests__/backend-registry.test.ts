@@ -11916,6 +11916,7 @@ command = "pnpm dev"
     expect(overlay?.subAgents?.[0]).toMatchObject({
       monitorId: `codex-native:${nativeThreadId}`,
       monitorThreadId: nativeThreadId,
+      monitorTurnId: "turn-1",
       agentName: "Poincare",
       preferredModel: "gpt-5.4-mini",
       preferredReasoningEffort: "medium",
@@ -11957,6 +11958,83 @@ command = "pnpm dev"
       },
     });
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(2);
+
+    await registry.close();
+  });
+
+  it("fills Codex native sub-agent names from parent assistant output", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    const nativeThreadId = "019ebb70-2c58-7143-850e-0a699607c755";
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-1",
+        item: {
+          id: "collab-spawn-1",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          receiverThreadIds: [nativeThreadId],
+          prompt: "Check the status of PR #783.",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
+          agentsStates: {
+            [nativeThreadId]: {
+              status: "running",
+            },
+          },
+        },
+      },
+    } as AppServerNotification);
+    let overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      monitorTurnId: "turn-1",
+    });
+    expect(overlay?.subAgents?.[0]?.agentName).toBeUndefined();
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [
+            {
+              type: "text",
+              text: "Spawned sub-agent Huygens for PR #783 using `gpt-5.4-mini` with low reasoning. I did not wait.",
+            },
+          ],
+        },
+      },
+    } as AppServerNotification);
+
+    overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      agentName: "Huygens",
+      monitorTurnId: "turn-1",
+      preferredModel: "gpt-5.4-mini",
+      preferredReasoningEffort: "low",
+    });
 
     await registry.close();
   });
