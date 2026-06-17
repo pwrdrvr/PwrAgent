@@ -229,28 +229,32 @@ export function EnvActionRunEntry(props: {
           {status === "started" ? (
             <>
               <button
-                className="composer__secondary-action composer__queued-env-action-stop"
+                className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-stop"
                 type="button"
                 disabled={stopping}
+                aria-label="Stop"
+                title="Stop gracefully"
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
                   props.onStop?.(run, "stop");
                 }}
               >
-                Stop
+                <EnvActionStopIcon />
               </button>
               <button
-                className="composer__secondary-action composer__queued-env-action-terminate"
+                className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-terminate"
                 type="button"
                 disabled={stopping && terminationMode === "terminate"}
+                aria-label="Terminate"
+                title="Terminate process tree now"
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
                   props.onStop?.(run, "terminate");
                 }}
               >
-                Terminate
+                <EnvActionTerminateIcon />
               </button>
             </>
           ) : (
@@ -268,7 +272,7 @@ export function EnvActionRunEntry(props: {
           )}
           {props.placement === "composer" && props.onMoveToSidebar ? (
             <button
-              className="composer__secondary-action composer__queued-env-action-sidebar"
+              className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-sidebar"
               type="button"
               aria-label="Move action to the sidebar Actions panel"
               title="Move action to the sidebar Actions panel"
@@ -278,7 +282,7 @@ export function EnvActionRunEntry(props: {
                 props.onMoveToSidebar?.();
               }}
             >
-              Sidebar
+              <EnvActionSidebarIcon />
             </button>
           ) : null}
         </span>
@@ -307,6 +311,67 @@ export function EnvActionRunEntry(props: {
         </div>
       </div>
     </details>
+  );
+}
+
+function EnvActionStopIcon(): ReactNode {
+  return (
+    <svg
+      className="composer__queued-env-action-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="7" y="7" width="10" height="10" rx="1.5" />
+    </svg>
+  );
+}
+
+function EnvActionTerminateIcon(): ReactNode {
+  return (
+    <svg
+      className="composer__queued-env-action-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" />
+      <path d="m9 9 6 6" />
+      <path d="m15 9-6 6" />
+    </svg>
+  );
+}
+
+function EnvActionSidebarIcon(): ReactNode {
+  return (
+    <svg
+      className="composer__queued-env-action-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M10 5v14" />
+      <path d="m15 10 3 2-3 2" />
+    </svg>
   );
 }
 

@@ -12388,7 +12388,55 @@ textarea,
 .composer__queued-env-action-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.composer__queued-env-action-control {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-input) 78%, transparent);
+  color: var(--text-muted);
+}
+
+.composer__queued-env-action-control:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-border) 72%, var(--border-subtle));
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__queued-env-action-control:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.composer__queued-env-action-stop:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.composer__queued-env-action-terminate {
+  color: color-mix(in srgb, var(--danger-text) 74%, var(--text-muted));
+}
+
+.composer__queued-env-action-terminate:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger-border) 70%, var(--border-subtle));
+  background: color-mix(in srgb, var(--danger-soft) 34%, var(--bg-panel-hover));
+  color: var(--danger-text);
+}
+
+.composer__queued-env-action-sidebar:hover:not(:disabled) {
+  color: var(--accent-bright);
+}
+
+.composer__queued-env-action-icon {
+  display: block;
   flex: 0 0 auto;
 }
 
