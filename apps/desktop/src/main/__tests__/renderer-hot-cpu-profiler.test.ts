@@ -587,7 +587,9 @@ describe("RendererHotCpuProfiler", () => {
     expect(sessionResult.ok).toBe(true);
     if (!sessionResult.ok) return;
 
-    const { target } = createTarget();
+    vi.useFakeTimers();
+
+    const { target, debuggerApi } = createTarget();
     const onHeapSnapshotLimitReached = vi.fn(async () => undefined);
     const onProfileWritten = vi.fn();
     let nowCallCount = 0;
@@ -596,9 +598,10 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101.5),
       createMetric(4, 103),
     ];
+    const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0)]);
     const profiler = new RendererHotCpuProfiler({
       config,
-      getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
+      getAppMetrics,
       onHeapSnapshotLimitReached,
       onProfileWritten,
       session: sessionResult.session,
@@ -611,15 +614,27 @@ describe("RendererHotCpuProfiler", () => {
       now: () => new Date(1_780_000_000_000 + nowCallCount++ * 2_000),
     });
 
-    await profiler.start();
+    try {
+      await profiler.start();
 
-    await vi.waitFor(() => {
-      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
-    });
-    await vi.waitFor(() => {
-      expect(onHeapSnapshotLimitReached).toHaveBeenCalledTimes(1);
-    });
-    await profiler.stop("test-complete");
+      await vi.advanceTimersByTimeAsync(config.startDelayMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+      await vi.advanceTimersByTimeAsync(config.profileDurationMs);
+
+      await vi.waitFor(() => {
+        expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
+      });
+      await vi.waitFor(() => {
+        expect(onHeapSnapshotLimitReached).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      await profiler.stop("test-complete");
+    }
 
     const snapshotFilenames = target.takeHeapSnapshot.mock.calls.map((call) =>
       // The product builds snapshot paths with path.join, so on Windows they
