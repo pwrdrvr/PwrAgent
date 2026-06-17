@@ -218,7 +218,7 @@ import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,
 } from "../../automations/automation-output-decision.js";
-const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;

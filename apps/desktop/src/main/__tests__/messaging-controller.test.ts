@@ -27,17 +27,18 @@ import type {
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared";
-import type {
-  MessagingCapabilityProfile,
-  MessagingSurfaceAction,
-  MessagingChannelKind,
-  MessagingDeliveryScope,
-  MessagingDeliveryResult,
-  MessagingInboundCallbackEvent,
-  MessagingInboundEvent,
-  MessagingInboundTextEvent,
-  MessagingJsonValue,
-  MessagingSurfaceIntent,
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  type MessagingCapabilityProfile,
+  type MessagingSurfaceAction,
+  type MessagingChannelKind,
+  type MessagingDeliveryScope,
+  type MessagingDeliveryResult,
+  type MessagingInboundCallbackEvent,
+  type MessagingInboundEvent,
+  type MessagingInboundTextEvent,
+  type MessagingJsonValue,
+  type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
@@ -9924,6 +9925,59 @@ describe("MessagingController", () => {
           id: "q1",
           allowFreeform: true,
         }),
+      ],
+    });
+  });
+
+  it("keeps Plan questionnaires active for the durable callback lifetime", async () => {
+    let now = 1000;
+    const harness = await createHarness({ now: () => now });
+    await bindThread(harness);
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-long-lived",
+        questions: [
+          {
+            id: "q1",
+            header: "Mode",
+            question: "How should I proceed?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              {
+                label: "Implement (Recommended)",
+                description: "Start coding.",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    const questionnaire = harness.delivered.find(
+      (intent) => intent.kind === "questionnaire",
+    );
+    expect(questionnaire).toBeDefined();
+    await expect(harness.store.getPendingIntent(questionnaire!.id, { now })).resolves
+      .toMatchObject({
+        expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+      });
+
+    now += 5 * 24 * 60 * 60 * 1000;
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildTextEvent("Keep it pragmatic."));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      answers: [
+        {
+          kind: "custom",
+          value: "Keep it pragmatic.",
+        },
       ],
     });
   });
