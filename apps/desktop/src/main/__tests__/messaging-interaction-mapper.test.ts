@@ -123,7 +123,7 @@ describe("DeterministicInteractionMapper", () => {
     });
   });
 
-  it("matches review navigation on answered final questionnaire questions", () => {
+  it("matches submit navigation on answered final questionnaire questions", () => {
     const intent = {
       id: "intent-questionnaire-final",
       kind: "questionnaire",
@@ -146,9 +146,9 @@ describe("DeterministicInteractionMapper", () => {
       ],
     } satisfies MessagingQuestionnaireIntent;
 
-    expect(mapper.mapText({ intent, text: "review" })).toMatchObject({
+    expect(mapper.mapText({ intent, text: "submit" })).toMatchObject({
       kind: "matched",
-      action: { id: "questionnaire:next", label: "Review" },
+      action: { id: "questionnaire:submit", label: "Submit" },
     });
   });
 

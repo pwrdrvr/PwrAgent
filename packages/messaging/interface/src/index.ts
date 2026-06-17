@@ -856,10 +856,10 @@ export function messagingQuestionnaireActions(
   if (messagingQuestionnaireAnswerComplete(answer)) {
     const isFinalQuestion = normalized.currentIndex >= normalized.questions.length - 1;
     actions.push({
-      id: "questionnaire:next",
-      label: isFinalQuestion ? "Review" : "Next",
+      id: isFinalQuestion ? "questionnaire:submit" : "questionnaire:next",
+      label: isFinalQuestion ? "Submit" : "Next",
       style: isFinalQuestion ? "primary" : "navigation",
-      fallbackText: isFinalQuestion ? "review" : "next",
+      fallbackText: isFinalQuestion ? "submit" : "next",
     });
   }
 

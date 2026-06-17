@@ -9925,7 +9925,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("records questionnaire answers, navigates review, and submits through messaging", async () => {
+  it("records questionnaire answers, navigates back and next, and submits through messaging", async () => {
     const harness = await createHarness();
     await bindThread(harness);
     await harness.controller.handleBackendPendingRequest("codex", {
@@ -9994,12 +9994,32 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "tone:option:1" }),
+      buildCallbackEvent({ actionId: "questionnaire:back" }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "questionnaire",
-      phase: "review",
+      phase: "answering",
+      currentIndex: 0,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "questionnaire:next" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      phase: "answering",
+      currentIndex: 1,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "tone:option:1" }),
+    );
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "questionnaire",
+      phase: "submitted",
       answers: [
         {
           kind: "custom",
@@ -10012,28 +10032,6 @@ describe("MessagingController", () => {
         },
       ],
     });
-
-    await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "questionnaire:back" }),
-    );
-
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "questionnaire",
-      phase: "answering",
-      currentIndex: 1,
-    });
-
-    await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "questionnaire:next" }),
-    );
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "questionnaire",
-      phase: "review",
-    });
-
-    await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "questionnaire:submit" }),
-    );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
       backend: "codex",
@@ -10099,7 +10097,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "questionnaire",
-      phase: "review",
+      phase: "submitted",
       answers: [
         {
           kind: "custom",

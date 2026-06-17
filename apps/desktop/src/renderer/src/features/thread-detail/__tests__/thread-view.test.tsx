@@ -2831,7 +2831,6 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Small patch/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(submitServerRequest).toHaveBeenCalledWith({

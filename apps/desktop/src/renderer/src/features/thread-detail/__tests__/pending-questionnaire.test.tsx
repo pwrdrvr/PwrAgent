@@ -126,16 +126,7 @@ describe("PendingQuestionnaire", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Large refactor/ }));
     expect(screen.getByText("Question 2 of 2")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Unit only/ }));
-    expect(screen.getAllByText("Review answers").length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByText("Question 2 of 2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Unit only/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByText("Question 1 of 2")).toBeInTheDocument();
@@ -145,12 +136,17 @@ describe("PendingQuestionnaire", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    fireEvent.click(screen.getByRole("button", { name: "Review" }));
-    expect(screen.getByText(/Scope: How much should change\?/)).toBeInTheDocument();
-    expect(screen.getByText(/Tests: Which test path\?/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.click(screen.getByRole("button", { name: /Unit only/ }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        answers: [
+          expect.objectContaining({ kind: "option", optionKey: "B" }),
+          expect.objectContaining({ kind: "option", optionKey: "A" }),
+        ],
+      })
+    );
   });
 
   it("keeps freeform answers compact and caps autosizing growth", () => {

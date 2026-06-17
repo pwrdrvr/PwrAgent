@@ -1,14 +1,12 @@
 import { useLayoutEffect, useRef } from "react";
 import {
+  answerQuestionnaireOption,
   answerQuestionnaireOptionAndAdvance,
   answerQuestionnaireText,
   canAdvanceQuestionnaire,
-  canReviewQuestionnaire,
   canSubmitQuestionnaire,
   goToNextQuestion,
   goToPreviousQuestion,
-  goToQuestionnaireReview,
-  questionnaireAnswerDisplay,
   type PendingQuestionnaireState,
 } from "./questionnaire";
 
@@ -65,72 +63,7 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
 
   const isLastQuestion = props.state.currentIndex === props.state.questions.length - 1;
   const canMoveNext = canAdvanceQuestionnaire(props.state);
-  const canMoveToReview = canReviewQuestionnaire(props.state);
   const canSubmit = canSubmitQuestionnaire(props.state);
-
-  if (props.state.phase === "review" || props.state.phase === "submitted") {
-    const submitted = props.state.phase === "submitted";
-    return (
-      <div className="transcript-questionnaire" role="group" aria-label="Pending input">
-        <div className="transcript-questionnaire__header">
-          <span className="chip chip--mode">
-            {submitted ? "Input submitted" : "Review answers"}
-          </span>
-          <span className="transcript-message__time">
-            {props.state.questions.length} answer
-            {props.state.questions.length === 1 ? "" : "s"}
-          </span>
-        </div>
-
-        <div className="transcript-questionnaire__prompt">
-          <h3>{submitted ? "Submitted answers" : "Review answers"}</h3>
-        </div>
-
-        <div className="transcript-questionnaire__summary">
-          {props.state.questions.map((summaryQuestion, index) => {
-            const title = [summaryQuestion.header, summaryQuestion.question]
-              .filter(Boolean)
-              .join(summaryQuestion.header && summaryQuestion.question ? ": " : "");
-            return (
-              <div className="transcript-questionnaire__summary-item" key={summaryQuestion.id}>
-                <span className="transcript-questionnaire__summary-question">
-                  {index + 1}. {title}
-                </span>
-                <span className="transcript-questionnaire__summary-answer">
-                  {questionnaireAnswerDisplay(props.state.answers[index]) || "No answer"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {submitted ? null : (
-          <div className="transcript-questionnaire__actions">
-            <button
-              className="button button--ghost"
-              disabled={props.busy}
-              type="button"
-              onClick={() => {
-                props.onChange(goToPreviousQuestion(props.state));
-              }}
-            >
-              Back
-            </button>
-            <button
-              className="button button--primary"
-              disabled={props.busy || !canSubmit}
-              type="button"
-              onClick={() => {
-                void props.onSubmit(props.state);
-              }}
-            >
-              Submit
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   return (
     <div className="transcript-questionnaire" role="group" aria-label="Pending input">
@@ -163,9 +96,13 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
                 aria-pressed={selected}
                 disabled={props.busy}
                 onClick={() => {
-                  props.onChange(
-                    answerQuestionnaireOptionAndAdvance(props.state, option.key),
-                  );
+                  if (isLastQuestion) {
+                    const answered = answerQuestionnaireOption(props.state, option.key);
+                    void props.onSubmit(answered);
+                    return;
+                  }
+
+                  props.onChange(answerQuestionnaireOptionAndAdvance(props.state, option.key));
                 }}
               >
                 <span className="transcript-questionnaire__option-label">
@@ -220,13 +157,13 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
         {isLastQuestion ? (
           <button
             className="button button--primary"
-            disabled={props.busy || !canMoveToReview}
+            disabled={props.busy || !canSubmit}
             type="button"
             onClick={() => {
-              props.onChange(goToQuestionnaireReview(props.state));
+              void props.onSubmit(props.state);
             }}
           >
-            Review
+            Submit
           </button>
         ) : (
           <button
