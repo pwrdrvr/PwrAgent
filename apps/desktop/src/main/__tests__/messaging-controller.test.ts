@@ -9971,14 +9971,20 @@ describe("MessagingController", () => {
     harness.delivered.length = 0;
     await harness.controller.handleInboundEvent(buildTextEvent("Keep it pragmatic."));
 
-    expect(harness.delivered.at(-1)).toMatchObject({
+    expect(harness.delivered.at(-2)).toMatchObject({
       kind: "questionnaire",
+      phase: "submitted",
       answers: [
         {
           kind: "custom",
           value: "Keep it pragmatic.",
         },
       ],
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
     });
   });
 
