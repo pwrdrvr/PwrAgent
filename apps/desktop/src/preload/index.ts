@@ -1420,7 +1420,7 @@ if (process.contextIsolated) {
   );
   contextBridge.exposeInMainWorld("__pwragentHomeDir", bootstrapHomeDir);
   recordPreloadLog("info", "exposed context bridge", {
-    keys: Object.keys(desktopApi)
+    keyCount: Object.keys(desktopApi).length
   });
 } else {
   recordPreloadLog("warn", "context isolation disabled; bridge not exposed");
