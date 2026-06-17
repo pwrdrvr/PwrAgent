@@ -9993,36 +9993,6 @@ textarea,
   line-height: 1.4;
 }
 
-.transcript-questionnaire__summary {
-  display: grid;
-  gap: 8px;
-}
-
-.transcript-questionnaire__summary-item {
-  display: grid;
-  gap: 4px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.transcript-questionnaire__summary-item:last-child {
-  border-bottom: 0;
-}
-
-.transcript-questionnaire__summary-question {
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.transcript-questionnaire__summary-answer {
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
 .transcript-questionnaire__freeform {
   display: grid;
   gap: 6px;

@@ -187,51 +187,8 @@ export function canAdvanceQuestionnaire(state: PendingQuestionnaireState): boole
   );
 }
 
-export function canReviewQuestionnaire(state: PendingQuestionnaireState): boolean {
-  return (
-    state.phase === "answering" &&
-    state.currentIndex === state.questions.length - 1 &&
-    canSubmitQuestionnaire(state)
-  );
-}
-
 export function canSubmitQuestionnaire(state: PendingQuestionnaireState): boolean {
   return state.answers.every(isAnswerComplete);
-}
-
-export function goToQuestionnaireReview(
-  state: PendingQuestionnaireState
-): PendingQuestionnaireState {
-  if (!canSubmitQuestionnaire(state)) {
-    return state;
-  }
-
-  return {
-    ...state,
-    phase: "review",
-  };
-}
-
-export function markQuestionnaireSubmitted(
-  state: PendingQuestionnaireState
-): PendingQuestionnaireState {
-  return {
-    ...state,
-    phase: "submitted",
-  };
-}
-
-export function questionnaireAnswerDisplay(
-  answer: PendingQuestionnaireAnswer | null | undefined
-): string {
-  if (!answer) {
-    return "";
-  }
-  const value = answer.value.trim();
-  if (!value) {
-    return "";
-  }
-  return answer.kind === "text" ? `Custom: ${value}` : value;
 }
 
 export function buildQuestionnaireResponse(
@@ -260,7 +217,7 @@ function advanceAfterAnswer(
     };
   }
 
-  return goToQuestionnaireReview(state);
+  return state;
 }
 
 function answerCurrentQuestion(

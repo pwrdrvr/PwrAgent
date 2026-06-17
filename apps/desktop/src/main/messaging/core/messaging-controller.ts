@@ -2371,6 +2371,11 @@ export class MessagingController {
       kind: "custom",
       value,
     });
+    if (this.questionnaireReadyToSubmit(updated)) {
+      await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
+      return true;
+    }
+
     await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
     return true;
   }
@@ -2404,7 +2409,7 @@ export class MessagingController {
     }
 
     if (action.id === "questionnaire:submit") {
-      if (!intent.answers.every(messagingQuestionnaireAnswerComplete)) {
+      if (!this.questionnaireReadyToSubmit(intent)) {
         await this.deliver(
           buildConfirmationIntent({
             id: this.newIntentId("questionnaire-incomplete"),
@@ -2420,22 +2425,17 @@ export class MessagingController {
         return;
       }
 
-      const submittedIntent: MessagingQuestionnaireIntent = {
-        ...intent,
-        phase: "submitted",
-      };
-      await this.submitQuestionnaireIntent(submittedIntent);
-      await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
-      await this.options.store.deletePendingIntent(pendingIntent.id);
-      await this.resumeBindingForPendingIntent(
-        pendingIntent,
-        "pending_request.submitted",
-      );
+      await this.submitAndRetireQuestionnaire(pendingIntent, intent, event);
       return;
     }
 
     const updated = this.questionnaireWithOptionAnswer(intent, action.id);
     if (updated !== intent) {
+      if (this.questionnaireReadyToSubmit(updated)) {
+        await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
+        return;
+      }
+
       await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
     }
   }
@@ -2481,7 +2481,7 @@ export class MessagingController {
     return {
       ...intent,
       answers,
-      phase: "review",
+      phase: "answering",
     };
   }
 
@@ -2495,15 +2495,37 @@ export class MessagingController {
       return intent;
     }
     if (intent.currentIndex >= intent.questions.length - 1) {
-      return {
-        ...intent,
-        phase: "review",
-      };
+      return intent;
     }
     return {
       ...intent,
       currentIndex: intent.currentIndex + 1,
     };
+  }
+
+  private questionnaireReadyToSubmit(intent: MessagingQuestionnaireIntent): boolean {
+    return (
+      intent.currentIndex >= intent.questions.length - 1 &&
+      intent.answers.every(messagingQuestionnaireAnswerComplete)
+    );
+  }
+
+  private async submitAndRetireQuestionnaire(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<void> {
+    const submittedIntent: MessagingQuestionnaireIntent = {
+      ...intent,
+      phase: "submitted",
+    };
+    await this.submitQuestionnaireIntent(submittedIntent);
+    await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
+    await this.options.store.deletePendingIntent(pendingIntent.id);
+    await this.resumeBindingForPendingIntent(
+      pendingIntent,
+      "pending_request.submitted",
+    );
   }
 
   private questionnaireWithPreviousQuestion(
