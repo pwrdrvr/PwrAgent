@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTOMATION_INBOUND_TEXT_MATCH_MODES,
+  AUTOMATION_RUN_TRIGGERS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
   formatAutomationScheduleSummary,
   validateAutomationScheduleDefinition,
@@ -10,6 +12,11 @@ import {
 describe("automation contracts", () => {
   it("defaults backlog handling to coalescing missed windows", () => {
     expect(DEFAULT_AUTOMATION_BACKLOG_POLICY).toBe("coalesce");
+  });
+
+  it("includes inbound message runs and literal v1 text match modes", () => {
+    expect(AUTOMATION_RUN_TRIGGERS).toContain("inbound_message");
+    expect(AUTOMATION_INBOUND_TEXT_MATCH_MODES).toEqual(["contains", "equals"]);
   });
 
   it("formats and validates interval schedule definitions", () => {

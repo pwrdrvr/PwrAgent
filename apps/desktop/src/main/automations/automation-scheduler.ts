@@ -1,5 +1,6 @@
 import type {
   AutomationGateRunResult,
+  AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunWindow,
 } from "@pwragent/shared";
@@ -88,6 +89,55 @@ export class AutomationScheduler {
     return await this.submitRun({ automation, runId: run.id, windows: [], now });
   }
 
+  async runFromInboundEvent(params: {
+    automation: AutomationRecord;
+    source: AutomationRunSourceMetadata;
+    now?: number;
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+    const now = params.now ?? this.now();
+    const active = this.options.store.findActiveRunForAutomation(params.automation.id);
+    const run = this.options.store.createRun({
+      automationId: params.automation.id,
+      trigger: "inbound_message",
+      scheduledWindows: [],
+      source: params.source,
+      now,
+    });
+    if (!run) return undefined;
+
+    if (active) {
+      if (params.automation.backlogPolicy === "drop_missed") {
+        this.options.store.markRunTerminal({
+          runId: run.id,
+          status: "skipped",
+          completedAt: now,
+          errorMessage:
+            "The automation execution lane was busy when this inbound message arrived.",
+          now,
+        });
+        return undefined;
+      }
+      const queued = this.options.store.markRunQueued({
+        runId: run.id,
+        queueEntryId: buildLaneQueueEntryId(run.id),
+        queuedAt: now,
+        now,
+      });
+      return buildLaneQueuedResult({
+        automation: params.automation,
+        run: queued ?? run,
+        position: 1,
+      });
+    }
+
+    return await this.submitRun({
+      automation: params.automation,
+      runId: run.id,
+      windows: [],
+      now,
+    });
+  }
+
   async handleTurnQueueUpdate(params: {
     automationRunId?: string;
     status: "queued" | "started" | "failed" | "cancelled" | "terminal";
@@ -140,6 +190,13 @@ export class AutomationScheduler {
     automation: AutomationRecord,
     now: number,
   ): Promise<void> {
+    if (!automation.schedule) {
+      this.options.store.updateAutomation(automation.id, {
+        nextRunAt: null,
+        now,
+      });
+      return;
+    }
     const firstDueAt = Math.max(automation.nextRunAt ?? now, this.sessionStartedAt);
     const windows = collectDueAutomationWindows({
       schedule: automation.schedule,

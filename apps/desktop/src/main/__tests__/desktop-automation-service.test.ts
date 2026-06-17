@@ -183,6 +183,132 @@ describe("DesktopAutomationService", () => {
     expect(registry.submitTurn).not.toHaveBeenCalled();
   });
 
+  it("forwards automation execution profile overrides to headless starts", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+      executionProfile: {
+        cwd: "/tmp/incident-bot",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+      },
+    });
+
+    await service.runNow({ automationId: created.automation.id });
+
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/incident-bot",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+      }),
+    );
+  });
+
+  it("starts inbound-triggered runs from matching messaging events", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate the alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          name: "Datadog ERROR",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          sender: {
+            platformUserId: "B123",
+            isBot: true,
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+          },
+        },
+      ],
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "slack-thread",
+          kind: "source_message",
+          destination: "source_thread",
+          broadcast: true,
+        },
+      ],
+    });
+
+    await expect(
+      service.handleMessagingInboundEvent({
+        id: "slack-text:local",
+        kind: "text",
+        actor: {
+          platformUserId: "B123",
+          displayName: "Datadog",
+          isBot: true,
+        },
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C123",
+            kind: "channel",
+            title: "alerts",
+          },
+        },
+        receivedAt: 2_000,
+        routingState: {
+          opaque: {
+            channelId: "C123",
+            ts: "1712023032.123456",
+          },
+        },
+        text: "ERROR api latency high",
+      }),
+    ).resolves.toBe(true);
+
+    const [run] = store.listRunsForAutomation(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations[0]!.id,
+    );
+    expect(run).toMatchObject({
+      trigger: "inbound_message",
+      status: "running",
+      source: {
+        sourceEventKey: "slack:C123:1712023032.123456::B123",
+        matchedTriggerId: "datadog-error",
+        message: {
+          text: "ERROR api latency high",
+        },
+      },
+    });
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        automationName: "Datadog alert triage",
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("Inbound source message:"),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("records the submitted automation prompt when a run starts", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();

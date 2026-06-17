@@ -214,6 +214,7 @@ describe("AutomationStore", () => {
       finalText: "Nothing urgent.",
       errorMessage: undefined,
       outputDecision: undefined,
+      actionResults: [],
       transcriptEvents: [
         {
           id: "run-1:assistant-final",
@@ -224,6 +225,182 @@ describe("AutomationStore", () => {
       ],
       createdAt: 3_000,
       updatedAt: 3_000,
+    });
+  });
+
+  it("defaults legacy scheduled automations and persists inbound trigger metadata", () => {
+    const legacy = store.createAutomation({
+      id: "automation-legacy",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Legacy schedule",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 15,
+        unit: "minutes",
+      },
+      now: 1_000,
+    });
+
+    expect(legacy.triggers).toEqual([
+      {
+        id: "schedule",
+        kind: "schedule",
+        schedule: {
+          kind: "interval",
+          every: 15,
+          unit: "minutes",
+        },
+      },
+    ]);
+    expect(legacy.outputActions).toEqual([
+      { id: "agent-context", kind: "agent_context" },
+    ]);
+
+    const inbound = store.createAutomation({
+      id: "automation-inbound",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate this alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          name: "Datadog ERROR",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+            conversationKind: "channel",
+            title: "alerts",
+          },
+          sender: {
+            platformUserId: "B123",
+            isBot: true,
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+            caseSensitive: false,
+          },
+        },
+      ],
+      executionProfile: {
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        mcpAllowlist: ["datadog", "aws-readonly"],
+      },
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "slack-thread",
+          kind: "source_message",
+          destination: "source_thread",
+          broadcast: true,
+        },
+      ],
+      now: 2_000,
+    });
+
+    expect(inbound.schedule).toBeUndefined();
+    expect(inbound.scheduleSummary).toBe("inbound: Datadog ERROR");
+    expect(store.getAutomation("automation-inbound")).toMatchObject({
+      triggers: inbound.triggers,
+      executionProfile: inbound.executionProfile,
+      outputActions: inbound.outputActions,
+    });
+  });
+
+  it("persists inbound run source metadata and action results", () => {
+    store.createAutomation({
+      id: "automation-inbound",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate this alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 1_000,
+    });
+
+    store.createRun({
+      id: "run-inbound",
+      automationId: "automation-inbound",
+      trigger: "inbound_message",
+      source: {
+        kind: "messaging",
+        eventId: "slack-event-1",
+        sourceEventKey: "slack:C123:171.000:B123",
+        receivedAt: 2_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+          conversationKind: "channel",
+        },
+        message: {
+          text: "ERROR api failed",
+        },
+        routingState: {
+          opaque: {
+            channelId: "C123",
+            ts: "171.000",
+          },
+        },
+      },
+      now: 2_000,
+    });
+
+    expect(store.getRun("run-inbound")).toMatchObject({
+      trigger: "inbound_message",
+      source: {
+        sourceEventKey: "slack:C123:171.000:B123",
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+      },
+    });
+
+    store.upsertRunArtifact({
+      runId: "run-inbound",
+      status: "completed",
+      finalText: "Investigated.",
+      actionResults: [
+        {
+          actionId: "slack-thread",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 3_000,
+        },
+      ],
+      now: 3_000,
+    });
+
+    expect(store.getRunArtifact("run-inbound")).toMatchObject({
+      actionResults: [
+        {
+          actionId: "slack-thread",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 3_000,
+        },
+      ],
     });
   });
 

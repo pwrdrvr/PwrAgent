@@ -5379,7 +5379,13 @@ export class DesktopBackendRegistry {
     agentThreadId: string;
     automationName?: string;
     automationRunId: string;
+    cwd?: string;
+    executionMode?: ThreadExecutionMode;
+    fastMode?: boolean;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
   }): Promise<{
     backend: AppServerBackendKind;
     headlessThreadId: string;
@@ -5392,24 +5398,28 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.agentThreadId,
     });
-    const executionMode = overlay?.executionMode ?? "default";
+    const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const approvalPolicy = "never";
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.resolveModelSettings(params.backend, {
-      model: overlay?.model,
-      serviceTier: overlay?.serviceTier,
-      reasoningEffort: overlay?.reasoningEffort,
-      fastMode: params.backend === "codex" ? overlay?.fastMode : undefined,
+      model: params.model ?? overlay?.model,
+      serviceTier: params.serviceTier ?? overlay?.serviceTier,
+      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+      fastMode:
+        params.backend === "codex"
+          ? params.fastMode ?? overlay?.fastMode
+          : undefined,
     });
     const cwd =
-      params.backend === "codex"
+      params.cwd ??
+      (params.backend === "codex"
         ? await this.resolveThreadEnvironmentCwd(
             params.backend,
             params.agentThreadId,
             overlay,
           )
-        : undefined;
+        : undefined);
     const input = prependAutomationRuntimeContext({
       approvalPolicy,
       executionMode,

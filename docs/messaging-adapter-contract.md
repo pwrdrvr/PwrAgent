@@ -53,6 +53,13 @@ The `actor.platformUserId` must be the stable platform ID used for
 authorization. Mutable usernames and display names may be included for audit or
 operator visibility only.
 
+Adapters must not drop all bot-authored messages by default. They should only
+suppress messages from the PwrAgent bot identity itself, then emit other
+authorized bot messages as ordinary `text` or `media` events with
+`actor.isBot = true`. Desktop automation triggers use that distinction to match
+provider alerts such as Slack posts from monitoring bots without looping on
+PwrAgent's own replies.
+
 ## Opaque State
 
 Adapters own routing and surface state. PwrAgent may persist and echo
@@ -98,6 +105,8 @@ Adapters own platform limits and degradation:
 - render buttons/components/selects when available
 - include text fallback for every interactive surface
 - post a fresh message when update or dismiss is unsupported
+- honor source-relative delivery hints when the provider can identify the
+  source message's channel/thread from opaque routing state
 
 Adapters may render explicit links only when the source intent carries explicit
 link syntax or a future structured link part. Platform clients may still apply
@@ -109,6 +118,14 @@ Telegram currently uses Bot API long polling, HTML-safe text, inline keyboards,
 parts. Discord uses Gateway events, REST message delivery, defensive
 `allowed_mentions`, components, image embeds for remote URLs, and multipart
 uploads for byte-backed file/image parts.
+
+`delivery.sourceRelative = "source_thread"` means "reply where the source
+message can continue the same platform thread." `source_channel` means "post to
+the source channel without a thread target." Providers that support an explicit
+thread-reply broadcast flag, such as Slack's `reply_broadcast`, should map
+`delivery.broadcastThreadReply` to the platform-native option. Unsupported
+providers may fall back to a normal fresh message or return a structured
+unsupported delivery result.
 
 ## Attachment Policy
 

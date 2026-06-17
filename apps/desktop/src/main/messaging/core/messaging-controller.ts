@@ -15,6 +15,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
+  AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentOption,
@@ -222,6 +223,7 @@ import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,
 } from "../../automations/automation-output-decision.js";
+import { registerAutomationSourceMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -538,6 +540,9 @@ type PendingNewThreadPromptBundle = {
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
+  automationInboundHandler?: (
+    event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+  ) => Promise<boolean>;
   backend: MessagingBackendBridge;
   channel?: MessagingChannelKind;
   interactionMapper?: MessagingInteractionMapper;
@@ -639,6 +644,7 @@ export class MessagingController {
     string,
     PendingQueueAuditMessage
   >();
+  private readonly unregisterAutomationSourceMessageDeliveryHandler: () => void;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -663,6 +669,10 @@ export class MessagingController {
         await this.deliverToolUpdateDelivery(delivery);
       },
     });
+    this.unregisterAutomationSourceMessageDeliveryHandler =
+      registerAutomationSourceMessageDeliveryHandler((params) =>
+        this.deliverAutomationSourceMessage(params),
+      );
   }
 
   async handlePwrAgentMessagingRequest(
@@ -759,6 +769,14 @@ export class MessagingController {
       return;
     }
 
+    if (
+      (event.kind === "text" || event.kind === "media") &&
+      this.options.automationInboundHandler &&
+      (await this.options.automationInboundHandler(event))
+    ) {
+      return;
+    }
+
     if (event.kind === "media") {
       await this.handleMedia(event);
       return;
@@ -767,6 +785,57 @@ export class MessagingController {
     if (event.kind === "text") {
       await this.handleText(event);
     }
+  }
+
+  async deliverAutomationSourceMessage(params: {
+    broadcast?: boolean;
+    destination: "source_thread" | "source_channel";
+    intentId: string;
+    source: AutomationRunSourceMetadata;
+    text: string;
+  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
+    if (
+      this.options.channel &&
+      this.options.channel !== params.source.conversation.channel
+    ) {
+      return {
+        ok: false,
+        unsupported: true,
+        errorMessage: "Source-message delivery belongs to another provider.",
+      };
+    }
+    const event = messagingEventFromAutomationSource(params.source);
+    const result = await this.deliver(
+      {
+        id: params.intentId,
+        kind: "message",
+        createdAt: this.now(),
+        role: "assistant",
+        delivery: {
+          sourceRelative: params.destination,
+          broadcastThreadReply: params.broadcast,
+        },
+        parts: [
+          {
+            type: "text",
+            text: params.text,
+            markdown: "markdown",
+          },
+        ],
+      },
+      undefined,
+      event,
+    );
+    return {
+      ok:
+        result.outcome === "presented" ||
+        result.outcome === "presented_new" ||
+        result.outcome === "updated" ||
+        result.outcome === "signaled",
+      unsupported: result.outcome === "unsupported",
+      message: result.outcome,
+      errorMessage: result.errorMessage,
+    };
   }
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
@@ -3505,6 +3574,7 @@ export class MessagingController {
 
   dispose(): void {
     this.disposed = true;
+    this.unregisterAutomationSourceMessageDeliveryHandler();
     this.turnAdmission.dispose();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -13335,6 +13405,35 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
     return false;
   }
   return true;
+}
+
+function messagingEventFromAutomationSource(
+  source: AutomationRunSourceMetadata,
+): MessagingInboundTextEvent {
+  return {
+    id: source.eventId ?? source.sourceEventKey,
+    kind: "text",
+    actor: {
+      platformUserId: source.actor.platformUserId,
+      displayName: source.actor.displayName,
+      username: source.actor.username,
+      isBot: source.actor.isBot,
+    },
+    channel: {
+      channel: source.conversation.channel,
+      conversation: {
+        id: source.conversation.conversationId,
+        kind: source.conversation.conversationKind ?? "channel",
+        parentId: source.conversation.parentId,
+        title: source.conversation.title,
+        parentTitle: source.conversation.parentTitle,
+        ancestorTitle: source.conversation.ancestorTitle,
+      },
+    },
+    receivedAt: source.receivedAt,
+    routingState: source.routingState as MessagingAdapterState | undefined,
+    text: source.message?.text ?? "",
+  };
 }
 
 export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {

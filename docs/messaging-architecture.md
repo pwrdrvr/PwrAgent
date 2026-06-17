@@ -79,6 +79,7 @@ sequenceDiagram
     participant Platform as Platform<br/>(Telegram/Discord)
     participant Adapter as Provider Adapter
     participant Controller as MessagingController
+    participant Automation as Automation Service
     participant Bridge as Backend Bridge
     participant Backend as Codex / Grok
 
@@ -86,12 +87,23 @@ sequenceDiagram
     Platform->>Adapter: webhook / gateway event
     Note over Adapter: normalize to<br/>MessagingInboundEvent<br/>(text/command/callback/media/lifecycle)
     Adapter->>Controller: handleInboundEvent(event)
+    Controller->>Automation: match inbound automation triggers
+    Automation-->>Controller: matched or not matched
     Note over Controller: authorize actor,<br/>resolve binding,<br/>turn admission
     Controller->>Bridge: turn/start, turn/steer, etc.
     Bridge->>Backend: protocol call
 ```
 
 The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". Workflow decisions — debouncing, queueing, steering, binding resolution — all live in `MessagingController`. Adapters must not call `turn/start` themselves.
+
+Before ordinary text/media routing, the controller offers the normalized event
+to desktop automations. Enabled inbound-message automations match on provider,
+conversation, sender/bot identity, text filter, and thread-reply policy. A match
+starts an automation run on the automation's assigned Agent thread and records
+bounded source metadata for the prompt and read-only inspection tools. This path
+is intentionally separate from bound-thread user input: a Datadog Slack post can
+start or queue work in one Agent thread without requiring that Slack channel to
+be bound to the thread as a normal conversation.
 
 ### Outbound (agent produces output)
 
@@ -104,17 +116,23 @@ sequenceDiagram
     participant Adapter as Provider Adapter
     participant Platform as Platform
 
-    Backend->>Bridge: turn/completed, item/agentMessage/delta, …
-    Bridge->>Controller: AgentEvent
-    Controller->>Producer: build…Intent({ …, capabilityProfile })
+Backend->>Bridge: turn/completed, item/agentMessage/delta, …
+Bridge->>Controller: AgentEvent
+Controller->>Producer: build…Intent({ …, capabilityProfile })
     Note over Producer: applyActionCapabilityLimits<br/>(truncate by priority,<br/>cap labels to maxLabelLength)
     Producer-->>Controller: MessagingSurfaceIntent (channel-neutral)
     Controller->>Adapter: deliver(intent)
     Note over Adapter: render to platform-native<br/>(inline keyboard / components / …),<br/>defensive caps as safety net
-    Adapter->>Platform: send message / edit / pin
+Adapter->>Platform: send message / edit / pin
 ```
 
 **Key invariant:** the producer never sees the adapter, the channel kind, or any provider name. It receives a `MessagingCapabilityProfile` describing what the destination supports and adapts content to fit. Producers thread through the controller's `this.capabilityProfile`, which the controller reads once at construction from `options.adapter.capabilityProfile`.
+
+Automation output actions reuse the same delivery boundary. `agent_context`
+stores the run artifact for the assigned Agent's dynamic inspection tools.
+`source_message` asks the messaging controller to render a short result and
+deliver it relative to the source inbound event. The provider still owns final
+platform translation, including source-thread targeting and broadcast flags.
 
 ## 1:1 controller:adapter mapping
 

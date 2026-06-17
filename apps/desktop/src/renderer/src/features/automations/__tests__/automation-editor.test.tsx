@@ -46,7 +46,10 @@ describe("AutomationEditor", () => {
         backend: "codex",
         backlogPolicy: "coalesce",
         enabled: true,
+        executionProfile: undefined,
+        gate: undefined,
         name: "Check email",
+        outputActions: [{ id: "agent-context", kind: "agent_context" }],
         schedule: {
           every: 5,
           kind: "interval",
@@ -54,7 +57,172 @@ describe("AutomationEditor", () => {
         },
         taskPrompt: "Check email and summarize anything urgent.",
         threadId: "thread-1",
+        triggers: [
+          {
+            id: "schedule",
+            kind: "schedule",
+            schedule: {
+              every: 5,
+              kind: "interval",
+              unit: "minutes",
+            },
+          },
+        ],
       },
+    });
+  });
+
+  it("submits an inbound Slack trigger with execution overrides and source reply output", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Investigate Datadog" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate the alert and summarize likely causes." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(screen.getByLabelText("Conversation ID"), {
+      target: { value: "C123" },
+    });
+    fireEvent.change(screen.getByLabelText("Sender ID"), {
+      target: { value: "B999" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "Datadog monitor alert" },
+    });
+    fireEvent.click(screen.getByLabelText("Broadcast source-thread reply"));
+    fireEvent.change(screen.getByLabelText("Access mode"), {
+      target: { value: "full-access" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5" },
+    });
+    fireEvent.change(screen.getByLabelText("Reasoning"), {
+      target: { value: "high" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        backend: "codex",
+        executionProfile: {
+          executionMode: "full-access",
+          model: "gpt-5",
+          reasoningEffort: "high",
+        },
+        name: "Investigate Datadog",
+        outputActions: [
+          { id: "agent-context", kind: "agent_context" },
+          {
+            broadcast: true,
+            destination: "source_thread",
+            id: "source-thread-reply",
+            kind: "source_message",
+          },
+        ],
+        schedule: undefined,
+        taskPrompt: "Investigate the alert and summarize likely causes.",
+        threadId: "thread-1",
+        triggers: [
+          {
+            conversation: {
+              channel: "slack",
+              conversationId: "C123",
+              conversationKind: "channel",
+            },
+            id: "inbound-message",
+            includeThreadReplies: false,
+            kind: "inbound_message",
+            name: "Datadog monitor alert",
+            sender: {
+              isBot: true,
+              platformUserId: "B999",
+            },
+            textFilter: {
+              mode: "contains",
+              text: "Datadog monitor alert",
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  it("submits an inbound Telegram trigger for a user sender", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Investigate Telegram alert" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate this Telegram report." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+
+    expect(screen.getByText(/Each matching inbound message starts/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "telegram" },
+    });
+    fireEvent.change(screen.getByLabelText("Group or topic ID"), {
+      target: { value: "-1001234567890" },
+    });
+    fireEvent.change(screen.getByLabelText("Telegram user ID"), {
+      target: { value: "123456" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "automation alert" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        backend: "codex",
+        name: "Investigate Telegram alert",
+        triggers: [
+          expect.objectContaining({
+            conversation: {
+              channel: "telegram",
+              conversationId: "-1001234567890",
+              conversationKind: "channel",
+            },
+            sender: {
+              isBot: false,
+              platformUserId: "123456",
+            },
+            textFilter: {
+              mode: "contains",
+              text: "automation alert",
+            },
+          }),
+        ],
+      }),
     });
   });
 
@@ -361,7 +529,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Command"), {
       target: { value: "node scripts/check-mail.js" },
     });
-    fireEvent.change(screen.getByLabelText("Working directory"), {
+    fireEvent.change(screen.getByLabelText("Gate working directory"), {
       target: { value: "/tmp/mail-agent" },
     });
     fireEvent.change(screen.getByLabelText("Timeout ms"), {
@@ -400,6 +568,18 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
     status: "enabled",
     taskPrompt: "Check email.",
     threadId: "thread-1",
+    triggers: [
+      {
+        id: "schedule",
+        kind: "schedule",
+        schedule: {
+          every: 5,
+          kind: "interval",
+          unit: "minutes",
+        },
+      },
+    ],
+    outputActions: [{ id: "agent-context", kind: "agent_context" }],
     updatedAt: 1,
     ...overrides,
   };

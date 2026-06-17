@@ -11742,6 +11742,7 @@ textarea,
 .automation-row__meta,
 .automation-row__schedule,
 .automation-editor__summary,
+.automation-editor__callout,
 .automation-run-history__empty {
   margin: 4px 0 0;
   color: var(--text-secondary);
@@ -12168,6 +12169,10 @@ textarea,
   display: grid;
   grid-template-columns: minmax(72px, 0.8fr) minmax(120px, 1.2fr);
   gap: 10px;
+}
+
+.automation-inline-fields--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .automation-weekdays {

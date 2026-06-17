@@ -3,10 +3,13 @@ import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
   AutomationDetail,
+  AutomationInboundMessageTriggerDefinition,
   AutomationScheduleDefinition,
   AutomationWeekday,
   CreateAutomationRequest,
+  MessagingChannelKind,
   NavigationThreadSummary,
+  ThreadExecutionMode,
   ThreadIdentifier,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
@@ -52,6 +55,8 @@ type AutomationEditorProps = {
 };
 
 type ScheduleFormKind = "interval" | "weekdays" | "weekly";
+type TriggerFormKind = "schedule" | "inbound_message";
+type OptionalExecutionMode = "" | ThreadExecutionMode;
 type AgentPickerTab = "agents" | "threads";
 
 type AgentThreadOption = {
@@ -61,6 +66,21 @@ type AgentThreadOption = {
   thread?: NavigationThreadSummary;
   title: string;
 };
+
+const INBOUND_PROVIDER_OPTIONS: Array<{
+  label: string;
+  value: Extract<MessagingChannelKind, "slack" | "telegram">;
+}> = [
+  { label: "Slack", value: "slack" },
+  { label: "Telegram", value: "telegram" },
+];
+
+const MODEL_OPTIONS = ["gpt-5", "gpt-5.4", "gpt-5.4-mini", "grok-4"] as const;
+const REASONING_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
+const ACCESS_MODE_OPTIONS: Array<{ label: string; value: ThreadExecutionMode }> = [
+  { label: "Default", value: "default" },
+  { label: "Full Access", value: "full-access" },
+];
 
 const DAY_LABELS: Record<AutomationWeekday, string> = {
   monday: "Mon",
@@ -78,6 +98,10 @@ const DEFER_AGENT_LABEL = "I'll set this up later...";
 export function AutomationEditor(props: AutomationEditorProps) {
   const initialAutomation =
     props.mode.kind === "edit" ? props.mode.automation : undefined;
+  const initialInboundTrigger = initialAutomation?.triggers.find(
+    (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
+      trigger.kind === "inbound_message",
+  );
   const initialSchedule = initialAutomation?.schedule;
   const initialAssignment = readInitialAssignment(props);
   const initialThreadKey = initialAssignment
@@ -133,6 +157,45 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const agentLabelId = useId();
   const agentHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
+  const [triggerKind, setTriggerKind] = useState<TriggerFormKind>(
+    initialInboundTrigger ? "inbound_message" : "schedule",
+  );
+  const [inboundProvider, setInboundProvider] = useState<MessagingChannelKind>(
+    initialInboundTrigger?.conversation.channel ?? "slack",
+  );
+  const [inboundConversationId, setInboundConversationId] = useState(
+    initialInboundTrigger?.conversation.conversationId ?? "",
+  );
+  const [inboundSenderId, setInboundSenderId] = useState(
+    initialInboundTrigger?.sender?.platformUserId ?? "",
+  );
+  const [inboundSenderIsBot, setInboundSenderIsBot] = useState(
+    initialInboundTrigger?.sender?.isBot ?? true,
+  );
+  const [inboundText, setInboundText] = useState(
+    initialInboundTrigger?.textFilter?.text ?? "",
+  );
+  const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
+    initialInboundTrigger?.includeThreadReplies ?? false,
+  );
+  const [sourceReplyBroadcast, setSourceReplyBroadcast] = useState(
+    initialAutomation?.outputActions.some(
+      (action) => action.kind === "source_message" && action.broadcast,
+    ) ?? false,
+  );
+  const [profileCwd, setProfileCwd] = useState(
+    initialAutomation?.executionProfile?.cwd ?? "",
+  );
+  const [profileModel, setProfileModel] = useState(
+    initialAutomation?.executionProfile?.model ?? "",
+  );
+  const [profileReasoning, setProfileReasoning] = useState(
+    initialAutomation?.executionProfile?.reasoningEffort ?? "",
+  );
+  const [profileExecutionMode, setProfileExecutionMode] =
+    useState<OptionalExecutionMode>(
+      initialAutomation?.executionProfile?.executionMode ?? "",
+    );
 
   const agentOptions = useMemo(
     () => {
@@ -243,7 +306,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       setValidationError("Task prompt is required.");
       return;
     }
-    if (!selectedSchedule.ok) {
+    if (triggerKind === "schedule" && !selectedSchedule.ok) {
       setValidationError(selectedSchedule.error);
       return;
     }
@@ -257,13 +320,36 @@ export function AutomationEditor(props: AutomationEditorProps) {
       setValidationError(gate.error);
       return;
     }
-    const scheduleValidation = validateAutomationScheduleDefinition(
-      selectedSchedule.schedule,
-    );
-    if (!scheduleValidation.ok) {
-      setValidationError(scheduleValidation.error);
+    if (triggerKind === "schedule" && selectedSchedule.ok) {
+      const scheduleValidation = validateAutomationScheduleDefinition(
+        selectedSchedule.schedule,
+      );
+      if (!scheduleValidation.ok) {
+        setValidationError(scheduleValidation.error);
+        return;
+      }
+    }
+    const triggerConfig = buildTriggerConfig({
+      broadcast: sourceReplyBroadcast,
+      conversationId: inboundConversationId,
+      includeThreadReplies: inboundIncludeReplies,
+      provider: inboundProvider,
+      schedule: selectedSchedule.ok ? selectedSchedule.schedule : undefined,
+      senderId: inboundSenderId,
+      senderIsBot: inboundSenderIsBot,
+      text: inboundText,
+      triggerKind,
+    });
+    if (!triggerConfig.ok) {
+      setValidationError(triggerConfig.error);
       return;
     }
+    const executionProfile = buildExecutionProfile({
+      cwd: profileCwd,
+      executionMode: profileExecutionMode,
+      model: profileModel,
+      reasoningEffort: profileReasoning,
+    });
 
     if (props.mode.kind === "edit") {
       const assignment = readAssignmentFromThreadKey(threadKey);
@@ -278,10 +364,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
           ...assignment,
           backlogPolicy,
           enabled,
+          executionProfile,
           gate: gate.gate,
           name: trimmedName,
-          schedule: selectedSchedule.schedule,
+          nextRunAt: triggerKind === "inbound_message" ? null : undefined,
+          outputActions: triggerConfig.outputActions,
+          schedule: triggerConfig.schedule,
           taskPrompt: trimmedPrompt,
+          triggers: triggerConfig.triggers,
         },
       });
       return;
@@ -301,10 +391,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
         ...assignment,
         backlogPolicy,
         enabled,
+        executionProfile,
         gate: gate.gate,
         name: trimmedName,
-        schedule: selectedSchedule.schedule,
+        outputActions: triggerConfig.outputActions,
+        schedule: triggerConfig.schedule,
         taskPrompt: trimmedPrompt,
+        triggers: triggerConfig.triggers,
       },
     });
   };
@@ -512,6 +605,32 @@ export function AutomationEditor(props: AutomationEditorProps) {
       </label>
 
       <fieldset className="automation-fieldset">
+        <legend>Trigger</legend>
+        <div className="automation-segmented" role="group" aria-label="Trigger kind">
+          {([
+            ["schedule", "Schedule"],
+            ["inbound_message", "Inbound message"],
+          ] as const).map(([kind, label]) => (
+            <button
+              key={kind}
+              aria-pressed={triggerKind === kind}
+              className={`automation-segmented__button${
+                triggerKind === kind ? " is-active" : ""
+              }`}
+              type="button"
+              onClick={() => {
+                setTriggerKind(kind);
+                setValidationError(undefined);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      {triggerKind === "schedule" ? (
+      <fieldset className="automation-fieldset">
         <legend>Schedule</legend>
         <div className="automation-segmented" role="group" aria-label="Schedule kind">
           {(["interval", "weekdays", "weekly"] as const).map((kind) => (
@@ -597,6 +716,163 @@ export function AutomationEditor(props: AutomationEditorProps) {
         )}
         <p className="automation-editor__summary">{selectedScheduleSummary}</p>
       </fieldset>
+      ) : (
+        <fieldset className="automation-fieldset">
+          <legend>Inbound filter</legend>
+          <p className="automation-editor__callout">
+            Each matching inbound message starts an isolated background run for
+            this automation. The run is queued with the target Agent, writes its
+            analysis back into Agent context, and can optionally reply where the
+            triggering message arrived so recent instances can be compared later.
+          </p>
+          <div className="automation-inline-fields">
+            <label className="automation-field">
+              <span>Provider</span>
+              <select
+                value={inboundProvider}
+                onChange={(event) => {
+                  const provider = event.currentTarget.value as MessagingChannelKind;
+                  setInboundProvider(provider);
+                  if (provider === "telegram") {
+                    setInboundSenderIsBot(false);
+                  }
+                  setValidationError(undefined);
+                }}
+              >
+                {INBOUND_PROVIDER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="automation-field">
+              <span>
+                {inboundProvider === "telegram" ? "Group or topic ID" : "Conversation ID"}
+              </span>
+              <input
+                value={inboundConversationId}
+                onChange={(event) => {
+                  setInboundConversationId(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              />
+            </label>
+          </div>
+          <div className="automation-inline-fields">
+            <label className="automation-field">
+              <span>
+                {inboundProvider === "telegram" ? "Telegram user ID" : "Sender ID"}
+              </span>
+              <input
+                value={inboundSenderId}
+                onChange={(event) => {
+                  setInboundSenderId(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              />
+            </label>
+            <label className="automation-checkbox">
+              <input
+                checked={inboundSenderIsBot}
+                type="checkbox"
+                onChange={(event) => {
+                  setInboundSenderIsBot(event.currentTarget.checked);
+                  setValidationError(undefined);
+                }}
+              />
+              <span>Bot sender</span>
+            </label>
+          </div>
+          <label className="automation-field">
+            <span>Text contains</span>
+            <input
+              value={inboundText}
+              onChange={(event) => {
+                setInboundText(event.currentTarget.value);
+                setValidationError(undefined);
+              }}
+            />
+          </label>
+          <label className="automation-checkbox">
+            <input
+              checked={inboundIncludeReplies}
+              type="checkbox"
+              onChange={(event) => setInboundIncludeReplies(event.currentTarget.checked)}
+            />
+            <span>Include thread replies</span>
+          </label>
+          <label className="automation-checkbox">
+            <input
+              checked={sourceReplyBroadcast}
+              type="checkbox"
+              onChange={(event) => setSourceReplyBroadcast(event.currentTarget.checked)}
+            />
+            <span>Broadcast source-thread reply</span>
+          </label>
+        </fieldset>
+      )}
+
+      <fieldset className="automation-fieldset">
+        <legend>Execution</legend>
+        <div className="automation-inline-fields automation-inline-fields--single">
+          <label className="automation-field">
+            <span>Agent working directory</span>
+            <input
+              value={profileCwd}
+              onChange={(event) => setProfileCwd(event.currentTarget.value)}
+            />
+          </label>
+        </div>
+        <div className="automation-inline-fields">
+          <label className="automation-field">
+            <span>Access mode</span>
+            <select
+              value={profileExecutionMode}
+              onChange={(event) =>
+                setProfileExecutionMode(event.currentTarget.value as OptionalExecutionMode)
+              }
+            >
+              <option value="">Inherit Agent access</option>
+              {ACCESS_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="automation-field">
+            <span>Model</span>
+            <select
+              value={profileModel}
+              onChange={(event) => setProfileModel(event.currentTarget.value)}
+            >
+              <option value="">Inherit Agent model</option>
+              {modelOptions(profileModel).map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="automation-inline-fields automation-inline-fields--single">
+          <label className="automation-field">
+            <span>Reasoning</span>
+            <select
+              value={profileReasoning}
+              onChange={(event) => setProfileReasoning(event.currentTarget.value)}
+            >
+              <option value="">Inherit Agent reasoning</option>
+              {reasoningOptions(profileReasoning).map((reasoning) => (
+                <option key={reasoning} value={reasoning}>
+                  {reasoning}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </fieldset>
 
       <fieldset className="automation-fieldset">
         <legend>Gate</legend>
@@ -625,7 +901,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </label>
             <div className="automation-inline-fields">
               <label className="automation-field">
-                <span>Working directory</span>
+                <span>Gate working directory</span>
                 <input
                   value={gateCwd}
                   onChange={(event) => {
@@ -884,6 +1160,128 @@ function buildGate(params: {
       timeoutMs,
     },
     ok: true,
+  };
+}
+
+function buildExecutionProfile(params: {
+  cwd: string;
+  executionMode: OptionalExecutionMode;
+  model: string;
+  reasoningEffort: string;
+}): CreateAutomationRequest["executionProfile"] {
+  const cwd = params.cwd.trim();
+  const model = params.model.trim();
+  const reasoningEffort = params.reasoningEffort.trim();
+  if (!cwd && !params.executionMode && !model && !reasoningEffort) {
+    return undefined;
+  }
+  return {
+    ...(cwd ? { cwd } : {}),
+    ...(params.executionMode ? { executionMode: params.executionMode } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function modelOptions(current: string): string[] {
+  return includeCurrentOption(MODEL_OPTIONS, current);
+}
+
+function reasoningOptions(current: string): string[] {
+  return includeCurrentOption(REASONING_OPTIONS, current);
+}
+
+function includeCurrentOption(
+  options: readonly string[],
+  current: string,
+): string[] {
+  const trimmed = current.trim();
+  return trimmed && !options.includes(trimmed)
+    ? [trimmed, ...options]
+    : [...options];
+}
+
+function buildTriggerConfig(params: {
+  broadcast: boolean;
+  conversationId: string;
+  includeThreadReplies: boolean;
+  provider: MessagingChannelKind;
+  schedule?: AutomationScheduleDefinition;
+  senderId: string;
+  senderIsBot: boolean;
+  text: string;
+  triggerKind: TriggerFormKind;
+}):
+  | {
+      ok: true;
+      outputActions: CreateAutomationRequest["outputActions"];
+      schedule?: AutomationScheduleDefinition;
+      triggers: CreateAutomationRequest["triggers"];
+    }
+  | { error: string; ok: false } {
+  if (params.triggerKind === "schedule") {
+    if (!params.schedule) {
+      return { error: "Choose a valid schedule.", ok: false };
+    }
+    return {
+      ok: true,
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+      schedule: params.schedule,
+      triggers: [
+        {
+          id: "schedule",
+          kind: "schedule",
+          schedule: params.schedule,
+        },
+      ],
+    };
+  }
+
+  const conversationId = params.conversationId.trim();
+  const senderId = params.senderId.trim();
+  const text = params.text.trim();
+  if (!conversationId) {
+    return { error: "Conversation ID is required.", ok: false };
+  }
+  if (!senderId) {
+    return { error: "Sender ID is required.", ok: false };
+  }
+  if (!text) {
+    return { error: "Text contains is required.", ok: false };
+  }
+
+  return {
+    ok: true,
+    outputActions: [
+      { id: "agent-context", kind: "agent_context" },
+      {
+        broadcast: params.broadcast,
+        destination: "source_thread",
+        id: "source-thread-reply",
+        kind: "source_message",
+      },
+    ],
+    triggers: [
+      {
+        conversation: {
+          channel: params.provider,
+          conversationId,
+          conversationKind: "channel",
+        },
+        id: "inbound-message",
+        includeThreadReplies: params.includeThreadReplies,
+        kind: "inbound_message",
+        name: text,
+        sender: {
+          isBot: params.senderIsBot,
+          platformUserId: senderId,
+        },
+        textFilter: {
+          mode: "contains",
+          text,
+        },
+      },
+    ],
   };
 }
 

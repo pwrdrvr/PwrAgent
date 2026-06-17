@@ -3,6 +3,7 @@ import {
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
@@ -143,6 +144,10 @@ export type DesktopMessagingConfigLoader = (
 ) =>
   | DesktopMessagingConfig
   | Promise<DesktopMessagingConfig>;
+
+export type MessagingAutomationInboundHandler = (
+  event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+) => Promise<boolean>;
 
 type RunningMessagingAdapter = {
   adapter: DesktopMessagingAdapter;
@@ -301,6 +306,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         onEvent?: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
+      automationInboundHandler?: MessagingAutomationInboundHandler;
     },
   ) {}
 
@@ -902,6 +908,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapter,
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
+      automationInboundHandler: this.options.automationInboundHandler,
       backend: this.options.backendBridge,
       channel: adapter.channel,
       deliveryBudget,
@@ -2057,6 +2064,8 @@ export function getDesktopMessagingRuntime(
       adapterFactory: createConfiguredAdapters,
       backendBridge: new DesktopMessagingBackendBridge(),
       config: config ?? (() => loadDesktopMessagingConfig()),
+      automationInboundHandler: (event) =>
+        getDesktopAutomationService().handleMessagingInboundEvent(event),
     });
   }
 

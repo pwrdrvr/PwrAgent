@@ -58,6 +58,7 @@ import {
 import {
   logSlackInvalidIdentifier,
   validateSlackCallbackHandle,
+  validateSlackBotId,
   validateSlackChannelId,
   validateSlackFileId,
   validateSlackMessageTs,
@@ -324,6 +325,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   >();
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
+  private botId: string | undefined;
   private botUserId: string | undefined;
   private assistantThreadStatusDisabled = false;
   private conversationInfoLookupDisabled = false;
@@ -444,6 +446,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (this.started) return;
     this.listener = listener;
     const auth = await this.api.authTest();
+    this.botId = auth.bot_id;
     this.botUserId = auth.user_id;
     this.botAccount = auth.user ?? auth.user_id;
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
@@ -540,6 +543,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       text: text || intent.fallbackText || "PwrAgent",
       ...(blocks.length > 0 ? { blocks } : {}),
       ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+      ...(target.threadTs && intent.delivery?.broadcastThreadReply
+        ? { reply_broadcast: true }
+        : {}),
       unfurl_links: false,
       unfurl_media: false,
     };
@@ -671,10 +677,16 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
     if (!this.listener) return;
-    if (event.bot_id || (this.botUserId && event.user === this.botUserId)) return;
+    if (
+      (this.botId && event.bot_id === this.botId) ||
+      (this.botUserId && event.user === this.botUserId)
+    ) {
+      return;
+    }
     if (event.subtype && event.subtype !== "file_share") return;
 
-    const ids = this.validateInboundIds({
+    const ids = this.validateInboundMessageIds({
+      botId: event.bot_id,
       channelId: event.channel,
       teamId: event.team,
       userId: event.user,
@@ -683,7 +695,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!ids) return;
     if (this.isDuplicateMessageEvent(event, ids)) return;
 
-    const actor = await this.actorForSlackUser(ids.userId);
+    const actor = ids.botId
+      ? this.actorForSlackBot(ids.botId)
+      : await this.actorForSlackUser(ids.userId);
     const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: undefined,
@@ -1160,12 +1174,17 @@ export class SlackAdapter implements SlackProviderAdapter {
     const auditChannel = intent.audit?.channel;
     const channelId = surfaceState?.channelId ?? auditChannel?.conversation.id;
     if (!channelId) return undefined;
+    const sourceRelative = intent.delivery?.sourceRelative;
     const threadTs =
-      surfaceState?.threadTs
-      ?? auditChannel?.conversation.parentId
-      ?? (auditChannel?.conversation.kind === "thread"
-        ? auditChannel.conversation.parentId
-        : undefined);
+      sourceRelative === "source_channel"
+        ? undefined
+        : sourceRelative === "source_thread"
+          ? surfaceState?.threadTs ?? surfaceState?.ts ?? auditChannel?.conversation.parentId
+          : surfaceState?.threadTs
+            ?? auditChannel?.conversation.parentId
+            ?? (auditChannel?.conversation.kind === "thread"
+              ? auditChannel.conversation.parentId
+              : undefined);
     return {
       channelId,
       channelRef:
@@ -1374,6 +1393,85 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
+  private validateInboundMessageIds(params: {
+    botId?: unknown;
+    channelId: unknown;
+    teamId?: unknown;
+    ts?: unknown;
+    userId?: unknown;
+  }): { botId?: string; channelId: string; teamId?: string; ts: string; userId: string } | undefined {
+    let senderId: string;
+    if (typeof params.botId === "string" && params.botId) {
+      const botValidation = validateSlackBotId(params.botId);
+      if (!botValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "bot_id",
+          logger: this.logger,
+          reason: botValidation.reason,
+          value: params.botId,
+        });
+        return undefined;
+      }
+      senderId = params.botId;
+    } else {
+      const userValidation = validateSlackUserId(params.userId);
+      if (!userValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "user_id",
+          logger: this.logger,
+          reason: userValidation.reason,
+          value: params.userId,
+        });
+        return undefined;
+      }
+      senderId = params.userId as string;
+    }
+
+    const channelValidation = validateSlackChannelId(params.channelId);
+    if (!channelValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "channel_id",
+        logger: this.logger,
+        reason: channelValidation.reason,
+        value: params.channelId,
+      });
+      return undefined;
+    }
+    if (params.teamId !== undefined) {
+      const teamValidation = validateSlackTeamId(params.teamId);
+      if (!teamValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "team_id",
+          logger: this.logger,
+          reason: teamValidation.reason,
+          value: params.teamId,
+        });
+        return undefined;
+      }
+    }
+    const ts = typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
+    const tsValidation = validateSlackMessageTs(ts);
+    if (!tsValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "message_ts",
+        logger: this.logger,
+        reason: tsValidation.reason,
+        value: ts,
+      });
+      return undefined;
+    }
+
+    return {
+      channelId: params.channelId as string,
+      ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
+      ts,
+      userId: senderId,
+      ...(typeof params.botId === "string" && params.botId
+        ? { botId: params.botId }
+        : {}),
+    };
+  }
+
   private authorizeInbound(params: {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
@@ -1518,6 +1616,15 @@ export class SlackAdapter implements SlackProviderAdapter {
       platformUserId: userId,
       ...(displayName ? { displayName } : {}),
       ...(username ? { username } : {}),
+    };
+  }
+
+  private actorForSlackBot(botId: string): MessagingActorIdentity {
+    const contact = this.config.authorizedActorIds.find((item) => item.id === botId);
+    return {
+      platformUserId: botId,
+      displayName: contact?.displayName ?? botId,
+      isBot: true,
     };
   }
 
@@ -1903,10 +2010,14 @@ export function createSlackApi(botToken: string): SlackApi {
       return response.file as SlackFileInfo | undefined;
     },
     async postMessage(params) {
-      return (await client.chat.postMessage(params)) as SlackMessageResult;
+      return (await client.chat.postMessage(
+        params as unknown as Parameters<typeof client.chat.postMessage>[0],
+      )) as SlackMessageResult;
     },
     async updateMessage(params) {
-      return (await client.chat.update(params)) as SlackMessageResult;
+      return (await client.chat.update(
+        params as unknown as Parameters<typeof client.chat.update>[0],
+      )) as SlackMessageResult;
     },
     async usersInfo(params) {
       const response = await client.users.info(params);

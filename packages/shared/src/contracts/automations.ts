@@ -2,7 +2,12 @@ import type {
   AppServerBackendKind,
   AppServerThreadReplay,
   ThreadIdentifier,
+  ThreadExecutionMode,
 } from "./normalized-app-server";
+import type {
+  MessagingChannelKind,
+  MessagingConversationKind,
+} from "./messaging";
 
 export const AUTOMATION_BACKLOG_POLICIES = [
   "coalesce",
@@ -31,7 +36,11 @@ export const AUTOMATION_RUN_STATUSES = [
 
 export type AutomationRunStatus = (typeof AUTOMATION_RUN_STATUSES)[number];
 
-export const AUTOMATION_RUN_TRIGGERS = ["scheduled", "manual"] as const;
+export const AUTOMATION_RUN_TRIGGERS = [
+  "scheduled",
+  "manual",
+  "inbound_message",
+] as const;
 
 export type AutomationRunTrigger = (typeof AUTOMATION_RUN_TRIGGERS)[number];
 
@@ -95,6 +104,134 @@ export const AUTOMATION_SCHEDULE_KINDS = [
 ] as const;
 export type AutomationScheduleKind = (typeof AUTOMATION_SCHEDULE_KINDS)[number];
 
+export type AutomationScheduleTriggerDefinition = {
+  id: string;
+  kind: "schedule";
+  schedule: AutomationScheduleDefinition;
+};
+
+export const AUTOMATION_INBOUND_TEXT_MATCH_MODES = [
+  "contains",
+  "equals",
+] as const;
+
+export type AutomationInboundTextMatchMode =
+  (typeof AUTOMATION_INBOUND_TEXT_MATCH_MODES)[number];
+
+export type AutomationInboundTextFilter = {
+  mode: AutomationInboundTextMatchMode;
+  text: string;
+  caseSensitive?: boolean;
+};
+
+export type AutomationInboundSenderFilter = {
+  platformUserId?: string;
+  isBot?: boolean;
+};
+
+export type AutomationMessagingConversationSnapshot = {
+  channel: MessagingChannelKind;
+  conversationId: string;
+  conversationKind?: MessagingConversationKind;
+  parentId?: string;
+  title?: string;
+  parentTitle?: string;
+  ancestorTitle?: string;
+};
+
+export type AutomationInboundMessageTriggerDefinition = {
+  id: string;
+  kind: "inbound_message";
+  name?: string;
+  conversation: AutomationMessagingConversationSnapshot;
+  sender?: AutomationInboundSenderFilter;
+  textFilter?: AutomationInboundTextFilter;
+  includeThreadReplies?: boolean;
+};
+
+export type AutomationTriggerDefinition =
+  | AutomationScheduleTriggerDefinition
+  | AutomationInboundMessageTriggerDefinition;
+
+export type AutomationRunSourceActorSnapshot = {
+  platformUserId: string;
+  displayName?: string;
+  username?: string;
+  isBot?: boolean;
+};
+
+export type AutomationRunSourceMessage = {
+  text?: string;
+  textTruncated?: boolean;
+};
+
+export type AutomationRunSourceMetadata = {
+  kind: "messaging";
+  eventId?: string;
+  sourceEventKey: string;
+  receivedAt: number;
+  matchedTriggerId: string;
+  matchedTriggerName?: string;
+  actor: AutomationRunSourceActorSnapshot;
+  conversation: AutomationMessagingConversationSnapshot;
+  message?: AutomationRunSourceMessage;
+  routingState?: Record<string, unknown>;
+};
+
+export type AutomationExecutionProfile = {
+  backend?: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  executionMode?: ThreadExecutionMode;
+  fastMode?: boolean;
+  cwd?: string;
+  mcpAllowlist?: string[];
+  skillAllowlist?: string[];
+  toolAllowlist?: string[];
+};
+
+export type AutomationSourceMessageDestination =
+  | "source_thread"
+  | "source_channel";
+
+export type AutomationOutputActionDefinition =
+  | {
+      id: string;
+      kind: "agent_context";
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "source_message";
+      destination: AutomationSourceMessageDestination;
+      broadcast?: boolean;
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "messaging_target";
+      target: AutomationMessagingConversationSnapshot;
+      enabled?: boolean;
+    };
+
+export type AutomationOutputActionStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "unsupported"
+  | "skipped";
+
+export type AutomationOutputActionResult = {
+  actionId: string;
+  kind: AutomationOutputActionDefinition["kind"];
+  status: AutomationOutputActionStatus;
+  attemptedAt?: number;
+  completedAt?: number;
+  message?: string;
+  errorMessage?: string;
+};
+
 export type AutomationScheduleValidationResult =
   | {
       ok: true;
@@ -137,7 +274,8 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
   id: string;
   name: string;
   status: AutomationStatus;
-  schedule: AutomationScheduleDefinition;
+  triggers: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
   backlogPolicy: AutomationBacklogPolicy;
   nextRunAt?: number;
@@ -151,6 +289,8 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
 export type AutomationDetail = AutomationListItemSummary & {
   taskPrompt: string;
   gate?: AutomationGateConfig;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions: AutomationOutputActionDefinition[];
   createdAt: number;
   deletedAt?: number;
 };
@@ -185,6 +325,7 @@ export type AutomationRunSummary = {
   backendThreadId?: string;
   backendTurnId?: string;
   errorMessage?: string;
+  source?: AutomationRunSourceMetadata;
 };
 
 export type AutomationRunOutputDecision =
@@ -219,6 +360,7 @@ export type AutomationRunArtifact = {
   finalText?: string;
   errorMessage?: string;
   outputDecision?: AutomationRunOutputDecision;
+  actionResults: AutomationOutputActionResult[];
   transcriptEvents: AutomationRunTranscriptEvent[];
   createdAt: number;
   updatedAt: number;
@@ -245,8 +387,11 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
   gate?: AutomationGateConfig;
-  schedule: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions?: AutomationOutputActionDefinition[];
   enabled?: boolean;
   nextRunAt?: number;
 };
@@ -258,8 +403,11 @@ export type UpdateAutomationRequest = {
   name?: string;
   taskPrompt?: string;
   gate?: AutomationGateConfig | null;
+  triggers?: AutomationTriggerDefinition[];
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile | null;
+  outputActions?: AutomationOutputActionDefinition[];
   enabled?: boolean;
   nextRunAt?: number | null;
 };

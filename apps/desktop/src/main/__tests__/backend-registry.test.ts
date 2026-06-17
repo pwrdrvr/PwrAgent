@@ -14001,6 +14001,87 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("applies explicit headless automation profile overrides without changing approval policy", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread-1": {
+            backend: "codex",
+            threadId: "agent-thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [
+              {
+                id: "/tmp/default-project",
+                label: "Default Project",
+                path: "/tmp/default-project",
+                kind: "local",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Incident triage",
+      automationRunId: "run-1",
+      cwd: "/tmp/incident-bot",
+      executionMode: "full-access",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      input: [{ type: "text", text: "Investigate alert." }],
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/incident-bot",
+      ephemeral: true,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/incident-bot",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      fastMode: true,
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Full Access (full-access)."),
+      },
+      { type: "text", text: "Investigate alert." },
+    ]);
+
+    await registry.close();
+  });
+
   it("auto-cancels approval requests from headless automations", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

@@ -389,6 +389,114 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("serializes inbound message runs behind the automation lane", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+          },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: {
+        kind: "messaging",
+        sourceEventKey: "slack:C123:1::B123",
+        receivedAt: 1_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+        },
+        message: {
+          text: "ERROR first",
+        },
+      },
+      now,
+    });
+    const [activeRun] = store.listRunsForAutomation("automation-1");
+
+    now = 2_000;
+    const queued = await scheduler.runFromInboundEvent({
+      automation,
+      source: {
+        kind: "messaging",
+        sourceEventKey: "slack:C123:2::B123",
+        receivedAt: 2_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+        },
+        message: {
+          text: "ERROR second",
+        },
+      },
+      now,
+    });
+
+    expect(queued?.status).toBe("queued");
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        trigger: "inbound_message",
+        status: "queued",
+        source: expect.objectContaining({
+          sourceEventKey: "slack:C123:2::B123",
+        }),
+      }),
+      expect.objectContaining({
+        trigger: "inbound_message",
+        status: "running",
+        source: expect.objectContaining({
+          sourceEventKey: "slack:C123:1::B123",
+        }),
+      }),
+    ]);
+
+    now = 3_000;
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: activeRun?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now,
+    });
+
+    expect(queue.submitted).toHaveLength(2);
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      trigger: "inbound_message",
+      status: "running",
+      source: {
+        sourceEventKey: "slack:C123:2::B123",
+      },
+    });
+  });
+
   it("includes successful gate output in the automation run prompt", async () => {
     createIntervalAutomation({
       backend: "codex",

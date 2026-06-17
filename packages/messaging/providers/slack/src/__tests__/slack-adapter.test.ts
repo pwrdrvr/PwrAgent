@@ -66,6 +66,7 @@ function fakeApi(spies: {
 }): SlackApi {
   return {
     authTest: async () => ({
+      bot_id: "B0PWRAGENT",
       user: "pwragent",
       user_id: "U0BOTUSERID",
       team: "PwrDrvr",
@@ -546,6 +547,46 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("maps source-relative thread broadcast delivery to Slack post fields", async () => {
+    const spies: { posted: unknown[] } = { posted: [] };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await adapter.deliver({
+      id: "automation-source-reply",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      delivery: {
+        sourceRelative: "source_thread",
+        broadcastThreadReply: true,
+      },
+      parts: [{ type: "text", text: "Investigated alert" }],
+      targetSurface: {
+        channel: "slack",
+        id: "slack-text",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            ts: "1712023032.123456",
+          },
+        },
+      },
+    });
+
+    expect(spies.posted[0]).toMatchObject({
+      channel: "C012ABCDEF0",
+      thread_ts: "1712023032.123456",
+      reply_broadcast: true,
+      text: "Investigated alert",
+    });
+  });
+
   it("keeps fan-out callback records scoped per routed binding", async () => {
     const store = fakeStore();
     const spies: { posted: unknown[] } = { posted: [] };
@@ -646,6 +687,94 @@ describe("SlackAdapter", () => {
         }),
       }),
     ]);
+  });
+
+  it("routes authorized non-self bot message events for automation triggers", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          ...baseConfig.authorizedActorIds,
+          { id: "B012DATADOG", displayName: "Datadog" },
+        ],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        bot_id: "B012DATADOG",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        text: "ERROR api latency high",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        text: "ERROR api latency high",
+        actor: expect.objectContaining({
+          platformUserId: "B012DATADOG",
+          displayName: "Datadog",
+          isBot: true,
+        }),
+        routingState: expect.objectContaining({
+          opaque: expect.objectContaining({
+            channelId: "C012ABCDEF0",
+            ts: "1712023032.123456",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("ignores Slack events authored by the configured PwrAgent bot", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          ...baseConfig.authorizedActorIds,
+          { id: "B0PWRAGENT", displayName: "PwrAgent" },
+        ],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        bot_id: "B0PWRAGENT",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        text: "Automation completed",
+      },
+    });
+
+    expect(events).toEqual([]);
   });
 
   it("routes leading app mentions as mentioned text", async () => {

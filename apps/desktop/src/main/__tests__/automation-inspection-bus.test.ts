@@ -154,6 +154,127 @@ describe("AutomationInspectionBus", () => {
     });
   });
 
+  it("exposes inbound source metadata and action results for recurrence analysis", () => {
+    const automation = store.createAutomation({
+      id: "automation:datadog",
+      backend: "codex",
+      threadId: "agent-thread",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate alerts",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          name: "Datadog ERROR",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+          },
+        },
+      ],
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "slack-thread",
+          kind: "source_message",
+          destination: "source_thread",
+          broadcast: true,
+        },
+      ],
+      now: 1_000,
+    });
+    const run = store.createRun({
+      id: "automation-run:datadog-1",
+      automationId: automation.id,
+      trigger: "inbound_message",
+      status: "completed",
+      source: {
+        kind: "messaging",
+        sourceEventKey: "slack:C123:171::B123",
+        receivedAt: 2_000,
+        matchedTriggerId: "datadog-error",
+        matchedTriggerName: "Datadog ERROR",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+          title: "alerts",
+        },
+        message: {
+          text: "ERROR api latency high",
+        },
+      },
+      now: 2_000,
+    });
+    store.upsertRunArtifact({
+      runId: run!.id,
+      status: "completed",
+      finalText: "Investigated.",
+      actionResults: [
+        {
+          actionId: "slack-thread",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 3_000,
+        },
+      ],
+      now: 3_000,
+    });
+
+    expect(
+      bus.inspect({
+        operation: "list_automation_runs",
+        context: { backend: "codex", threadId: "agent-thread" },
+        args: { automationId: automation.id },
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: {
+        runs: [
+          expect.objectContaining({
+            trigger: "inbound_message",
+            source: expect.objectContaining({
+              matchedTriggerId: "datadog-error",
+              receivedAt: 2_000,
+              conversation: expect.objectContaining({
+                channel: "slack",
+                conversationId: "C123",
+              }),
+            }),
+          }),
+        ],
+      },
+    });
+
+    expect(
+      bus.inspect({
+        operation: "get_automation_run_artifact",
+        context: { backend: "codex", threadId: "agent-thread" },
+        args: { runId: run!.id },
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: {
+        artifact: {
+          actionResults: [
+            expect.objectContaining({
+              actionId: "slack-thread",
+              kind: "source_message",
+              status: "completed",
+            }),
+          ],
+        },
+      },
+    });
+  });
+
   it("rejects cross-thread automation and run inspection", () => {
     const automation = createAutomation({
       id: "automation:weather",

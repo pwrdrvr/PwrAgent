@@ -13,6 +13,7 @@ import type {
   AutomationRunStatus,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
+  AutomationTriggerDefinition,
   CreateAutomationRequest,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
@@ -25,6 +26,7 @@ import type {
   RunAutomationNowResponse,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
+import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { validateAutomationScheduleDefinition } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
@@ -32,12 +34,14 @@ import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
+import { executeAutomationOutputActions } from "./automation-action-executor.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+import { matchAutomationInboundEvent } from "./automation-trigger-matcher.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
 
@@ -246,7 +250,10 @@ export class DesktopAutomationService {
   }
 
   async create(request: CreateAutomationRequest): Promise<AutomationMutationResponse> {
-    this.assertValidSchedule(request.schedule);
+    const schedule = request.schedule ?? scheduleFromTriggers(request.triggers);
+    if (schedule) {
+      this.assertValidSchedule(schedule);
+    }
     await this.assertAgentThreadTarget({
       backend: request.backend,
       threadId: request.threadId,
@@ -258,14 +265,17 @@ export class DesktopAutomationService {
       name: request.name,
       taskPrompt: request.taskPrompt,
       gate: request.gate,
-      schedule: request.schedule,
+      triggers: request.triggers,
+      schedule,
       backlogPolicy: request.backlogPolicy,
+      executionProfile: request.executionProfile,
+      outputActions: request.outputActions,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
-        (request.enabled === false
+        (request.enabled === false || !schedule
           ? undefined
-          : computeNextAutomationRunAt(request.schedule, now)),
+          : computeNextAutomationRunAt(schedule, now)),
       now,
     });
     await this.notifyThreadAutomationsUpdated(automation);
@@ -278,8 +288,9 @@ export class DesktopAutomationService {
     if (!current) {
       throw new Error("Automation not found.");
     }
-    if (request.schedule) {
-      this.assertValidSchedule(request.schedule);
+    const requestedSchedule = request.schedule ?? scheduleFromTriggers(request.triggers);
+    if (requestedSchedule) {
+      this.assertValidSchedule(requestedSchedule);
     }
     if ((request.backend === undefined) !== (request.threadId === undefined)) {
       throw new Error("Automation Agent reassignment requires backend and threadId.");
@@ -300,21 +311,27 @@ export class DesktopAutomationService {
       await this.assertAgentThreadTarget(reassignment);
     }
     const now = Date.now();
-    const schedule = request.schedule ?? current.schedule;
+    const schedule = requestedSchedule ?? current.schedule;
     const enablingFromPaused = request.enabled === true && current.status !== "enabled";
     const disabling = request.enabled === false;
     const shouldRecomputeNextRun =
       request.nextRunAt === undefined &&
       !disabling &&
-      (enablingFromPaused || (request.schedule !== undefined && current.status === "enabled"));
+      Boolean(schedule) &&
+      (enablingFromPaused ||
+        ((request.schedule !== undefined || request.triggers !== undefined) &&
+          current.status === "enabled"));
     const updated = this.options.store.updateAutomation(request.automationId, {
       backend: reassignment?.backend,
       threadId: reassignment?.threadId,
       name: request.name,
       taskPrompt: request.taskPrompt,
       gate: request.gate,
+      triggers: request.triggers,
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
+      executionProfile: request.executionProfile,
+      outputActions: request.outputActions,
       status:
         request.enabled === undefined
           ? undefined
@@ -327,7 +344,7 @@ export class DesktopAutomationService {
           : disabling
             ? null
             : shouldRecomputeNextRun
-            ? computeNextAutomationRunAt(schedule, now)
+            ? computeNextAutomationRunAt(schedule!, now)
             : undefined,
       now,
     });
@@ -369,7 +386,9 @@ export class DesktopAutomationService {
     const current = this.options.store.getAutomation(request.automationId);
     if (!current) throw new Error("Automation not found.");
     const automation = this.options.store.resumeAutomation(request.automationId, {
-      nextRunAt: computeNextAutomationRunAt(current.schedule, Date.now()),
+      nextRunAt: current.schedule
+        ? computeNextAutomationRunAt(current.schedule, Date.now())
+        : undefined,
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
@@ -406,6 +425,31 @@ export class DesktopAutomationService {
       queueEntryId: result?.entry.id,
       turnId: result?.status === "started" ? result.turnId : undefined,
     };
+  }
+
+  async handleMessagingInboundEvent(event: MessagingInboundEvent): Promise<boolean> {
+    if (event.kind !== "text" && event.kind !== "media") {
+      return false;
+    }
+    if (this.options.runtime?.disabled) {
+      return false;
+    }
+    const matches = matchAutomationInboundEvent({
+      automations: this.options.store.listAutomations(),
+      event,
+    });
+    if (matches.length === 0) {
+      return false;
+    }
+    for (const match of matches) {
+      await this.scheduler.runFromInboundEvent({
+        automation: match.automation,
+        source: match.source,
+      });
+      await this.notifyThreadAutomationsUpdated(match.automation);
+    }
+    this.startSchedulerIfEnabled();
+    return true;
   }
 
   buildThreadSummaries() {
@@ -543,7 +587,7 @@ export class DesktopAutomationService {
     });
     if (shouldRecordRunArtifact(params.status)) {
       const existingArtifact = this.options.store.getRunArtifact(run.id);
-      this.options.store.upsertRunArtifact({
+      const artifact = this.options.store.upsertRunArtifact({
         runId: run.id,
         status: run.status,
         finalText: params.finalText,
@@ -559,6 +603,22 @@ export class DesktopAutomationService {
           }),
         ),
       });
+      if (artifact && automation) {
+        const actionResults = await executeAutomationOutputActions({
+          actions: automation.outputActions,
+          artifact,
+          source: run.source,
+        });
+        this.options.store.upsertRunArtifact({
+          runId: run.id,
+          status: run.status,
+          finalText: artifact.finalText,
+          errorMessage: artifact.errorMessage,
+          outputDecision: artifact.outputDecision,
+          actionResults,
+          transcriptEvents: artifact.transcriptEvents,
+        });
+      }
     }
     const artifact = this.options.store.getRunArtifact(run.id);
     await this.options.registry.publishLocalEvent({
@@ -695,7 +755,7 @@ export class DesktopAutomationService {
         .filter((automation) => automation.status === "enabled" && automation.schedule)
         .map((automation) => [
           automation.id,
-          computeNextAutomationRunAt(automation.schedule, now),
+          computeNextAutomationRunAt(automation.schedule!, now),
         ]),
     );
     this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
@@ -763,7 +823,7 @@ export class DesktopAutomationService {
     );
   }
 
-  private assertValidSchedule(schedule: CreateAutomationRequest["schedule"]): void {
+  private assertValidSchedule(schedule: NonNullable<CreateAutomationRequest["schedule"]>): void {
     const validation = validateAutomationScheduleDefinition(schedule);
     if (!validation.ok) {
       throw new Error(validation.error);
@@ -828,8 +888,11 @@ function toAutomationDetail(
     gate: record.gate,
     status: record.status,
     schedule: record.schedule,
+    triggers: record.triggers,
     scheduleSummary: record.scheduleSummary,
     backlogPolicy: record.backlogPolicy,
+    executionProfile: record.executionProfile,
+    outputActions: record.outputActions,
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
@@ -841,6 +904,12 @@ function toAutomationDetail(
 
 function automationRunActivityAt(run: AutomationRunSummary): number | undefined {
   return run.completedAt ?? run.startedAt ?? run.queuedAt ?? run.scheduledFor;
+}
+
+function scheduleFromTriggers(
+  triggers: AutomationTriggerDefinition[] | undefined,
+) {
+  return triggers?.find((trigger) => trigger.kind === "schedule")?.schedule;
 }
 
 function shouldRecordRunArtifact(

@@ -1,4 +1,4 @@
-import type { AutomationRunSummary } from "@pwragent/shared";
+import type { AutomationRunSummary, ThreadExecutionMode } from "@pwragent/shared";
 import type { AutomationGateRunResult } from "@pwragent/shared";
 import type {
   ThreadTurnQueueEntry,
@@ -45,7 +45,13 @@ export type HeadlessAutomationLauncher = {
     agentThreadId: AutomationRecord["threadId"];
     automationName?: string;
     automationRunId: string;
+    cwd?: string;
+    executionMode?: ThreadExecutionMode;
+    fastMode?: boolean;
     input: ThreadTurnQueueEntry["input"];
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
   }): Promise<{
     headlessThreadId?: string;
     queueEntryId: string;
@@ -79,7 +85,13 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       agentThreadId: params.automation.threadId,
       automationName: params.automation.name,
       automationRunId: params.run.id,
+      cwd: params.automation.executionProfile?.cwd,
+      executionMode: params.automation.executionProfile?.executionMode,
+      fastMode: params.automation.executionProfile?.fastMode,
       input,
+      model: params.automation.executionProfile?.model,
+      reasoningEffort: params.automation.executionProfile?.reasoningEffort,
+      serviceTier: params.automation.executionProfile?.serviceTier,
     });
     automationRunnerLog.info("headless automation run accepted", {
       automationId: params.automation.id,
