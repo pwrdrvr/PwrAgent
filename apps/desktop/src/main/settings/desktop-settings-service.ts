@@ -618,6 +618,10 @@ export class DesktopSettingsService {
           value: config.ui?.editedFilesDock ?? "above",
           source: config.ui?.editedFilesDock === undefined ? "default" : "config",
         },
+        actionRunsDock: {
+          value: config.ui?.actionRunsDock ?? "above",
+          source: config.ui?.actionRunsDock === undefined ? "default" : "config",
+        },
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),

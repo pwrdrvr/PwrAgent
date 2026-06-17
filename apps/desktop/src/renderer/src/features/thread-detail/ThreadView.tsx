@@ -26,6 +26,7 @@ import type {
   AppServerSkillSummary,
   BackendSummary,
   CodexEnvironmentSetupProgressEvent,
+  CodexEnvironmentActionRun,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
@@ -56,7 +57,9 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import {
   DEFAULT_CONTEXT_TAB,
+  DEFAULT_ACTION_RUNS_DOCK,
   DEFAULT_EDITED_FILES_DOCK,
+  type ActionRunsDock,
   type ContextTabId,
   type EditedFilesDock,
 } from "./context-panels/context-tab";
@@ -915,6 +918,8 @@ export type ThreadViewProps = {
    */
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
+  actionRunsDock?: ActionRunsDock;
+  onActionRunsDockChange?: (dock: ActionRunsDock) => void;
   sidebarHidden?: boolean;
   onToggleSidebar?: () => void;
   /**
@@ -1080,6 +1085,9 @@ export function ThreadView(props: ThreadViewProps) {
     useState<string>();
   const [launchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
+  const [dismissedEnvActionRunIds, setDismissedEnvActionRunIds] = useState<
+    Set<string>
+  >(() => new Set());
   // The context-rail pin is a window-level preference owned by App and
   // toggled from the header chips (no more wide-display force-pin — the
   // user controls it explicitly).
@@ -1092,10 +1100,12 @@ export function ThreadView(props: ThreadViewProps) {
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
+  const actionRunsDock = props.actionRunsDock ?? DEFAULT_ACTION_RUNS_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
   const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
   const onActiveContextTabChange = props.onActiveContextTabChange ?? noop;
   const onEditedFilesDockChange = props.onEditedFilesDockChange ?? noop;
+  const onActionRunsDockChange = props.onActionRunsDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
   const transcriptPanelRef = useRef<HTMLElement>(null);
@@ -1148,6 +1158,12 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
+  const envActionRuns = readCodexEnvironmentActionRuns(
+    selectedThread?.codexEnvironmentRuntime,
+  );
+  const visibleEnvActionRuns = envActionRuns.filter(
+    (run) => !dismissedEnvActionRunIds.has(run.runId),
+  );
   const selectedThreadBackend = useMemo(
     () =>
       selectedThread
@@ -1728,6 +1744,53 @@ export function ThreadView(props: ThreadViewProps) {
     onContextRailPinnedChange,
     onEditedFilesDockChange,
   ]);
+
+  const moveActionRunsToSidebar = useCallback(() => {
+    onActionRunsDockChange("sidebar");
+    onActiveContextTabChange("actions");
+    if (!contextRailPinned) {
+      onContextRailPinnedChange(true);
+    }
+  }, [
+    contextRailPinned,
+    onActionRunsDockChange,
+    onActiveContextTabChange,
+    onContextRailPinnedChange,
+  ]);
+
+  const showActionRunsAboveComposer = useCallback(() => {
+    onActionRunsDockChange("above");
+  }, [onActionRunsDockChange]);
+
+  const stopEnvActionRun = useCallback(
+    (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => {
+      if (!selectedThread || !props.desktopApi?.stopCodexEnvironmentAction) {
+        return;
+      }
+      void props.desktopApi
+        .stopCodexEnvironmentAction({
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          runId: run.runId,
+          mode,
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to stop environment action run", error);
+        });
+    },
+    [props.desktopApi, selectedThread],
+  );
+
+  const dismissEnvActionRun = useCallback((run: CodexEnvironmentActionRun) => {
+    setDismissedEnvActionRunIds((current) => {
+      if (current.has(run.runId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(run.runId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!pendingActivityEntry) {
@@ -2618,6 +2681,15 @@ export function ThreadView(props: ThreadViewProps) {
             onBeforeSendTurn={() => {
               setTranscriptReglueRequestKey((current) => current + 1);
             }}
+            onMoveEnvActionsToSidebar={
+              actionRunsDock === "above" && envActionRuns.length > 0
+                ? moveActionRunsToSidebar
+                : undefined
+            }
+            onDismissEnvActionRun={dismissEnvActionRun}
+            onStopEnvActionRun={stopEnvActionRun}
+            hiddenEnvActionRunIds={dismissedEnvActionRunIds}
+            showEnvActionAnchors={actionRunsDock === "above"}
             onSetExecutionMode={props.onSetExecutionMode}
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
@@ -2667,6 +2739,15 @@ export function ThreadView(props: ThreadViewProps) {
           onScrollToTurn={handleScrollToTurn}
           editedFilesDock={editedFilesDock}
           onEditedFilesDockChange={onEditedFilesDockChange}
+          actionRuns={visibleEnvActionRuns}
+          actionRunsDock={actionRunsDock}
+          actionRunsEnvironmentName={
+            selectedThread?.codexEnvironmentRuntime?.environmentName
+          }
+          onActionRunsDockChange={onActionRunsDockChange}
+          onShowActionRunsAboveComposer={showActionRunsAboveComposer}
+          onDismissEnvActionRun={dismissEnvActionRun}
+          onStopEnvActionRun={stopEnvActionRun}
           onActiveTabChange={onActiveContextTabChange}
           onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}

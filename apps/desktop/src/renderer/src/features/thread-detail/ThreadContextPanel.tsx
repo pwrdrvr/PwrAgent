@@ -16,6 +16,7 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
   NavigationThreadSummary,
+  CodexEnvironmentActionRun,
   ThreadPricingSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -29,6 +30,7 @@ import {
   PullRequestIcon,
   ServerIcon,
   SubAgentsIcon,
+  TerminalIcon,
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -40,9 +42,11 @@ import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
+import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
 import type {
   ContextTabId,
+  ActionRunsDock,
   EditedFilesDock,
 } from "./context-panels/context-tab";
 import type { EditedFileGroup } from "./edited-file-groups";
@@ -65,6 +69,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
+  { id: "actions", label: "Actions", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
@@ -121,6 +126,16 @@ type ThreadContextPanelProps = {
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   editedFilesDock?: EditedFilesDock;
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
+  actionRuns?: CodexEnvironmentActionRun[];
+  actionRunsDock?: ActionRunsDock;
+  actionRunsEnvironmentName?: string;
+  onActionRunsDockChange?: (dock: ActionRunsDock) => void;
+  onShowActionRunsAboveComposer?: () => void;
+  onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
+  onStopEnvActionRun?: (
+    run: CodexEnvironmentActionRun,
+    mode: "stop" | "terminate"
+  ) => void;
 };
 
 // Clamp bounds for the context-rail width. Shared by the resize math and the
@@ -652,6 +667,22 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             pricing={props.pricing}
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
+          />
+        );
+      case "actions":
+        return (
+          <ActionRunsPanel
+            dock={props.actionRunsDock ?? "above"}
+            environmentName={props.actionRunsEnvironmentName}
+            onDockChange={(dock) => {
+              props.onActionRunsDockChange?.(dock);
+              if (dock === "above") {
+                props.onShowActionRunsAboveComposer?.();
+              }
+            }}
+            onDismissRun={props.onDismissEnvActionRun}
+            onStopRun={props.onStopEnvActionRun}
+            runs={props.actionRuns ?? []}
           />
         );
       case "subagents":

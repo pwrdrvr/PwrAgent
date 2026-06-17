@@ -24,6 +24,8 @@ import {
   type RetainThreadBranchDriftResponse,
   type RunCodexEnvironmentActionRequest,
   type RunCodexEnvironmentActionResponse,
+  type StopCodexEnvironmentActionRequest,
+  type StopCodexEnvironmentActionResponse,
   type SetAcpSessionRuntimeOptionRequest,
   type SetAcpSessionRuntimeOptionResponse,
   type SetCodexThreadEnvironmentRequest,
@@ -61,6 +63,7 @@ import {
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+  AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
@@ -607,6 +610,17 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.handle(
+    AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+    async (
+      _event,
+      request: StopCodexEnvironmentActionRequest,
+    ): Promise<StopCodexEnvironmentActionResponse> => {
+      return await registry.stopCodexEnvironmentAction(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.handle(
     AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -670,6 +684,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.removeHandler(AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
   ipcMain.removeHandler(AGENT_TRUST_CODEX_PROJECT_CHANNEL);

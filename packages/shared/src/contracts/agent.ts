@@ -552,6 +552,19 @@ export type RunCodexEnvironmentActionResponse = {
   codexEnvironmentRuntime: CodexThreadEnvironmentRuntime;
 };
 
+export type StopCodexEnvironmentActionRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  runId: string;
+  mode: "stop" | "terminate";
+};
+
+export type StopCodexEnvironmentActionResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  codexEnvironmentRuntime: CodexThreadEnvironmentRuntime;
+};
+
 export type SetCodexThreadEnvironmentRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

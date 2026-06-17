@@ -7,6 +7,7 @@ export type ContextTabId =
   | "info"
   | "edits"
   | "pricing"
+  | "actions"
   | "subagents"
   | "automations"
   | "prs"
@@ -17,6 +18,7 @@ export const CONTEXT_TAB_IDS: ContextTabId[] = [
   "info",
   "edits",
   "pricing",
+  "actions",
   "subagents",
   "automations",
   "prs",
@@ -44,5 +46,13 @@ export type EditedFilesDock = "above" | "sidebar";
 export const DEFAULT_EDITED_FILES_DOCK: EditedFilesDock = "above";
 
 export function isEditedFilesDock(value: unknown): value is EditedFilesDock {
+  return value === "above" || value === "sidebar";
+}
+
+export type ActionRunsDock = "above" | "sidebar";
+
+export const DEFAULT_ACTION_RUNS_DOCK: ActionRunsDock = "above";
+
+export function isActionRunsDock(value: unknown): value is ActionRunsDock {
   return value === "above" || value === "sidebar";
 }

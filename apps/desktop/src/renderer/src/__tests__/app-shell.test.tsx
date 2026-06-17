@@ -466,6 +466,7 @@ describe("App", () => {
         contextRailPinned: { value: false, source: "default" },
         activeContextTab: { value: "info", source: "default" },
         editedFilesDock: { value: "above", source: "default" },
+        actionRunsDock: { value: "above", source: "default" },
       },
       messaging: {
         enabled: { value: true, source: "default" },

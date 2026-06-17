@@ -165,6 +165,13 @@ export type CodexEnvironmentActionRun = {
   exitSignal?: string;
   durationMs?: number;
   output?: string;
+  /**
+   * User-requested process-tree shutdown. While status remains "started",
+   * this means PwrAgent has already sent a signal and is waiting for the
+   * process close callback to report the final exit details.
+   */
+  terminationRequestedAt?: number;
+  terminationMode?: "stop" | "terminate";
 };
 
 export type CodexThreadEnvironmentRuntime = {

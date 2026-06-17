@@ -7,6 +7,7 @@ import {
   buildExitErrorSuffix,
   CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
   startLocalCodexEnvironmentAction,
+  stopCodexEnvironmentDetachedCommand,
 } from "../app-server/codex-environment-runtime";
 import { resolveWindowsBashShell } from "../windows-shell";
 
@@ -163,6 +164,53 @@ describe("codex environment runtime", () => {
           "stdout third",
           "stderr fourth",
         ].join("\n"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 15_000);
+
+  it("stops a detached action process tree by run id", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-stop-"));
+    const runId = "test-run-stop";
+    try {
+      const detachedExit = new Promise<{ exitSignal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          void startLocalCodexEnvironmentAction({
+            actionId: "start-dev",
+            runId,
+            env: {
+              ...process.env,
+              SHELL: spawnableShell("/bin/sh"),
+            },
+            onDetachedExit: resolve,
+            runtime: {
+              environmentId: "env",
+              environmentName: "Env",
+              executionTarget: "local",
+              cwd: root,
+              actions: [
+                {
+                  id: "start-dev",
+                  name: "Start dev",
+                  command: "while true; do sleep 1; done",
+                },
+              ],
+            },
+          }).catch(reject);
+        },
+      );
+
+      await expectEventually(async () => {
+        const result = stopCodexEnvironmentDetachedCommand(runId, "stop");
+        if (!result.found) {
+          throw new Error("Detached process is not registered yet");
+        }
+        return result;
+      });
+
+      await expect(detachedExit).resolves.toMatchObject({
+        exitSignal: expect.any(String),
       });
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

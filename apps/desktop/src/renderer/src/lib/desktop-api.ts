@@ -128,6 +128,8 @@ import type {
   RenameThreadResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
+  StopCodexEnvironmentActionRequest,
+  StopCodexEnvironmentActionResponse,
   SetCodexThreadEnvironmentRequest,
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
@@ -428,6 +430,9 @@ export type DesktopApi = {
   runCodexEnvironmentAction?: (
     request: RunCodexEnvironmentActionRequest,
   ) => Promise<RunCodexEnvironmentActionResponse>;
+  stopCodexEnvironmentAction?: (
+    request: StopCodexEnvironmentActionRequest,
+  ) => Promise<StopCodexEnvironmentActionResponse>;
   setCodexThreadEnvironment?: (
     request: SetCodexThreadEnvironmentRequest,
   ) => Promise<SetCodexThreadEnvironmentResponse>;

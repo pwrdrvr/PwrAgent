@@ -121,6 +121,7 @@ export type DesktopSettingsConfig = {
     contextRailPinned?: boolean;
     activeContextTab?: string;
     editedFilesDock?: string;
+    actionRunsDock?: string;
   };
   messaging?: {
     enabled?: boolean;
@@ -818,6 +819,13 @@ export function desktopSettingsPatchToEdits(
       set(["ui", "edited_files_dock"], patch.ui.editedFilesDock);
     }
   }
+  if (patch.ui?.actionRunsDock !== undefined) {
+    if (patch.ui.actionRunsDock === "above") {
+      edits.push({ op: "delete", path: ["ui", "action_runs_dock"] });
+    } else {
+      set(["ui", "action_runs_dock"], patch.ui.actionRunsDock);
+    }
+  }
 
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
@@ -1276,6 +1284,7 @@ function normalizeDesktopConfig(
       contextRailPinned: readBoolean(ui?.context_rail_pinned),
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
+      actionRunsDock: readString(ui?.action_runs_dock),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
