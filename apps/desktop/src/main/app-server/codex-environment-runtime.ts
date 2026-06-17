@@ -480,9 +480,8 @@ function runShellCommand(
     processId,
     cwd: params.cwd,
     mode: params.mode,
-    command: params.command,
     shell,
-    pathPreview: truncateForLog(commandEnv.PATH),
+    captureShellEnvironment: params.captureShellEnvironment === true,
   });
   const capture = params.captureShellEnvironment
     ? createShellEnvironmentCaptureTarget()
@@ -722,7 +721,6 @@ function runShellCommand(
             code,
             signal,
             durationMs,
-            command: params.command,
             cwd: params.cwd,
           });
         } else {
@@ -800,8 +798,8 @@ function runShellCommand(
           code,
           signal,
           durationMs,
-          capturedEnvKeys: shellEnvironment
-            ? Object.keys(shellEnvironment).sort()
+          capturedEnvKeyCount: shellEnvironment
+            ? Object.keys(shellEnvironment).length
             : undefined,
         });
         settle(() => {

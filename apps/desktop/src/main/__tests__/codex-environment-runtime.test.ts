@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyLocalCodexEnvironmentSelection,
   buildExitErrorSuffix,
@@ -9,6 +9,29 @@ import {
   startLocalCodexEnvironmentAction,
 } from "../app-server/codex-environment-runtime";
 import { resolveWindowsBashShell } from "../windows-shell";
+
+const mainLogEntries = vi.hoisted(
+  (): Array<{
+    level: "error" | "info" | "warn";
+    message: string;
+    payload?: Record<string, unknown>;
+    scope: string;
+  }> => [],
+);
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn((scope: string) => ({
+    error: (message: string, payload?: Record<string, unknown>) => {
+      mainLogEntries.push({ level: "error", message, payload, scope });
+    },
+    info: (message: string, payload?: Record<string, unknown>) => {
+      mainLogEntries.push({ level: "info", message, payload, scope });
+    },
+    warn: (message: string, payload?: Record<string, unknown>) => {
+      mainLogEntries.push({ level: "warn", message, payload, scope });
+    },
+  })),
+}));
 
 const isWindows = process.platform === "win32";
 
@@ -27,6 +50,10 @@ function spawnableShell(posixShell: string): string {
 }
 
 describe("codex environment runtime", () => {
+  afterEach(() => {
+    mainLogEntries.length = 0;
+  });
+
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
     await expect(
       startLocalCodexEnvironmentAction({
@@ -474,6 +501,66 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("omits command, PATH preview, and captured key names from successful setup logs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-log-redact-"));
+    const toolPath = path.join(root, "node-bin");
+
+    try {
+      await mkdir(toolPath, { recursive: true });
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `/private/toolchain/bin${path.delimiter}${process.env.PATH ?? ""}`,
+          SHELL: "/bin/sh",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: [
+              `export PATH=${JSON.stringify(toolPath)}:$PATH`,
+              "export NVM_DIR=/private/nvm",
+              "export GITHUB_TOKEN=secret",
+              "printf setup-output",
+            ].join("\n"),
+            actions: [],
+          },
+          executionTarget: "local",
+          setupEnabled: true,
+        },
+      });
+
+      const startLog = mainLogEntries.find(
+        (entry) => entry.message === "codex-environment-command-start",
+      );
+      expect(startLog?.payload).toMatchObject({
+        captureShellEnvironment: true,
+        mode: "wait",
+      });
+      expect(startLog?.payload).not.toHaveProperty("command");
+      expect(startLog?.payload).not.toHaveProperty("pathPreview");
+
+      const exitLog = mainLogEntries.find(
+        (entry) => entry.message === "codex-environment-command-exit",
+      );
+      expect(exitLog?.payload).toMatchObject({
+        capturedEnvKeyCount: Object.keys(runtime?.shellEnvironment ?? {}).length,
+        code: 0,
+      });
+      expect(exitLog?.payload).not.toHaveProperty("capturedEnvKeys");
+
+      const serializedLogs = JSON.stringify(mainLogEntries);
+      expect(serializedLogs).not.toContain("GITHUB_TOKEN");
+      expect(serializedLogs).not.toContain("secret");
+      expect(serializedLogs).not.toContain("/private/toolchain/bin");
+      expect(serializedLogs).not.toContain("/private/nvm");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("does not persist allow-listed env values that contain URL credentials", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-secret-"));
     const pnpmHome = path.join(root, "pnpm-home");
@@ -551,6 +638,62 @@ describe("codex environment runtime", () => {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it("omits successful detached action commands from info logs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-detached-log-"));
+
+    try {
+      const detachedExit = new Promise<{ output: string }>((resolve, reject) => {
+        void startLocalCodexEnvironmentAction({
+          actionId: "start-dev",
+          runId: "test-run-detached-log",
+          env: {
+            ...process.env,
+            SHELL: "/bin/sh",
+          },
+          onDetachedExit: resolve,
+          runtime: {
+            environmentId: "env",
+            environmentName: "Env",
+            executionTarget: "local",
+            cwd: root,
+            actions: [
+              {
+                id: "start-dev",
+                name: "Start dev",
+                command: "printf 'sensitive detached command output'",
+              },
+            ],
+          },
+        }).catch(reject);
+      });
+
+      await expect(detachedExit).resolves.toMatchObject({
+        output: "sensitive detached command output",
+      });
+
+      const startLog = mainLogEntries.find(
+        (entry) => entry.message === "codex-environment-command-start",
+      );
+      expect(startLog?.payload).toMatchObject({
+        captureShellEnvironment: false,
+        mode: "detach",
+      });
+      expect(startLog?.payload).not.toHaveProperty("command");
+      expect(startLog?.payload).not.toHaveProperty("pathPreview");
+
+      const detachedExitLog = mainLogEntries.find(
+        (entry) => entry.message === "codex-environment-detached-exit",
+      );
+      expect(detachedExitLog?.payload).toMatchObject({ code: 0 });
+      expect(detachedExitLog?.payload).not.toHaveProperty("command");
+      expect(JSON.stringify(mainLogEntries)).not.toContain(
+        "sensitive detached command output",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 15_000);
 
   it("reuses cached shell hydration when setup is disabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-cache-"));
