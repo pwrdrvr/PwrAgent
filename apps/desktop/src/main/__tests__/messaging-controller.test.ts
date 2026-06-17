@@ -27,17 +27,18 @@ import type {
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared";
-import type {
-  MessagingCapabilityProfile,
-  MessagingSurfaceAction,
-  MessagingChannelKind,
-  MessagingDeliveryScope,
-  MessagingDeliveryResult,
-  MessagingInboundCallbackEvent,
-  MessagingInboundEvent,
-  MessagingInboundTextEvent,
-  MessagingJsonValue,
-  MessagingSurfaceIntent,
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  type MessagingCapabilityProfile,
+  type MessagingSurfaceAction,
+  type MessagingChannelKind,
+  type MessagingDeliveryScope,
+  type MessagingDeliveryResult,
+  type MessagingInboundCallbackEvent,
+  type MessagingInboundEvent,
+  type MessagingInboundTextEvent,
+  type MessagingJsonValue,
+  type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
@@ -992,6 +993,53 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
+  });
+
+  it("keeps a pending new-thread first prompt usable after the picker TTL", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    now += 2 * 24 * 60 * 60 * 1000;
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix the delayed prompt bug"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Fix the delayed prompt bug",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: expect.stringContaining("PwrAgent commands"),
+      }),
+    );
   });
 
   it("updates the ready prompt into the first status card without exhausting the DM budget", async () => {
@@ -9881,6 +9929,59 @@ describe("MessagingController", () => {
     });
   });
 
+  it("keeps Plan questionnaires active for the durable callback lifetime", async () => {
+    let now = 1000;
+    const harness = await createHarness({ now: () => now });
+    await bindThread(harness);
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-long-lived",
+        questions: [
+          {
+            id: "q1",
+            header: "Mode",
+            question: "How should I proceed?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              {
+                label: "Implement (Recommended)",
+                description: "Start coding.",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    const questionnaire = harness.delivered.find(
+      (intent) => intent.kind === "questionnaire",
+    );
+    expect(questionnaire).toBeDefined();
+    await expect(harness.store.getPendingIntent(questionnaire!.id, { now })).resolves
+      .toMatchObject({
+        expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+      });
+
+    now += 5 * 24 * 60 * 60 * 1000;
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildTextEvent("Keep it pragmatic."));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      answers: [
+        {
+          kind: "custom",
+          value: "Keep it pragmatic.",
+        },
+      ],
+    });
+  });
+
   it("stops typing while presenting a Plan questionnaire for an active turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -12021,6 +12122,90 @@ describe("MessagingController", () => {
           {
             type: "text",
             text: "new thread prompt",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("restores first-prompt capture after cancelling a Full Access new-thread warning", async () => {
+    let now = 1000;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("first prompt"));
+    const firstWarning = harness.delivered.at(-1);
+    expect(firstWarning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+
+    now += 90_000;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:cancel",
+        value: findAction(firstWarning, "full-access-risk:cancel").value,
+      }),
+    );
+    harness.startTurn.mockClear();
+    harness.materializeDirectoryLaunchpad.mockClear();
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second prompt"));
+
+    const secondWarning = harness.delivered.at(-1);
+    expect(secondWarning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(secondWarning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "second prompt",
           },
         ],
         launchpad: expect.objectContaining({

@@ -218,7 +218,8 @@ import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,
 } from "../../automations/automation-output-decision.js";
-const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
+const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // Discrete item lifecycle events are cheap provider lease renewals, not
@@ -4490,20 +4491,46 @@ export class MessagingController {
       directory,
     });
     await this.presentNewThreadPromptGate(
-      normalizeNewThreadSessionForBackend({
-        ...session,
-        backend: selectedBackend.kind,
-        mode: "new_thread_options",
-        pageIndex: 0,
-        workMode,
-        branchName: workMode === "worktree" ? session.branchName : undefined,
-        selectedProject: project,
-        updatedAt: this.now(),
-        expiresAt: this.now() + this.pendingIntentTtlMs,
-      }, selectedBackend, this.now()),
+      normalizeNewThreadSessionForBackend(
+        this.withNewThreadPromptCaptureExpiry({
+          ...session,
+          backend: selectedBackend.kind,
+          mode: "new_thread_options",
+          pageIndex: 0,
+          workMode,
+          branchName: workMode === "worktree" ? session.branchName : undefined,
+          selectedProject: project,
+          updatedAt: this.now(),
+          expiresAt: this.now() + this.pendingIntentTtlMs,
+        }),
+        selectedBackend,
+        this.now(),
+      ),
       event,
       navigation,
     );
+  }
+
+  private withNewThreadPromptCaptureExpiry(
+    session: MessagingBrowseSessionRecord,
+  ): MessagingBrowseSessionRecord {
+    if (
+      !isNewThreadLaunchAction(session.launchAction) ||
+      session.mode !== "new_thread_options" ||
+      !session.selectedProject
+    ) {
+      return session;
+    }
+
+    const expiresAt = this.now() + NEW_THREAD_PROMPT_CAPTURE_TTL_MS;
+    return {
+      ...session,
+      expiresAt: Math.max(session.expiresAt, expiresAt),
+      textInputExpiresAt: Math.max(
+        session.textInputExpiresAt ?? session.expiresAt,
+        expiresAt,
+      ),
+    };
   }
 
   private async presentNewThreadPromptGate(
@@ -8420,7 +8447,9 @@ export class MessagingController {
         ...context.session,
         expiresAt: Math.max(context.session.expiresAt, expiresAt),
         textInputExpiresAt:
-          context.session.textInputExpiresAt ?? context.session.expiresAt,
+          options.presentationMode === "message"
+            ? this.now()
+            : context.session.textInputExpiresAt ?? context.session.expiresAt,
         updatedAt: this.now(),
       });
     }
@@ -8465,7 +8494,11 @@ export class MessagingController {
           filter: session.query,
         });
         if (context.kind === "new-thread") {
-          await this.presentNewThreadPromptGate(session, event, navigation);
+          await this.presentNewThreadPromptGate(
+            this.withNewThreadPromptCaptureExpiry(session),
+            event,
+            navigation,
+          );
         } else {
           await this.renderResumeBrowser(session, navigation, event);
         }
