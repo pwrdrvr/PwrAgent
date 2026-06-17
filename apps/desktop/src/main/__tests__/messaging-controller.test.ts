@@ -994,6 +994,53 @@ describe("MessagingController", () => {
     });
   });
 
+  it("keeps a pending new-thread first prompt usable after the picker TTL", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    now += 2 * 24 * 60 * 60 * 1000;
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix the delayed prompt bug"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Fix the delayed prompt bug",
+          },
+        ],
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          directoryKey: "directory:pwragent",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: expect.stringContaining("PwrAgent commands"),
+      }),
+    );
+  });
+
   it("updates the ready prompt into the first status card without exhausting the DM budget", async () => {
     let now = 0;
     const scope: MessagingDeliveryScope = {
