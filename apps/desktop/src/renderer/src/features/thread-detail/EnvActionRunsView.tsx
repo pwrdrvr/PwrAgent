@@ -3,9 +3,11 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 const ENV_ACTION_OUTPUT_MAX_LINES = 500;
 
@@ -228,12 +230,14 @@ export function EnvActionRunEntry(props: {
         <span className="composer__queued-env-action-actions">
           {status === "started" ? (
             <>
-              <button
-                className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-stop"
-                type="button"
+              <EnvActionControlButton
+                ariaLabel="Stop"
+                className="composer__queued-env-action-stop"
                 disabled={stopping}
-                aria-label="Stop"
-                title="Stop gracefully"
+                tooltip={[
+                  "Stop gracefully",
+                  "Sends SIGTERM first, then force terminates if the process tree does not exit.",
+                ].join("\n")}
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -241,13 +245,15 @@ export function EnvActionRunEntry(props: {
                 }}
               >
                 <EnvActionStopIcon />
-              </button>
-              <button
-                className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-terminate"
-                type="button"
+              </EnvActionControlButton>
+              <EnvActionControlButton
+                ariaLabel="Terminate"
+                className="composer__queued-env-action-terminate"
                 disabled={stopping && terminationMode === "terminate"}
-                aria-label="Terminate"
-                title="Terminate process tree now"
+                tooltip={[
+                  "Terminate now",
+                  "Force-kills the process tree immediately.",
+                ].join("\n")}
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -255,7 +261,7 @@ export function EnvActionRunEntry(props: {
                 }}
               >
                 <EnvActionTerminateIcon />
-              </button>
+              </EnvActionControlButton>
             </>
           ) : (
             <button
@@ -271,11 +277,13 @@ export function EnvActionRunEntry(props: {
             </button>
           )}
           {props.placement === "composer" && props.onMoveToSidebar ? (
-            <button
-              className="composer__secondary-action composer__queued-env-action-control composer__queued-env-action-sidebar"
-              type="button"
-              aria-label="Move action to the sidebar Actions panel"
-              title="Move action to the sidebar Actions panel"
+            <EnvActionControlButton
+              ariaLabel="Move action to the sidebar Actions panel"
+              className="composer__queued-env-action-sidebar"
+              tooltip={[
+                "Show in sidebar",
+                "Opens the Actions panel and hides this row above the composer.",
+              ].join("\n")}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -283,7 +291,7 @@ export function EnvActionRunEntry(props: {
               }}
             >
               <EnvActionSidebarIcon />
-            </button>
+            </EnvActionControlButton>
           ) : null}
         </span>
       </summary>
@@ -311,6 +319,50 @@ export function EnvActionRunEntry(props: {
         </div>
       </div>
     </details>
+  );
+}
+
+function EnvActionControlButton(props: {
+  ariaLabel: string;
+  children: ReactNode;
+  className: string;
+  disabled?: boolean;
+  onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  tooltip: string;
+}): ReactNode {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const className = [
+    "composer__secondary-action",
+    "composer__queued-env-action-control",
+    props.className,
+  ].join(" ");
+
+  const showTooltip = (target: HTMLButtonElement): void => {
+    if (!props.disabled) {
+      tooltip.show(target, props.tooltip);
+    }
+  };
+
+  return (
+    <>
+      <button
+        aria-label={props.ariaLabel}
+        className={className}
+        disabled={props.disabled}
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={(event) => {
+          tooltip.hide();
+          props.onClick(event);
+        }}
+        onFocus={(event) => showTooltip(event.currentTarget)}
+        onMouseEnter={(event) => showTooltip(event.currentTarget)}
+        onMouseLeave={tooltip.hide}
+      >
+        {props.children}
+      </button>
+      {tooltip.tooltipNode}
+    </>
   );
 }
 

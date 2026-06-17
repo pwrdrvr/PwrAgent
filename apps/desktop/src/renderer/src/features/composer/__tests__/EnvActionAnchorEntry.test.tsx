@@ -8,6 +8,7 @@ import {
   formatDurationMs,
   formatRunningDurationMs,
 } from "../Composer";
+import { EnvActionRunsView } from "../../thread-detail/EnvActionRunsView";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -215,6 +216,50 @@ describe("EnvActionAnchorEntry", () => {
   });
 
   describe("stop interaction", () => {
+    it("uses the shared styled tooltip for icon action controls", async () => {
+      render(
+        <EnvActionRunsView
+          runs={[buildRun({ status: "started" })]}
+          placement="composer"
+          onMoveToSidebar={() => {}}
+          onStop={() => {}}
+        />,
+      );
+
+      const stopButton = screen.getByRole("button", { name: "Stop" });
+      expect(stopButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(stopButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Stop gracefully");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Sends SIGTERM first");
+
+      fireEvent.mouseLeave(stopButton);
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+
+      const terminateButton = screen.getByRole("button", { name: "Terminate" });
+      expect(terminateButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(terminateButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Terminate now");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Force-kills");
+
+      fireEvent.mouseLeave(terminateButton);
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+
+      const sidebarButton = screen.getByRole("button", {
+        name: "Move action to the sidebar Actions panel",
+      });
+      expect(sidebarButton).not.toHaveAttribute("title");
+      fireEvent.mouseEnter(sidebarButton);
+      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Show in sidebar");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Actions panel");
+    });
+
     it("invokes onStop with graceful stop when the user clicks Stop", () => {
       const onStop = vi.fn();
       const run = buildRun({ status: "started" });
