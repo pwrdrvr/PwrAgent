@@ -98,6 +98,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }): Promise<AppServerThreadStatus | undefined> {
     const response = await this.registry.readThread({
       backend: request.backend,
+      includeTurns: false,
       limit: 0,
       threadId: request.threadId,
     });

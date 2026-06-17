@@ -149,6 +149,60 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards metadata-only and bounded read options to the Grok app server", async () => {
+    const readParams: Record<string, unknown>[] = [];
+    const server = {
+      request: async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
+            methods: ["thread/read"],
+          };
+        }
+        if (method === "thread/read") {
+          readParams.push(params);
+          return {
+            threadId: "thread-1",
+            thread: { threadId: "thread-1" },
+            messages: [],
+            items: [],
+          };
+        }
+        throw new Error(`Unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await client.readThread({
+      threadId: "thread-1",
+      includeTurns: false,
+      limit: 0,
+    });
+    await client.readThread({
+      threadId: "thread-1",
+      before: "cursor-before-1",
+      limit: 5,
+    });
+
+    expect(readParams).toEqual([
+      {
+        threadId: "thread-1",
+        includeTurns: false,
+        limit: 0,
+      },
+      {
+        threadId: "thread-1",
+        includeTurns: true,
+        before: "cursor-before-1",
+        limit: 5,
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("retries initialization when the initialized notification fails", async () => {
     let initializeRequestCount = 0;
     let initializedNotificationCount = 0;

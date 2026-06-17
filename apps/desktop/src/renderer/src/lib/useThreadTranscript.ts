@@ -44,6 +44,7 @@ function messageMatchesOptimisticEntry(
 
 export function useThreadTranscript(params: {
   desktopApi?: DesktopApi;
+  initialHistoryLimit?: number;
   thread?: NavigationThreadSummary;
 }): {
   addOptimisticUserMessage: (
@@ -60,7 +61,7 @@ export function useThreadTranscript(params: {
   refresh: () => Promise<void>;
   response?: AppServerReadThreadResponse;
 } {
-  const { desktopApi, thread } = params;
+  const { desktopApi, initialHistoryLimit, thread } = params;
   const [response, setResponse] = useState<AppServerReadThreadResponse>();
   const [optimisticEntries, setOptimisticEntries] = useState<AppServerThreadMessageEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -101,6 +102,9 @@ export function useThreadTranscript(params: {
     try {
       const nextResponse = await desktopApi.readThread({
         backend: thread.source,
+        ...(initialHistoryLimit !== undefined
+          ? { limit: initialHistoryLimit }
+          : {}),
         threadId: thread.id
       });
       if (requestVersionRef.current !== requestVersion) {
@@ -118,7 +122,7 @@ export function useThreadTranscript(params: {
         setLoading(false);
       }
     }
-  }, [desktopApi, thread]);
+  }, [desktopApi, initialHistoryLimit, thread]);
 
   useEffect(() => {
     void loadLatest();

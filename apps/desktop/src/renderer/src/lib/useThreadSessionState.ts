@@ -49,6 +49,7 @@ import {
 } from "../features/thread-detail/live-transcript-activity";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+export const LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT = 5;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -129,6 +130,7 @@ type ThreadSessionEntry = {
   error?: string;
   expectOwnUpdate: boolean;
   failedHydrationVersion?: number | "unknown";
+  hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -2830,6 +2832,7 @@ function didHydrateCompletedTurn(
 
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
+  initialHistoryLimit?: number;
   liveTranscriptEventFiltering?: boolean;
   thread?: NavigationThreadSummary;
 }): {
@@ -2977,6 +2980,8 @@ export function useThreadSessionState(params: {
     [desktopApi?.logRendererDiagnostic]
   );
 
+  const initialHistoryLimit = params.initialHistoryLimit;
+
   const loadLatest = useCallback(
     async (targetThread: NavigationThreadSummary): Promise<void> => {
       const readThread = desktopApi?.readThread;
@@ -3013,6 +3018,9 @@ export function useThreadSessionState(params: {
         });
         const response = normalizeResponseImageBoundaryText(await readThread({
           backend: targetThread.source,
+          ...(initialHistoryLimit !== undefined
+            ? { limit: initialHistoryLimit }
+            : {}),
           threadId: targetThread.id,
         }));
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
@@ -3075,6 +3083,7 @@ export function useThreadSessionState(params: {
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
+            hydratedInitialHistoryLimit: initialHistoryLimit,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
@@ -3118,6 +3127,7 @@ export function useThreadSessionState(params: {
     [
       desktopApi?.readThread,
       desktopApi?.recordStartupProfileEvent,
+      initialHistoryLimit,
       logStaleThinkingState,
       updateSession,
     ]
@@ -3299,6 +3309,9 @@ export function useThreadSessionState(params: {
     }
 
     if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
+      if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
+        void loadLatest(thread);
+      }
       return;
     }
 
@@ -3333,7 +3346,7 @@ export function useThreadSessionState(params: {
     }
 
     void loadLatest(thread);
-  }, [loadLatest, sessions, thread, threadKey, updateSession]);
+  }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {

@@ -836,6 +836,7 @@ class DesktopAppServerService {
     const response = await getDesktopBackendRegistry().readThread({
       backend,
       threadId: request.threadId,
+      includeTurns: request.includeTurns,
       before: request.before,
       limit: request.limit,
     });

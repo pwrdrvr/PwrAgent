@@ -9,6 +9,7 @@ import type {
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
   getContextWindowMoonPhase,
   useThreadSessionState,
 } from "../useThreadSessionState";
@@ -156,6 +157,96 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.threadBusy).toBe(false);
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it("uses a bounded initial thread history limit when configured", async () => {
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "entry-1",
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      threadId: "thread-1",
+    });
+  });
+
+  it("rehydrates the selected thread when the initial history limit changes", async () => {
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const thread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const { result, rerender } = renderHook(
+      ({ initialHistoryLimit }: { initialHistoryLimit?: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit,
+          thread,
+        }),
+      {
+        initialProps: {
+          initialHistoryLimit: undefined as number | undefined,
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    expect(readThread).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    rerender({ initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    expect(readThread).toHaveBeenLastCalledWith({
+      backend: "codex",
+      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      threadId: "thread-1",
+    });
   });
 
   it("keeps a newer active turn busy when an older turn completion arrives", async () => {
