@@ -1248,6 +1248,10 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function readFileChangeApprovalFile(
   value: unknown,
 ): NonNullable<PendingRequestApprovalContext["files"]>[number] | undefined {
@@ -1261,17 +1265,65 @@ function readFileChangeApprovalFile(
     readNonEmptyString(kind?.type) ??
     readNonEmptyString(record.kind) ??
     readNonEmptyString(record.action);
+  const directDiff =
+    readNonEmptyString(kind?.unified_diff) ??
+    readNonEmptyString(kind?.unifiedDiff) ??
+    readFileChangeApprovalDiff(record) ??
+    readFileChangeApprovalDiff(kind);
+  const content =
+    readOptionalString(kind?.content) ?? readOptionalString(record.content);
   const diff =
-    readNonEmptyString(record.diff) ??
-    readNonEmptyString(record.patch) ??
-    readNonEmptyString(record.unifiedDiff) ??
-    readNonEmptyString(record.unified_diff);
+    buildFileChangeApprovalContentDiff({ action, content, filePath }) ??
+    directDiff;
   return {
     ...(action ? { action } : {}),
     ...(diff ? { diff } : {}),
     displayPath: filePath,
     path: filePath,
   };
+}
+
+function readFileChangeApprovalDiff(
+  record: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const direct =
+    readNonEmptyString(record.diff) ??
+    readNonEmptyString(record.patch) ??
+    readNonEmptyString(record.unifiedDiff) ??
+    readNonEmptyString(record.unified_diff);
+  if (direct) {
+    return direct;
+  }
+  return readFileChangeApprovalDiff(readRecord(record.diff));
+}
+
+function buildFileChangeApprovalContentDiff(params: {
+  action: string | undefined;
+  content: string | undefined;
+  filePath: string;
+}): string | undefined {
+  if (
+    params.content === undefined ||
+    (params.action !== "add" && params.action !== "delete")
+  ) {
+    return undefined;
+  }
+
+  const lines = params.content.length ? params.content.split("\n") : [];
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const hunkLineCount = lines.length;
+  const displayPath = params.filePath.replace(/^\/+/, "") || "file";
+  const header =
+    params.action === "add"
+      ? [`--- /dev/null`, `+++ b/${displayPath}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${displayPath}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.action === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
 }
 
 function fileChangeApprovalContextKey(params: {
