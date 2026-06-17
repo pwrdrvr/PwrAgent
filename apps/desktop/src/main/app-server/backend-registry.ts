@@ -11669,17 +11669,24 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async recordCodexNativeSubAgentNamesFromTurn(event: AgentEvent): Promise<void> {
-    if (event.backend !== "codex" || event.notification.method !== "turn/completed") {
+  private async recordCodexNativeSubAgentNames(event: AgentEvent): Promise<void> {
+    if (event.backend !== "codex") {
       return;
     }
-    const parentThreadId = event.notification.params.threadId;
-    const turnId = turnIdFromTerminalNotification(event.notification);
-    const text = finalTextFromTerminalNotification(event.notification);
-    if (!parentThreadId || !turnId || !text) {
+    const params = readRecord(event.notification.params);
+    if (!params) {
       return;
     }
-    const names = extractCodexNativeSpawnedAgentNames(text);
+    const parentThreadId = readOptionalString(params, ["threadId", "thread_id"]);
+    const turn = readRecord(params.turn);
+    const turnId =
+      readOptionalString(params, ["turnId", "turn_id"]) ?? readOptionalString(turn, ["id"]);
+    if (!parentThreadId || !turnId) {
+      return;
+    }
+    const names = textFragmentsFromCodexNotification(event.notification).flatMap(
+      (text) => extractCodexNativeSpawnedAgentNames(text),
+    );
     if (names.length === 0) {
       return;
     }
@@ -15483,7 +15490,7 @@ export class DesktopBackendRegistry {
     await this.recordLiveThreadUsage(event);
     await this.recordCodexNativeSubAgentActivity(event);
     await this.recordCodexNativeSubAgentNotifications(event);
-    await this.recordCodexNativeSubAgentNamesFromTurn(event);
+    await this.recordCodexNativeSubAgentNames(event);
     await this.recordTaskMonitorUsage(event);
 
     this.rememberThreadTitleFromEvent(event);

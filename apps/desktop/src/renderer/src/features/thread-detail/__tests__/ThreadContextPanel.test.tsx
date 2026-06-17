@@ -340,6 +340,43 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels Codex native sub-agent usage separately from monitor usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "codex-native:019ed7df-5876-7882-9b75-7fd647372da7",
+            task: "Check PR status",
+            status: "success",
+            createdAt: 2000,
+            updatedAt: 2500,
+            monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+            monitorUsage: {
+              summary: "800 uncached in · 200 cached · 50 out",
+              tokenUsage: {
+                inputTokens: 1000,
+                cachedInputTokens: 200,
+                uncachedInputTokens: 800,
+                outputTokens: 50,
+                totalTokens: 1050,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      screen.getByText("Codex usage: 800 uncached in · 200 cached · 50 out"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Monitor usage: 800 uncached in · 200 cached · 50 out"),
+    ).not.toBeInTheDocument();
+  });
+
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
 

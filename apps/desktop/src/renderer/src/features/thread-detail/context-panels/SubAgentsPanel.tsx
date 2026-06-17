@@ -13,6 +13,16 @@ type SubAgentsPanelProps = {
   thread: NavigationThreadSummary;
 };
 
+function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
+  if (subAgent.monitorId.startsWith("codex-native:")) {
+    return "Codex";
+  }
+  if (subAgent.monitorId.startsWith("review:")) {
+    return "Review";
+  }
+  return "Monitor";
+}
+
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
@@ -63,7 +73,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 ) : null}
                 {subAgent.monitorUsage?.summary ? (
                   <p className="rail-card__usage">
-                    {subAgent.monitorId.startsWith("review:") ? "Review" : "Monitor"} usage:{" "}
+                    {subAgentUsageLabel(subAgent)} usage:{" "}
                     {subAgent.monitorUsage.summary}
                   </p>
                 ) : null}

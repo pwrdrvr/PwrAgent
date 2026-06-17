@@ -12008,19 +12008,14 @@ command = "pnpm dev"
     expect(overlay?.subAgents?.[0]?.agentName).toBeUndefined();
 
     await codexClient.emit({
-      method: "turn/completed",
+      method: "item/completed",
       params: {
         threadId: "thread-parent",
         turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "completed",
-          output: [
-            {
-              type: "text",
-              text: "Spawned sub-agent Huygens for PR #783 using `gpt-5.4-mini` with low reasoning. I did not wait.",
-            },
-          ],
+        item: {
+          id: "assistant-message-1",
+          type: "agentMessage",
+          text: "Spawned sub-agent Huygens for PR #783 using `gpt-5.4-mini` with low reasoning. I did not wait.",
         },
       },
     } as AppServerNotification);
