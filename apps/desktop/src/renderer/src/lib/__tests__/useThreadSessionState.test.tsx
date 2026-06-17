@@ -325,13 +325,15 @@ describe("useThreadSessionState", () => {
       limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
       threadId: "thread-1",
     });
-    expect(transcriptLabels(result.current.entries)).toEqual([
-      "message:Older 1",
-      "message:Older 2",
-      "message:Recent 1",
-      "message:Recent 2",
-      "message:Recent 3",
-    ]);
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Older 1",
+        "message:Older 2",
+        "message:Recent 1",
+        "message:Recent 2",
+        "message:Recent 3",
+      ]);
+    });
     expect(result.current.response?.replay.pagination.previousCursor).toBe(
       "oldest-page"
     );
