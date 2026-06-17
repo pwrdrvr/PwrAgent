@@ -27,6 +27,17 @@ const thread: NavigationThreadSummary = {
   updatedAt: 1,
 };
 
+const ordinaryThread: NavigationThreadSummary = {
+  executionMode: "default",
+  id: "ordinary-thread",
+  inbox: { inInbox: false },
+  linkedDirectories: [],
+  source: "codex",
+  title: "Slack helper",
+  titleSource: "explicit",
+  updatedAt: 2,
+};
+
 const automation: AutomationDetail = {
   backend: "codex",
   backlogPolicy: "coalesce",
@@ -114,9 +125,8 @@ describe("AutomationsScreen", () => {
     fireEvent.change(within(editor).getByLabelText("Name"), {
       target: { value: "Check email" },
     });
-    fireEvent.change(within(editor).getByLabelText("Agent"), {
-      target: { value: "codex:thread-1" },
-    });
+    fireEvent.click(within(editor).getByLabelText("Agent"));
+    fireEvent.click(within(editor).getByRole("option", { name: /Email Agent/ }));
     fireEvent.change(within(editor).getByLabelText("Task prompt"), {
       target: { value: "Check email." },
     });
@@ -130,6 +140,76 @@ describe("AutomationsScreen", () => {
         threadId: "thread-1",
       }),
     );
+  });
+
+  it("promotes a regular thread to an Agent before creating an automation", async () => {
+    const promotedAutomation: AutomationDetail = {
+      ...automation,
+      id: "automation-promoted",
+      threadId: "ordinary-thread",
+    };
+    const createAutomation = vi.fn(async () => ({ automation: promotedAutomation }));
+    const setThreadAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "ordinary-thread",
+      agent: {
+        name: "Slack Agent",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 3,
+      },
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      createAutomation,
+      listAutomations: vi
+        .fn()
+        .mockResolvedValueOnce({ automations: [] })
+        .mockResolvedValue({ automations: [promotedAutomation] }),
+      onAgentEvent: () => () => undefined,
+      setThreadAgent,
+    };
+
+    render(
+      <AutomationsScreen
+        desktopApi={desktopApi}
+        threads={[thread, ordinaryThread]}
+        onClose={() => undefined}
+        onRefreshNavigation={onRefreshNavigation}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
+    const editor = screen.getByLabelText("Name").closest("form") as HTMLElement;
+    expect(editor).not.toBeNull();
+    fireEvent.change(within(editor).getByLabelText("Name"), {
+      target: { value: "Slack automation" },
+    });
+    fireEvent.click(within(editor).getByLabelText("Agent"));
+    fireEvent.click(within(editor).getByRole("tab", { name: "Threads" }));
+    fireEvent.click(within(editor).getByRole("option", { name: /Slack helper/ }));
+
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
+    expect(setThreadAgent).toHaveBeenCalledWith({
+      agent: { name: "Slack helper" },
+      backend: "codex",
+      threadId: "ordinary-thread",
+    });
+    expect(within(editor).getByLabelText("Agent")).toHaveTextContent("Slack Agent");
+
+    fireEvent.change(within(editor).getByLabelText("Task prompt"), {
+      target: { value: "Post the latest automation state." },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createAutomation).toHaveBeenCalledTimes(1));
+    expect(createAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "ordinary-thread",
+      }),
+    );
+    expect(onRefreshNavigation).toHaveBeenCalled();
   });
 
   it("shows rollout replay details for an automation run", async () => {

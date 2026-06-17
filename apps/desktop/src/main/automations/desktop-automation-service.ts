@@ -322,6 +322,13 @@ export class DesktopAutomationService {
       now,
     });
     if (!updated) throw new Error("Automation not found.");
+    if (disabling) {
+      await this.cancelPendingRunsForAutomation(
+        request.automationId,
+        now,
+        "Automation paused before this run started.",
+      );
+    }
     if (assignmentChanged) {
       await this.notifyThreadAutomationsUpdated(current);
     }
@@ -331,11 +338,18 @@ export class DesktopAutomationService {
   }
 
   async pause(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
+    const now = Date.now();
     const automation = this.options.store.updateAutomation(request.automationId, {
       status: "paused",
       nextRunAt: null,
+      now,
     });
     if (!automation) throw new Error("Automation not found.");
+    await this.cancelPendingRunsForAutomation(
+      request.automationId,
+      now,
+      "Automation paused before this run started.",
+    );
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
@@ -354,18 +368,12 @@ export class DesktopAutomationService {
   }
 
   async delete(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
-    const pendingQueueEntryIds = this.options.store
-      .listPendingOrQueuedRunsForAutomation(request.automationId)
-      .map((run) => run.queueEntryId)
-      .filter((entryId): entryId is string => Boolean(entryId));
+    this.cancelQueuedTurnsForAutomation(
+      request.automationId,
+      "Automation deleted before the run started.",
+    );
     const automation = this.options.store.deleteAutomation(request.automationId);
     if (!automation) throw new Error("Automation not found.");
-    for (const entryId of pendingQueueEntryIds) {
-      this.options.registry.cancelQueuedTurn(
-        entryId,
-        "Automation deleted before the run started.",
-      );
-    }
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
@@ -682,6 +690,53 @@ export class DesktopAutomationService {
   private startSchedulerIfEnabled(): void {
     if (!this.options.runtime?.disabled) {
       this.scheduler.start();
+    }
+  }
+
+  private async cancelPendingRunsForAutomation(
+    automationId: string,
+    now: number,
+    reason: string,
+  ): Promise<void> {
+    const automation = this.options.store.getAutomation(automationId, {
+      includeDeleted: true,
+    });
+    const pendingRuns = this.options.store.listPendingOrQueuedRunsForAutomation(
+      automationId,
+    );
+    this.cancelQueuedTurns(pendingRuns, reason);
+    this.options.store.cancelPendingRunsForAutomation({
+      automationId,
+      errorMessage: reason,
+      now,
+    });
+    if (!automation) {
+      return;
+    }
+    for (const run of pendingRuns) {
+      await this.publishAutomationRunUpdate({
+        backend: automation.backend,
+        runId: run.id,
+        status: "cancelled",
+        threadId: automation.threadId,
+        errorMessage: reason,
+      });
+    }
+  }
+
+  private cancelQueuedTurnsForAutomation(automationId: string, reason: string): void {
+    this.cancelQueuedTurns(
+      this.options.store.listPendingOrQueuedRunsForAutomation(automationId),
+      reason,
+    );
+  }
+
+  private cancelQueuedTurns(runs: AutomationRunSummary[], reason: string): void {
+    const pendingQueueEntryIds = runs
+      .map((run) => run.queueEntryId)
+      .filter((entryId): entryId is string => Boolean(entryId));
+    for (const entryId of pendingQueueEntryIds) {
+      this.options.registry.cancelQueuedTurn(entryId, reason);
     }
   }
 

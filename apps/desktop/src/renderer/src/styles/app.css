@@ -11172,6 +11172,230 @@ textarea,
   outline-offset: 1px;
 }
 
+.automation-agent-field {
+  position: relative;
+}
+
+.automation-agent-field__label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.automation-agent-help {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+.automation-agent-help:hover,
+.automation-agent-help:focus-visible,
+.automation-agent-help[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.automation-agent-picker {
+  position: relative;
+}
+
+.automation-agent-picker__trigger {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-agent-picker__trigger span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-agent-picker__chevron {
+  flex: 0 0 auto;
+  padding: 0 9px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.automation-agent-picker__trigger:focus-visible {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.automation-agent-picker__menu {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  left: 0;
+  top: calc(100% + 4px);
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.automation-agent-picker__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-panel);
+}
+
+.automation-agent-picker__tab {
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.automation-agent-picker__tab:hover,
+.automation-agent-picker__tab:focus-visible,
+.automation-agent-picker__tab.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.automation-agent-picker__search {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.automation-agent-picker__search:focus {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.automation-agent-picker__option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-agent-picker__option:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.automation-agent-picker__option-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.automation-agent-picker__option-main > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-agent-picker__option-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-agent-picker__option:hover,
+.automation-agent-picker__option:focus-visible,
+.automation-agent-picker__option[aria-selected="true"] {
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.automation-agent-picker__option--action {
+  color: var(--accent-bright);
+}
+
+.automation-agent-picker__option--muted {
+  color: var(--text-muted);
+}
+
+.automation-agent-picker__empty {
+  margin: 4px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.automation-agent-help-popover {
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.automation-agent-help-popover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .automation-fieldset {
   display: flex;
   flex-direction: column;

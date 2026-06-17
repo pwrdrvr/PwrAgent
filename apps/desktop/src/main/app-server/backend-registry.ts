@@ -5981,14 +5981,16 @@ export class DesktopBackendRegistry {
           dynamicTools,
         });
     const startedAt = Date.now();
+    const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
+    const agentName = request.agent?.name?.trim();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
     this.pendingStartedThreads.set(
-      `${backend}:${result.threadId}`,
+      pendingThreadKey,
       {
         id: result.threadId,
         source: backend,
-        title: "Untitled thread",
-        titleSource: "fallback",
+        title: agentName || "Untitled thread",
+        titleSource: agentName ? "explicit" : "fallback",
         projectKey: cwd,
         createdAt: startedAt,
         updatedAt: startedAt,
@@ -6188,7 +6190,7 @@ export class DesktopBackendRegistry {
     try {
       const forkedAt = Date.now();
       const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
-      this.pendingStartedThreads.set(`${backend}:${result.threadId}`, {
+      this.pendingStartedThreads.set(buildThreadIdentityKey(backend, result.threadId), {
         id: result.threadId,
         source: backend,
         title: "Forked thread",
@@ -6261,7 +6263,7 @@ export class DesktopBackendRegistry {
       });
       this.invalidateThreadListCache(backend);
     } catch (error) {
-      this.pendingStartedThreads.delete(`${backend}:${result.threadId}`);
+      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
       await preparedWorkspace.rollback?.();
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
@@ -10359,7 +10361,7 @@ export class DesktopBackendRegistry {
   ): AppServerThreadSummary[] {
     const threadIds = new Set(threads.map((thread) => thread.id));
     for (const threadId of threadIds) {
-      this.pendingStartedThreads.delete(`${backend}:${threadId}`);
+      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, threadId));
     }
     if (params.archived === true) {
       return threads;
@@ -11252,7 +11254,9 @@ export class DesktopBackendRegistry {
       return overlayCwd.trim();
     }
 
-    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
+    const pendingThread = this.pendingStartedThreads.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
     const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
     if (pendingCwd?.trim()) {
       return pendingCwd.trim();

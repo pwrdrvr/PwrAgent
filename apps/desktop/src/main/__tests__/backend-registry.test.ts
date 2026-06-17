@@ -7444,6 +7444,36 @@ script = "pnpm install"
     await registry.close();
   });
 
+  it("seeds an idle newly started Agent thread with the Agent name", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startThread({
+      agent: { name: "Summy Dummy" },
+      backend: "codex",
+      cwd: "/repo-a",
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Summy Dummy",
+        titleSource: "explicit",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("starts requested worktree threads as local when the cwd is not a git repository", async () => {
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({

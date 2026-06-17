@@ -302,6 +302,41 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
+  it("records one skipped summary when many drop_missed windows are due", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      backlogPolicy: "drop_missed",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    now = 60 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        status: "skipped",
+        scheduledFor: 10 * 60 * 1000,
+        scheduledWindows: [{ scheduledFor: 10 * 60 * 1000 }],
+        errorMessage:
+          "Dropped 11 missed schedule windows because the automation execution lane was busy.",
+      }),
+      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
+    ]);
+  });
+
   it("queues manual run-now without changing the recurring next run", async () => {
     queue.active = true;
     createIntervalAutomation();
