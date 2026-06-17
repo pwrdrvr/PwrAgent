@@ -11845,6 +11845,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
+    const upsertThreadSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
@@ -11891,6 +11892,7 @@ command = "pnpm dev"
       lastMessage: "Inspecting the diff.",
     });
     expect(overlay?.subAgents?.[0]?.task).toEqual(expect.stringContaining("correctness"));
+    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
 
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -11923,6 +11925,7 @@ command = "pnpm dev"
         uncachedInputTokens: 900,
       },
     });
+    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(2);
 
     await registry.close();
   });
@@ -12030,6 +12033,7 @@ command = "pnpm dev"
     expect(afterCloseOverlay?.subAgents?.[0]).toMatchObject({
       outcome: "success",
       status: "success",
+      lastMessage: "Review completed with no findings.",
     });
 
     await registry.close();

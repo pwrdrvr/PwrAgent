@@ -11392,6 +11392,18 @@ export class DesktopBackendRegistry {
       "reasoning_effort",
     ]);
     const outcome = codexNativeSubAgentOutcome(status);
+    const nextLastMessage = codexNativeSubAgentMessage({
+      agentMessage: agentState.message,
+      agentState: agentState.status,
+      tool: params.call.tool,
+    });
+    const lastMessage =
+      existing &&
+      codexNativeSubAgentIsTerminal(existing.status) &&
+      !agentState.message &&
+      existing.lastMessage
+        ? existing.lastMessage
+        : nextLastMessage;
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task:
@@ -11414,11 +11426,7 @@ export class DesktopBackendRegistry {
         : existing?.preferredReasoningEffort
           ? { preferredReasoningEffort: existing.preferredReasoningEffort }
           : {}),
-      lastMessage: codexNativeSubAgentMessage({
-        agentMessage: agentState.message,
-        agentState: agentState.status,
-        tool: params.call.tool,
-      }),
+      lastMessage,
       ...(outcome
         ? { outcome }
         : existing?.outcome
@@ -14795,9 +14803,6 @@ export class DesktopBackendRegistry {
         status: readStatusType(event.notification.params.status),
       });
     }
-
-    await this.recordTaskMonitorUsage(event);
-    await this.recordCodexNativeSubAgentActivity(event);
 
     if (event.notification.method === "serverRequest/resolved") {
       const key = buildPendingRequestKey({
