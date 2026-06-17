@@ -32,6 +32,9 @@ const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
   codexCredits: false,
   usd: true,
 };
+// Below this size, uncached input is often the new request/tool payload rather than a full context replay.
+const MIN_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
+const MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS = 250_000;
 
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
@@ -129,6 +132,10 @@ export function PricingPanel(props: PricingPanelProps) {
               line,
               lineTotals,
             });
+            const contextReplayLines = formatContextReplayEstimate({
+              displayOptions,
+              line,
+            });
             const runningTokens = formatUsageLineRunningTokens(line);
 
             return (
@@ -156,6 +163,11 @@ export function PricingPanel(props: PricingPanelProps) {
                 {usageLineEstimate ? (
                   <p className="rail-card__usage">{usageLineEstimate}</p>
                 ) : null}
+                {contextReplayLines.map((replayLine) => (
+                  <p key={replayLine} className="rail-card__usage">
+                    {replayLine}
+                  </p>
+                ))}
                 {runningTokens ? (
                   <details className="pricing-running-total">
                     <summary className="pricing-running-total__summary">
@@ -614,6 +626,144 @@ function formatUsageLineRunningTotal(params: {
   return estimates.length > 0
     ? `Running total: ${estimates.join(" · ")}${params.lineTotals?.runningHasEstimate ? " (includes estimates)" : ""}`
     : undefined;
+}
+
+function formatContextReplayEstimate(params: {
+  displayOptions: PricingDisplayOptions;
+  line: PricingUsageLine;
+}): string[] {
+  if (isEstimatedUsageGap(params.line) || isHistoricalUsageSummary(params.line)) {
+    return [];
+  }
+
+  const coldContextReplays = estimateContextReplayBucket(
+    params.line.uncachedInputTokens,
+  );
+  const hotContextReplays = estimateContextReplayBucket(
+    params.line.cachedInputTokens,
+    coldContextReplays?.averageTokens,
+  );
+  const lines: string[] = [];
+  if (coldContextReplays) {
+    lines.push(
+      formatContextReplayBucketLine({
+        bucket: coldContextReplays,
+        displayOptions: params.displayOptions,
+        label: "cold",
+        line: params.line,
+        tokenKind: "uncached",
+      }),
+    );
+  }
+  if (hotContextReplays) {
+    lines.push(
+      formatContextReplayBucketLine({
+        bucket: hotContextReplays,
+        displayOptions: params.displayOptions,
+        label: "hot",
+        line: params.line,
+        tokenKind: "cached",
+      }),
+    );
+  }
+  return lines;
+}
+
+type EstimatedContextReplayBucket = {
+  averageTokens: number;
+  count: number;
+  totalTokens: number;
+};
+
+function estimateContextReplayBucket(
+  totalTokens: number,
+  referenceReplayTokens?: number,
+): EstimatedContextReplayBucket | undefined {
+  if (totalTokens < MIN_CONTEXT_REPLAY_INPUT_TOKENS) {
+    return undefined;
+  }
+  const replaySize =
+    referenceReplayTokens && referenceReplayTokens >= MIN_CONTEXT_REPLAY_INPUT_TOKENS
+      ? Math.min(referenceReplayTokens, MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS)
+      : MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS;
+  const count = Math.max(1, Math.ceil(totalTokens / replaySize));
+  return {
+    averageTokens: Math.round(totalTokens / count),
+    count,
+    totalTokens,
+  };
+}
+
+function formatContextReplayBucketLine(params: {
+  bucket: EstimatedContextReplayBucket;
+  displayOptions: PricingDisplayOptions;
+  label: "cold" | "hot";
+  line: PricingUsageLine;
+  tokenKind: "cached" | "uncached";
+}): string {
+  const replayTokens =
+    params.bucket.count > 1
+      ? `~${formatTokenCount(params.bucket.averageTokens)} ${params.tokenKind} avg; ${formatTokenCount(
+          params.bucket.totalTokens,
+        )} ${params.tokenKind} bucket`
+      : `${formatTokenCount(params.bucket.totalTokens)} ${params.tokenKind}`;
+  return `Estimated ${params.label} context replays: ${params.bucket.count.toLocaleString()} (${replayTokens}${formatReplayCostEstimates(
+    params,
+  )})`;
+}
+
+function formatReplayCostEstimates(params: {
+  bucket: EstimatedContextReplayBucket;
+  displayOptions: PricingDisplayOptions;
+  line: PricingUsageLine;
+  tokenKind: "cached" | "uncached";
+}): string {
+  const estimates: string[] = [];
+  if (params.displayOptions.usd) {
+    const valueMicros =
+      params.tokenKind === "cached"
+        ? params.line.cachedInputCostMicros
+        : params.line.uncachedInputCostMicros;
+    if (valueMicros > 0) {
+      estimates.push(formatMoney(valueMicros, params.line.currency));
+    }
+  }
+  if (params.displayOptions.codexCredits) {
+    const credits = estimateContextReplayCodexCredits({
+      bucket: params.bucket,
+      line: params.line,
+      tokenKind: params.tokenKind,
+    });
+    if (credits !== undefined && credits > 0) {
+      estimates.push(formatCodexCredits(credits));
+    }
+  }
+  if (estimates.length === 0) {
+    return "";
+  }
+  return ` · ${estimates.join(" · ")}`;
+}
+
+function estimateContextReplayCodexCredits(params: {
+  bucket: EstimatedContextReplayBucket;
+  line: PricingUsageLine;
+  tokenKind: "cached" | "uncached";
+}): number | undefined {
+  if (params.line.provider !== "openai") {
+    return undefined;
+  }
+  const estimate = estimateOpenAiCodexCreditUsage({
+    at: params.line.createdAt,
+    cachedInputTokens: params.tokenKind === "cached" ? params.bucket.totalTokens : 0,
+    fastMode: params.line.fastMode,
+    model: params.line.model,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    serviceTier: params.line.serviceTier,
+    uncachedInputTokens:
+      params.tokenKind === "uncached" ? params.bucket.totalTokens : 0,
+  });
+  return estimate?.totalCreditMicros;
 }
 
 function formatUsageLineRunningTokens(line: ThreadUsageLineRecord): string | undefined {
