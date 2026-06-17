@@ -9,6 +9,7 @@ import { StateDb } from "../state/state-db";
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
+const PRICING_CATALOG_TIME = Date.UTC(2026, 5, 16);
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-usage-pricing-"));
@@ -101,7 +102,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
   it("keeps the original usage line timestamp when live usage is updated", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
-        createdAt: 1_000,
+        createdAt: PRICING_CATALOG_TIME,
         source: "live",
         status: "pending",
         totalCostMicros: 4_000,
@@ -109,7 +110,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
-        createdAt: 2_000,
+        createdAt: PRICING_CATALOG_TIME + 1_000,
         inputTokens: 1_400,
         source: "live",
         status: "pending",
@@ -124,7 +125,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
 
     expect(pricing.lines[0]).toMatchObject({
-      createdAt: 1_000,
+      createdAt: PRICING_CATALOG_TIME,
       inputTokens: 1_400,
       totalCostMicros: 16_100,
       totalTokens: 1_700,
@@ -322,6 +323,32 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("uses the usage timestamp when selecting effective pricing rates", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: Date.UTC(2026, 0, 1),
+        completedAt: Date.UTC(2026, 0, 1),
+        usageLineId: "line-before-catalog",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "unpriced",
+      priceUnavailableReason: "missing-rate",
+      totalCostMicros: 0,
+    });
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 0,
+      totalCostMicros: 0,
+      unpricedUsageLineCount: 1,
+    });
+  });
+
   it("records one provider-scoped usage turn for multiple usage lines from the same turn", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
@@ -408,7 +435,7 @@ function buildUsageLine(
     backend: "codex",
     cachedInputCostMicros: 100,
     cachedInputTokens: 200,
-    createdAt: 1_000,
+    createdAt: PRICING_CATALOG_TIME,
     currency: "USD",
     fastMode: false,
     inputTokens: 1_000,

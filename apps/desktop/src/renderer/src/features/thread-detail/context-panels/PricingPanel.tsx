@@ -444,6 +444,7 @@ function estimateCodexCreditsForLine(line: ThreadUsageLineRecord):
     return undefined;
   }
   const estimate = estimateOpenAiCodexCreditUsage({
+    at: line.createdAt,
     cachedInputTokens: line.cachedInputTokens,
     fastMode: line.fastMode,
     model: line.model,

@@ -2225,6 +2225,7 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
   }
 
   const cost = estimateOpenAiTokenUsageCost({
+    at: line.createdAt,
     cachedInputTokens: line.cachedInputTokens,
     fastMode: line.fastMode,
     model: line.model,
