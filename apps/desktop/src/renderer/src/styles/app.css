@@ -11915,6 +11915,17 @@ textarea,
   overflow: hidden;
 }
 
+.rail-card__agent-name {
+  margin: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rail-card__model {
   margin: 0;
   color: var(--text-secondary);

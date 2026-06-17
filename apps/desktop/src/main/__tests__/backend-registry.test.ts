@@ -11866,6 +11866,20 @@ command = "pnpm dev"
           tool: "spawnAgent",
           status: "completed",
           receiverThreadIds: [nativeThreadId],
+          receiverThreads: [
+            {
+              threadId: nativeThreadId,
+              thread: {
+                source: {
+                  subAgent: {
+                    thread_spawn: {
+                      agent_nickname: "Poincare",
+                    },
+                  },
+                },
+              },
+            },
+          ],
           prompt: "You are the correctness reviewer. Inspect the diff.",
           model: "gpt-5.4-mini",
           reasoningEffort: "medium",
@@ -11886,6 +11900,7 @@ command = "pnpm dev"
     expect(overlay?.subAgents?.[0]).toMatchObject({
       monitorId: `codex-native:${nativeThreadId}`,
       monitorThreadId: nativeThreadId,
+      agentName: "Poincare",
       preferredModel: "gpt-5.4-mini",
       preferredReasoningEffort: "medium",
       status: "running",
@@ -11955,6 +11970,20 @@ command = "pnpm dev"
           tool: "spawnAgent",
           status: "completed",
           receiverThreadIds: [nativeThreadId],
+          receiverThreads: [
+            {
+              threadId: nativeThreadId,
+              thread: {
+                source: {
+                  subAgent: {
+                    thread_spawn: {
+                      agent_nickname: "Poincare",
+                    },
+                  },
+                },
+              },
+            },
+          ],
           prompt: "You are the correctness reviewer. Inspect the diff.",
           model: "gpt-5.4-mini",
           agentsStates: {
@@ -12001,6 +12030,7 @@ command = "pnpm dev"
       monitorId: `codex-native:${nativeThreadId}`,
       createdAt,
       monitorThreadId: nativeThreadId,
+      agentName: "Poincare",
       outcome: "success",
       status: "success",
       lastMessage: "Review completed with no findings.",
@@ -12031,6 +12061,7 @@ command = "pnpm dev"
       threadId: "thread-parent",
     });
     expect(afterCloseOverlay?.subAgents?.[0]).toMatchObject({
+      agentName: "Poincare",
       outcome: "success",
       status: "success",
       lastMessage: "Review completed with no findings.",

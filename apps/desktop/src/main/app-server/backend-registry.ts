@@ -1644,6 +1644,7 @@ type CodexNativeSubAgentCall = {
   item: Record<string, unknown>;
   itemId?: string;
   receiverThreadIds: string[];
+  receiverThreadNames: Map<string, string>;
   tool: string;
 };
 
@@ -1710,6 +1711,107 @@ function readStringArrayLike(
   return [];
 }
 
+function normalizeCodexNativeAgentName(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim().replace(/^@+/, "");
+  return normalized ? truncateSubAgentText(normalized, 80) : undefined;
+}
+
+function readCodexNativeAgentNameFromSource(
+  source: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const direct =
+    normalizeCodexNativeAgentName(source.agentNickname) ??
+    normalizeCodexNativeAgentName(source.agent_nickname) ??
+    normalizeCodexNativeAgentName(source.nickname) ??
+    normalizeCodexNativeAgentName(source.name);
+  if (direct) {
+    return direct;
+  }
+
+  const subAgent = readRecord(source.subAgent) ?? readRecord(source.sub_agent);
+  const spawn =
+    readRecord(subAgent?.thread_spawn) ??
+    readRecord(subAgent?.threadSpawn) ??
+    readRecord(source.thread_spawn) ??
+    readRecord(source.threadSpawn);
+  return (
+    normalizeCodexNativeAgentName(spawn?.agent_nickname) ??
+    normalizeCodexNativeAgentName(spawn?.agentNickname) ??
+    normalizeCodexNativeAgentName(subAgent?.agentNickname) ??
+    normalizeCodexNativeAgentName(subAgent?.agent_nickname)
+  );
+}
+
+function readCodexNativeAgentNameFromThread(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+  return (
+    normalizeCodexNativeAgentName(thread.agentNickname) ??
+    normalizeCodexNativeAgentName(thread.agent_nickname) ??
+    normalizeCodexNativeAgentName(thread.nickname) ??
+    normalizeCodexNativeAgentName(thread.name) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.source)) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn)) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
+  );
+}
+
+function readCodexNativeReceiverThreadNames(
+  item: Record<string, unknown>,
+): Map<string, string> {
+  const names = new Map<string, string>();
+
+  const recordName = (threadId: string | undefined, name: string | undefined) => {
+    if (threadId && name) {
+      names.set(threadId, name);
+    }
+  };
+
+  const receiverThreads = Array.isArray(item.receiverThreads)
+    ? item.receiverThreads
+    : Array.isArray(item.receiver_threads)
+      ? item.receiver_threads
+      : [];
+  for (const receiverThread of receiverThreads) {
+    const receiver = readRecord(receiverThread);
+    if (!receiver) {
+      continue;
+    }
+    const threadId = readOptionalString(receiver, [
+      "threadId",
+      "thread_id",
+      "id",
+    ]);
+    const thread = readRecord(receiver.thread) ?? receiver;
+    recordName(
+      threadId,
+      readCodexNativeAgentNameFromThread(thread) ??
+        readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
+    );
+  }
+
+  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  for (const [threadId, state] of Object.entries(states ?? {})) {
+    const stateRecord = readRecord(state);
+    recordName(
+      threadId,
+      readCodexNativeAgentNameFromThread(stateRecord) ??
+        readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
+    );
+  }
+
+  return names;
+}
+
 function readCodexNativeSubAgentCalls(
   notification: AppServerNotification,
 ): CodexNativeSubAgentCall[] {
@@ -1749,6 +1851,7 @@ function readCodexNativeSubAgentCalls(
           "receiver_thread_ids",
           "receivers",
         ]),
+        receiverThreadNames: readCodexNativeReceiverThreadNames(candidate),
         tool,
       },
     ];
@@ -11391,6 +11494,9 @@ export class DesktopBackendRegistry {
       "reasoningEffort",
       "reasoning_effort",
     ]);
+    const agentName =
+      params.call.receiverThreadNames.get(params.receiverThreadId) ??
+      existing?.agentName;
     const outcome = codexNativeSubAgentOutcome(status);
     const nextLastMessage = codexNativeSubAgentMessage({
       agentMessage: agentState.message,
@@ -11416,6 +11522,7 @@ export class DesktopBackendRegistry {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       monitorThreadId: params.receiverThreadId,
+      ...(agentName ? { agentName } : {}),
       ...(model
         ? { preferredModel: model }
         : existing?.preferredModel

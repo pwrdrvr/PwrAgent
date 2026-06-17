@@ -36,6 +36,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     {subAgentStatusLabel(subAgent.status)}
                   </RailStatusChip>
                 </p>
+                {subAgent.agentName ? (
+                  <p className="rail-card__agent-name" title={subAgent.agentName}>
+                    {subAgent.agentName}
+                  </p>
+                ) : null}
                 <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}
                 </p>

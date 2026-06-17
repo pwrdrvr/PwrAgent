@@ -227,6 +227,7 @@ describe("ThreadContextPanel", () => {
             status: "running",
             createdAt: 2000,
             updatedAt: 2500,
+            agentName: "Poincare",
             preferredModel: "gpt-5.4-mini",
             monitorThreadId: "monitor-thread-2",
             lastMessage: "Lint is still running.",
@@ -261,6 +262,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
+    expect(screen.getByText("Poincare")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Lint is still running.")).toBeInTheDocument();
     expect(
@@ -288,6 +290,8 @@ describe("ThreadContextPanel", () => {
       modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
     ).toBeInTheDocument();
     expect(modal.getByText("Latest message")).toBeInTheDocument();
+    expect(modal.getByText("Name")).toBeInTheDocument();
+    expect(modal.getByText("Poincare")).toBeInTheDocument();
     expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
     expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
     expect(modal.getByText("gpt-5.4-mini")).toBeInTheDocument();

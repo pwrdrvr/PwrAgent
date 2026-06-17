@@ -147,6 +147,7 @@ export type ThreadSubAgentSummary = {
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
+  agentName?: string;
   preferredModel?: string;
   preferredReasoningEffort?: string;
   monitorThreadId?: ThreadIdentifier;

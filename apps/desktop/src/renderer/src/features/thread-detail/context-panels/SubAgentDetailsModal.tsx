@@ -78,6 +78,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
+  const ariaLabel = subAgent.agentName
+    ? `${subAgent.agentName}: ${subAgent.task}`
+    : subAgent.task;
 
   if (typeof document === "undefined") {
     return null;
@@ -88,7 +91,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       className="subagent-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={`Sub-agent details: ${subAgent.task}`}
+      aria-label={`Sub-agent details: ${ariaLabel}`}
       onClick={props.onClose}
     >
       <div
@@ -112,6 +115,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         <h2 className="subagent-modal__title">{subAgent.task}</h2>
 
         <dl className="subagent-modal__facts">
+          {subAgent.agentName ? (
+            <div>
+              <dt>Name</dt>
+              <dd>{subAgent.agentName}</dd>
+            </div>
+          ) : null}
           {model ? (
             <div>
               <dt>Model</dt>
