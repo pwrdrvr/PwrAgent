@@ -16,12 +16,15 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
   NavigationThreadSummary,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
   EditsIcon,
   InfoIcon,
+  PricingIcon,
   ProjectsIcon,
   PullRequestIcon,
   ServerIcon,
@@ -36,6 +39,7 @@ import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
+import { PricingPanel } from "./context-panels/PricingPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
 import type {
   ContextTabId,
@@ -60,6 +64,7 @@ type ContextTab = {
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
+  { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
@@ -88,6 +93,15 @@ type ThreadContextPanelProps = {
   width?: number;
   pinned: boolean;
   platform?: string;
+  pricing?: {
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  };
+  pricingDisplayOptions?: {
+    codexCredits: boolean;
+    usd: boolean;
+  };
+  threadPricingSummaryEnabled?: boolean;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
   onRestoreWorktree?: (
@@ -140,9 +154,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
 
-  const activeTab = props.activeTab;
-  const topTabs = CONTEXT_TABS.filter((tab) => !tab.bottom);
-  const bottomTabs = CONTEXT_TABS.filter((tab) => tab.bottom);
+  const activeTab =
+    props.activeTab === "pricing" && !props.threadPricingSummaryEnabled
+      ? "info"
+      : props.activeTab;
+  const visibleTabs = CONTEXT_TABS.filter(
+    (tab) => tab.id !== "pricing" || props.threadPricingSummaryEnabled,
+  );
+  const topTabs = visibleTabs.filter((tab) => !tab.bottom);
+  const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
 
   const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
     lastMousePositionRef.current = {
@@ -624,6 +644,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onScrollToTurn={props.onScrollToTurn}
             dock={props.editedFilesDock ?? "above"}
             onDockChange={props.onEditedFilesDockChange ?? noop}
+          />
+        );
+      case "pricing":
+        return (
+          <PricingPanel
+            pricing={props.pricing}
+            displayOptions={props.pricingDisplayOptions}
+            onScrollToTurn={props.onScrollToTurn}
           />
         );
       case "subagents":

@@ -9,6 +9,7 @@ dist-electron/
 out/
 playwright-report/
 test-results/
+.tmp/
 *.tsbuildinfo
 packages/agent-core/.env.local
 .env.local

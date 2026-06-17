@@ -97,6 +97,9 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    threadPricingSummary?: boolean;
+    threadPricingDisplayUsd?: boolean;
+    threadPricingDisplayCodexCredits?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;
@@ -627,6 +630,24 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
+    );
+  }
+  if (patch.experimental?.threadPricingSummary !== undefined) {
+    set(
+      ["experimental", "thread_pricing_summary"],
+      patch.experimental.threadPricingSummary,
+    );
+  }
+  if (patch.experimental?.threadPricingDisplayUsd !== undefined) {
+    set(
+      ["experimental", "thread_pricing_display_usd"],
+      patch.experimental.threadPricingDisplayUsd,
+    );
+  }
+  if (patch.experimental?.threadPricingDisplayCodexCredits !== undefined) {
+    set(
+      ["experimental", "thread_pricing_display_codex_credits"],
+      patch.experimental.threadPricingDisplayCodexCredits,
     );
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
@@ -1220,6 +1241,13 @@ function normalizeDesktopConfig(
       ),
       liveTranscriptEventFiltering: readBoolean(
         experimental?.live_transcript_event_filtering,
+      ),
+      threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
+      threadPricingDisplayUsd: readBoolean(
+        experimental?.thread_pricing_display_usd,
+      ),
+      threadPricingDisplayCodexCredits: readBoolean(
+        experimental?.thread_pricing_display_codex_credits,
       ),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,

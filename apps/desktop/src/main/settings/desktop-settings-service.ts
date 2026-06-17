@@ -555,6 +555,18 @@ export class DesktopSettingsService {
           config.experimental?.liveTranscriptEventFiltering,
           false,
         ),
+        threadPricingSummary: this.resolveConfigBoolean(
+          config.experimental?.threadPricingSummary,
+          false,
+        ),
+        threadPricingDisplayUsd: this.resolveConfigBoolean(
+          config.experimental?.threadPricingDisplayUsd,
+          true,
+        ),
+        threadPricingDisplayCodexCredits: this.resolveConfigBoolean(
+          config.experimental?.threadPricingDisplayCodexCredits,
+          false,
+        ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
           false,

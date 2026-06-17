@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 16;
+export const CURRENT_STATE_DB_USER_VERSION = 21;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -475,6 +475,147 @@ CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
   ON pr_lookup_cache(fetched_at DESC);
 `;
 
+const THREAD_USAGE_PRICING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
+  catalog_id      TEXT NOT NULL,
+  catalog_version TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  currency        TEXT NOT NULL,
+  effective_from  INTEGER NOT NULL,
+  effective_to    INTEGER,
+  source_label    TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (catalog_id, catalog_version)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_rates (
+  rate_id                         TEXT PRIMARY KEY,
+  catalog_id                      TEXT NOT NULL,
+  catalog_version                 TEXT NOT NULL,
+  provider                        TEXT NOT NULL,
+  currency                        TEXT NOT NULL,
+  model                           TEXT NOT NULL,
+  service_tier                    TEXT NOT NULL,
+  input_micros_per_million        INTEGER NOT NULL,
+  cached_input_micros_per_million INTEGER NOT NULL,
+  output_micros_per_million       INTEGER NOT NULL,
+  display_name                    TEXT NOT NULL,
+  FOREIGN KEY (catalog_id, catalog_version)
+    REFERENCES pricing_catalog_versions(catalog_id, catalog_version)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pricing_rates_lookup
+  ON pricing_rates(provider, model, service_tier, currency);
+
+CREATE TABLE IF NOT EXISTS thread_usage_turns (
+  usage_turn_id       TEXT PRIMARY KEY,
+  provider            TEXT NOT NULL,
+  backend             TEXT NOT NULL,
+  thread_id           TEXT NOT NULL,
+  parent_thread_id    TEXT,
+  turn_id             TEXT,
+  model               TEXT,
+  reasoning_effort    TEXT,
+  service_tier        TEXT,
+  fast_mode           INTEGER,
+  settings_source     TEXT,
+  settings_confidence TEXT,
+  started_at          INTEGER,
+  completed_at        INTEGER,
+  observed_at         INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
+  ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
+  ON thread_usage_turns(provider, backend, thread_id, turn_id);
+
+CREATE TABLE IF NOT EXISTS thread_usage_lines (
+  usage_line_id              TEXT PRIMARY KEY,
+  usage_turn_id              TEXT,
+  provider                   TEXT NOT NULL DEFAULT 'openai',
+  backend                    TEXT NOT NULL,
+  thread_id                  TEXT NOT NULL,
+  parent_thread_id           TEXT,
+  turn_id                    TEXT,
+  source                     TEXT NOT NULL,
+  source_item_id             TEXT,
+  scope                      TEXT NOT NULL,
+  status                     TEXT NOT NULL,
+  created_at                 INTEGER NOT NULL,
+  completed_at               INTEGER,
+  model                      TEXT,
+  reasoning_effort           TEXT,
+  service_tier               TEXT,
+  fast_mode                  INTEGER,
+  settings_source            TEXT,
+  settings_confidence        TEXT,
+  input_tokens               INTEGER NOT NULL,
+  cached_input_tokens        INTEGER NOT NULL,
+  uncached_input_tokens      INTEGER NOT NULL,
+  output_tokens              INTEGER NOT NULL,
+  reasoning_output_tokens    INTEGER NOT NULL,
+  total_tokens               INTEGER NOT NULL,
+  cumulative_input_tokens    INTEGER,
+  cumulative_cached_input_tokens INTEGER,
+  cumulative_uncached_input_tokens INTEGER,
+  cumulative_output_tokens   INTEGER,
+  cumulative_reasoning_output_tokens INTEGER,
+  cumulative_total_tokens    INTEGER,
+  price_status               TEXT NOT NULL,
+  price_unavailable_reason   TEXT,
+  currency                   TEXT NOT NULL,
+  pricing_catalog_id         TEXT,
+  pricing_catalog_version    TEXT,
+  pricing_rate_id            TEXT,
+  uncached_input_cost_micros INTEGER NOT NULL,
+  cached_input_cost_micros   INTEGER NOT NULL,
+  output_cost_micros         INTEGER NOT NULL,
+  total_cost_micros          INTEGER NOT NULL,
+  cumulative_total_cost_micros INTEGER,
+  updated_at                 INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
+  ON thread_usage_lines(provider, backend, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_parent
+  ON thread_usage_lines(provider, backend, parent_thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
+  ON thread_usage_lines(provider, backend, thread_id, turn_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
+  ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
+
+CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
+  provider                  TEXT NOT NULL DEFAULT 'openai',
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, currency)
+);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -617,6 +758,36 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 16) {
       db.transaction(() => {
         db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
+        db.pragma("user_version = 16");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 17) {
+      db.transaction(() => {
+        db.exec(THREAD_USAGE_PRICING_SCHEMA);
+        db.pragma("user_version = 17");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 18) {
+      db.transaction(() => {
+        ensureThreadUsagePricingProviderScope(db);
+        db.pragma("user_version = 18");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 19) {
+      db.transaction(() => {
+        ensureThreadUsagePricingCumulativeColumns(db);
+        db.pragma("user_version = 19");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 20) {
+      db.transaction(() => {
+        repairThreadUsageLineCreatedAt(db);
+        db.pragma("user_version = 20");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 21) {
+      db.transaction(() => {
+        ensureThreadUsagePricingIndexes(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -770,6 +941,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
     ensurePullRequestProviderColumns(db);
+    ensureThreadUsagePricingProviderScope(db);
+    ensureThreadUsagePricingCumulativeColumns(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -782,6 +955,298 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+}
+
+function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {
+  const hasUsageLines = tableExists(db, "thread_usage_lines");
+  const hasPricingSummaries = tableExists(db, "thread_pricing_summaries");
+  if (!hasUsageLines || !hasPricingSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  db.exec(`
+CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
+  catalog_id      TEXT NOT NULL,
+  catalog_version TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  currency        TEXT NOT NULL,
+  effective_from  INTEGER NOT NULL,
+  effective_to    INTEGER,
+  source_label    TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (catalog_id, catalog_version)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_rates (
+  rate_id                         TEXT PRIMARY KEY,
+  catalog_id                      TEXT NOT NULL,
+  catalog_version                 TEXT NOT NULL,
+  provider                        TEXT NOT NULL,
+  currency                        TEXT NOT NULL,
+  model                           TEXT NOT NULL,
+  service_tier                    TEXT NOT NULL,
+  input_micros_per_million        INTEGER NOT NULL,
+  cached_input_micros_per_million INTEGER NOT NULL,
+  output_micros_per_million       INTEGER NOT NULL,
+  display_name                    TEXT NOT NULL,
+  FOREIGN KEY (catalog_id, catalog_version)
+    REFERENCES pricing_catalog_versions(catalog_id, catalog_version)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pricing_rates_lookup
+  ON pricing_rates(provider, model, service_tier, currency);
+
+CREATE TABLE IF NOT EXISTS thread_usage_turns (
+  usage_turn_id       TEXT PRIMARY KEY,
+  provider            TEXT NOT NULL,
+  backend             TEXT NOT NULL,
+  thread_id           TEXT NOT NULL,
+  parent_thread_id    TEXT,
+  turn_id             TEXT,
+  model               TEXT,
+  reasoning_effort    TEXT,
+  service_tier        TEXT,
+  fast_mode           INTEGER,
+  settings_source     TEXT,
+  settings_confidence TEXT,
+  started_at          INTEGER,
+  completed_at        INTEGER,
+  observed_at         INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
+  ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
+  ON thread_usage_turns(provider, backend, thread_id, turn_id);
+`);
+
+  if (!tableColumnExists(db, "thread_usage_lines", "provider")) {
+    db.exec(
+      "ALTER TABLE thread_usage_lines ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
+    );
+  }
+  if (!tableColumnExists(db, "thread_usage_lines", "usage_turn_id")) {
+    db.exec("ALTER TABLE thread_usage_lines ADD COLUMN usage_turn_id TEXT");
+  }
+  db.exec(`
+UPDATE thread_usage_lines
+SET
+  provider = COALESCE(NULLIF(provider, ''), 'openai'),
+  usage_turn_id = COALESCE(
+    NULLIF(usage_turn_id, ''),
+    COALESCE(NULLIF(provider, ''), 'openai') || ':' || backend || ':' || thread_id || ':' || COALESCE(turn_id, usage_line_id)
+  )
+`);
+
+  db.exec(`
+INSERT INTO thread_usage_turns (
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  started_at,
+  completed_at,
+  observed_at,
+  updated_at
+)
+SELECT
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  MIN(created_at),
+  MAX(completed_at),
+  MIN(created_at),
+  MAX(updated_at)
+FROM thread_usage_lines
+WHERE usage_turn_id IS NOT NULL
+GROUP BY usage_turn_id
+ON CONFLICT(usage_turn_id) DO UPDATE SET
+  provider = excluded.provider,
+  backend = excluded.backend,
+  thread_id = excluded.thread_id,
+  parent_thread_id = excluded.parent_thread_id,
+  turn_id = excluded.turn_id,
+  model = excluded.model,
+  reasoning_effort = excluded.reasoning_effort,
+  service_tier = excluded.service_tier,
+  fast_mode = excluded.fast_mode,
+  settings_source = excluded.settings_source,
+  settings_confidence = excluded.settings_confidence,
+  started_at = excluded.started_at,
+  completed_at = excluded.completed_at,
+  observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
+  updated_at = excluded.updated_at
+`);
+
+  if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
+    db.exec(
+      "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
+    );
+  }
+  db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
+  db.exec(`
+CREATE TABLE thread_pricing_summaries_v2 (
+  provider                  TEXT NOT NULL DEFAULT 'openai',
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, currency)
+)
+`);
+  db.exec(`
+INSERT INTO thread_pricing_summaries_v2
+SELECT
+  COALESCE(NULLIF(provider, ''), 'openai'),
+  backend,
+  thread_id,
+  currency,
+  usage_line_count,
+  priced_usage_line_count,
+  unpriced_usage_line_count,
+  input_tokens,
+  cached_input_tokens,
+  uncached_input_tokens,
+  output_tokens,
+  reasoning_output_tokens,
+  total_tokens,
+  total_cost_micros,
+  updated_at
+FROM thread_pricing_summaries
+`);
+  db.exec("DROP TABLE thread_pricing_summaries");
+  db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
+  db.exec(THREAD_USAGE_PRICING_SCHEMA);
+}
+
+function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "cumulative_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_cached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_cached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_uncached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_uncached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_reasoning_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_reasoning_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_cost_micros",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_cost_micros INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function repairThreadUsageLineCreatedAt(db: BetterSqlite3.Database): void {
+  if (
+    !tableExists(db, "thread_usage_lines") ||
+    !tableExists(db, "thread_usage_turns") ||
+    !tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+  ) {
+    return;
+  }
+
+  db.exec(`
+UPDATE thread_usage_lines
+SET created_at = (
+  SELECT MIN(thread_usage_lines.created_at, thread_usage_turns.observed_at)
+  FROM thread_usage_turns
+  WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+)
+WHERE source = 'live'
+  AND usage_turn_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM thread_usage_turns
+    WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+      AND thread_usage_turns.observed_at < thread_usage_lines.created_at
+  )
+`);
+}
+
+function ensureThreadUsagePricingIndexes(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
+`);
+}
+
+function tableExists(
+  db: BetterSqlite3.Database,
+  tableName: string,
+): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { 1: number } | undefined;
+  return Boolean(row);
 }
 
 function ensurePullRequestProviderColumns(db: BetterSqlite3.Database): void {
@@ -816,7 +1281,12 @@ SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
 
 function tableColumnExists(
   db: BetterSqlite3.Database,
-  tableName: "app_runtime_instances" | "pr_lookup_cache" | "pr_status_cache",
+  tableName:
+    | "app_runtime_instances"
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "thread_pricing_summaries"
+    | "thread_usage_lines",
   columnName: string,
 ): boolean {
   const rows = readTableInfo(db, tableName);
@@ -825,7 +1295,12 @@ function tableColumnExists(
 
 function readTableInfo(
   db: BetterSqlite3.Database,
-  tableName: "app_runtime_instances" | "pr_lookup_cache" | "pr_status_cache",
+  tableName:
+    | "app_runtime_instances"
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "thread_pricing_summaries"
+    | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
     case "app_runtime_instances":
@@ -838,6 +1313,14 @@ function readTableInfo(
       }>;
     case "pr_status_cache":
       return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_pricing_summaries":
+      return db.prepare("PRAGMA table_info(thread_pricing_summaries)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_usage_lines":
+      return db.prepare("PRAGMA table_info(thread_usage_lines)").all() as Array<{
         name: string;
       }>;
   }

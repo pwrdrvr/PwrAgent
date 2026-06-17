@@ -1,5 +1,6 @@
 import type { AutomationRunOutputDecision } from "./automations";
 import type { PrSummary } from "./navigation";
+import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
@@ -401,6 +402,7 @@ export type AppServerThreadActivityEntry = {
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
   turn?: AppServerThreadTurnMetadata;
+  usageLine?: ThreadUsageLineRecord;
 };
 
 export type AppServerThreadPlanStepStatus =
@@ -616,6 +618,10 @@ export type AppServerReadThreadResponse = {
   fetchedAt: number;
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
+  pricing?: {
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  };
   threadStatus?: AppServerThreadStatus;
 };
 
@@ -893,6 +899,16 @@ export type AppServerNotification =
         turnId?: string;
         model?: string;
         tokenUsage: unknown;
+      };
+    }
+  | {
+      method: "thread/pricing/updated";
+      params: {
+        threadId: string;
+        pricing: {
+          lines: ThreadUsageLineRecord[];
+          summaries: ThreadPricingSummary[];
+        };
       };
     }
   | {

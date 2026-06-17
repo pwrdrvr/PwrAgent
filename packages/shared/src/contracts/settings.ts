@@ -460,6 +460,23 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
+     * Gates the thread context-rail Pricing tab. The pricing ledger may still
+     * collect data for validation, but the user-visible summary stays hidden
+     * while this experimental setting is disabled.
+     */
+    threadPricingSummary?: DesktopSettingsValue<boolean>;
+    /**
+     * Shows provider API list-price estimates in USD when the experimental
+     * thread pricing tab is visible.
+     */
+    threadPricingDisplayUsd?: DesktopSettingsValue<boolean>;
+    /**
+     * Shows Codex Credits estimates when the experimental thread pricing tab
+     * is visible. Credits use Codex's token-based credit rate card rather than
+     * a currency conversion from USD.
+     */
+    threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;
+    /**
      * Enables Codex's upstream default-mode request_user_input feature for
      * ordinary turns, allowing skills to pause and ask structured questions
      * outside Plan mode when the installed Codex build supports it.
@@ -686,6 +703,9 @@ export type DesktopSettingsConfigPatch = {
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    threadPricingSummary?: boolean;
+    threadPricingDisplayUsd?: boolean;
+    threadPricingDisplayCodexCredits?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;

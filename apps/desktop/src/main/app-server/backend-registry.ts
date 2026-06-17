@@ -12,7 +12,10 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  estimateOpenAiTokenUsageCost,
+  formatTokenUsageUsd,
   isToolManagedWorktreePath,
+  resolveOpenAiPricingServiceTier,
   shortenDerivedThreadTitle,
   type AgentEvent,
   type ArchiveWorktreeRequest,
@@ -119,7 +122,9 @@ import {
   type ThreadExecutionMode,
   type ThreadIdentifier,
   type ThreadOverlayState,
+  type ThreadPricingSummary,
   type ThreadSubAgentSummary,
+  type ThreadUsageLineRecord,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -1513,8 +1518,11 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   backend: Exclude<AppServerBackendKind, AcpBackendId>;
   createdAt: number;
+  fastMode?: boolean;
   latestUsage?: TaskMonitorUsageSnapshot;
+  model?: string;
   parentThreadId: string;
+  serviceTier?: string;
   reviewThreadId: string;
   task: string;
   turnId: string;
@@ -1628,36 +1636,16 @@ type TaskMonitorTokenUsageBreakdown = {
   totalTokens?: number;
 };
 
-type TaskMonitorPricingCatalogEntry = {
-  cachedInputUsdPerMillion: number;
-  inputUsdPerMillion: number;
-  model: string;
-  outputUsdPerMillion: number;
+type TaskMonitorTokenUsageRecords = {
+  currentUsage?: TaskMonitorTokenUsageBreakdown;
+  latestUsage?: TaskMonitorTokenUsageBreakdown;
+  totalUsage?: TaskMonitorTokenUsageBreakdown;
 };
 
-const TASK_MONITOR_PRICING_CATALOG: readonly TaskMonitorPricingCatalogEntry[] = [
-  {
-    model: "gpt-5.5",
-    inputUsdPerMillion: 5,
-    cachedInputUsdPerMillion: 0.5,
-    outputUsdPerMillion: 30,
-  },
-  {
-    model: "gpt-5.4",
-    inputUsdPerMillion: 2.5,
-    cachedInputUsdPerMillion: 0.25,
-    outputUsdPerMillion: 15,
-  },
-  {
-    model: "gpt-5.4-mini",
-    inputUsdPerMillion: 0.75,
-    cachedInputUsdPerMillion: 0.075,
-    outputUsdPerMillion: 4.5,
-  },
-];
-
 function buildTaskMonitorUsageSnapshot(params: {
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   tokenUsage: unknown;
 }): TaskMonitorUsageSnapshot | undefined {
   const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
@@ -1676,8 +1664,11 @@ function buildTaskMonitorUsageSnapshot(params: {
   );
   const cost = estimateTaskMonitorUsageCost({
     cachedInputTokens,
+    fastMode: params.fastMode,
     model: params.model,
     outputTokens,
+    reasoningOutputTokens,
+    serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
 
@@ -1689,7 +1680,7 @@ function buildTaskMonitorUsageSnapshot(params: {
           reasoningOutputTokens,
         )} reasoning)`
       : `${formatTaskMonitorTokenCount(outputTokens)} out`,
-    cost ? `${formatTaskMonitorUsd(cost.totalUsd)} list price` : undefined,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1742,6 +1733,51 @@ function normalizeTaskMonitorTokenUsage(
   return undefined;
 }
 
+function readTaskMonitorTokenUsageRecords(
+  tokenUsage: unknown,
+): TaskMonitorTokenUsageRecords | undefined {
+  const root = readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const container =
+    readRecord(root.tokenUsage) ??
+    readRecord(root.token_usage) ??
+    readRecord(root.info) ??
+    root;
+  const latestUsage =
+    readTaskMonitorTokenBreakdownFromUnknown(container.last) ??
+    readTaskMonitorTokenBreakdownFromUnknown(container.last_token_usage);
+  const totalUsage =
+    readTaskMonitorTokenBreakdownFromUnknown(container.total) ??
+    readTaskMonitorTokenBreakdownFromUnknown(container.total_token_usage);
+  const currentUsage =
+    latestUsage ?? totalUsage ?? readTaskMonitorTokenBreakdown(container);
+  if (latestUsage || totalUsage || currentUsage) {
+    return {
+      ...(currentUsage ? { currentUsage } : {}),
+      ...(latestUsage ? { latestUsage } : {}),
+      ...(totalUsage ? { totalUsage } : {}),
+    };
+  }
+
+  for (const key of ["data", "payload", "info", "usage", "result"]) {
+    const nested = readTaskMonitorTokenUsageRecords(root[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readTaskMonitorTokenBreakdownFromUnknown(
+  value: unknown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const record = readRecord(value);
+  return record ? readTaskMonitorTokenBreakdown(record) : undefined;
+}
+
 function readTaskMonitorTokenBreakdown(
   record: Record<string, unknown>,
 ): TaskMonitorTokenUsageBreakdown | undefined {
@@ -1779,6 +1815,56 @@ function readTaskMonitorTokenBreakdown(
   };
 }
 
+function subtractTaskMonitorTokenUsage(
+  total: TaskMonitorTokenUsageBreakdown,
+  baseline: TaskMonitorTokenUsageBreakdown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const result: TaskMonitorTokenUsageBreakdown = {};
+  for (const key of [
+    "cachedInputTokens",
+    "inputTokens",
+    "uncachedInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+    "totalTokens",
+  ] as const) {
+    const totalValue = total[key];
+    if (typeof totalValue === "number" && Number.isFinite(totalValue)) {
+      const baselineValue = baseline[key] ?? 0;
+      result[key] = Math.max(0, totalValue - baselineValue);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeTaskMonitorPricingTokens(
+  tokens: TaskMonitorTokenUsageBreakdown,
+): Required<TaskMonitorTokenUsageBreakdown> {
+  const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    Math.max(0, tokens.cachedInputTokens ?? 0),
+  );
+  const uncachedInputTokens = Math.max(
+    0,
+    tokens.uncachedInputTokens ?? inputTokens - cachedInputTokens,
+  );
+  const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    0,
+    tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
+  };
+}
+
 function readTaskMonitorNumber(
   record: Record<string, unknown>,
   ...keys: string[]
@@ -1794,50 +1880,361 @@ function readTaskMonitorNumber(
 
 function estimateTaskMonitorUsageCost(params: {
   cachedInputTokens: number;
+  fastMode?: boolean;
   model?: string;
   outputTokens: number;
+  reasoningOutputTokens?: number;
+  serviceTier?: string;
   uncachedInputTokens: number;
 }): { model: string; totalUsd: number } | undefined {
-  const model = params.model?.trim();
-  if (!model) {
-    return undefined;
-  }
-  const entry = TASK_MONITOR_PRICING_CATALOG.find(
-    (candidate) => candidate.model === model,
-  );
-  if (!entry) {
-    return undefined;
-  }
-  const totalUsd =
-    (params.uncachedInputTokens * entry.inputUsdPerMillion) / 1_000_000 +
-    (params.cachedInputTokens * entry.cachedInputUsdPerMillion) / 1_000_000 +
-    (params.outputTokens * entry.outputUsdPerMillion) / 1_000_000;
-  return { model, totalUsd };
+  const cost = estimateOpenAiTokenUsageCost(params);
+  return cost ? { model: cost.model, totalUsd: cost.totalUsd } : undefined;
 }
 
 function formatTaskMonitorTokenCount(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-function formatTaskMonitorUsd(value: number): string {
-  if (value > 0 && value < 0.001) {
-    return "<$0.001";
+function collectThreadUsageLinesFromReplay(
+  replay: AppServerThreadReplay,
+): ThreadUsageLineRecord[] {
+  const lines: ThreadUsageLineRecord[] = [];
+  const seen = new Set<string>();
+  for (const entry of replay.entries) {
+    if (entry.type !== "activity" || !entry.usageLine) {
+      continue;
+    }
+    if (seen.has(entry.usageLine.usageLineId)) {
+      continue;
+    }
+    seen.add(entry.usageLine.usageLineId);
+    lines.push(entry.usageLine);
   }
-  if (value < 0.1) {
-    return new Intl.NumberFormat(undefined, {
-      currency: "USD",
-      maximumFractionDigits: 3,
-      minimumFractionDigits: 3,
-      style: "currency",
-    }).format(Math.ceil(value * 1_000) / 1_000);
+  return lines;
+}
+
+function buildTaskMonitorUsageLine(params: {
+  backend: AppServerBackendKind;
+  fastMode?: boolean;
+  model?: string;
+  monitorId: string;
+  monitorThreadId: string;
+  monitorTurnId?: string;
+  parentThreadId: string;
+  serviceTier?: string;
+  source: ThreadUsageLineRecord["source"];
+  usage: TaskMonitorUsageSnapshot;
+}): ThreadUsageLineRecord {
+  const tokenUsage = params.usage.tokenUsage;
+  const inputTokens = Math.max(0, tokenUsage.inputTokens ?? 0);
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    Math.max(0, tokenUsage.cachedInputTokens ?? 0),
+  );
+  const uncachedInputTokens = Math.max(
+    0,
+    tokenUsage.uncachedInputTokens ?? inputTokens - cachedInputTokens,
+  );
+  const outputTokens = Math.max(0, tokenUsage.outputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(0, tokenUsage.reasoningOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    0,
+    tokenUsage.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+  );
+  const model = params.model ?? params.usage.model ?? params.usage.cost?.model;
+  const cost = estimateOpenAiTokenUsageCost({
+    cachedInputTokens,
+    fastMode: params.fastMode,
+    model,
+    outputTokens,
+    reasoningOutputTokens,
+    serviceTier: params.serviceTier,
+    uncachedInputTokens,
+  });
+  const pricingServiceTier = resolveOpenAiPricingServiceTier({
+    fastMode: params.fastMode,
+    serviceTier: params.serviceTier,
+  });
+  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
+    cost
+      ? undefined
+      : !model
+        ? "missing-model"
+        : pricingServiceTier === undefined
+          ? "unsupported-service-tier"
+          : "missing-rate";
+
+  return {
+    backend: params.backend,
+    cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+    cachedInputTokens,
+    createdAt: Date.now(),
+    currency: cost?.currency ?? "USD",
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    inputTokens,
+    ...(model ? { model } : {}),
+    outputCostMicros: cost?.outputCostMicros ?? 0,
+    outputTokens,
+    parentThreadId: params.parentThreadId,
+    priceStatus: cost ? "priced" : "unpriced",
+    ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+    provider: cost?.provider ?? "openai",
+    ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
+    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+    reasoningOutputTokens,
+    scope: "monitor",
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+    settingsConfidence: model ? "fallback" : "unknown",
+    settingsSource: "monitor",
+    source: params.source,
+    sourceItemId: params.monitorId,
+    status: "finalized",
+    threadId: params.monitorThreadId,
+    totalCostMicros: cost?.totalCostMicros ?? 0,
+    totalTokens,
+    ...(params.monitorTurnId ? { turnId: params.monitorTurnId } : {}),
+    uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+    uncachedInputTokens,
+    usageLineId: [
+      params.backend,
+      params.parentThreadId,
+      params.monitorId,
+      params.monitorThreadId,
+      params.monitorTurnId ?? "no-turn",
+      "monitor",
+    ].join(":"),
+  };
+}
+
+function findNestedUsageValue(value: unknown, keys: string[]): unknown {
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+  for (const child of Object.values(record)) {
+    const nested = findNestedUsageValue(child, keys);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readUsageString(value: unknown, keys: string[]): string | undefined {
+  const nested = findNestedUsageValue(value, keys);
+  return typeof nested === "string" && nested.trim() ? nested.trim() : undefined;
+}
+
+function readUsageBoolean(value: unknown, keys: string[]): boolean | undefined {
+  const nested = findNestedUsageValue(value, keys);
+  return typeof nested === "boolean" ? nested : undefined;
+}
+
+function readTaskMonitorUsageModel(params: {
+  notificationModel?: unknown;
+  tokenUsage: unknown;
+}): string | undefined {
+  return (
+    (typeof params.notificationModel === "string" && params.notificationModel.trim()
+      ? params.notificationModel.trim()
+      : undefined) ??
+    readUsageString(params.tokenUsage, ["model", "modelId", "model_id"])
+  );
+}
+
+function readTaskMonitorUsageServiceTier(tokenUsage: unknown): string | undefined {
+  return readUsageString(tokenUsage, ["serviceTier", "service_tier"]);
+}
+
+function readTaskMonitorUsageFastMode(tokenUsage: unknown): boolean | undefined {
+  return readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]);
+}
+
+function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
+  if (line.priceStatus !== "unpriced") {
+    return;
+  }
+  backendRegistryLog.warn("thread usage line persisted without list price", {
+    backend: line.backend,
+    cachedInputTokens: line.cachedInputTokens,
+    fastMode: line.fastMode,
+    model: line.model,
+    outputTokens: line.outputTokens,
+    parentThreadId: line.parentThreadId,
+    priceUnavailableReason: line.priceUnavailableReason,
+    reasoningEffort: line.reasoningEffort,
+    reasoningOutputTokens: line.reasoningOutputTokens,
+    scope: line.scope,
+    serviceTier: line.serviceTier,
+    settingsConfidence: line.settingsConfidence,
+    settingsSource: line.settingsSource,
+    source: line.source,
+    threadId: line.threadId,
+    turnId: line.turnId,
+    uncachedInputTokens: line.uncachedInputTokens,
+    usageLineId: line.usageLineId,
+  });
+}
+
+function readUuidV7Timestamp(id: string | undefined): number | undefined {
+  if (!id) {
+    return undefined;
+  }
+  const hex = id.replace(/-/g, "").slice(0, 12);
+  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
+    return undefined;
+  }
+  const timestamp = Number.parseInt(hex, 16);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function resolveLiveThreadUsageTiming(params: {
+  overlay?: ThreadOverlayState;
+  turnId?: string;
+}): {
+  completedAt?: number;
+  createdAt?: number;
+  startedAt?: number;
+} {
+  if (!params.turnId) {
+    return {};
   }
 
-  return new Intl.NumberFormat(undefined, {
-    currency: "USD",
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 2,
-    style: "currency",
-  }).format(Math.ceil(value * 100) / 100);
+  const activity = params.overlay?.immutableUsageActivities?.find(
+    (entry) => entry.turn?.id === params.turnId,
+  );
+  const turn = activity?.turn;
+  const startedAt = turn?.startedAt ?? readUuidV7Timestamp(params.turnId);
+  const completedAt = turn?.completedAt;
+  const createdAt = completedAt ?? activity?.createdAt;
+  return {
+    ...(typeof completedAt === "number" ? { completedAt } : {}),
+    ...(typeof createdAt === "number" ? { createdAt } : {}),
+    ...(typeof startedAt === "number" ? { startedAt } : {}),
+  };
+}
+
+function buildLiveThreadUsageLine(params: {
+  backend: AppServerBackendKind;
+  cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
+  completedAt?: number;
+  createdAt?: number;
+  fastMode?: boolean;
+  model?: string;
+  serviceTier?: string;
+  startedAt?: number;
+  threadId: string;
+  tokenUsage: unknown;
+  turnId?: string;
+}): ThreadUsageLineRecord | undefined {
+  const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
+  if (!tokens) {
+    return undefined;
+  }
+
+  const {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
+  } = normalizeTaskMonitorPricingTokens(tokens);
+  const cumulativeTokens = params.cumulativeTokenUsage
+    ? normalizeTaskMonitorPricingTokens(params.cumulativeTokenUsage)
+    : undefined;
+  const cost = estimateOpenAiTokenUsageCost({
+    cachedInputTokens,
+    fastMode: params.fastMode,
+    model: params.model,
+    outputTokens,
+    reasoningOutputTokens,
+    serviceTier: params.serviceTier,
+    uncachedInputTokens,
+  });
+  const cumulativeCost = cumulativeTokens
+    ? estimateOpenAiTokenUsageCost({
+        cachedInputTokens: cumulativeTokens.cachedInputTokens,
+        fastMode: params.fastMode,
+        model: params.model,
+        outputTokens: cumulativeTokens.outputTokens,
+        reasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
+        serviceTier: params.serviceTier,
+        uncachedInputTokens: cumulativeTokens.uncachedInputTokens,
+      })
+    : undefined;
+  const pricingServiceTier = resolveOpenAiPricingServiceTier({
+    fastMode: params.fastMode,
+    serviceTier: params.serviceTier,
+  });
+  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
+    cost
+      ? undefined
+      : !params.model
+        ? "missing-model"
+        : pricingServiceTier === undefined
+          ? "unsupported-service-tier"
+          : "missing-rate";
+
+  return {
+    backend: params.backend,
+    cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+    cachedInputTokens,
+    ...(typeof params.completedAt === "number" ? { completedAt: params.completedAt } : {}),
+    createdAt: params.createdAt ?? params.completedAt ?? Date.now(),
+    currency: cost?.currency ?? "USD",
+    ...(cumulativeTokens
+      ? {
+          cumulativeCachedInputTokens: cumulativeTokens.cachedInputTokens,
+          cumulativeInputTokens: cumulativeTokens.inputTokens,
+          cumulativeOutputTokens: cumulativeTokens.outputTokens,
+          cumulativeReasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
+          ...(cumulativeCost
+            ? { cumulativeTotalCostMicros: cumulativeCost.totalCostMicros }
+            : {}),
+          cumulativeTotalTokens: cumulativeTokens.totalTokens,
+          cumulativeUncachedInputTokens: cumulativeTokens.uncachedInputTokens,
+        }
+      : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    inputTokens,
+    ...(params.model ? { model: params.model } : {}),
+    outputCostMicros: cost?.outputCostMicros ?? 0,
+    outputTokens,
+    priceStatus: cost ? "priced" : "unpriced",
+    ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
+    provider: cost?.provider ?? "openai",
+    ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
+    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+    reasoningOutputTokens,
+    scope: "turn",
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+    settingsConfidence: params.model ? "fallback" : "unknown",
+    settingsSource: "thread-overlay",
+    source: "live",
+    sourceItemId: "thread-token-usage",
+    ...(typeof params.startedAt === "number" ? { startedAt: params.startedAt } : {}),
+    status: "pending",
+    threadId: params.threadId,
+    totalCostMicros: cost?.totalCostMicros ?? 0,
+    totalTokens,
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+    uncachedInputTokens,
+    usageLineId: [
+      params.backend,
+      params.threadId,
+      params.turnId ?? "no-turn",
+      "live-token-usage",
+    ].join(":"),
+  };
 }
 
 function readTurnStatus(value: unknown): string | undefined {
@@ -3015,6 +3412,10 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly liveThreadUsageBaselines = new Map<
+    string,
+    TaskMonitorTokenUsageBreakdown
+  >();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -5380,16 +5781,63 @@ export class DesktopBackendRegistry {
           replay: replayWithEnvironment,
           activities: overlay?.immutableUsageActivities,
         });
+    if (!request.before) {
+      await this.persistReplayUsageLines(replayWithEnvironment);
+    }
+    const pricing =
+      typeof this.overlayStore.readThreadPricing === "function"
+        ? await this.overlayStore.readThreadPricing({
+            backend,
+            threadId: request.threadId,
+          })
+        : { lines: [], summaries: [] };
 
     return {
       backend,
       fetchedAt: Date.now(),
       threadId: request.threadId,
+      pricing,
       ...(replayWithImmutableUsage.threadStatus
         ? { threadStatus: replayWithImmutableUsage.threadStatus }
         : {}),
       replay: replayWithImmutableUsage,
     };
+  }
+
+  private async persistReplayUsageLines(
+    replay: AppServerThreadReplay,
+  ): Promise<void> {
+    if (typeof this.overlayStore.upsertThreadUsageLine !== "function") {
+      return;
+    }
+    const lines = collectThreadUsageLinesFromReplay(replay);
+    for (const line of lines) {
+      logUnpricedThreadUsageLine(line);
+      await this.overlayStore.upsertThreadUsageLine({ line });
+    }
+  }
+
+  private async emitThreadPricingUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (typeof this.overlayStore.readThreadPricing !== "function") {
+      return;
+    }
+    const pricing = await this.overlayStore.readThreadPricing({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/pricing/updated",
+        params: {
+          threadId: params.threadId,
+          pricing,
+        },
+      },
+    });
   }
 
   async startThread(params: {
@@ -6322,8 +6770,11 @@ export class DesktopBackendRegistry {
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
+      ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
+      ...(modelSettings.model ? { model: modelSettings.model } : {}),
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
+      ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
       task: reviewTaskLabel(params.target),
       turnId: result.turnId,
     };
@@ -9937,7 +10388,26 @@ export class DesktopBackendRegistry {
         notification.params.turnId,
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
+      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const model =
+        readTaskMonitorUsageModel({
+          notificationModel: notification.params.model,
+          tokenUsage: notification.params.tokenUsage,
+        }) ??
+        reviewRecord?.model ??
+        completedReviewRecord?.model;
+      const serviceTier =
+        readTaskMonitorUsageServiceTier(notification.params.tokenUsage) ??
+        reviewRecord?.serviceTier ??
+        completedReviewRecord?.serviceTier;
+      const fastMode =
+        readTaskMonitorUsageFastMode(notification.params.tokenUsage) ??
+        reviewRecord?.fastMode ??
+        completedReviewRecord?.fastMode;
       const usageSnapshot = buildTaskMonitorUsageSnapshot({
+        fastMode,
+        model,
+        serviceTier,
         tokenUsage: notification.params.tokenUsage,
       });
       if (!usageSnapshot) {
@@ -9948,9 +10418,28 @@ export class DesktopBackendRegistry {
         await this.persistReviewSubAgent(reviewRecord, {
           monitorUsage: usageSnapshot,
         });
+        if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+          const line = buildTaskMonitorUsageLine({
+            backend: event.backend,
+            fastMode,
+            model,
+            monitorId: reviewSubAgentId(reviewRecord.turnId),
+            monitorThreadId: reviewRecord.reviewThreadId,
+            monitorTurnId: reviewRecord.turnId,
+            parentThreadId: reviewRecord.parentThreadId,
+            serviceTier,
+            source: "monitor",
+            usage: usageSnapshot,
+          });
+          logUnpricedThreadUsageLine(line);
+          await this.overlayStore.upsertThreadUsageLine({ line });
+          await this.emitThreadPricingUpdated({
+            backend: event.backend,
+            threadId: line.parentThreadId ?? line.threadId,
+          });
+        }
         return;
       }
-      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
         backend: event.backend,
         parentThreadId:
@@ -9961,6 +10450,28 @@ export class DesktopBackendRegistry {
         usage: usageSnapshot,
       });
       if (reviewUsagePersisted) {
+        if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+          const line = buildTaskMonitorUsageLine({
+            backend: event.backend,
+            fastMode,
+            model,
+            monitorId: reviewSubAgentId(notification.params.turnId),
+            monitorThreadId:
+              completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
+            monitorTurnId: notification.params.turnId,
+            parentThreadId:
+              completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+            serviceTier,
+            source: "monitor",
+            usage: usageSnapshot,
+          });
+          logUnpricedThreadUsageLine(line);
+          await this.overlayStore.upsertThreadUsageLine({ line });
+          await this.emitThreadPricingUpdated({
+            backend: event.backend,
+            threadId: line.parentThreadId ?? line.threadId,
+          });
+        }
         return;
       }
     }
@@ -9985,6 +10496,158 @@ export class DesktopBackendRegistry {
       monitorRecord.latestUsage = usageSnapshot;
       await this.persistTaskMonitorSubAgent(monitorRecord, {
         monitorUsage: usageSnapshot,
+      });
+      if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+        const line = buildTaskMonitorUsageLine({
+          backend: event.backend,
+          model: monitorRecord.preferredModel,
+          monitorId: monitorRecord.monitorId,
+          monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
+          monitorTurnId: monitorRecord.monitorTurnId,
+          parentThreadId: monitorRecord.parentThreadId,
+          source: "monitor",
+          usage: usageSnapshot,
+        });
+        logUnpricedThreadUsageLine(line);
+        await this.overlayStore.upsertThreadUsageLine({ line });
+        await this.emitThreadPricingUpdated({
+          backend: event.backend,
+          threadId: line.parentThreadId ?? line.threadId,
+        });
+      }
+    }
+  }
+
+  private deriveLiveThreadTokenUsage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): {
+    cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
+    turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
+  } {
+    const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+    if (!records) {
+      return { turnTokenUsage: params.tokenUsage };
+    }
+
+    if (!records.totalUsage || !params.turnId) {
+      return {
+        ...(records.totalUsage ? { cumulativeTokenUsage: records.totalUsage } : {}),
+        turnTokenUsage:
+          records.latestUsage ?? records.currentUsage ?? params.tokenUsage,
+      };
+    }
+
+    const key = [
+      params.backend,
+      params.threadId,
+      params.turnId,
+      "live-token-usage",
+    ].join(":");
+    let baseline = this.liveThreadUsageBaselines.get(key);
+    if (!baseline && records.latestUsage) {
+      baseline = subtractTaskMonitorTokenUsage(
+        records.totalUsage,
+        records.latestUsage,
+      );
+      if (baseline) {
+        this.liveThreadUsageBaselines.set(key, baseline);
+      }
+    }
+
+    const turnTokenUsage = baseline
+      ? subtractTaskMonitorTokenUsage(records.totalUsage, baseline)
+      : undefined;
+    return {
+      cumulativeTokenUsage: records.totalUsage,
+      turnTokenUsage:
+        turnTokenUsage ??
+        records.latestUsage ??
+        records.currentUsage ??
+        records.totalUsage,
+    };
+  }
+
+  private async recordLiveThreadUsage(event: AgentEvent): Promise<void> {
+    const notification = event.notification;
+    if (notification.method !== "thread/tokenUsage/updated") {
+      return;
+    }
+    const threadId = notification.params.threadId;
+    if (!threadId) {
+      return;
+    }
+    if (
+      Array.from(this.taskMonitorDelegations.values()).some(
+        (record) => record.monitorThreadId === threadId,
+      )
+    ) {
+      return;
+    }
+    if (notification.params.turnId) {
+      const reviewKey = buildReviewSubAgentKey(
+        event.backend,
+        threadId,
+        notification.params.turnId,
+      );
+      if (
+        this.activeReviewSubAgents.has(reviewKey) ||
+        this.reviewSubAgentsByReviewTurn.has(reviewKey)
+      ) {
+        return;
+      }
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: event.backend,
+      threadId,
+    });
+    const tokenUsage = notification.params.tokenUsage;
+    const model =
+      (typeof notification.params.model === "string" && notification.params.model.trim()
+        ? notification.params.model.trim()
+        : undefined) ??
+      readUsageString(tokenUsage, ["model", "modelId", "model_id"]) ??
+      overlay?.model;
+    const serviceTier = (
+      readUsageString(tokenUsage, ["serviceTier", "service_tier"]) ??
+      overlay?.serviceTier
+    ) || undefined;
+    const fastMode =
+      readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]) ??
+      overlay?.fastMode;
+    const derivedUsage = this.deriveLiveThreadTokenUsage({
+      backend: event.backend,
+      threadId,
+      tokenUsage,
+      turnId: notification.params.turnId ?? undefined,
+    });
+    const usageTiming = resolveLiveThreadUsageTiming({
+      overlay,
+      turnId: notification.params.turnId ?? undefined,
+    });
+    const line = buildLiveThreadUsageLine({
+      backend: event.backend,
+      cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
+      ...usageTiming,
+      fastMode,
+      model,
+      serviceTier,
+      threadId,
+      tokenUsage: derivedUsage.turnTokenUsage,
+      turnId: notification.params.turnId ?? undefined,
+    });
+    if (!line) {
+      return;
+    }
+    if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+      logUnpricedThreadUsageLine(line);
+      await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.emitThreadPricingUpdated({
+        backend: event.backend,
+        threadId: line.parentThreadId ?? line.threadId,
       });
     }
   }
@@ -12966,7 +13629,6 @@ export class DesktopBackendRegistry {
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
     }
-    await this.recordTaskMonitorUsage(event);
 
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
@@ -13279,6 +13941,9 @@ export class DesktopBackendRegistry {
         });
       }
     }
+
+    await this.recordLiveThreadUsage(event);
+    await this.recordTaskMonitorUsage(event);
 
     this.rememberThreadTitleFromEvent(event);
     this.notifyForAttentionRequired(event);

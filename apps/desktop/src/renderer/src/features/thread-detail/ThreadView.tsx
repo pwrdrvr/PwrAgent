@@ -35,6 +35,8 @@ import type {
   NavigationThreadSummary,
   PendingRequestAction,
   ThreadExecutionMode,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
@@ -841,6 +843,15 @@ export type ThreadViewProps = {
   loadingMore: boolean;
   messageCount: number;
   contextWindow?: ThreadContextWindowState;
+  pricing?: {
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  };
+  pricingDisplayOptions?: {
+    codexCredits: boolean;
+    usd: boolean;
+  };
+  threadPricingSummaryEnabled?: boolean;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -1075,7 +1086,11 @@ export function ThreadView(props: ThreadViewProps) {
   // Defaults to pinned-open (matches the persisted default) when App hasn't
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
-  const activeContextTab = props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
+  const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? false;
+  const activeContextTab =
+    !threadPricingSummaryEnabled && props.activeContextTab === "pricing"
+      ? DEFAULT_CONTEXT_TAB
+      : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
   const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
@@ -2660,6 +2675,9 @@ export function ThreadView(props: ThreadViewProps) {
           pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}
+          pricing={props.pricing}
+          pricingDisplayOptions={props.pricingDisplayOptions}
+          threadPricingSummaryEnabled={threadPricingSummaryEnabled}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}
         />

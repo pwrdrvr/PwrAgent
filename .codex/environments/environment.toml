@@ -40,6 +40,15 @@ PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 '''
 
 [[actions]]
+name = "Default - No Messaging"
+icon = "run"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=default pnpm dev:no-messaging
+'''
+
+[[actions]]
 name = "Dev - Protocol Capture"
 icon = "run"
 command = '''

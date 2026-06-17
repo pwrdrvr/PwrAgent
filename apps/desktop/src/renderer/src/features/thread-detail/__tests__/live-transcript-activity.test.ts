@@ -153,7 +153,7 @@ describe("buildTokenUsageActivityEntry", () => {
       "Output: 174 tokens, including 25 reasoning",
       "Uncached input cost: 19,549 tokens at $5.00/M = $0.098",
       "Cached input cost: 2,432 tokens at $0.50/M (0.1x uncached) = $0.002",
-      "Output cost: 174 tokens at $30.00/M = $0.006",
+      "Output cost: 199 tokens at $30.00/M = $0.006",
       "Cost: $0.11 list price for GPT-5.5 Standard",
     ]);
   });

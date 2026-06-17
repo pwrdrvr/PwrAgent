@@ -41,12 +41,30 @@ const DEFAULT_AGENT_CORE_GROK = {
   source: "default" as const,
 };
 
+const DEFAULT_THREAD_PRICING_SUMMARY = {
+  value: false,
+  source: "default" as const,
+};
+
+const DEFAULT_THREAD_PRICING_DISPLAY_USD = {
+  value: true,
+  source: "default" as const,
+};
+
+const DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
+  onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -56,6 +74,15 @@ export function ExperimentalSettings(props: {
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
     DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+  const threadPricingSummary =
+    props.snapshot.experimental.threadPricingSummary ??
+    DEFAULT_THREAD_PRICING_SUMMARY;
+  const threadPricingDisplayUsd =
+    props.snapshot.experimental.threadPricingDisplayUsd ??
+    DEFAULT_THREAD_PRICING_DISPLAY_USD;
+  const threadPricingDisplayCodexCredits =
+    props.snapshot.experimental.threadPricingDisplayCodexCredits ??
+    DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -137,6 +164,62 @@ export function ExperimentalSettings(props: {
                   </button>
                 ) : null}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Thread Pricing Summary"
+        description="Show list-price usage totals in the thread context rail. Disabled by default while pricing reconstruction and provider coverage are being validated."
+        chip={threadPricingSummary.value ? "On" : "Off"}
+        chipKind={threadPricingSummary.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable thread pricing summary"
+            sub="When on, the Pricing tab appears in the thread context rail with list-price totals and per-turn usage rows."
+            source={sourceBadge(threadPricingSummary)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingSummary.value}
+                disabled={props.saving}
+                label="Enable thread pricing summary"
+                onChange={(enabled) => {
+                  void props.onThreadPricingSummaryChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Display USD"
+            sub="Show OpenAI API list-price estimates in USD."
+            source={sourceBadge(threadPricingDisplayUsd)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingDisplayUsd.value}
+                disabled={props.saving || !threadPricingSummary.value}
+                label="Display USD"
+                onChange={(enabled) => {
+                  void props.onThreadPricingDisplayUsdChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Display Codex Credits"
+            sub="Show Codex Credits estimates from Codex's token-based credit rate card."
+            source={sourceBadge(threadPricingDisplayCodexCredits)}
+            control={
+              <SettingsSwitch
+                checked={threadPricingDisplayCodexCredits.value}
+                disabled={props.saving || !threadPricingSummary.value}
+                label="Display Codex Credits"
+                onChange={(enabled) => {
+                  void props.onThreadPricingDisplayCodexCreditsChange(enabled);
+                }}
+              />
             }
           />
         </div>

@@ -30,6 +30,7 @@ import type {
   NavigationLaunchpadDraft,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
@@ -203,6 +204,7 @@ function createOverlayStoreMock(params?: {
   const overlays = new Map<string, ThreadOverlayState>(
     Object.entries(params?.overlays ?? {})
   );
+  const usageLines = new Map<string, ThreadUsageLineRecord>();
   let launchpadDefaults: NavigationLaunchpadDefaults = {
     backend: "codex",
     executionMode: "default",
@@ -224,6 +226,44 @@ function createOverlayStoreMock(params?: {
     }) => overlays.get(`${backend}:${threadId}`),
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, overlays.get(`codex:${threadId}`)])),
+    upsertThreadUsageLine: async ({ line }: { line: ThreadUsageLineRecord }) => {
+      usageLines.set(line.usageLineId, line);
+      return {
+        line,
+        summary: {
+          backend: line.backend,
+          cachedInputTokens: line.cachedInputTokens,
+          currency: line.currency,
+          inputTokens: line.inputTokens,
+          outputTokens: line.outputTokens,
+          pricedUsageLineCount: line.priceStatus === "priced" ? 1 : 0,
+          provider: line.provider,
+          reasoningOutputTokens: line.reasoningOutputTokens,
+          threadId: line.parentThreadId ?? line.threadId,
+          totalCostMicros: line.totalCostMicros,
+          totalTokens: line.totalTokens,
+          uncachedInputTokens: line.uncachedInputTokens,
+          unpricedUsageLineCount: line.priceStatus === "priced" ? 0 : 1,
+          updatedAt: Date.now(),
+          usageLineCount: 1,
+        },
+      };
+    },
+    readThreadPricing: async ({
+      backend,
+      threadId,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+    }) => ({
+      lines: Array.from(usageLines.values()).filter(
+        (line) =>
+          line.backend === backend &&
+          line.status !== "superseded" &&
+          (line.threadId === threadId || line.parentThreadId === threadId),
+      ),
+      summaries: [],
+    }),
     setAcpWorktreeDirectory: async ({
       backend,
       threadId,
@@ -4126,6 +4166,7 @@ script = "echo setup"
     });
     await vi.waitFor(() => {
       expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+      expect(sessions[0]?.executionMode).toBe("full-access");
     });
 
     expect(sessions[0]?.executionMode).toBe("full-access");
@@ -11186,6 +11227,79 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists live thread pricing from turn usage, not cumulative thread totals", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 200,
+            output_tokens: 50,
+            reasoning_output_tokens: 10,
+            total_tokens: 1_060,
+          },
+          total_token_usage: {
+            input_tokens: 11_000,
+            cached_input_tokens: 10_200,
+            output_tokens: 500,
+            reasoning_output_tokens: 100,
+            total_tokens: 11_600,
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 200,
+      cumulativeCachedInputTokens: 10_200,
+      cumulativeInputTokens: 11_000,
+      cumulativeOutputTokens: 500,
+      cumulativeReasoningOutputTokens: 100,
+      cumulativeTotalTokens: 11_600,
+      cumulativeUncachedInputTokens: 800,
+      inputTokens: 1_000,
+      outputTokens: 50,
+      reasoningOutputTokens: 10,
+      totalTokens: 1_060,
+      turnId: "turn-2",
+      uncachedInputTokens: 800,
+    });
+
+    await registry.close();
+  });
+
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
@@ -11232,6 +11346,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11252,7 +11367,9 @@ command = "pnpm dev"
         return overlay?.subAgents?.[0]?.monitorUsage;
       })
       .toMatchObject({
-        summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+        summary: expect.stringContaining(
+          "800 uncached in · 200 cached · 50 out (10 reasoning)"
+        ),
         tokenUsage: {
           cachedInputTokens: 200,
           inputTokens: 1_000,
@@ -11262,6 +11379,20 @@ command = "pnpm dev"
           uncachedInputTokens: 800,
         },
       });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-1",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await codexClient.emit({
       method: "turn/completed",
@@ -11339,6 +11470,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11364,7 +11496,9 @@ command = "pnpm dev"
         status: "success",
         lastMessage: "Review completed.",
         monitorUsage: {
-          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          summary: expect.stringContaining(
+            "800 uncached in · 200 cached · 50 out (10 reasoning)"
+          ),
           tokenUsage: {
             cachedInputTokens: 200,
             inputTokens: 1_000,
@@ -11375,6 +11509,20 @@ command = "pnpm dev"
           },
         },
       });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-1",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await registry.close();
   });
@@ -11422,6 +11570,7 @@ command = "pnpm dev"
       params: {
         threadId: "thread-review",
         turnId: "turn-review-1",
+        model: "gpt-5.5",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11448,7 +11597,9 @@ command = "pnpm dev"
         outcome: "success",
         status: "success",
         monitorUsage: {
-          summary: "800 uncached in · 200 cached · 50 out (10 reasoning)",
+          summary: expect.stringContaining(
+            "800 uncached in · 200 cached · 50 out (10 reasoning)"
+          ),
         },
       });
     const reviewOverlay = await overlayStore.getThreadOverlayState({
@@ -11456,6 +11607,20 @@ command = "pnpm dev"
       threadId: "thread-review",
     });
     expect(reviewOverlay?.subAgents).toBeUndefined();
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.5",
+      parentThreadId: "thread-parent",
+      priceStatus: "priced",
+      scope: "monitor",
+      threadId: "thread-review",
+      turnId: "turn-review-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await registry.close();
   });
@@ -13474,7 +13639,7 @@ command = "pnpm dev"
           monitorUsage: {
             cost: {
               model: "gpt-5.4-mini",
-              totalUsd: 0.00084,
+              totalUsd: 0.000885,
             },
             summary: expectedUsageSummary,
           },
@@ -13527,7 +13692,7 @@ command = "pnpm dev"
                 },
                 cost: {
                   model: "gpt-5.4-mini",
-                  totalUsd: 0.00084,
+                  totalUsd: 0.000885,
                 },
                 phase: "progress",
               },
@@ -13667,7 +13832,7 @@ command = "pnpm dev"
           monitorUsage: {
             cost: {
               model: "gpt-5.4-mini",
-              totalUsd: 0.00084,
+              totalUsd: 0.000885,
             },
             summary: expectedUsageSummary,
           },

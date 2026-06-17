@@ -1648,6 +1648,61 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults thread pricing summary to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.threadPricingSummary).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(initial.experimental.threadPricingDisplayUsd).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(initial.experimental.threadPricingDisplayCodexCredits).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        threadPricingSummary: true,
+        threadPricingDisplayUsd: false,
+        threadPricingDisplayCodexCredits: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.threadPricingSummary).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(updated.experimental.threadPricingDisplayUsd).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(updated.experimental.threadPricingDisplayCodexCredits).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_summary = true",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_display_usd = false",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_pricing_display_codex_credits = true",
+    );
+  });
+
   it("defaults Codex default-mode request_user_input to false and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

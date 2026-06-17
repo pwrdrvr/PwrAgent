@@ -792,6 +792,15 @@ function DesktopAppShell(props: {
     loadingMore: session.loadingMore,
     messageCount: session.messages.length,
     contextWindow: session.contextWindow,
+    pricing: session.response?.pricing,
+    threadPricingSummaryEnabled:
+      settings.snapshot?.experimental.threadPricingSummary?.value ?? false,
+    pricingDisplayOptions: {
+      codexCredits:
+        settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??
+        false,
+      usd: settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
+    },
     pendingAssistantMessage: session.pendingAssistantMessage,
     pendingMcpInteraction: session.pendingMcpInteraction,
     pendingRequest: session.pendingRequest,

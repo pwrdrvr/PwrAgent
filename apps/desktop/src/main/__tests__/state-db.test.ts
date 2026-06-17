@@ -58,6 +58,418 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates thread usage pricing ledger tables", () => {
+    const tables = stateDb.raw
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?) ORDER BY name`,
+      )
+      .all(
+        "pricing_catalog_versions",
+        "pricing_rates",
+        "thread_pricing_summaries",
+        "thread_usage_turns",
+        "thread_usage_lines",
+      ) as Array<{ name: string }>;
+
+    expect(tables.map((table) => table.name)).toEqual([
+      "pricing_catalog_versions",
+      "pricing_rates",
+      "thread_pricing_summaries",
+      "thread_usage_lines",
+      "thread_usage_turns",
+    ]);
+  });
+
+  it("indexes thread usage pricing reads and rollups without full line-table scans", () => {
+    expect(indexNames("thread_usage_lines")).toEqual(
+      expect.arrayContaining([
+        "idx_thread_usage_lines_read_parent",
+        "idx_thread_usage_lines_read_thread",
+        "idx_thread_usage_lines_summary_parent",
+        "idx_thread_usage_lines_summary_thread",
+      ]),
+    );
+
+    const readPlan = queryPlanDetails(
+      `SELECT *
+       FROM (
+         SELECT *
+         FROM thread_usage_lines
+         WHERE backend = ?
+           AND status != 'superseded'
+           AND thread_id = ?
+         UNION ALL
+         SELECT *
+         FROM thread_usage_lines
+         WHERE backend = ?
+           AND status != 'superseded'
+           AND parent_thread_id = ?
+           AND thread_id != ?
+       )
+       ORDER BY created_at DESC, usage_line_id DESC`,
+      ["codex", "thread-1", "codex", "thread-1", "thread-1"],
+    );
+    expect(readPlan).toContain("idx_thread_usage_lines_read_thread");
+    expect(readPlan).toContain("idx_thread_usage_lines_read_parent");
+    expect(readPlan).not.toMatch(/\bSCAN thread_usage_lines\b/);
+
+    const summaryPlan = queryPlanDetails(
+      `SELECT
+         COUNT(*) AS usage_line_count,
+         COALESCE(SUM(total_cost_micros), 0) AS total_cost_micros
+       FROM (
+         SELECT *
+         FROM thread_usage_lines
+         WHERE provider = ?
+           AND backend = ?
+           AND currency = ?
+           AND status != 'superseded'
+           AND thread_id = ?
+         UNION ALL
+         SELECT *
+         FROM thread_usage_lines
+         WHERE provider = ?
+           AND backend = ?
+           AND currency = ?
+           AND status != 'superseded'
+           AND parent_thread_id = ?
+           AND thread_id != ?
+       )`,
+      [
+        "openai",
+        "codex",
+        "USD",
+        "thread-1",
+        "openai",
+        "codex",
+        "USD",
+        "thread-1",
+        "thread-1",
+      ],
+    );
+    expect(summaryPlan).toContain("idx_thread_usage_lines_summary_thread");
+    expect(summaryPlan).toContain("idx_thread_usage_lines_summary_parent");
+    expect(summaryPlan).not.toMatch(/\bSCAN thread_usage_lines\b/);
+  });
+
+  it("migrates legacy thread usage pricing rows into provider-scoped usage turns", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "legacy-thread-usage-pricing-state.db");
+    const raw = openRawDb(dbPath);
+    raw.exec(`
+      PRAGMA user_version = 17;
+      CREATE TABLE thread_usage_lines (
+        usage_line_id              TEXT PRIMARY KEY,
+        backend                    TEXT NOT NULL,
+        thread_id                  TEXT NOT NULL,
+        parent_thread_id           TEXT,
+        turn_id                    TEXT,
+        source                     TEXT NOT NULL,
+        source_item_id             TEXT,
+        scope                      TEXT NOT NULL,
+        status                     TEXT NOT NULL,
+        created_at                 INTEGER NOT NULL,
+        completed_at               INTEGER,
+        model                      TEXT,
+        reasoning_effort           TEXT,
+        service_tier               TEXT,
+        fast_mode                  INTEGER,
+        settings_source            TEXT,
+        settings_confidence        TEXT,
+        input_tokens               INTEGER NOT NULL,
+        cached_input_tokens        INTEGER NOT NULL,
+        uncached_input_tokens      INTEGER NOT NULL,
+        output_tokens              INTEGER NOT NULL,
+        reasoning_output_tokens    INTEGER NOT NULL,
+        total_tokens               INTEGER NOT NULL,
+        price_status               TEXT NOT NULL,
+        price_unavailable_reason   TEXT,
+        currency                   TEXT NOT NULL,
+        pricing_catalog_id         TEXT,
+        pricing_catalog_version    TEXT,
+        pricing_rate_id            TEXT,
+        uncached_input_cost_micros INTEGER NOT NULL,
+        cached_input_cost_micros   INTEGER NOT NULL,
+        output_cost_micros         INTEGER NOT NULL,
+        total_cost_micros          INTEGER NOT NULL,
+        updated_at                 INTEGER NOT NULL
+      );
+      CREATE TABLE thread_pricing_summaries (
+        backend                   TEXT NOT NULL,
+        thread_id                 TEXT NOT NULL,
+        currency                  TEXT NOT NULL,
+        usage_line_count          INTEGER NOT NULL,
+        priced_usage_line_count   INTEGER NOT NULL,
+        unpriced_usage_line_count INTEGER NOT NULL,
+        input_tokens              INTEGER NOT NULL,
+        cached_input_tokens       INTEGER NOT NULL,
+        uncached_input_tokens     INTEGER NOT NULL,
+        output_tokens             INTEGER NOT NULL,
+        reasoning_output_tokens   INTEGER NOT NULL,
+        total_tokens              INTEGER NOT NULL,
+        total_cost_micros         INTEGER NOT NULL,
+        updated_at                INTEGER NOT NULL,
+        PRIMARY KEY (backend, thread_id, currency)
+      );
+      INSERT INTO thread_usage_lines (
+        usage_line_id,
+        backend,
+        thread_id,
+        parent_thread_id,
+        turn_id,
+        source,
+        source_item_id,
+        scope,
+        status,
+        created_at,
+        completed_at,
+        model,
+        reasoning_effort,
+        service_tier,
+        fast_mode,
+        settings_source,
+        settings_confidence,
+        input_tokens,
+        cached_input_tokens,
+        uncached_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        price_status,
+        price_unavailable_reason,
+        currency,
+        pricing_catalog_id,
+        pricing_catalog_version,
+        pricing_rate_id,
+        uncached_input_cost_micros,
+        cached_input_cost_micros,
+        output_cost_micros,
+        total_cost_micros,
+        updated_at
+      ) VALUES (
+        'line-1',
+        'codex',
+        'thread-1',
+        NULL,
+        'turn-1',
+        'hydration',
+        'item-1',
+        'turn',
+        'finalized',
+        1000,
+        1100,
+        'gpt-5.5',
+        'high',
+        'standard',
+        0,
+        'turn-context',
+        'exact',
+        1000,
+        200,
+        800,
+        300,
+        100,
+        1300,
+        'priced',
+        NULL,
+        'USD',
+        'openai-api',
+        '2026-06-16',
+        'openai:2026-06-16:gpt-5.5:standard',
+        900,
+        100,
+        4000,
+        5000,
+        1200
+      );
+      INSERT INTO thread_pricing_summaries VALUES (
+        'codex',
+        'thread-1',
+        'USD',
+        1,
+        1,
+        0,
+        1000,
+        200,
+        800,
+        300,
+        100,
+        1300,
+        5000,
+        1200
+      );
+    `);
+    raw.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(columnNames("thread_usage_lines")).toContain("provider");
+    expect(columnNames("thread_usage_lines")).toContain("usage_turn_id");
+    expect(columnNames("thread_pricing_summaries")).toContain("provider");
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+
+    const line = stateDb.raw
+      .prepare(
+        `SELECT provider, usage_turn_id
+         FROM thread_usage_lines
+         WHERE usage_line_id = 'line-1'`,
+      )
+      .get() as { provider: string; usage_turn_id: string };
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT provider, backend, thread_id, turn_id
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(line.usage_turn_id) as {
+        provider: string;
+        backend: string;
+        thread_id: string;
+        turn_id: string | null;
+      };
+    const summary = stateDb.raw
+      .prepare(
+        `SELECT provider, backend, thread_id, currency, total_cost_micros
+         FROM thread_pricing_summaries`,
+      )
+      .get() as {
+        provider: string;
+        backend: string;
+        thread_id: string;
+        currency: string;
+        total_cost_micros: number;
+      };
+
+    expect(line).toEqual({
+      provider: "openai",
+      usage_turn_id: "openai:codex:thread-1:turn-1",
+    });
+    expect(turn).toEqual({
+      backend: "codex",
+      provider: "openai",
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+    });
+    expect(summary).toEqual({
+      backend: "codex",
+      currency: "USD",
+      provider: "openai",
+      thread_id: "thread-1",
+      total_cost_micros: 5000,
+    });
+  });
+
+  it("repairs live usage line timestamps that were overwritten by streaming updates", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "live-usage-created-at-repair-state.db");
+    stateDb = StateDb.open(dbPath);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          source,
+          source_item_id,
+          scope,
+          status,
+          created_at,
+          model,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'live-line-1',
+          'openai:codex:thread-1:turn-1',
+          'openai',
+          'codex',
+          'thread-1',
+          'turn-1',
+          'live',
+          'thread-token-usage',
+          'turn',
+          'pending',
+          2000,
+          'gpt-5.5',
+          1000,
+          200,
+          800,
+          300,
+          100,
+          1300,
+          'priced',
+          'USD',
+          900,
+          100,
+          4000,
+          5000,
+          2000
+        )`,
+      )
+      .run();
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_turns (
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          model,
+          settings_source,
+          settings_confidence,
+          observed_at,
+          updated_at
+        ) VALUES (
+          'openai:codex:thread-1:turn-1',
+          'openai',
+          'codex',
+          'thread-1',
+          'turn-1',
+          'gpt-5.5',
+          'thread-overlay',
+          'fallback',
+          1000,
+          2000
+        )`,
+      )
+      .run();
+    stateDb.raw.pragma("user_version = 19");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+    expect(
+      (
+        stateDb.raw
+          .prepare(
+            "SELECT created_at FROM thread_usage_lines WHERE usage_line_id = 'live-line-1'",
+          )
+          .get() as { created_at: number }
+      ).created_at,
+    ).toBe(1000);
+  });
+
   it("repairs databases that used version 13 for the old PR cache migration", () => {
     stateDb.close();
 
@@ -171,13 +583,43 @@ function existingTables(): string[] {
   return rows.map((row) => row.name);
 }
 
-function columnNames(tableName: "pr_lookup_cache" | "pr_status_cache"): string[] {
+function columnNames(
+  tableName:
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "thread_pricing_summaries"
+    | "thread_usage_lines",
+): string[] {
   const rows = readTableInfo(tableName);
   return rows.map((row) => row.name);
 }
 
+function indexNames(tableName: "thread_usage_lines"): string[] {
+  return (
+    stateDb.raw.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+      name: string;
+    }>
+  )
+    .map((row) => row.name)
+    .sort();
+}
+
+function queryPlanDetails(sql: string, params: unknown[]): string {
+  return (
+    stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+      detail: string;
+    }>
+  )
+    .map((row) => row.detail)
+    .join("\n");
+}
+
 function readTableInfo(
-  tableName: "pr_lookup_cache" | "pr_status_cache",
+  tableName:
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "thread_pricing_summaries"
+    | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
     case "pr_lookup_cache":
@@ -188,5 +630,13 @@ function readTableInfo(
       return stateDb.raw.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
         name: string;
       }>;
+    case "thread_pricing_summaries":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_pricing_summaries)")
+        .all() as Array<{ name: string }>;
+    case "thread_usage_lines":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_usage_lines)")
+        .all() as Array<{ name: string }>;
   }
 }

@@ -10,7 +10,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  BackendSummary,
+  NavigationThreadSummary,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
@@ -108,9 +113,13 @@ type PanelOverrides = Partial<
     | "pinned"
     | "thread"
     | "onRefreshNavigation"
+    | "onScrollToTurn"
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
+    | "pricing"
+    | "pricingDisplayOptions"
+    | "threadPricingSummaryEnabled"
   >
 >;
 
@@ -345,6 +354,336 @@ describe("ThreadContextPanel", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("tab", { name: "Provider status" }),
     );
+  });
+
+  it("hides the Pricing tab by default while the experimental flag is off", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+    });
+
+    expect(screen.queryByRole("tab", { name: "Pricing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+  });
+
+  it("renders cached pricing totals and per-turn model settings", () => {
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      totalCostMicros: 9_500,
+      usageLineCount: 1,
+      pricedUsageLineCount: 1,
+      unpricedUsageLineCount: 0,
+      provider: "openai",
+      updatedAt: 1_800_000_000_000,
+    };
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "codex:thread-1:turn-1:turn:item-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      scope: "turn",
+      source: "hydration",
+      sourceItemId: "item-1",
+      status: "finalized",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+      settingsSource: "turn-context",
+      settingsConfidence: "exact",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeCachedInputTokens: 5_000,
+      cumulativeInputTokens: 8_000,
+      cumulativeOutputTokens: 700,
+      cumulativeReasoningOutputTokens: 240,
+      cumulativeTotalCostMicros: 42_000,
+      cumulativeTotalTokens: 8_940,
+      cumulativeUncachedInputTokens: 3_000,
+      uncachedInputCostMicros: 7_500,
+      cachedInputCostMicros: 500,
+      outputCostMicros: 1_500,
+      totalCostMicros: 9_500,
+      provider: "openai",
+      pricingCatalogId: "openai-api",
+      pricingCatalogVersion: "2026-06-16",
+      pricingRateId: "openai-api:2026-06-16:gpt-5.5:priority",
+      createdAt: 1_800_000_000_000,
+      completedAt: 1_800_000_001_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [summary],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
+    expect(screen.getAllByText("$0.010")[0]).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
+    expect(
+      screen.queryByText("gpt-5.5 · high · Fast · priority"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.042 list price")).toBeInTheDocument();
+  });
+
+  it("renders Codex Credits as an optional pricing display unit", () => {
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      totalCostMicros: 9_500,
+      usageLineCount: 1,
+      pricedUsageLineCount: 1,
+      unpricedUsageLineCount: 0,
+      provider: "openai",
+      updatedAt: 1_800_000_000_000,
+    };
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      scope: "turn",
+      source: "hydration",
+      status: "finalized",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+      inputTokens: 2_000,
+      uncachedInputTokens: 1_500,
+      cachedInputTokens: 500,
+      outputTokens: 300,
+      reasoningOutputTokens: 120,
+      totalTokens: 2_420,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeTotalCostMicros: 42_000,
+      uncachedInputCostMicros: 7_500,
+      cachedInputCostMicros: 500,
+      outputCostMicros: 1_500,
+      totalCostMicros: 9_500,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+      completedAt: 1_800_000_001_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [summary],
+      },
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: true,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("$0.010 · 1.3 Codex Credits")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.010 list price this turn · 1.3 Codex Credits this turn"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.042 list price · 1.3 Codex Credits"),
+    ).toBeInTheDocument();
+  });
+
+  it("makes pricing row timestamps scroll the transcript to their turn", () => {
+    const onScrollToTurn = vi.fn();
+
+    renderPanel({
+      activeTab: "pricing",
+      onScrollToTurn,
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "hydration",
+            status: "finalized",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-1",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-1",
+          },
+        ],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 0,
+            currency: "USD",
+            inputTokens: 100,
+            outputTokens: 10,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            uncachedInputTokens: 100,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_000,
+            usageLineCount: 1,
+          },
+        ],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+
+    expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
+  });
+
+  it("summarizes pricing rows when provider summaries are absent", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 50,
+            cachedInputTokens: 500,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 2_000,
+            model: "gpt-5.5",
+            outputCostMicros: 500,
+            outputTokens: 300,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 50,
+            scope: "monitor",
+            source: "monitor",
+            status: "finalized",
+            threadId: "monitor-thread-1",
+            totalCostMicros: 1_250,
+            totalTokens: 2_350,
+            uncachedInputCostMicros: 700,
+            uncachedInputTokens: 1_500,
+            usageLineId: "monitor-line-1",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.queryByText("No usage pricing recorded yet.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("$0.002")[0]).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("1 (1 priced, 0 unpriced)");
+    expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
+  });
+
+  it("labels legacy live rows without cumulative context as historical summaries", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 7_000_000,
+            cachedInputTokens: 70_463_104,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            model: "gpt-5.5",
+            outputCostMicros: 42_000_000,
+            outputTokens: 221_675,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            scope: "turn",
+            source: "live",
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            turnId: "turn-legacy",
+            uncachedInputCostMicros: 6_830_000,
+            uncachedInputTokens: 2_788_759,
+            usageLineId: "line-legacy",
+          },
+        ],
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 70_463_104,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            outputTokens: 221_675,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            uncachedInputTokens: 2_788_759,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_000,
+            usageLineCount: 1,
+          },
+        ],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
+    expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
+    expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

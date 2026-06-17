@@ -125,6 +125,34 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
+  it("writes the thread pricing summary flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        threadPricingSummary: true,
+        threadPricingDisplayUsd: false,
+        threadPricingDisplayCodexCredits: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_summary"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_display_usd"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: ["experimental", "thread_pricing_display_codex_credits"],
+        value: true,
+      },
+    ]);
+  });
+
   it("writes the Codex default-mode request_user_input flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {

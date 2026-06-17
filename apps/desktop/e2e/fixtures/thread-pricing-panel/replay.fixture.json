@@ -1,0 +1,243 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "thread-pricing-panel",
+    "threadId": "thread-pricing-panel"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-pricing-panel",
+          "title": "Pricing ledger thread",
+          "titleSource": "explicit",
+          "summary": "Replay-backed pricing panel regression",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1781616385000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me pricing."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Pricing rows are recorded."
+          },
+          {
+            "type": "activity",
+            "id": "usage-openai-priced",
+            "summary": "Turn usage: 800 uncached in · 200 cached · 300 out · $0.005 list price",
+            "createdAt": 1781616385000,
+            "status": "completed",
+            "details": [
+              {
+                "id": "usage-openai-priced-detail",
+                "kind": "read",
+                "label": "Cost: $0.005 list price for GPT-5.5 Standard",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "turnId": "turn-openai-priced"
+            },
+            "usageLine": {
+              "backend": "codex",
+              "cachedInputCostMicros": 100,
+              "cachedInputTokens": 200,
+              "completedAt": 1781616386000,
+              "createdAt": 1781616385000,
+              "currency": "USD",
+              "fastMode": false,
+              "inputTokens": 1000,
+              "model": "gpt-5.5",
+              "outputCostMicros": 4000,
+              "outputTokens": 300,
+              "priceStatus": "priced",
+              "provider": "openai",
+              "pricingCatalogId": "openai-api",
+              "pricingCatalogVersion": "2026-06-16",
+              "pricingRateId": "openai:2026-06-16:gpt-5.5:standard",
+              "reasoningEffort": "high",
+              "reasoningOutputTokens": 100,
+              "scope": "turn",
+              "serviceTier": "standard",
+              "settingsConfidence": "exact",
+              "settingsSource": "turn-context",
+              "source": "hydration",
+              "sourceItemId": "usage-openai-priced",
+              "status": "finalized",
+              "threadId": "thread-pricing-panel",
+              "totalCostMicros": 5000,
+              "totalTokens": 1300,
+              "turnId": "turn-openai-priced",
+              "uncachedInputCostMicros": 900,
+              "uncachedInputTokens": 800,
+              "usageLineId": "openai-priced-line",
+              "usageTurnId": "openai:codex:thread-pricing-panel:turn-openai-priced"
+            }
+          },
+          {
+            "type": "activity",
+            "id": "usage-openai-unpriced",
+            "summary": "Turn usage: 50 uncached in · 0 cached · 20 out",
+            "createdAt": 1781616390000,
+            "status": "completed",
+            "details": [
+              {
+                "id": "usage-openai-unpriced-detail",
+                "kind": "read",
+                "label": "Cost unavailable: missing model",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "turnId": "turn-openai-unpriced"
+            },
+            "usageLine": {
+              "backend": "codex",
+              "cachedInputCostMicros": 0,
+              "cachedInputTokens": 0,
+              "completedAt": 1781616391000,
+              "createdAt": 1781616390000,
+              "currency": "USD",
+              "inputTokens": 50,
+              "outputCostMicros": 0,
+              "outputTokens": 20,
+              "priceStatus": "unpriced",
+              "priceUnavailableReason": "missing-model",
+              "provider": "openai",
+              "reasoningOutputTokens": 0,
+              "scope": "turn",
+              "settingsConfidence": "unknown",
+              "settingsSource": "unknown",
+              "source": "hydration",
+              "sourceItemId": "usage-openai-unpriced",
+              "status": "finalized",
+              "threadId": "thread-pricing-panel",
+              "totalCostMicros": 0,
+              "totalTokens": 70,
+              "turnId": "turn-openai-unpriced",
+              "uncachedInputCostMicros": 0,
+              "uncachedInputTokens": 50,
+              "usageLineId": "openai-unpriced-line",
+              "usageTurnId": "openai:codex:thread-pricing-panel:turn-openai-unpriced"
+            }
+          },
+          {
+            "type": "activity",
+            "id": "usage-xai-priced",
+            "summary": "Turn usage: 400 uncached in · 0 cached · 120 out · $0.003 list price",
+            "createdAt": 1781616395000,
+            "status": "completed",
+            "details": [
+              {
+                "id": "usage-xai-priced-detail",
+                "kind": "read",
+                "label": "Cost: $0.003 list price for Grok 4.20 Reasoning",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "turnId": "turn-xai-priced"
+            },
+            "usageLine": {
+              "backend": "codex",
+              "cachedInputCostMicros": 0,
+              "cachedInputTokens": 0,
+              "completedAt": 1781616396000,
+              "createdAt": 1781616395000,
+              "currency": "USD",
+              "fastMode": false,
+              "inputTokens": 400,
+              "model": "grok-4.20-reasoning",
+              "outputCostMicros": 2000,
+              "outputTokens": 120,
+              "priceStatus": "priced",
+              "provider": "xai",
+              "pricingCatalogId": "xai-api",
+              "pricingCatalogVersion": "2026-06-16",
+              "pricingRateId": "xai:2026-06-16:grok-4.20-reasoning:standard",
+              "reasoningOutputTokens": 0,
+              "scope": "turn",
+              "serviceTier": "standard",
+              "settingsConfidence": "exact",
+              "settingsSource": "turn-context",
+              "source": "hydration",
+              "sourceItemId": "usage-xai-priced",
+              "status": "finalized",
+              "threadId": "thread-pricing-panel",
+              "totalCostMicros": 3000,
+              "totalTokens": 520,
+              "turnId": "turn-xai-priced",
+              "uncachedInputCostMicros": 1000,
+              "uncachedInputTokens": 400,
+              "usageLineId": "xai-priced-line",
+              "usageTurnId": "xai:codex:thread-pricing-panel:turn-xai-priced"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me pricing."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Pricing rows are recorded."
+          }
+        ],
+        "lastUserMessage": "Show me pricing.",
+        "lastAssistantMessage": "Pricing rows are recorded.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    }
+  ]
+}

@@ -79,6 +79,18 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        threadPricingSummary: {
+          value: false,
+          source: "default",
+        },
+        threadPricingDisplayUsd: {
+          value: true,
+          source: "default",
+        },
+        threadPricingDisplayCodexCredits: {
+          value: false,
+          source: "default",
+        },
         codexDefaultModeRequestUserInput: {
           value: false,
           source: "default",

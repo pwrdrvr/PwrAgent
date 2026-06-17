@@ -1793,6 +1793,88 @@ function buildTurnMetadata(params: {
   };
 }
 
+function readUuidV7Timestamp(id: string | undefined): number | undefined {
+  if (!id) {
+    return undefined;
+  }
+  const hex = id.replace(/-/g, "").slice(0, 12);
+  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
+    return undefined;
+  }
+  const timestamp = Number.parseInt(hex, 16);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function mergeKnownTurnMetadata(params: {
+  knownTurn?: AppServerThreadTurnMetadata;
+  turn?: AppServerThreadTurnMetadata;
+}): AppServerThreadTurnMetadata | undefined {
+  const id = params.turn?.id ?? params.knownTurn?.id;
+  if (!id) {
+    return undefined;
+  }
+
+  return {
+    id,
+    ...(params.turn?.status ?? params.knownTurn?.status
+      ? { status: params.turn?.status ?? params.knownTurn?.status }
+      : {}),
+    ...(typeof (params.turn?.startedAt ?? params.knownTurn?.startedAt) === "number"
+      ? { startedAt: params.turn?.startedAt ?? params.knownTurn?.startedAt }
+      : {}),
+    ...(typeof (params.turn?.completedAt ?? params.knownTurn?.completedAt) === "number"
+      ? { completedAt: params.turn?.completedAt ?? params.knownTurn?.completedAt }
+      : {}),
+    ...(typeof (params.turn?.durationMs ?? params.knownTurn?.durationMs) === "number"
+      ? { durationMs: params.turn?.durationMs ?? params.knownTurn?.durationMs }
+      : {}),
+  };
+}
+
+function findKnownTurnUsageMetadata(
+  session: ThreadSessionEntry,
+  turnId: string | undefined,
+): {
+  createdAt?: number;
+  isTurnUsage?: boolean;
+  turn?: AppServerThreadTurnMetadata;
+} {
+  if (!turnId) {
+    return {};
+  }
+  const entries = [
+    ...(session.response?.replay.entries ?? []),
+    ...session.optimisticEntries,
+  ];
+  const turnUsageEntry = entries.find(
+    (candidate) =>
+      candidate.turn?.id === turnId &&
+      candidate.type === "activity" &&
+      isTokenUsageActivityEntry(candidate) &&
+      tokenUsageActivityScope(candidate) === "turn"
+  );
+  const entry = turnUsageEntry ?? entries.find((candidate) => candidate.turn?.id === turnId);
+  const entryIsTurnUsage =
+    entry?.type === "activity" &&
+    isTokenUsageActivityEntry(entry) &&
+    tokenUsageActivityScope(entry) === "turn";
+  const startedAt = entry?.turn?.startedAt ?? readUuidV7Timestamp(turnId);
+  const turn = entry?.turn
+    ? {
+        ...entry.turn,
+        ...(typeof startedAt === "number" ? { startedAt } : {}),
+      }
+    : typeof startedAt === "number"
+      ? { id: turnId, startedAt }
+      : undefined;
+  const createdAt = entry?.turn?.completedAt ?? entry?.createdAt;
+  return {
+    ...(typeof createdAt === "number" ? { createdAt } : {}),
+    ...(entryIsTurnUsage ? { isTurnUsage: true } : {}),
+    ...(turn ? { turn } : {}),
+  };
+}
+
 function terminalTurnMatchesActiveTurn(
   session: ThreadSessionEntry,
   terminalTurnId: string | undefined,
@@ -4126,19 +4208,43 @@ export function useThreadSessionState(params: {
           };
         }
 
+        if (event.notification.method === "thread/pricing/updated") {
+          return {
+            ...current,
+            lastTouchedAt: nextLastTouchedAt,
+            response: current.response
+              ? {
+                  ...current.response,
+                  pricing: event.notification.params.pricing,
+                }
+              : current.response,
+          };
+        }
+
         if (event.notification.method === "thread/tokenUsage/updated") {
           const contextWindow = normalizeThreadContextWindowState(
             event.notification.params.tokenUsage
           );
+          const notificationTurnId =
+            typeof event.notification.params.turnId === "string"
+              ? event.notification.params.turnId
+              : undefined;
+          const knownTurnUsage = findKnownTurnUsageMetadata(current, notificationTurnId);
+          const usageBelongsToActiveTurn = Boolean(
+            current.activeTurnId &&
+              (!notificationTurnId || notificationTurnId === current.activeTurnId)
+          );
           const turn = buildTurnMetadata({
-            fallbackId:
-              typeof event.notification.params.turnId === "string"
-                ? event.notification.params.turnId
-                : current.activeTurnId,
-            fallbackStartedAt: current.activeTurnStartedAt,
-            fallbackStatus: current.activeTurnId ? "in_progress" : "completed",
+            fallbackId: notificationTurnId ?? current.activeTurnId,
+            fallbackStartedAt:
+              notificationTurnId && notificationTurnId !== current.activeTurnId
+                ? knownTurnUsage.turn?.startedAt
+                : current.activeTurnStartedAt,
+            fallbackStatus:
+              knownTurnUsage.turn?.status ??
+              (usageBelongsToActiveTurn ? "in_progress" : "completed"),
+            turn: knownTurnUsage.turn,
           });
-          const usageEntryId = `live-token-usage-${turn?.id ?? notificationThreadId}`;
           const model = resolveTokenUsageModel({
             backend: event.backend,
             notificationParams: event.notification.params,
@@ -4157,14 +4263,33 @@ export function useThreadSessionState(params: {
             thread,
             threadId: notificationThreadId,
           });
+          const knownCompletedTurnUsage = Boolean(
+            notificationTurnId &&
+              notificationTurnId !== current.activeTurnId &&
+              knownTurnUsage.isTurnUsage &&
+              knownTurnUsage.turn?.status === "completed"
+          );
+          const usageEntryId = knownCompletedTurnUsage
+            ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
+            : `live-token-usage-${turn?.id ?? notificationThreadId}`;
           let usageEntry = buildTokenUsageActivityEntry({
             fastMode,
             id: usageEntryId,
             model,
             serviceTier,
+            ...(knownCompletedTurnUsage ? { summaryPrefix: "Turn usage" } : {}),
             tokenUsage: event.notification.params.tokenUsage,
-            turn,
+            turn: mergeKnownTurnMetadata({
+              knownTurn: knownTurnUsage.turn,
+              turn,
+            }),
           });
+          if (usageEntry && typeof knownTurnUsage.createdAt === "number") {
+            usageEntry = {
+              ...usageEntry,
+              createdAt: knownTurnUsage.createdAt,
+            };
+          }
           let pendingTurnUsage = current.pendingTurnUsage;
           const activeTurnUsage = Boolean(
             usageEntry &&
@@ -4235,7 +4360,13 @@ export function useThreadSessionState(params: {
         return current;
       });
     });
-  }, [desktopApi, liveTranscriptEventFiltering, thread, threadKey, updateSession]);
+  }, [
+    desktopApi,
+    liveTranscriptEventFiltering,
+    thread,
+    threadKey,
+    updateSession,
+  ]);
 
   const selectedSession = threadKey ? sessions[threadKey] : undefined;
 
