@@ -100,7 +100,7 @@ describe("live diff activity normalization", () => {
       },
     });
 
-    expect(entry?.id).toBe("live-diff-thread-1");
+    expect(entry?.id).toMatch(/^live-diff-thread-1-\d+$/);
     expect(entry?.summary).toBe("Edited 2 files, +1, -1");
     expect(entry?.details.map((detail) => detail.fileDiff?.kind)).toEqual([
       "add",
@@ -110,6 +110,51 @@ describe("live diff activity normalization", () => {
       "Add new.ts",
       "Delete old.ts",
     ]);
+  });
+
+  it("uses unique live diff refs when turn id is omitted", () => {
+    const firstDiff = [
+      "diff --git a/src/example.ts b/src/example.ts",
+      "--- a/src/example.ts",
+      "+++ b/src/example.ts",
+      "@@ -1,1 +1,1 @@",
+      "-first",
+      "+first updated",
+    ].join("\n");
+    const secondDiff = [
+      "diff --git a/src/example.ts b/src/example.ts",
+      "--- a/src/example.ts",
+      "+++ b/src/example.ts",
+      "@@ -1,1 +1,1 @@",
+      "-second",
+      "+second updated",
+    ].join("\n");
+
+    const first = buildLiveDiffActivityEntry({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-no-turn",
+        diff: firstDiff,
+      },
+    });
+    const second = buildLiveDiffActivityEntry({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-no-turn",
+        diff: secondDiff,
+      },
+    });
+
+    expect(first?.id).not.toBe(second?.id);
+    const firstRef = first?.details[0]?.fileDiff?.diffRef;
+    const secondRef = second?.details[0]?.fileDiff?.diffRef;
+    expect(firstRef?.key).not.toBe(secondRef?.key);
+    expect(firstRef ? getLiveThreadFileDiff(firstRef) : undefined).toContain(
+      "first updated",
+    );
+    expect(secondRef ? getLiveThreadFileDiff(secondRef) : undefined).toContain(
+      "second updated",
+    );
   });
 
   it("keeps large live diff text behind refs instead of embedding it in events", () => {

@@ -44,6 +44,7 @@ import { ThreadView } from "../ThreadView";
 function buildRendererLiveDiffEvent(params: {
   additions: number;
   diff: string;
+  lazy?: boolean;
   path: string;
   removals: number;
   threadId: string;
@@ -64,7 +65,18 @@ function buildRendererLiveDiffEvent(params: {
         path: params.path,
         fileDiff: {
           kind: "update",
-          diff: params.diff,
+          diff: params.lazy ? "" : params.diff,
+          ...(params.lazy
+            ? {
+                diffRef: {
+                  source: "live" as const,
+                  key: `live:${params.threadId}:${entryId}:${entryId}-1`,
+                  threadId: params.threadId,
+                  entryId,
+                  detailId: `${entryId}-1`,
+                },
+              }
+            : {}),
           additions: params.additions,
           removals: params.removals,
         },
@@ -2344,6 +2356,121 @@ describe("ThreadView", () => {
     // edited files rehydrate from the replay instead of vanishing. Two
     // matches: the transcript work-group row and the rail title button.
     expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(2);
+    expect(
+      screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("clears lazy live diff activity once matching replay diff arrives", async () => {
+    const selectedThread = {
+      id: "thread-lazy",
+      title: "Fix lazy diff catch-up",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false,
+      },
+    };
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -113,2 +113,1 @@",
+      "-<<<<<<< HEAD",
+      "-function appendMessageEntries(",
+      "+function messageMatchesOptimisticEntry(",
+    ].join("\n");
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const getThreadFileDiff = vi.fn(async () => ({ diff: liveDiff }));
+
+    const renderThread = (transcriptEntries: any[]) => (
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{
+          getThreadFileDiff,
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={transcriptEntries.length}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={transcriptEntries}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const { rerender } = render(
+      renderThread([
+        {
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "Fix the merge markers.",
+        },
+      ]),
+    );
+
+    await act(async () => {
+      agentEventHandler?.(
+        buildRendererLiveDiffEvent({
+          additions: 1,
+          diff: liveDiff,
+          lazy: true,
+          path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+          removals: 2,
+          threadId: "thread-lazy",
+          turnId: "turn-1",
+        }),
+      );
+    });
+
+    rerender(
+      renderThread([
+        {
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "Fix the merge markers.",
+        },
+        {
+          type: "activity",
+          id: "activity-1",
+          summary: "Edited 1 file",
+          turn: { id: "turn-1", status: "in_progress" },
+          details: [
+            {
+              id: "detail-1",
+              kind: "write",
+              label: "Update useThreadSessionState.ts",
+              path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+              fileDiff: {
+                kind: "update",
+                additions: 1,
+                removals: 2,
+                diff: liveDiff,
+              },
+            },
+          ],
+        },
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }),
+    );
+
+    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+    expect(getThreadFileDiff).not.toHaveBeenCalled();
     expect(
       screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
     ).toBeInTheDocument();

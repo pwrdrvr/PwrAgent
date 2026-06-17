@@ -9,6 +9,7 @@ import type {
 const MAX_LIVE_DIFF_CACHE_ENTRIES = 2_000;
 
 const liveDiffCache = new Map<string, { diff: string; storedAt: number }>();
+let fallbackLiveDiffEntrySequence = 0;
 
 function buildLiveDiffRef(params: {
   threadId: string;
@@ -206,7 +207,9 @@ export function extractLiveDiffActivityDetails(params: {
 export function buildLiveDiffActivityEntry(
   notification: Extract<AppServerNotification, { method: "turn/diff/updated" }>,
 ): AppServerThreadActivityEntry | undefined {
-  const entryId = `live-diff-${notification.params.turnId ?? notification.params.threadId}`;
+  const entryId = notification.params.turnId
+    ? `live-diff-${notification.params.turnId}`
+    : `live-diff-${notification.params.threadId}-${fallbackLiveDiffEntrySequence += 1}`;
   const details = extractLiveDiffActivityDetails({
     diff: notification.params.diff,
     entryId,

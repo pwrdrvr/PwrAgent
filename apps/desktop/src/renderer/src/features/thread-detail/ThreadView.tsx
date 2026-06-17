@@ -655,12 +655,36 @@ function activityContainsDiff(
   pendingEntry: AppServerThreadActivityEntry
 ): boolean {
   return pendingEntry.details.every((pendingDetail) => {
-    const pendingDiff = pendingDetail.fileDiff?.diff;
-    if (!pendingDiff) {
+    const pendingFileDiff = pendingDetail.fileDiff;
+    if (!pendingFileDiff) {
       return false;
     }
 
-    return candidate.details.some((detail) => detail.fileDiff?.diff === pendingDiff);
+    return candidate.details.some((detail) => {
+      const candidateFileDiff = detail.fileDiff;
+      if (!candidateFileDiff) {
+        return false;
+      }
+
+      if (pendingFileDiff.diff) {
+        return candidateFileDiff.diff === pendingFileDiff.diff;
+      }
+
+      if (!pendingFileDiff.diffRef) {
+        return false;
+      }
+
+      const sameFile =
+        pendingDetail.path && detail.path
+          ? pendingDetail.path === detail.path
+          : pendingDetail.label === detail.label;
+      return (
+        sameFile &&
+        candidateFileDiff.kind === pendingFileDiff.kind &&
+        candidateFileDiff.additions === pendingFileDiff.additions &&
+        candidateFileDiff.removals === pendingFileDiff.removals
+      );
+    });
   });
 }
 
