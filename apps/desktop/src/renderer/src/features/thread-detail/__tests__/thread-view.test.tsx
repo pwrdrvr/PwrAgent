@@ -2316,12 +2316,16 @@ describe("ThreadView", () => {
 
     // Replay caught up: the pending live entry clears (no dupe), but the
     // rail keeps rendering the persisted entry's edits — accumulated
-    // edited files rehydrate from the replay instead of vanishing. Two
-    // matches: the transcript work-group row and the rail title button.
-    expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(2);
+    // edited files rehydrate from the replay instead of vanishing. The rail
+    // summary stays at one edited file; if the pending live entry remained,
+    // this would double-count into a two-file rail summary instead.
+    const rail = screen.getByRole("complementary", {
+      name: /Edited 1 file, \+1, -2/,
+    });
+    expect(rail).toBeInTheDocument();
     expect(
-      screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
-    ).toBeInTheDocument();
+      within(rail).getAllByRole("button", { name: /Edited 1 file/i }),
+    ).toHaveLength(2);
   });
 
   it("renders Codex warning notifications inline", async () => {

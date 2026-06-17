@@ -579,11 +579,12 @@ export type EditGroupCommitInput = {
 };
 
 /**
- * Git lifecycle of an edited-file group, resolved against the live worktree
- * (not the agent's command transcript). A group is `committed` when none of
- * its files still have uncommitted working-tree changes; `commitSha` is the
+ * Live Git state for an edited-file group, resolved against the worktree
+ * rather than the agent's command transcript. A group is `committed` when none
+ * of its files still have uncommitted working-tree changes; `commitSha` is the
  * most recent commit touching those files, and `pushed` reflects whether that
  * commit is reachable from any remote ref (omitted when it can't be told).
+ * This is a current file-state hint, not turn-to-commit provenance.
  */
 export type EditGroupCommitState = {
   committed: boolean;
