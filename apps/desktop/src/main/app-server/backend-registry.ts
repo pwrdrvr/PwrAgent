@@ -149,9 +149,6 @@ import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
-  PWRAGENT_APP_TOOL_NAMESPACE,
-  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
-  PWRAGENT_THREAD_TOOL_NAMESPACE,
   isThreadSearchContentMode,
   isThreadSearchSemanticMode,
   type PendingRequestDecision,
@@ -161,7 +158,6 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
-  TASK_MONITOR_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -198,6 +194,7 @@ import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
+  isAutomationInspectionDynamicToolCall,
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
@@ -208,6 +205,7 @@ import {
   buildTaskMonitorDynamicToolSpecs,
   findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
+  isTaskMonitorDynamicToolCall,
   normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
   normalizePreferredMonitorModel,
@@ -217,18 +215,21 @@ import {
 import {
   buildPwrAgentAppDynamicToolErrorResponse,
   handlePwrAgentAppDynamicToolCall,
+  isPwrAgentAppDynamicToolCall,
   readPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import {
   buildPwrAgentThreadDynamicToolErrorResponse,
   handlePwrAgentThreadDynamicToolCall,
+  isPwrAgentThreadDynamicToolCall,
   readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
 import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
 import {
   buildPwrAgentMessagingDynamicToolErrorResponse,
   handlePwrAgentMessagingDynamicToolCall,
+  isPwrAgentMessagingDynamicToolCall,
   readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
@@ -2251,13 +2252,13 @@ function buildTaskMonitorRecoveryPrompt(params: {
   return [
     "PwrAgent monitor recovery instruction:",
     "",
-    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent_task_monitors.complete_monitoring.`,
+    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent.complete_monitoring.`,
     "You must now report the final monitor result. Use only the monitor task context you already have.",
     "",
     `Monitor id: ${params.monitorId}`,
     `Task: ${params.task}`,
     "",
-    "Call pwragent_task_monitors.complete_monitoring exactly once.",
+    "Call pwragent.complete_monitoring exactly once.",
     "If you cannot determine a successful final outcome from the context you have, use outcome \"failure\" and explain that monitoring ended without a determinate result.",
     "Do not sleep, poll indefinitely, or do unrelated work in this recovery turn.",
   ].join("\n");
@@ -13474,7 +13475,10 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (dynamicToolCall?.namespace === "pwragent_automations") {
+    if (
+      dynamicToolCall &&
+      isAutomationInspectionDynamicToolCall(dynamicToolCall)
+    ) {
       if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
         backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
           backend,
@@ -13508,7 +13512,7 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (threadToolCall?.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE) {
+    if (threadToolCall && isPwrAgentThreadDynamicToolCall(threadToolCall)) {
       if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
         backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
           backend,
@@ -13542,7 +13546,7 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (appToolCall?.namespace === PWRAGENT_APP_TOOL_NAMESPACE) {
+    if (appToolCall && isPwrAgentAppDynamicToolCall(appToolCall)) {
       if (!this.isLiveDynamicToolCall(backend, appToolCall)) {
         backendRegistryLog.warn("rejecting app management dynamic tool call", {
           backend,
@@ -13577,7 +13581,10 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (messagingToolCall?.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE) {
+    if (
+      messagingToolCall &&
+      isPwrAgentMessagingDynamicToolCall(messagingToolCall)
+    ) {
       if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
         backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
           backend,
@@ -13612,7 +13619,7 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (taskMonitorToolCall?.namespace === TASK_MONITOR_TOOL_NAMESPACE) {
+    if (taskMonitorToolCall && isTaskMonitorDynamicToolCall(taskMonitorToolCall)) {
       if (backend !== "codex") {
         return buildTaskMonitorDynamicToolErrorResponse({
           code: "forbidden",
@@ -14414,7 +14421,7 @@ export class DesktopBackendRegistry {
     await this.finishTaskMonitorDelegation({
       completionSource,
       details: [
-        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent_task_monitors.complete_monitoring.",
+        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent.complete_monitoring.",
         `Fallback reason: ${params.reason}.`,
         params.terminalStatus
           ? `Last monitor turn status: ${params.terminalStatus}.`

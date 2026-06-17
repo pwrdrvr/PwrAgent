@@ -19,6 +19,7 @@ import type {
   ThreadSearchUnavailableScope,
 } from "./thread-search";
 
+/** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const PWRAGENT_THREAD_TOOL_NAMESPACE = "pwragent_threads";
 
 export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [

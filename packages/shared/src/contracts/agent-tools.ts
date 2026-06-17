@@ -1,3 +1,5 @@
+export const PWRAGENT_TOOL_NAMESPACE = "pwragent";
+
 export const AGENT_TOOL_CATALOG_IDS = [
   "automation_inspection",
   "app_management",

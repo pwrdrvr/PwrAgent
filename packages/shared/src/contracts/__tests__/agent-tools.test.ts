@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_TOOL_CATALOG_IDS,
+  PWRAGENT_TOOL_NAMESPACE,
   isAgentToolCatalogId,
   normalizeAgentToolCatalogIds,
 } from "../agent-tools";
 
 describe("agent tool contracts", () => {
+  it("defines the unified PwrAgent dynamic tool namespace", () => {
+    expect(PWRAGENT_TOOL_NAMESPACE).toBe("pwragent");
+  });
+
   it("defines the v1 agent tool catalog ids", () => {
     expect(AGENT_TOOL_CATALOG_IDS).toEqual([
       "automation_inspection",

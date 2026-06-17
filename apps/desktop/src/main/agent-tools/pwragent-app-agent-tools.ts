@@ -7,7 +7,7 @@ import type {
 import {
   PWRAGENT_APP_MANAGEMENT_ACTIONS,
   PWRAGENT_APP_OPERATION_NAMES,
-  PWRAGENT_APP_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -28,9 +28,11 @@ export type PwrAgentAppManagementHandler = (
 
 export function buildPwrAgentAppToolRouter(
   handler: PwrAgentAppManagementHandler | undefined,
-  options: { unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentAppToolDefinitions(handler), {
+  return new AgentToolRouter(buildPwrAgentAppToolDefinitions(handler, {
+    namespace: options.namespace,
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent app tool.",
   });
@@ -38,9 +40,10 @@ export function buildPwrAgentAppToolRouter(
 
 export function buildPwrAgentAppToolDefinitions(
   handler: PwrAgentAppManagementHandler | undefined,
+  options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentAppOperationName>[] {
   return PWRAGENT_APP_OPERATION_NAMES.map((operation) => ({
-    namespace: PWRAGENT_APP_TOOL_NAMESPACE,
+    namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),

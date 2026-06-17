@@ -13,6 +13,7 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
+  PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
   isTaskMonitorOperationName,
 } from "@pwragent/shared";
@@ -30,7 +31,7 @@ export function buildTaskMonitorDynamicToolSpecs(
   role: "parent" | "monitor" | "all" = "all",
 ): DynamicToolSpec[] {
   const createTool: DynamicToolSpec = {
-    namespace: TASK_MONITOR_TOOL_NAMESPACE,
+    namespace: PWRAGENT_TOOL_NAMESPACE,
     name: "create_monitor_delegation",
     description:
       "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: cwd or target location, command/status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Do not pass parent-local Codex/tool session ids such as exec_command/write_stdin session_id values; monitor threads cannot access those sessions, stdout/stderr streams, stdin, or exit status. For a local build/test/script, delegate before starting it and provide cwd plus the exact command so the monitor starts it and captures output itself. Prefer separate stdout/stderr capture files plus a combined output file when practical, and include those file paths in the final handoff. If the command is already running, provide durable process/log/status files that the monitor can read. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
@@ -52,7 +53,7 @@ export function buildTaskMonitorDynamicToolSpecs(
   };
   const monitorTools: DynamicToolSpec[] = [
     {
-      namespace: TASK_MONITOR_TOOL_NAMESPACE,
+      namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "inject_progress",
       description:
         "Inject a concise progress update from a monitor subagent into the parent PwrAgent thread without starting or waking a parent turn.",
@@ -72,7 +73,7 @@ export function buildTaskMonitorDynamicToolSpecs(
       deferLoading: false,
     },
     {
-      namespace: TASK_MONITOR_TOOL_NAMESPACE,
+      namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "complete_monitoring",
       description:
         "Finish a monitor delegation, inject the final result, and by default trigger exactly one parent turn with the final context.",
@@ -135,12 +136,13 @@ export function readTaskMonitorDynamicToolCall(request: {
 export function isTaskMonitorDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof TASK_MONITOR_TOOL_NAMESPACE;
+  namespace: typeof PWRAGENT_TOOL_NAMESPACE | typeof TASK_MONITOR_TOOL_NAMESPACE;
   tool: TaskMonitorOperationName;
 } {
   return (
-    call.namespace === TASK_MONITOR_TOOL_NAMESPACE &&
-    isTaskMonitorOperationName(call.tool)
+    call.namespace === TASK_MONITOR_TOOL_NAMESPACE ||
+    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
+      isTaskMonitorOperationName(call.tool))
   );
 }
 
@@ -150,6 +152,12 @@ export async function handleTaskMonitorDynamicToolCall(params: {
   handler: TaskMonitorHandler;
 }): Promise<DynamicToolCallResponse> {
   if (!isTaskMonitorDynamicToolCall(params.call)) {
+    return buildTaskMonitorDynamicToolErrorResponse({
+      code: "unsupported_operation",
+      message: "Unsupported PwrAgent task monitor tool.",
+    });
+  }
+  if (!isTaskMonitorOperationName(params.call.tool)) {
     return buildTaskMonitorDynamicToolErrorResponse({
       code: "unsupported_operation",
       message: "Unsupported PwrAgent task monitor tool.",
@@ -245,13 +253,13 @@ export function buildMonitorDelegationPrompt(params: {
     "</delegated_monitoring_procedure>",
     "",
     "<progress_protocol>",
-    "- Immediately after startup, before the first external poll or sleep, call pwragent_task_monitors.inject_progress with monitorId, status \"running\", and a concise message such as \"Monitor started: checking task status.\"",
+    "- Immediately after startup, before the first external poll or sleep, call pwragent.inject_progress with monitorId, status \"running\", and a concise message such as \"Monitor started: checking task status.\"",
     `- After the startup injection, poll about every ${pollInterval} seconds while the task is incomplete.`,
     "- Every poll should produce one non-waking progress injection: report the externally visible state change, or if nothing changed and the task is still running, send a brief heartbeat such as \"Still running: waiting for the task to finish.\"",
     `- Do not send routine heartbeat updates more often than about every ${heartbeatInterval} seconds unless the external state changed.`,
     "- Progress injections are non-waking: they must not ask the parent agent to act.",
     "- Do not include the parent transcript or broad repository context in progress updates.",
-    "- When the task reaches success, failure, or cancellation, call pwragent_task_monitors.complete_monitoring exactly once.",
+    "- When the task reaches success, failure, or cancellation, call pwragent.complete_monitoring exactly once.",
     "- The completion call is the only handoff that should trigger the parent agent.",
     "</progress_protocol>",
     params.finalHandoffPrompt?.trim()

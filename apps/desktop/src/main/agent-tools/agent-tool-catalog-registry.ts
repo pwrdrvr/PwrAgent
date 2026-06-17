@@ -3,10 +3,7 @@ import type {
   AgentToolCatalogSummary,
   ThreadAgentMetadata,
 } from "@pwragent/shared";
-import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
-import { PWRAGENT_APP_TOOL_NAMESPACE } from "@pwragent/shared";
-import { PWRAGENT_MESSAGING_TOOL_NAMESPACE } from "@pwragent/shared";
-import { PWRAGENT_THREAD_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   buildAutomationInspectionToolRouter,
@@ -58,12 +55,12 @@ export function resolveAgentToolCatalogs(params: {
       dynamicTools: automationDynamicTools,
       summary: {
         id: "automation_inspection",
-        namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+        namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
         toolCount: automationDynamicTools.length,
         fingerprint: buildCatalogFingerprint({
           id: "automation_inspection",
-          namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+          namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: automationDynamicTools,
         }),
       },
@@ -73,12 +70,12 @@ export function resolveAgentToolCatalogs(params: {
       dynamicTools: appDynamicTools,
       summary: {
         id: "app_management",
-        namespace: PWRAGENT_APP_TOOL_NAMESPACE,
+        namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
         toolCount: appDynamicTools.length,
         fingerprint: buildCatalogFingerprint({
           id: "app_management",
-          namespace: PWRAGENT_APP_TOOL_NAMESPACE,
+          namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: appDynamicTools,
         }),
       },
@@ -88,12 +85,12 @@ export function resolveAgentToolCatalogs(params: {
       dynamicTools: threadDynamicTools,
       summary: {
         id: "thread_inspection",
-        namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+        namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
         toolCount: threadDynamicTools.length,
         fingerprint: buildCatalogFingerprint({
           id: "thread_inspection",
-          namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+          namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: threadDynamicTools,
         }),
       },
@@ -103,12 +100,12 @@ export function resolveAgentToolCatalogs(params: {
       dynamicTools: messagingDynamicTools,
       summary: {
         id: "messaging_context",
-        namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+        namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
         toolCount: messagingDynamicTools.length,
         fingerprint: buildCatalogFingerprint({
           id: "messaging_context",
-          namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+          namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: messagingDynamicTools,
         }),
       },

@@ -5,6 +5,7 @@ import type {
 import {
   AUTOMATION_INSPECTION_OPERATION_NAMES,
   AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   DynamicToolCallParams,
@@ -29,14 +30,17 @@ export function buildAutomationInspectionDynamicToolSpecs(): DynamicToolSpec[] {
 export function isAutomationInspectionDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof AUTOMATION_INSPECTION_TOOL_NAMESPACE;
+  namespace:
+    | typeof AUTOMATION_INSPECTION_TOOL_NAMESPACE
+    | typeof PWRAGENT_TOOL_NAMESPACE;
   tool: AutomationInspectionOperationName;
 } {
   return (
-    call.namespace === AUTOMATION_INSPECTION_TOOL_NAMESPACE &&
-    AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
-      call.tool as AutomationInspectionOperationName,
-    )
+    call.namespace === AUTOMATION_INSPECTION_TOOL_NAMESPACE ||
+    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
+      AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
+        call.tool as AutomationInspectionOperationName,
+      ))
   );
 }
 
@@ -45,9 +49,12 @@ export async function handleAutomationInspectionDynamicToolCall(params: {
   call: DynamicToolCallParams;
   handler: AutomationInspectionHandler | undefined;
 }): Promise<DynamicToolCallResponse> {
+  const call = isAutomationInspectionDynamicToolCall(params.call)
+    ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
+    : params.call;
   return await buildAutomationInspectionToolRouter(params.handler).handleDynamicToolCall({
     backend: params.backend,
-    call: params.call,
+    call,
   });
 }
 

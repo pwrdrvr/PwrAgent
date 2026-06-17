@@ -1,3 +1,4 @@
+/** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const PWRAGENT_APP_TOOL_NAMESPACE = "pwragent_app";
 
 export const PWRAGENT_APP_OPERATION_NAMES = ["manage_pwragent"] as const;

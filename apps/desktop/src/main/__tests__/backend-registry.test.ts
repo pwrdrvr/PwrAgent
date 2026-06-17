@@ -5251,7 +5251,7 @@ script = "echo setup"
       | undefined;
     expect(dynamicTools).toEqual([
       expect.objectContaining({
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         name: "create_monitor_delegation",
       }),
     ]);
@@ -5287,39 +5287,39 @@ script = "echo setup"
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "get_automation_run_artifact",
         }),
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
         expect.objectContaining({
-          namespace: "pwragent_app",
+          namespace: "pwragent",
           name: "manage_pwragent",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "get_thread_status",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "mutate_thread",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "attach_thread_here",
         }),
       ]),
@@ -5331,20 +5331,14 @@ script = "echo setup"
         }>).map((tool) => tool.namespace),
       ),
     ).toEqual(
-      new Set([
-        "pwragent_automations",
-        "pwragent_app",
-        "pwragent_threads",
-        "pwragent_messaging",
-        "pwragent_task_monitors",
-      ]),
+      new Set(["pwragent"]),
     );
     expect(
       (codexClient.lastStartThreadParams?.dynamicTools as Array<{
         namespace: string;
         name: string;
       }> | undefined)
-        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        ?.filter((tool) => tool.name === "create_monitor_delegation")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
     await expect(
@@ -5386,7 +5380,7 @@ script = "echo setup"
     expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
       [
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
       ],
@@ -5396,7 +5390,7 @@ script = "echo setup"
         namespace: string;
         name: string;
       }> | undefined)
-        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        ?.filter((tool) => tool.name === "create_monitor_delegation")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
 
@@ -5444,23 +5438,23 @@ script = "echo setup"
     expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_app",
+          namespace: "pwragent",
           name: "manage_pwragent",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "attach_thread_here",
         }),
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
       ]),
@@ -7374,23 +7368,23 @@ script = "pnpm install"
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_app",
+          namespace: "pwragent",
           name: "manage_pwragent",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "attach_thread_here",
         }),
       ]),
@@ -7506,7 +7500,7 @@ script = "pnpm install"
       sandbox: "workspace-write",
       dynamicTools: [
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
       ],
@@ -13414,7 +13408,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_app",
+        namespace: "pwragent",
         tool: "manage_pwragent",
         arguments: {
           action: "status",
@@ -15171,7 +15165,7 @@ command = "pnpm dev"
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
         : "",
-    ).toContain("pwragent_task_monitors.complete_monitoring");
+    ).toContain("pwragent.complete_monitoring");
     expect(
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
@@ -15375,7 +15369,7 @@ command = "pnpm dev"
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
         : "",
-    ).toContain("pwragent_task_monitors.complete_monitoring");
+    ).toContain("pwragent.complete_monitoring");
 
     await checkStaleTaskMonitors(Date.now() + 180_000);
 

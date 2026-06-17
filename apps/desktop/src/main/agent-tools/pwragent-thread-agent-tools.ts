@@ -5,7 +5,7 @@ import type {
 } from "@pwragent/shared";
 import {
   PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES,
-  PWRAGENT_THREAD_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -26,9 +26,11 @@ export type PwrAgentThreadInspectionHandler = (
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
-  options: { unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler), {
+  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler, {
+    namespace: options.namespace,
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
   });
@@ -36,9 +38,10 @@ export function buildPwrAgentThreadToolRouter(
 
 export function buildPwrAgentThreadToolDefinitions(
   handler: PwrAgentThreadInspectionHandler | undefined,
+  options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentThreadInspectionOperationName>[] {
   return PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.map((operation) => ({
-    namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+    namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
