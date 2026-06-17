@@ -247,6 +247,7 @@ export type StartReviewResponse = {
 
 export type InterruptTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   turnId: string;
 };
@@ -259,6 +260,7 @@ export type InterruptTurnResponse = {
 
 export type CompactThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
 };
 
@@ -271,6 +273,7 @@ export type CompactThreadResponse = {
 
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
@@ -284,6 +287,7 @@ export type SteerTurnResponse = {
 
 export type SetThreadExecutionModeRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
 };
@@ -296,6 +300,7 @@ export type SetThreadExecutionModeResponse = {
 
 export type QueueThreadExecutionModeRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
 };
@@ -314,6 +319,7 @@ export type QueueThreadExecutionModeResponse = {
 
 export type CancelThreadExecutionModeQueueRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
 };
 
@@ -329,6 +335,7 @@ export type CancelThreadExecutionModeQueueResponse = {
 
 export type SetThreadModelSettingsRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   model?: string;
   serviceTier?: string;
@@ -340,6 +347,7 @@ export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
 export type SetAcpSessionRuntimeOptionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   source: BackendAcpRuntimeOptionSource;
   optionId: string;
@@ -393,6 +401,7 @@ export type RetainThreadBranchDriftResponse = RetainThreadBranchDriftRequest & {
 
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   turnId?: string;
   requestId: string;
@@ -539,6 +548,7 @@ export type CodexEnvironmentSetupProgressEvent = {
 
 export type RunCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   actionId: string;
   /**
@@ -570,6 +580,7 @@ export type StopCodexEnvironmentActionResponse = {
 
 export type SetCodexThreadEnvironmentRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   environmentId?: string;
   actionId?: string;

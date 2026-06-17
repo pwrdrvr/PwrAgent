@@ -278,7 +278,7 @@ MIT
 - vfile-message@4.0.3 | vfile/vfile-message
 - w3c-keyname@2.2.8 | https://github.com/marijnh/w3c-keyname
 - whatwg-url@5.0.0 | jsdom/whatwg-url
-- ws@8.20.1 | https://github.com/websockets/ws
+- ws@8.21.0 | https://github.com/websockets/ws
 - zod@3.25.76 | https://github.com/colinhacks/zod
 - zod@4.3.6 | https://github.com/colinhacks/zod
 - zwitch@2.0.4 | wooorm/zwitch
@@ -3940,13 +3940,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-ws@8.20.1 (MIT)
+ws@8.21.0 (MIT)
 ---------------
 
 Applies to:
-- ws@8.20.1 (MIT)
+- ws@8.21.0 (MIT)
 
-Representative file: ws@8.20.1/LICENSE
+Representative file: ws@8.21.0/LICENSE
 
 Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
 Copyright (c) 2013 Arnout Kazemier and contributors

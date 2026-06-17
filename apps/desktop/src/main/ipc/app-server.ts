@@ -995,6 +995,21 @@ class DesktopAppServerService {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .handoffThreadWorkspace(remoteRequest);
+      logDebug("handoffThreadWorkspace", {
+        backend: request.backend,
+        threadId: request.threadId,
+        direction: request.direction,
+        workMode: response.workMode,
+        targetPath: response.targetPath,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
     const response = await getDesktopBackendRegistry().handoffThreadWorkspace(request);
 
     logDebug("handoffThreadWorkspace", {

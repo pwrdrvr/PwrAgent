@@ -204,4 +204,207 @@ describe("federation backend bridge", () => {
       },
     ]);
   });
+
+  it("maps expanded remote control operations to capability-guarded handlers", async () => {
+    const backend: FederationBackendOperations = {
+      listThreads: vi.fn(),
+      readThread: vi.fn(),
+      listSkills: vi.fn(),
+      startTurn: vi.fn(),
+      compactThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "compact-1",
+      })),
+      interruptTurn: vi.fn(),
+      steerTurn: vi.fn(),
+      setThreadExecutionMode: vi.fn(),
+      queueThreadExecutionMode: vi.fn(),
+      cancelThreadExecutionModeQueue: vi.fn(),
+      setAcpSessionRuntimeOption: vi.fn(),
+      setThreadModelSettings: vi.fn(),
+      submitServerRequest: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        requestId: "approval-1",
+      })),
+      runCodexEnvironmentAction: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        codexEnvironmentRuntime: {
+          environmentId: "node",
+          environmentName: "Node",
+          executionTarget: "local" as const,
+        },
+      })),
+      setCodexThreadEnvironment: vi.fn(),
+      handoffThreadWorkspace: vi.fn(),
+    };
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      now: () => 2_000,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: [
+        "turn_control",
+        "pending_request_control",
+        "environment_actions",
+      ],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "compact-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.compactThread,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "approval-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.submitServerRequest,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          requestId: "approval-1",
+          response: { decision: "approve" },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_100,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "env-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction,
+        params: {
+          actionId: "start",
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_200,
+      },
+    });
+
+    expect(backend.compactThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    expect(backend.runCodexEnvironmentAction).toHaveBeenCalledWith({
+      actionId: "start",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "compact-request",
+        result: { turnId: "compact-1" },
+      },
+      {
+        kind: "response",
+        requestId: "approval-request",
+        result: { requestId: "approval-1" },
+      },
+      {
+        kind: "response",
+        requestId: "env-request",
+        result: {
+          codexEnvironmentRuntime: {
+            environmentId: "node",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("requires environment_actions for remote environment mutations", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: {
+        listThreads: vi.fn(),
+        readThread: vi.fn(),
+        listSkills: vi.fn(),
+        startTurn: vi.fn(),
+        compactThread: vi.fn(),
+        interruptTurn: vi.fn(),
+        steerTurn: vi.fn(),
+        setThreadExecutionMode: vi.fn(),
+        queueThreadExecutionMode: vi.fn(),
+        cancelThreadExecutionModeQueue: vi.fn(),
+        setAcpSessionRuntimeOption: vi.fn(),
+        setThreadModelSettings: vi.fn(),
+        submitServerRequest: vi.fn(),
+        runCodexEnvironmentAction: vi.fn(),
+        setCodexThreadEnvironment: vi.fn(),
+        handoffThreadWorkspace: vi.fn(),
+      } as FederationBackendOperations,
+    });
+
+    await expect(
+      router.routeEnvelope({
+        sourcePeerId: "gateway_one",
+        envelope: {
+          id: "env-request",
+          kind: "request",
+          method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
+          params: {
+            backend: "codex",
+            environmentId: "node",
+            threadId: "thread-1",
+          },
+          protocolVersion: 1,
+          sourceInstanceId: "gateway_one",
+          targetInstanceId: "client_one",
+          createdAt: 1_000,
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      code: "capability_denied",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "env-request",
+        error: { code: "capability_denied" },
+      },
+    ]);
+  });
 });

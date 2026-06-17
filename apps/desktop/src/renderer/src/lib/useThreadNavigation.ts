@@ -4488,6 +4488,8 @@ export function useThreadNavigation(
         await handoffThreadWorkspaceRequest({
           ...request,
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
@@ -4968,6 +4970,8 @@ export function useThreadNavigation(
       try {
         await setThreadExecutionMode({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           executionMode,
         });
@@ -4994,6 +4998,8 @@ export function useThreadNavigation(
       try {
         await cancelThreadExecutionModeQueueRequest({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
@@ -5057,6 +5063,8 @@ export function useThreadNavigation(
       try {
         await setThreadModelSettings({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           ...nextSettings,
         });
@@ -5118,6 +5126,8 @@ export function useThreadNavigation(
       try {
         await setAcpSessionRuntimeOption({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           ...params,
         });

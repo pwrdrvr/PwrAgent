@@ -4,12 +4,24 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
+  CancelThreadExecutionModeQueueResponse,
+  CompactThreadResponse,
   FederationCapability,
   FederationHealthStatus,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
   FederationProtocolEnvelope,
+  HandoffThreadWorkspaceResponse,
+  InterruptTurnResponse,
+  QueueThreadExecutionModeResponse,
+  RunCodexEnvironmentActionResponse,
+  SetAcpSessionRuntimeOptionResponse,
+  SetCodexThreadEnvironmentResponse,
+  SetThreadExecutionModeResponse,
+  SetThreadModelSettingsResponse,
+  SteerTurnResponse,
+  SubmitServerRequestResponse,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -19,10 +31,22 @@ import {
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
+  type CancelThreadExecutionModeQueueRequest,
+  type CompactThreadRequest,
   type FederationRemoteTarget,
+  type HandoffThreadWorkspaceRequest,
+  type InterruptTurnRequest,
   type NavigationSnapshot,
+  type QueueThreadExecutionModeRequest,
+  type RunCodexEnvironmentActionRequest,
+  type SetAcpSessionRuntimeOptionRequest,
+  type SetCodexThreadEnvironmentRequest,
+  type SetThreadExecutionModeRequest,
+  type SetThreadModelSettingsRequest,
+  type SteerTurnRequest,
   type StartTurnRequest,
   type StartTurnResponse,
+  type SubmitServerRequestRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
@@ -63,6 +87,8 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_navigation",
   "thread_detail",
   "turn_control",
+  "pending_request_control",
+  "environment_actions",
   "federated_search",
   "gateway_relay",
 ];
@@ -681,6 +707,64 @@ function localBackendOperations(): FederationBackendOperations {
             queueStatus: "queued",
             queueEntryId: submitted.entry.id,
           };
+    },
+    async compactThread(
+      request: CompactThreadRequest,
+    ): Promise<CompactThreadResponse> {
+      return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async interruptTurn(
+      request: InterruptTurnRequest,
+    ): Promise<InterruptTurnResponse> {
+      return await getDesktopBackendRegistry().interruptTurn(request);
+    },
+    async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
+      return await getDesktopBackendRegistry().steerTurn(request);
+    },
+    async setThreadExecutionMode(
+      request: SetThreadExecutionModeRequest,
+    ): Promise<SetThreadExecutionModeResponse> {
+      return await getDesktopBackendRegistry().setThreadExecutionMode(request);
+    },
+    async queueThreadExecutionMode(
+      request: QueueThreadExecutionModeRequest,
+    ): Promise<QueueThreadExecutionModeResponse> {
+      return await getDesktopBackendRegistry().queueThreadExecutionMode(request);
+    },
+    async cancelThreadExecutionModeQueue(
+      request: CancelThreadExecutionModeQueueRequest,
+    ): Promise<CancelThreadExecutionModeQueueResponse> {
+      return await getDesktopBackendRegistry().cancelThreadExecutionModeQueue(request);
+    },
+    async setAcpSessionRuntimeOption(
+      request: SetAcpSessionRuntimeOptionRequest,
+    ): Promise<SetAcpSessionRuntimeOptionResponse> {
+      return await getDesktopBackendRegistry().setAcpSessionRuntimeOption(request);
+    },
+    async setThreadModelSettings(
+      request: SetThreadModelSettingsRequest,
+    ): Promise<SetThreadModelSettingsResponse> {
+      return await getDesktopBackendRegistry().setThreadModelSettings(request);
+    },
+    async submitServerRequest(
+      request: SubmitServerRequestRequest,
+    ): Promise<SubmitServerRequestResponse> {
+      return await getDesktopBackendRegistry().submitServerRequest(request);
+    },
+    async runCodexEnvironmentAction(
+      request: RunCodexEnvironmentActionRequest,
+    ): Promise<RunCodexEnvironmentActionResponse> {
+      return await getDesktopBackendRegistry().runCodexEnvironmentAction(request);
+    },
+    async setCodexThreadEnvironment(
+      request: SetCodexThreadEnvironmentRequest,
+    ): Promise<SetCodexThreadEnvironmentResponse> {
+      return await getDesktopBackendRegistry().setCodexThreadEnvironment(request);
+    },
+    async handoffThreadWorkspace(
+      request: HandoffThreadWorkspaceRequest,
+    ): Promise<HandoffThreadWorkspaceResponse> {
+      return await getDesktopBackendRegistry().handoffThreadWorkspace(request);
     },
   };
 }
