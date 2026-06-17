@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   GitWorkingStateService,
@@ -207,6 +207,9 @@ describe("GitWorkingStateService", () => {
       if (args.includes("--numstat")) {
         return "2\t1\tdocs/PwrAgnt v2.html\n4\t0\tsrc/other-b.ts\n";
       }
+      if (args.includes("ls-files")) {
+        return "scratch/new.txt\0";
+      }
       return undefined;
     });
     const service = new GitWorkingStateService({ runGit });
@@ -241,6 +244,154 @@ describe("GitWorkingStateService", () => {
       truncated: true,
       maxFiles: 2,
     });
+  });
+
+  it("expands collapsed untracked directories without an unbounded status scan", async () => {
+    const worktreePath = "/repo/wt";
+    const { runGit, calls } = fakeGit((args) => {
+      if (args.includes("status")) {
+        return "?? .tmp/\0";
+      }
+      if (args.includes("ls-files")) {
+        return ".tmp/monitors/run/stdout.log\0.tmp/monitors/run/stderr.log\0";
+      }
+      if (args.includes("--numstat")) return "";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges(worktreePath);
+
+    expect(
+      calls.some(
+        (call) =>
+          call.args.includes("status") &&
+          call.args.includes("--untracked-files=normal"),
+      ),
+    ).toBe(true);
+    expect(calls.some((call) => call.args.includes("ls-files"))).toBe(true);
+    expect(response.changes).toEqual([
+      {
+        path: normalizeTestPath(`${worktreePath}/.tmp/monitors/run/stdout.log`),
+        repoPath: ".tmp/monitors/run/stdout.log",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      },
+      {
+        path: normalizeTestPath(`${worktreePath}/.tmp/monitors/run/stderr.log`),
+        repoPath: ".tmp/monitors/run/stderr.log",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      },
+    ]);
+  });
+
+  it("caps expansion of large untracked directory trees", async () => {
+    const worktreePath = "/repo/wt";
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) return "?? node_modules/\0";
+      if (args.includes("ls-files")) {
+        return [
+          "node_modules/a.js",
+          "node_modules/b.js",
+          "node_modules/c.js",
+          "node_modules/d.js",
+        ].join("\0");
+      }
+      if (args.includes("--numstat")) return "";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges(worktreePath, { maxFiles: 2 });
+
+    expect(response.changes).toEqual([
+      {
+        path: normalizeTestPath(`${worktreePath}/node_modules/a.js`),
+        repoPath: "node_modules/a.js",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      },
+      {
+        path: normalizeTestPath(`${worktreePath}/node_modules/b.js`),
+        repoPath: "node_modules/b.js",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      },
+    ]);
+    expect(response.totalChanges).toBe(3);
+    expect(response.truncated).toBe(true);
+  });
+
+  it("does not let excluded files consume the untracked directory expansion cap", async () => {
+    const worktreePath = "/repo/wt";
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) return "?? scratch/\0";
+      if (args.includes("ls-files")) {
+        return [
+          "scratch/turn-a.txt",
+          "scratch/turn-b.txt",
+          "scratch/other.txt",
+        ].join("\0");
+      }
+      if (args.includes("--numstat")) return "";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges(worktreePath, {
+      excludePaths: [
+        `${worktreePath}/scratch/turn-a.txt`,
+        `${worktreePath}/scratch/turn-b.txt`,
+      ],
+      maxFiles: 1,
+    });
+
+    expect(response.changes).toEqual([
+      {
+        path: normalizeTestPath(`${worktreePath}/scratch/other.txt`),
+        repoPath: "scratch/other.txt",
+        status: "untracked",
+        staged: false,
+        unstaged: true,
+      },
+    ]);
+    expect(response.totalChanges).toBe(1);
+    expect(response.truncated).toBe(false);
+  });
+
+  it("caps displayed changes from any single top-level directory", async () => {
+    const worktreePath = "/repo/wt";
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) return "?? node_modules/\0?? src/readme.md\0";
+      if (args.includes("ls-files")) {
+        return Array.from(
+          { length: 25 },
+          (_, index) => `node_modules/pkg-${index}.js`,
+        ).join("\0");
+      }
+      if (args.includes("--numstat")) return "";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listOtherChanges(worktreePath);
+
+    expect(
+      response.changes.filter((change) =>
+        change.repoPath.startsWith("node_modules/"),
+      ),
+    ).toHaveLength(20);
+    expect(response.changes.at(-1)).toMatchObject({
+      repoPath: "src/readme.md",
+      status: "untracked",
+    });
+    expect(response.totalChanges).toBe(22);
+    expect(response.truncated).toBe(true);
   });
 
   it("recovers unstaged status records after git stdout trimming", async () => {
@@ -354,6 +505,25 @@ describe("GitWorkingStateService", () => {
       });
       expect(response.detail?.fileDiff?.diff).toContain("+++ b/note.txt");
       expect(response.detail?.fileDiff?.diff).toContain("+hello");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not build an edited-file detail for an untracked directory", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    const dirPath = path.join(tmpRoot, ".tmp");
+    await mkdir(dirPath);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("status")) return "?? .tmp/";
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    try {
+      const response = await service.getOtherChangeDiff(tmpRoot, dirPath);
+
+      expect(response.detail).toBeUndefined();
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
     }

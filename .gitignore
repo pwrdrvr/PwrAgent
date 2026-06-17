@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 .local/
+.tmp/
 .DS_Store
 coverage/
 dist/
