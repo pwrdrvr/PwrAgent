@@ -642,6 +642,85 @@ describe("app server ipc", () => {
     expect(output).not.toContain("x".repeat(60_000));
   });
 
+  it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+      APP_SERVER_READ_THREAD_CHANNEL,
+    } = await import("../../shared/ipc");
+    const diff = [
+      "@@ -1,2 +1,4 @@",
+      " existing",
+      "+added one",
+      "+added two",
+    ].join("\n");
+    const readThreadResponse: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1234,
+      threadId: "thread-diff-ref",
+      replay: {
+        entries: [
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Edited 1 file",
+            details: [
+              {
+                id: "detail-1",
+                kind: "write",
+                label: "Update file.ts",
+                path: "/repo/file.ts",
+                fileDiff: {
+                  kind: "update",
+                  diff,
+                  additions: 2,
+                  removals: 0,
+                },
+              },
+            ],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+      threadStatus: "idle",
+    };
+    readThread.mockResolvedValueOnce(readThreadResponse as never);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+      {},
+      { backend: "codex", threadId: "thread-diff-ref" },
+    ) as AppServerReadThreadResponse | undefined;
+    const entry = response?.replay.entries[0];
+    const detail = entry?.type === "activity" ? entry.details[0] : undefined;
+
+    expect(detail?.fileDiff).toMatchObject({
+      diff: "",
+      additions: 2,
+      removals: 0,
+      diffRef: {
+        source: "thread",
+        backend: "codex",
+        threadId: "thread-diff-ref",
+        entryId: "activity-1",
+        detailId: "detail-1",
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain("+added one");
+
+    const fetched = await handlers.get(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL)?.(
+      {},
+      { ref: detail!.fileDiff!.diffRef! },
+    );
+
+    expect(fetched).toEqual({ diff });
+  });
+
   it("hydrates retained worktree snapshots when listing archived threads", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");

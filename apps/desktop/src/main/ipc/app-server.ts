@@ -170,6 +170,10 @@ import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { getLiveThreadFileDiff } from "../app-server/live-diff-activity";
+import {
+  getThreadReplayFileDiff,
+  shapeReadThreadFileDiffsForRenderer,
+} from "../app-server/thread-file-diff-cache";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -753,8 +757,9 @@ class DesktopAppServerService {
       threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
+    const materialized = await materializeTranscriptImageUrlsForRenderer(response);
     return sanitizeRendererPayload(
-      await materializeTranscriptImageUrlsForRenderer(response),
+      shapeReadThreadFileDiffsForRenderer(materialized),
     );
   }
 
@@ -2956,9 +2961,11 @@ export function registerAppServerIpcHandlers(): void {
       _event,
       request: GetThreadFileDiffRequest,
     ): Promise<GetThreadFileDiffResponse> => {
-      const diff = getLiveThreadFileDiff(request.ref);
+      const diff =
+        getLiveThreadFileDiff(request.ref) ??
+        getThreadReplayFileDiff(request.ref);
       return diff === undefined
-        ? { omittedReason: "Diff is no longer available for this live update." }
+        ? { omittedReason: "Diff is no longer available for this thread entry." }
         : { diff };
     },
   );

@@ -364,11 +364,12 @@ export type AppServerSource = {
 export type AppServerThreadFileChangeKind = "add" | "delete" | "update";
 
 export type AppServerThreadFileDiffRef = {
-  source: "live";
+  source: "live" | "thread";
   key: string;
   threadId: string;
   entryId: string;
   detailId: string;
+  backend?: AppServerBackendKind;
 };
 
 export type AppServerThreadFileDiff = {
