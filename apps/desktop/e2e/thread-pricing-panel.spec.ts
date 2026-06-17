@@ -48,7 +48,7 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(
       contextRail.getByRole("heading", { level: 3, name: "Pricing" }),
     ).toBeVisible();
-    await expect(contextRail.getByText("$0.020")).toBeVisible();
+    await expect(contextRail.getByText("$0.020", { exact: true })).toBeVisible();
     await expect(contextRail.getByText("3 (2 priced, 1 unpriced)")).toBeVisible();
     await expect(
       contextRail.getByText("1 usage row could not be priced."),

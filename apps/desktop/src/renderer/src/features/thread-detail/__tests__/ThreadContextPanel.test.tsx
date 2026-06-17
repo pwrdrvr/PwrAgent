@@ -438,7 +438,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
-    expect(screen.getByText("$0.042")).toBeInTheDocument();
+    expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
     expect(
       screen.queryByText("gpt-5.5 · high · Fast · priority"),
@@ -447,7 +447,7 @@ describe("ThreadContextPanel", () => {
       screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
-    expect(screen.getByText("Running total: $0.042 list price")).toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
   });
 
   it("renders Codex Credits as an optional pricing display unit", () => {
@@ -512,7 +512,7 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByText("$0.042")).toBeInTheDocument();
+    expect(screen.getByText("$0.010 · 1.3 Codex Credits")).toBeInTheDocument();
     expect(screen.queryByText("$0.042 · 1.3 Codex Credits")).not.toBeInTheDocument();
     expect(
       screen.getByText("$0.010 list price this turn · 1.3 Codex Credits this turn"),
@@ -521,24 +521,24 @@ describe("ThreadContextPanel", () => {
       screen.queryByText("Running total: $0.042 list price · 1.3 Codex Credits"),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText("Running total: $0.042 list price"),
+      screen.getByText("Running total: $0.010 list price · 1.3 Codex Credits"),
     ).toBeInTheDocument();
   });
 
-  it("uses cumulative running totals for the pricing header and Codex Credits", () => {
+  it("uses ledger running totals instead of cumulative aggregate cost fields", () => {
     const summary: ThreadPricingSummary = {
       backend: "codex",
       threadId: "thread-1",
       currency: "USD",
-      inputTokens: 559_270,
-      uncachedInputTokens: 77_990,
-      cachedInputTokens: 481_280,
-      outputTokens: 2_451,
-      reasoningOutputTokens: 200,
-      totalTokens: 561_721,
-      totalCostMicros: 720_000,
-      usageLineCount: 2,
-      pricedUsageLineCount: 2,
+      inputTokens: 722_086,
+      uncachedInputTokens: 96_934,
+      cachedInputTokens: 625_152,
+      outputTokens: 3_601,
+      reasoningOutputTokens: 255,
+      totalTokens: 725_942,
+      totalCostMicros: 749_421,
+      usageLineCount: 3,
+      pricedUsageLineCount: 3,
       unpricedUsageLineCount: 0,
       provider: "openai",
       updatedAt: 1_800_000_060_000,
@@ -574,6 +574,31 @@ describe("ThreadContextPanel", () => {
       provider: "openai",
       createdAt: 1_800_000_060_000,
     };
+    const monitorLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "monitor-line",
+      threadId: "monitor-thread",
+      parentThreadId: "thread-1",
+      turnId: "monitor-turn",
+      scope: "monitor",
+      source: "monitor",
+      status: "finalized",
+      model: "gpt-5.4-mini",
+      inputTokens: 162_816,
+      uncachedInputTokens: 18_944,
+      cachedInputTokens: 143_872,
+      outputTokens: 1_150,
+      reasoningOutputTokens: 55,
+      totalTokens: 164_021,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 10_000,
+      cachedInputCostMicros: 8_000,
+      outputCostMicros: 12_421,
+      totalCostMicros: 30_421,
+      provider: "openai",
+      createdAt: 1_800_000_030_000,
+    };
     const previousLine: ThreadUsageLineRecord = {
       backend: "codex",
       usageLineId: "line-previous",
@@ -604,7 +629,7 @@ describe("ThreadContextPanel", () => {
       activeTab: "pricing",
       pinned: true,
       pricing: {
-        lines: [latestLine, previousLine],
+        lines: [latestLine, monitorLine, previousLine],
         summaries: [summary],
       },
       pricingDisplayOptions: {
@@ -614,14 +639,17 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByText("$21.44 · 1,423 Codex Credits")).toBeInTheDocument();
-    expect(screen.queryByText("$0.72 · 18 Codex Credits")).not.toBeInTheDocument();
+    expect(screen.getByText("$0.75 · 19 Codex Credits")).toBeInTheDocument();
+    expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
     expect(
-      screen.getByText("2,788,759 uncached, 70,463,104 cached"),
+      screen.getByText("96,934 uncached, 625,152 cached"),
     ).toBeInTheDocument();
-    expect(screen.getByText("221,675 (37,030 reasoning)")).toBeInTheDocument();
+    expect(screen.getByText("3,601 (255 reasoning)")).toBeInTheDocument();
     expect(
-      screen.getByText("Running total: $21.44 list price · 1,423 Codex Credits"),
+      screen.getByText("Running total: $0.75 list price · 19 Codex Credits"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.080 list price · 2 Codex Credits"),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -631,7 +659,7 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.queryByText("Running total: $20.77 list price · 1.2 Codex Credits"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("Running total: $20.77 list price")).toBeInTheDocument();
+    expect(screen.getByText("Running total: $0.049 list price · 1.2 Codex Credits")).toBeInTheDocument();
   });
 
   it("makes pricing row timestamps scroll the transcript to their turn", () => {

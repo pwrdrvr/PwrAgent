@@ -33,58 +33,49 @@ export function PricingPanel(props: PricingPanelProps) {
   const lines = props.pricing?.lines ?? [];
   const summary = aggregateSummaries(summaries) ?? aggregateUsageLines(lines);
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
-  const codexCreditTotals = buildCodexCreditTotals(lines);
-  const latestRunningTotalLine = findLatestRunningTotalLine(lines);
-  const displaySummary = applyRunningTotalsToSummary(
-    summary,
-    latestRunningTotalLine,
-  );
-  const summaryCreditMicros = selectSummaryCreditMicros({
-    codexCreditTotals,
-    line: latestRunningTotalLine,
-  });
+  const pricingTotals = buildPricingRunningTotals(lines);
 
   return (
     <section className="context-panel__section">
       <h3>Pricing</h3>
-      {displaySummary ? (
+      {summary ? (
         <>
           <dl className="context-grid">
             <dt>Running total</dt>
             <dd>
               {formatSummaryEstimates({
-                codexCreditMicros: summaryCreditMicros,
+                codexCreditMicros: pricingTotals.totalCreditMicros,
                 displayOptions,
-                summary: displaySummary,
+                summary,
               })}
             </dd>
             <dt>Usage rows</dt>
             <dd>
-              {displaySummary.usageLineCount.toLocaleString()}{" "}
+              {summary.usageLineCount.toLocaleString()}{" "}
               <span className="context-list__meta">
-                ({displaySummary.pricedUsageLineCount.toLocaleString()} priced,{" "}
-                {displaySummary.unpricedUsageLineCount.toLocaleString()} unpriced)
+                ({summary.pricedUsageLineCount.toLocaleString()} priced,{" "}
+                {summary.unpricedUsageLineCount.toLocaleString()} unpriced)
               </span>
             </dd>
             <dt>Input</dt>
             <dd>
-              {formatTokenCount(displaySummary.uncachedInputTokens)} uncached,{" "}
-              {formatTokenCount(displaySummary.cachedInputTokens)} cached
+              {formatTokenCount(summary.uncachedInputTokens)} uncached,{" "}
+              {formatTokenCount(summary.cachedInputTokens)} cached
             </dd>
             <dt>Output</dt>
             <dd>
-              {formatTokenCount(displaySummary.outputTokens)}
-              {displaySummary.reasoningOutputTokens > 0
-                ? ` (${formatTokenCount(displaySummary.reasoningOutputTokens)} reasoning)`
+              {formatTokenCount(summary.outputTokens)}
+              {summary.reasoningOutputTokens > 0
+                ? ` (${formatTokenCount(summary.reasoningOutputTokens)} reasoning)`
                 : ""}
             </dd>
             <dt>Updated</dt>
-            <dd>{formatTimestamp(displaySummary.updatedAt)}</dd>
+            <dd>{formatTimestamp(summary.updatedAt)}</dd>
           </dl>
-          {displaySummary.unpricedUsageLineCount > 0 ? (
+          {summary.unpricedUsageLineCount > 0 ? (
             <p className="context-empty context-empty--warning">
-              {displaySummary.unpricedUsageLineCount.toLocaleString()} usage row
-              {displaySummary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
+              {summary.unpricedUsageLineCount.toLocaleString()} usage row
+              {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
             </p>
           ) : null}
           {summaries.length > 1 ? (
@@ -117,16 +108,16 @@ export function PricingPanel(props: PricingPanelProps) {
       {lines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
           {lines.map((line) => {
-            const creditEstimate = codexCreditTotals.byLineId.get(line.usageLineId);
+            const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
             const usageLineEstimate = formatUsageLineEstimates({
-              creditEstimate,
               displayOptions,
               line,
+              lineTotals,
             });
             const runningTotal = formatUsageLineRunningTotal({
-              creditEstimate,
               displayOptions,
               line,
+              lineTotals,
             });
             const runningTokens = formatUsageLineRunningTokens(line);
 
@@ -174,37 +165,6 @@ export function PricingPanel(props: PricingPanelProps) {
       ) : null}
     </section>
   );
-}
-
-function applyRunningTotalsToSummary(
-  summary: ThreadPricingSummary | undefined,
-  line: ThreadUsageLineRecord | undefined,
-): ThreadPricingSummary | undefined {
-  if (!summary || !line) {
-    return summary;
-  }
-  const cumulativeCachedInputTokens = line.cumulativeCachedInputTokens;
-  const cumulativeUncachedInputTokens = readCumulativeUncachedInputTokens(line);
-  const cumulativeInputTokens =
-    line.cumulativeInputTokens ??
-    (cumulativeCachedInputTokens !== undefined &&
-    cumulativeUncachedInputTokens !== undefined
-      ? cumulativeCachedInputTokens + cumulativeUncachedInputTokens
-      : undefined);
-
-  return {
-    ...summary,
-    cachedInputTokens: cumulativeCachedInputTokens ?? summary.cachedInputTokens,
-    inputTokens: cumulativeInputTokens ?? summary.inputTokens,
-    outputTokens: line.cumulativeOutputTokens ?? summary.outputTokens,
-    reasoningOutputTokens:
-      line.cumulativeReasoningOutputTokens ?? summary.reasoningOutputTokens,
-    totalCostMicros: line.cumulativeTotalCostMicros ?? summary.totalCostMicros,
-    totalTokens: line.cumulativeTotalTokens ?? summary.totalTokens,
-    uncachedInputTokens:
-      cumulativeUncachedInputTokens ?? summary.uncachedInputTokens,
-    updatedAt: Math.max(summary.updatedAt, line.completedAt ?? line.createdAt),
-  };
 }
 
 function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
@@ -263,34 +223,6 @@ function aggregateUsageLines(lines: ThreadUsageLineRecord[]): ThreadPricingSumma
   );
 }
 
-function findLatestRunningTotalLine(
-  lines: ThreadUsageLineRecord[],
-): ThreadUsageLineRecord | undefined {
-  return lines
-    .filter(
-      (line) =>
-        line.cumulativeTotalCostMicros !== undefined ||
-        hasCumulativeTokenBreakdown(line),
-    )
-    .sort((left, right) => lineTimestamp(right) - lineTimestamp(left))[0];
-}
-
-function selectSummaryCreditMicros(params: {
-  codexCreditTotals: ReturnType<typeof buildCodexCreditTotals>;
-  line: ThreadUsageLineRecord | undefined;
-}): number | undefined {
-  if (!params.line) {
-    return params.codexCreditTotals.totalCreditMicros;
-  }
-  return params.codexCreditTotals.byLineId.get(
-    params.line.usageLineId,
-  )?.cumulativeTotalCreditMicros;
-}
-
-function lineTimestamp(line: ThreadUsageLineRecord): number {
-  return line.completedAt ?? line.createdAt;
-}
-
 function formatSummaryEstimates(params: {
   codexCreditMicros: number | undefined;
   displayOptions: PricingDisplayOptions;
@@ -316,9 +248,9 @@ function formatSummaryEstimates(params: {
 }
 
 function formatUsageLineEstimates(params: {
-  creditEstimate: CodexCreditLineEstimate | undefined;
   displayOptions: PricingDisplayOptions;
   line: ThreadUsageLineRecord;
+  lineTotals: PricingRunningLineTotals | undefined;
 }): string | undefined {
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
@@ -330,39 +262,34 @@ function formatUsageLineEstimates(params: {
   }
   if (
     params.displayOptions.codexCredits &&
-    params.creditEstimate &&
-    params.creditEstimate.totalCreditMicros !== undefined &&
-    params.creditEstimate.totalCreditMicros > 0
+    params.lineTotals?.creditMicros !== undefined &&
+    params.lineTotals.creditMicros > 0
   ) {
     const suffix = formatUsageLineCreditSuffix(params.line);
     estimates.push(
-      `${formatCodexCredits(params.creditEstimate.totalCreditMicros)}${suffix ? ` ${suffix}` : ""}`,
+      `${formatCodexCredits(params.lineTotals.creditMicros)}${suffix ? ` ${suffix}` : ""}`,
     );
   }
   return estimates.length > 0 ? estimates.join(" · ") : undefined;
 }
 
 function formatUsageLineRunningTotal(params: {
-  creditEstimate: CodexCreditLineEstimate | undefined;
   displayOptions: PricingDisplayOptions;
   line: ThreadUsageLineRecord;
+  lineTotals: PricingRunningLineTotals | undefined;
 }): string | undefined {
   const estimates: string[] = [];
-  if (
-    params.displayOptions.usd &&
-    params.line.cumulativeTotalCostMicros !== undefined
-  ) {
+  if (params.displayOptions.usd && params.lineTotals?.runningCostMicros !== undefined) {
     estimates.push(
-      `${formatMoney(params.line.cumulativeTotalCostMicros, params.line.currency)} list price`,
+      `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} list price`,
     );
   }
   if (
     params.displayOptions.codexCredits &&
-    params.creditEstimate &&
-    params.creditEstimate.cumulativeTotalCreditMicros !== undefined &&
-    params.creditEstimate.cumulativeTotalCreditMicros > 0
+    params.lineTotals?.runningCreditMicros !== undefined &&
+    params.lineTotals.runningCreditMicros > 0
   ) {
-    estimates.push(formatCodexCredits(params.creditEstimate.cumulativeTotalCreditMicros));
+    estimates.push(formatCodexCredits(params.lineTotals.runningCreditMicros));
   }
   return estimates.length > 0 ? `Running total: ${estimates.join(" · ")}` : undefined;
 }
@@ -537,48 +464,44 @@ function formatMoney(valueMicros: number, currency: string): string {
   return `${currency} ${(valueMicros / 1_000_000).toFixed(4)}`;
 }
 
-type CodexCreditLineEstimate = {
-  cumulativeTotalCreditMicros?: number;
-  totalCreditMicros?: number;
+type PricingRunningLineTotals = {
+  creditMicros?: number;
+  runningCostMicros: number;
+  runningCreditMicros?: number;
 };
 
-function buildCodexCreditTotals(lines: ThreadUsageLineRecord[]): {
-  byLineId: Map<string, CodexCreditLineEstimate>;
+function buildPricingRunningTotals(lines: ThreadUsageLineRecord[]): {
+  byLineId: Map<string, PricingRunningLineTotals>;
   totalCreditMicros: number;
 } {
-  const sortedLines = [...lines].sort(
-    (left, right) =>
-      (left.startedAt ?? left.createdAt) - (right.startedAt ?? right.createdAt),
-  );
-  const byLineId = new Map<string, CodexCreditLineEstimate>();
-  let visibleLineTotalCreditMicros = 0;
-  let latestCumulativeCreditMicros: number | undefined;
-  let latestCumulativeCreditTimestamp = Number.NEGATIVE_INFINITY;
+  const sortedLines = [...lines].sort((left, right) => {
+    const leftTimestamp = left.startedAt ?? left.createdAt;
+    const rightTimestamp = right.startedAt ?? right.createdAt;
+    if (leftTimestamp !== rightTimestamp) {
+      return leftTimestamp - rightTimestamp;
+    }
+    return left.usageLineId.localeCompare(right.usageLineId);
+  });
+  const byLineId = new Map<string, PricingRunningLineTotals>();
+  let runningCostMicros = 0;
+  let runningCreditMicros = 0;
   for (const line of sortedLines) {
     const estimate = estimateCodexCreditsForLine(line);
-    const cumulativeEstimate = estimateCodexCreditsForCumulativeLine(line);
+    if (line.priceStatus === "priced") {
+      runningCostMicros += Math.max(0, line.totalCostMicros);
+    }
     if (estimate) {
-      visibleLineTotalCreditMicros += estimate.totalCreditMicros;
+      runningCreditMicros += estimate.totalCreditMicros;
     }
-    if (cumulativeEstimate) {
-      const timestamp = lineTimestamp(line);
-      if (timestamp >= latestCumulativeCreditTimestamp) {
-        latestCumulativeCreditTimestamp = timestamp;
-        latestCumulativeCreditMicros = cumulativeEstimate.totalCreditMicros;
-      }
-    }
-    if (estimate || cumulativeEstimate) {
-      byLineId.set(line.usageLineId, {
-        ...(cumulativeEstimate
-          ? { cumulativeTotalCreditMicros: cumulativeEstimate.totalCreditMicros }
-          : {}),
-        ...(estimate ? { totalCreditMicros: estimate.totalCreditMicros } : {}),
-      });
-    }
+    byLineId.set(line.usageLineId, {
+      ...(estimate ? { creditMicros: estimate.totalCreditMicros } : {}),
+      runningCostMicros,
+      ...(runningCreditMicros > 0 ? { runningCreditMicros } : {}),
+    });
   }
   return {
     byLineId,
-    totalCreditMicros: latestCumulativeCreditMicros ?? visibleLineTotalCreditMicros,
+    totalCreditMicros: runningCreditMicros,
   };
 }
 
@@ -599,35 +522,6 @@ function estimateCodexCreditsForLine(line: ThreadUsageLineRecord):
     reasoningOutputTokens: line.reasoningOutputTokens,
     serviceTier: line.serviceTier,
     uncachedInputTokens: line.uncachedInputTokens,
-  });
-  return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
-}
-
-function estimateCodexCreditsForCumulativeLine(line: ThreadUsageLineRecord):
-  | {
-      totalCreditMicros: number;
-    }
-  | undefined {
-  if (line.provider !== "openai") {
-    return undefined;
-  }
-  const uncachedInputTokens = readCumulativeUncachedInputTokens(line);
-  if (
-    uncachedInputTokens === undefined ||
-    line.cumulativeCachedInputTokens === undefined ||
-    line.cumulativeOutputTokens === undefined
-  ) {
-    return undefined;
-  }
-  const estimate = estimateOpenAiCodexCreditUsage({
-    at: line.createdAt,
-    cachedInputTokens: line.cumulativeCachedInputTokens,
-    fastMode: line.fastMode,
-    model: line.model,
-    outputTokens: line.cumulativeOutputTokens,
-    reasoningOutputTokens: line.cumulativeReasoningOutputTokens,
-    serviceTier: line.serviceTier,
-    uncachedInputTokens,
   });
   return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
 }
