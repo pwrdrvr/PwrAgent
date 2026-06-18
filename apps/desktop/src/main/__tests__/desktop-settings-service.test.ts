@@ -1218,6 +1218,41 @@ describe("DesktopSettingsService", () => {
     expect(getSecretSync).not.toHaveBeenCalled();
   });
 
+  it("surfaces secret access errors on settings snapshots", async () => {
+    const secretStore: DesktopSecretStore = {
+      describe: () => ({
+        available: true,
+        backend: "safeStorage",
+        encrypted: true,
+      }),
+      getSecretAccessError: vi.fn(
+        (name) =>
+          name === "telegramBotToken"
+            ? "PwrAgent could not unlock secret storage."
+            : undefined,
+      ),
+      hasSecret: vi.fn(async () => false),
+      getSecret: vi.fn(),
+      getSecretSync: vi.fn(),
+      setSecret: vi.fn(),
+      deleteSecret: vi.fn(),
+    };
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore,
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.messaging.telegram.botToken).toMatchObject({
+      configured: false,
+      source: "unset",
+      writable: true,
+      unavailableReason: "PwrAgent could not unlock secret storage.",
+    });
+  });
+
   it("writes non-secret patches without writing plaintext secrets to TOML", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

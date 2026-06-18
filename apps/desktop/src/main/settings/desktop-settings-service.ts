@@ -1917,10 +1917,12 @@ export class DesktopSettingsService {
 
     try {
       const configured = await this.options.secretStore.hasSecret(secret);
+      const accessError = this.options.secretStore.getSecretAccessError?.(secret);
       return {
         configured,
         source: configured ? "keychain" : "unset",
         writable: true,
+        ...(accessError ? { unavailableReason: accessError } : {}),
       };
     } catch (error) {
       return {
