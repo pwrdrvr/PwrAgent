@@ -12,6 +12,7 @@ describe("thread orchestration tool contracts", () => {
   it("defines the handoff task operation", () => {
     expect(PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES).toEqual([
       "handoff_task",
+      "send_message_to_thread",
     ]);
   });
 

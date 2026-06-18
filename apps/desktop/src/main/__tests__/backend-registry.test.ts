@@ -5299,11 +5299,19 @@ script = "echo setup"
         }),
         expect.objectContaining({
           namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent",
           name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
         }),
         expect.objectContaining({
           namespace: "pwragent",
@@ -5367,6 +5375,10 @@ script = "echo setup"
         }),
         expect.objectContaining({
           namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "get_thread_status",
         }),
         expect.objectContaining({
@@ -5384,6 +5396,10 @@ script = "echo setup"
         expect.objectContaining({
           namespace: "pwragent",
           name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
         }),
       ]),
     );
@@ -5456,11 +5472,19 @@ script = "echo setup"
         }),
         expect.objectContaining({
           namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent",
           name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
         }),
         expect.objectContaining({
           namespace: "pwragent",
@@ -13814,6 +13838,149 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("sends a follow-up prompt to another thread from an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Please pick up the CI failure.",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+          executionMode: "full-access",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      backend: "codex",
+      threadId: "target-thread",
+      turnId: "turn-1",
+      promptPreview: "Please pick up the CI failure.",
+      settings: {
+        executionMode: "full-access",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Please pick up the CI failure." }],
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await registry.close();
+  });
+
+  it("rejects sending a follow-up prompt to the invoking thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "parent-thread",
+          prompt: "Loop back into myself.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "send_message_to_thread targets another thread. Continue the current thread by replying normally.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("routes thread inspection search through the thread search service when available", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
@@ -14281,6 +14448,148 @@ command = "pnpm dev"
       codexClient.listThreadsCalls
         .map((call) => call.params?.archived)
     ).toEqual([false]);
+
+    await registry.close();
+  });
+
+  it("reads bounded transcript content from another thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "entry-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+            createdAt: 1000,
+          },
+          {
+            type: "activity",
+            id: "entry-command-1",
+            summary: "Ran command",
+            status: "completed",
+            details: [
+              {
+                id: "detail-1",
+                kind: "command",
+                label: "pnpm test",
+                status: "completed",
+                command: {
+                  displayCommand: "pnpm test",
+                  output: `${"line ".repeat(1000)}done`,
+                  exitCode: 0,
+                },
+              },
+            ],
+          },
+        ],
+        messages: [
+          {
+            id: "message-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+            createdAt: 1000,
+          },
+        ],
+        lastUserMessage: "Please inspect this thread.",
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "read_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          limit: 5,
+          maxCharsPerEntry: 200,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      read: {
+        backend: "codex",
+        threadId: "target-thread",
+        limit: 5,
+        maxCharsPerEntry: 200,
+        status: "idle",
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        },
+        entries: [
+          {
+            type: "message",
+            id: "entry-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+          },
+          {
+            type: "activity",
+            id: "entry-command-1",
+            details: [
+              {
+                kind: "command",
+                command: {
+                  displayCommand: "pnpm test",
+                  output: expect.stringContaining("..."),
+                },
+                truncated: true,
+              },
+            ],
+          },
+        ],
+        messages: [
+          {
+            id: "message-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastReadThreadParams).toEqual({
+      threadId: "target-thread",
+      includeTurns: true,
+      limit: 5,
+    });
 
     await registry.close();
   });

@@ -33,6 +33,7 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
+  type AppServerThreadMessage,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
@@ -112,8 +113,11 @@ import {
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
   type MutateThreadToolArgs,
+  type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+  type ThreadReadEntrySummary,
+  type ThreadReadMessageSummary,
   type ThreadMutationAppliedChange,
   type PwrAgentThreadOrchestrationErrorCode,
   type PwrAgentThreadOrchestrationRequest,
@@ -13871,13 +13875,108 @@ export class DesktopBackendRegistry {
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
-    if (request.operation !== "handoff_task") {
+    if (request.operation === "handoff_task") {
+      return await this.handoffTaskToThread(request);
+    }
+    if (request.operation === "send_message_to_thread") {
+      return await this.sendMessageToThread(request);
+    }
+    return threadOrchestrationFailure(
+      "unsupported_operation",
+      "Unsupported PwrAgent thread orchestration operation.",
+    );
+  }
+
+  private async sendMessageToThread(
+    request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(request.context.backend, {
+        threadId: request.context.threadId,
+        turnId: sourceTurnId,
+      })
+    ) {
       return threadOrchestrationFailure(
-        "unsupported_operation",
-        "Unsupported PwrAgent thread orchestration operation.",
+        "forbidden",
+        "Thread orchestration tools must be invoked from a live turn.",
       );
     }
-    return await this.handoffTaskToThread(request);
+    const backend = request.args.backend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    const threadId = request.args.threadId.trim();
+    const prompt = request.args.prompt.trim();
+    if (!threadId || !prompt) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "send_message_to_thread requires non-empty threadId and prompt strings.",
+      );
+    }
+    if (
+      backend === request.context.backend &&
+      threadId === request.context.threadId
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "send_message_to_thread targets another thread. Continue the current thread by replying normally.",
+      );
+    }
+
+    try {
+      const settings = {
+        ...(request.args.executionMode
+          ? { executionMode: request.args.executionMode }
+          : {}),
+        ...(request.args.model ? { model: request.args.model } : {}),
+        ...(request.args.reasoningEffort
+          ? { reasoningEffort: request.args.reasoningEffort }
+          : {}),
+        ...(request.args.serviceTier
+          ? { serviceTier: request.args.serviceTier }
+          : {}),
+        ...(Object.hasOwn(request.args, "fastMode")
+          ? { fastMode: request.args.fastMode }
+          : {}),
+        ...(request.args.approvalPolicy
+          ? { approvalPolicy: request.args.approvalPolicy }
+          : {}),
+        ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
+      };
+      const turn = await this.startTurn({
+        backend,
+        threadId,
+        input: [{ type: "text", text: prompt }],
+        executionMode: request.args.executionMode,
+        model: request.args.model,
+        reasoningEffort: request.args.reasoningEffort,
+        serviceTier: request.args.serviceTier,
+        fastMode: request.args.fastMode,
+        approvalPolicy: request.args.approvalPolicy,
+        sandbox: request.args.sandbox,
+      });
+      return {
+        ok: true,
+        data: {
+          backend,
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          promptPreview: truncateThreadInspectionText(prompt, 240),
+          settings,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return threadOrchestrationFailure(
+        /not found/i.test(message) ? "not_found" : "turn_start_failed",
+        message,
+      );
+    }
   }
 
   private async handoffTaskToThread(
@@ -15398,6 +15497,10 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (request.operation === "read_thread") {
+      return await this.handleReadThreadInspectionRequest(request.args);
+    }
+
     if (request.operation === "mutate_thread") {
       return await this.handleMutateThreadInspectionRequest(request.args);
     }
@@ -15544,6 +15647,114 @@ export class DesktopBackendRegistry {
         },
       },
     };
+  }
+
+  private async handleReadThreadInspectionRequest(
+    args: ReadThreadToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+    const before = args.before?.trim();
+    const limit = clampInteger(
+      args.limit,
+      DEFAULT_THREAD_INSPECTION_READ_LIMIT,
+      MAX_THREAD_INSPECTION_READ_LIMIT,
+    );
+    const maxCharsPerEntry = clampInteger(
+      args.maxCharsPerEntry,
+      DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS,
+      MAX_THREAD_INSPECTION_READ_ENTRY_CHARS,
+    );
+
+    try {
+      const response = await this.readThread({
+        backend: args.backend,
+        threadId,
+        includeTurns: true,
+        ...(before ? { before } : {}),
+        limit,
+      });
+      const replay = response.replay;
+      const status = response.threadStatus ?? replay.threadStatus;
+      return {
+        ok: true,
+        data: {
+          read: {
+            backend: args.backend,
+            threadId,
+            limit,
+            ...(before ? { before } : {}),
+            maxCharsPerEntry,
+            ...(args.includeEntries === false
+              ? {}
+              : {
+                  entries: replay.entries
+                    .slice(0, limit)
+                    .map((entry) =>
+                      toThreadReadEntrySummary(entry, maxCharsPerEntry),
+                    ),
+                }),
+            ...(args.includeMessages === false
+              ? {}
+              : {
+                  messages: replay.messages
+                    .slice(0, limit)
+                    .map((message) =>
+                      toThreadReadMessageSummary(message, maxCharsPerEntry),
+                    ),
+                }),
+            ...(replay.lastUserMessage
+              ? {
+                  lastUserMessage: truncateThreadInspectionText(
+                    replay.lastUserMessage,
+                    maxCharsPerEntry,
+                  ),
+                }
+              : {}),
+            ...(replay.lastAssistantMessage
+              ? {
+                  lastAssistantMessage: truncateThreadInspectionText(
+                    replay.lastAssistantMessage,
+                    maxCharsPerEntry,
+                  ),
+                }
+              : {}),
+            pagination: replay.pagination,
+            ...(args.includeStatus === false
+              ? {}
+              : status
+                ? { status }
+                : {}),
+          },
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        error: {
+          code: /not found/i.test(message) ? "not_found" : "internal_error",
+          message,
+        },
+      };
+    }
   }
 
   private getThreadInspectionSearchService(): ThreadSearchService | null {
@@ -16459,6 +16670,164 @@ function readThreadInspectionBackend(
     : undefined;
 }
 
+const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
+const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
+const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
+
+function toThreadReadMessageSummary(
+  message: AppServerThreadMessage,
+  maxCharsPerEntry: number,
+): ThreadReadMessageSummary {
+  const text = truncateThreadInspectionTextWithFlag(
+    message.text,
+    maxCharsPerEntry,
+  );
+  return {
+    id: message.id,
+    role: message.role,
+    ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
+    text: text.value,
+    ...(text.truncated ? { truncated: true } : {}),
+  };
+}
+
+function toThreadReadEntrySummary(
+  entry: AppServerThreadEntry,
+  maxCharsPerEntry: number,
+): ThreadReadEntrySummary {
+  switch (entry.type) {
+    case "message": {
+      const text = truncateThreadInspectionTextWithFlag(
+        entry.text,
+        maxCharsPerEntry,
+      );
+      return {
+        type: "message",
+        id: entry.id,
+        role: entry.role,
+        text: text.value,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.phase ? { phase: entry.phase } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        ...(text.truncated ? { truncated: true } : {}),
+      };
+    }
+    case "activity": {
+      const summary = truncateThreadInspectionTextWithFlag(
+        entry.summary,
+        maxCharsPerEntry,
+      );
+      const details = entry.details.slice(0, 10).map((detail) => {
+        const markdown = detail.markdown
+          ? truncateThreadInspectionTextWithFlag(detail.markdown, maxCharsPerEntry)
+          : undefined;
+        const output = detail.command?.output
+          ? truncateThreadInspectionTextWithFlag(
+              detail.command.output,
+              maxCharsPerEntry,
+            )
+          : undefined;
+        return {
+          id: detail.id,
+          kind: detail.kind,
+          label: truncateThreadInspectionText(detail.label, 320),
+          ...(markdown ? { markdown: markdown.value } : {}),
+          ...(detail.path ? { path: detail.path } : {}),
+          ...(detail.url ? { url: detail.url } : {}),
+          ...(detail.status ? { status: detail.status } : {}),
+          ...(detail.command
+            ? {
+                command: {
+                  displayCommand: detail.command.displayCommand,
+                  ...(detail.command.rawCommand
+                    ? { rawCommand: detail.command.rawCommand }
+                    : {}),
+                  ...(detail.command.cwd ? { cwd: detail.command.cwd } : {}),
+                  ...(output ? { output: output.value } : {}),
+                  ...(detail.command.exitCode !== undefined
+                    ? { exitCode: detail.command.exitCode }
+                    : {}),
+                  ...(detail.command.durationMs !== undefined
+                    ? { durationMs: detail.command.durationMs }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(summary.truncated || markdown?.truncated || output?.truncated
+            ? { truncated: true }
+            : {}),
+        };
+      });
+      return {
+        type: "activity",
+        id: entry.id,
+        summary: summary.value,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.status ? { status: entry.status } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        details,
+        ...(summary.truncated || entry.details.length > details.length
+          ? { truncated: true }
+          : {}),
+      };
+    }
+    case "plan": {
+      const explanation = entry.explanation
+        ? truncateThreadInspectionTextWithFlag(
+            entry.explanation,
+            maxCharsPerEntry,
+          )
+        : undefined;
+      const markdown = entry.markdown
+        ? truncateThreadInspectionTextWithFlag(entry.markdown, maxCharsPerEntry)
+        : undefined;
+      const steps = entry.steps.slice(0, 20).map((step) => ({
+        step: truncateThreadInspectionText(step.step, 500),
+        status: step.status,
+      }));
+      return {
+        type: "plan",
+        id: entry.id,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(explanation ? { explanation: explanation.value } : {}),
+        ...(markdown ? { markdown: markdown.value } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        steps,
+        ...(explanation?.truncated ||
+        markdown?.truncated ||
+        entry.steps.length > steps.length
+          ? { truncated: true }
+          : {}),
+      };
+    }
+    case "review": {
+      const review = truncateThreadInspectionTextWithFlag(
+        entry.review,
+        maxCharsPerEntry,
+      );
+      const displayText = entry.displayText
+        ? truncateThreadInspectionTextWithFlag(
+            entry.displayText,
+            maxCharsPerEntry,
+          )
+        : undefined;
+      return {
+        type: "review",
+        id: entry.id,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.status ? { status: entry.status } : {}),
+        review: review.value,
+        ...(displayText ? { displayText: displayText.value } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        ...(review.truncated || displayText?.truncated
+          ? { truncated: true }
+          : {}),
+      };
+    }
+  }
+}
+
 function isThreadMutationExecutionMode(
   value: unknown,
 ): value is ThreadExecutionMode {
@@ -16792,11 +17161,21 @@ function buildThreadInspectionDateRange(params: {
 }
 
 function truncateThreadInspectionText(value: string, maxLength: number): string {
+  return truncateThreadInspectionTextWithFlag(value, maxLength).value;
+}
+
+function truncateThreadInspectionTextWithFlag(
+  value: string,
+  maxLength: number,
+): { value: string; truncated: boolean } {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
-    return normalized;
+    return { value: normalized, truncated: false };
   }
-  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  return {
+    value: `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`,
+    truncated: true,
+  };
 }
 
 let registry: DesktopBackendRegistry | null = null;

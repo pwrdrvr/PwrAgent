@@ -7,6 +7,7 @@ import type {
   PwrAgentThreadOrchestrationOperationName,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
+  SendMessageToThreadToolArgs,
 } from "@pwragent/shared";
 import {
   HANDOFF_TASK_GROUPING_MODES,
@@ -67,11 +68,11 @@ export function buildPwrAgentThreadOrchestrationToolDefinitions(
           message: PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE,
         });
       }
-      const normalizedArgs = normalizeHandoffTaskArgs(args);
+      const normalizedArgs = normalizeArgsForOperation(operation, args);
       if (!normalizedArgs) {
         return agentToolFailure({
           code: "invalid_arguments",
-          message: "handoff_task requires a non-empty task string.",
+          message: invalidArgumentsMessageForOperation(operation),
         });
       }
       const response = await handler({
@@ -94,6 +95,8 @@ function descriptionForOperation(
   switch (operation) {
     case "handoff_task":
       return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread, and groupingMode=subthread only when the user asks for a sub-thread.";
+    case "send_message_to_thread":
+      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead.";
   }
 }
 
@@ -161,6 +164,57 @@ function inputSchemaForOperation(
           },
         },
       };
+    case "send_message_to_thread":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId", "prompt"],
+        properties: {
+          backend: {
+            type: "string",
+            description: "Backend that owns the target thread.",
+          },
+          threadId: {
+            type: "string",
+            description: "Existing target thread id that should receive the prompt.",
+          },
+          prompt: {
+            type: "string",
+            description:
+              "The follow-up message to send as a new turn in the target thread.",
+          },
+          model: { type: "string" },
+          reasoningEffort: { type: "string" },
+          serviceTier: { type: "string" },
+          fastMode: { type: "boolean" },
+          executionMode: { type: "string" },
+          approvalPolicy: { type: "string" },
+          sandbox: { type: "string" },
+        },
+      };
+  }
+}
+
+function normalizeArgsForOperation(
+  operation: PwrAgentThreadOrchestrationOperationName,
+  args: Record<string, unknown>,
+): HandoffTaskToolArgs | SendMessageToThreadToolArgs | undefined {
+  switch (operation) {
+    case "handoff_task":
+      return normalizeHandoffTaskArgs(args);
+    case "send_message_to_thread":
+      return normalizeSendMessageToThreadArgs(args);
+  }
+}
+
+function invalidArgumentsMessageForOperation(
+  operation: PwrAgentThreadOrchestrationOperationName,
+): string {
+  switch (operation) {
+    case "handoff_task":
+      return "handoff_task requires a non-empty task string.";
+    case "send_message_to_thread":
+      return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
   }
 }
 
@@ -242,6 +296,45 @@ function normalizeHandoffTaskArgs(
       : {}),
     ...(readTrimmedString(args.branchName)
       ? { branchName: readTrimmedString(args.branchName) }
+      : {}),
+  };
+}
+
+function normalizeSendMessageToThreadArgs(
+  args: Record<string, unknown>,
+): SendMessageToThreadToolArgs | undefined {
+  const backend = readTrimmedString(args.backend);
+  const threadId = readTrimmedString(args.threadId);
+  const prompt = readTrimmedString(args.prompt);
+  if (!backend || !threadId || !prompt) {
+    return undefined;
+  }
+  return {
+    backend: backend as SendMessageToThreadToolArgs["backend"],
+    threadId,
+    prompt,
+    ...(readTrimmedString(args.model)
+      ? { model: readTrimmedString(args.model) }
+      : {}),
+    ...(readTrimmedString(args.reasoningEffort)
+      ? { reasoningEffort: readTrimmedString(args.reasoningEffort) }
+      : {}),
+    ...(readTrimmedString(args.serviceTier)
+      ? { serviceTier: readTrimmedString(args.serviceTier) }
+      : {}),
+    ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
+    ...(readTrimmedString(args.executionMode)
+      ? {
+          executionMode: readTrimmedString(
+            args.executionMode,
+          ) as SendMessageToThreadToolArgs["executionMode"],
+        }
+      : {}),
+    ...(readTrimmedString(args.approvalPolicy)
+      ? { approvalPolicy: readTrimmedString(args.approvalPolicy) }
+      : {}),
+    ...(readTrimmedString(args.sandbox)
+      ? { sandbox: readTrimmedString(args.sandbox) }
       : {}),
   };
 }

@@ -29,6 +29,14 @@ describe("pwragent thread orchestration agent tools", () => {
           }),
         }),
       }),
+      expect.objectContaining({
+        namespace: "pwragent",
+        name: "send_message_to_thread",
+        deferLoading: false,
+        inputSchema: expect.objectContaining({
+          required: ["backend", "threadId", "prompt"],
+        }),
+      }),
     ]);
   });
 
@@ -79,6 +87,30 @@ describe("pwragent thread orchestration agent tools", () => {
           namespace: "pwragent",
           tool: "handoff_task",
           arguments: { task: "  " },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("validates send_message_to_thread before dispatch", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "send_message_to_thread",
+          arguments: {
+            backend: "codex",
+            threadId: "target-thread",
+            prompt: "  ",
+          },
         },
       }),
     ).resolves.toMatchObject({ success: false });
@@ -158,6 +190,57 @@ describe("pwragent thread orchestration agent tools", () => {
         groupingMode: "subthread",
         workspaceMode: "same",
         messagingAttachment: "auto",
+      },
+    });
+  });
+
+  it("normalizes send_message_to_thread args and dispatches with caller context", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "target-thread",
+        turnId: "target-turn",
+        promptPreview: "Check CI",
+        settings: {
+          model: "gpt-5.5",
+          fastMode: true,
+        },
+      },
+    }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: " target-thread ",
+          prompt: " Check CI ",
+          model: " gpt-5.5 ",
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      operation: "send_message_to_thread",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        threadId: "target-thread",
+        prompt: "Check CI",
+        model: "gpt-5.5",
+        fastMode: true,
       },
     });
   });

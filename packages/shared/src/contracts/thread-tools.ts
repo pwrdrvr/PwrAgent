@@ -1,5 +1,9 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadActivityStatus,
+  AppServerThreadMessage,
+  AppServerThreadReplayPagination,
+  AppServerThreadTurnMetadata,
   AppServerThreadStatus,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -25,6 +29,7 @@ export const PWRAGENT_THREAD_TOOL_NAMESPACE = "pwragent_threads";
 
 export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "search_threads",
+  "read_thread",
   "get_thread_status",
   "mutate_thread",
 ] as const;
@@ -71,6 +76,38 @@ export type SearchThreadsToolArgs = {
 export type GetThreadStatusToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+};
+
+export type ReadThreadToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * Provider pagination cursor returned by a previous read_thread response.
+   */
+  before?: string;
+  /**
+   * Maximum transcript entries to return. Implementations clamp this to a
+   * bounded product limit.
+   */
+  limit?: number;
+  /**
+   * Include normalized transcript messages in the response. Defaults to true.
+   */
+  includeMessages?: boolean;
+  /**
+   * Include normalized timeline entries in the response. Defaults to true.
+   */
+  includeEntries?: boolean;
+  /**
+   * Include current thread status when the backend can provide it.
+   * Defaults to true.
+   */
+  includeStatus?: boolean;
+  /**
+   * Maximum characters retained in each text-like transcript field.
+   * Implementations clamp this to a bounded product limit.
+   */
+  maxCharsPerEntry?: number;
 };
 
 export type MutateThreadToolArgs = {
@@ -144,8 +181,90 @@ export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
   queuedExecutionModeAt?: number;
 };
 
+export type ThreadReadMessageSummary = Pick<
+  AppServerThreadMessage,
+  "id" | "role" | "createdAt"
+> & {
+  text: string;
+  truncated?: boolean;
+};
+
+export type ThreadReadEntrySummary =
+  | {
+      type: "message";
+      id: string;
+      role: AppServerThreadMessage["role"];
+      text: string;
+      createdAt?: number;
+      phase?: "commentary" | "final";
+      turn?: AppServerThreadTurnMetadata;
+      truncated?: boolean;
+    }
+  | {
+      type: "activity";
+      id: string;
+      summary: string;
+      createdAt?: number;
+      status?: AppServerThreadActivityStatus;
+      turn?: AppServerThreadTurnMetadata;
+      details: Array<{
+        id: string;
+        kind: "read" | "write" | "command";
+        label: string;
+        markdown?: string;
+        path?: string;
+        url?: string;
+        status?: AppServerThreadActivityStatus;
+        command?: {
+          displayCommand: string;
+          rawCommand?: string;
+          cwd?: string;
+          output?: string;
+          exitCode?: number;
+          durationMs?: number;
+        };
+        truncated?: boolean;
+      }>;
+      truncated?: boolean;
+    }
+  | {
+      type: "plan";
+      id: string;
+      createdAt?: number;
+      explanation?: string;
+      markdown?: string;
+      turn?: AppServerThreadTurnMetadata;
+      steps: Array<{ step: string; status: string }>;
+      truncated?: boolean;
+    }
+  | {
+      type: "review";
+      id: string;
+      createdAt?: number;
+      status?: AppServerThreadActivityStatus;
+      review: string;
+      displayText?: string;
+      turn?: AppServerThreadTurnMetadata;
+      truncated?: boolean;
+    };
+
+export type ThreadReadResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  limit: number;
+  before?: string;
+  maxCharsPerEntry: number;
+  entries?: ThreadReadEntrySummary[];
+  messages?: ThreadReadMessageSummary[];
+  lastUserMessage?: string;
+  lastAssistantMessage?: string;
+  pagination: AppServerThreadReplayPagination;
+  status?: AppServerThreadStatus;
+};
+
 export type PwrAgentThreadInspectionToolArgsByOperation = {
   search_threads: SearchThreadsToolArgs;
+  read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
   mutate_thread: MutateThreadToolArgs;
 };
@@ -180,6 +299,9 @@ export type PwrAgentThreadInspectionResponse =
             unavailableScopes?: ThreadSearchUnavailableScope[];
             contentMode?: ThreadSearchContentMode;
             semanticMode?: ThreadSearchSemanticMode;
+          }
+        | {
+            read: ThreadReadResult;
           }
         | {
             thread: ThreadStatusInspectionSummary;

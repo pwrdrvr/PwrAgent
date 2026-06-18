@@ -9,6 +9,7 @@ import type { MessagingChannelKind, MessagingConversationKind } from "./messagin
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "handoff_task",
+  "send_message_to_thread",
 ] as const;
 
 export type PwrAgentThreadOrchestrationOperationName =
@@ -78,6 +79,19 @@ export type HandoffTaskToolArgs = {
   approvalPolicy?: string;
   sandbox?: string;
   branchName?: string;
+};
+
+export type SendMessageToThreadToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  prompt: string;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  executionMode?: ThreadExecutionMode;
+  approvalPolicy?: string;
+  sandbox?: string;
 };
 
 export type ThreadHandoffOriginWorkspace = {
@@ -167,8 +181,25 @@ export type HandoffTaskResult = {
   };
 };
 
+export type SendMessageToThreadResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId: string;
+  promptPreview: string;
+  settings: {
+    executionMode?: ThreadExecutionMode;
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+    approvalPolicy?: string;
+    sandbox?: string;
+  };
+};
+
 export type PwrAgentThreadOrchestrationToolArgsByOperation = {
   handoff_task: HandoffTaskToolArgs;
+  send_message_to_thread: SendMessageToThreadToolArgs;
 };
 
 export type PwrAgentThreadOrchestrationToolArgs<
@@ -190,7 +221,7 @@ export type PwrAgentThreadOrchestrationRequest<
 export type PwrAgentThreadOrchestrationResponse =
   | {
       ok: true;
-      data: HandoffTaskResult;
+      data: HandoffTaskResult | SendMessageToThreadResult;
     }
   | {
       ok: false;
