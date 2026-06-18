@@ -350,6 +350,34 @@ describe("MessagingController", () => {
         },
       },
     });
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_location",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          binding: {
+            backend: "codex",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "-1001",
+            kind: "channel",
+            title: "Ops",
+          },
+        },
+      },
+    });
     expect(getManagedConversationRights).toHaveBeenCalledWith(
       expect.objectContaining({
         actor: event.actor,

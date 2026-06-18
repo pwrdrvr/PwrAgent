@@ -15,8 +15,23 @@ export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "attach_thread_here",
 ] as const;
 
-export type PwrAgentMessagingOperationName =
+export const PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES = [
+  "get_current_location",
+] as const;
+
+export const PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES = [
+  ...PWRAGENT_MESSAGING_OPERATION_NAMES,
+  ...PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES,
+] as const;
+
+export type PwrAgentMessagingAdvertisedOperationName =
   (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number];
+
+export type PwrAgentMessagingLegacyOperationName =
+  (typeof PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES)[number];
+
+export type PwrAgentMessagingOperationName =
+  (typeof PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES)[number];
 
 export const PWRAGENT_MESSAGING_ERROR_CODES = [
   "invalid_arguments",
@@ -112,6 +127,7 @@ export type AttachThreadHereResult = {
 
 export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
+  get_current_location: GetCurrentMessagingSurfaceToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
 };
 

@@ -50,21 +50,25 @@ export class AgentToolRouter {
   }
 
   buildDynamicToolSpecs(): DynamicToolSpec[] {
-    return this.definitions.map((definition) => ({
-      namespace: definition.namespace,
-      name: definition.name,
-      description: definition.description,
-      inputSchema: definition.inputSchema as DynamicToolSpec["inputSchema"],
-      deferLoading: definition.deferLoading ?? false,
-    }));
+    return this.definitions
+      .filter((definition) => definition.advertise !== false)
+      .map((definition) => ({
+        namespace: definition.namespace,
+        name: definition.name,
+        description: definition.description,
+        inputSchema: definition.inputSchema as DynamicToolSpec["inputSchema"],
+        deferLoading: definition.deferLoading ?? false,
+      }));
   }
 
   buildMcpTools(): AgentMcpTool[] {
-    return this.definitions.map((definition) => ({
-      name: definition.name,
-      description: definition.description,
-      inputSchema: definition.inputSchema,
-    }));
+    return this.definitions
+      .filter((definition) => definition.advertise !== false)
+      .map((definition) => ({
+        name: definition.name,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+      }));
   }
 
   acceptsDynamicToolCall(

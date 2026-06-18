@@ -4,6 +4,7 @@ import type {
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
 import {
+  PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_OPERATION_NAMES,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
 } from "@pwragent/shared";
@@ -37,11 +38,14 @@ export function buildPwrAgentMessagingToolRouter(
 export function buildPwrAgentMessagingToolDefinitions(
   handler: PwrAgentMessagingHandler | undefined,
 ): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
-  return PWRAGENT_MESSAGING_OPERATION_NAMES.map((operation) => ({
+  return PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.map((operation) => ({
     namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
     name: operation,
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
+    advertise: PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
+      operation as (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number],
+    ),
     deferLoading: false,
     dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
       if (!handler) {
@@ -66,6 +70,8 @@ export function buildPwrAgentMessagingToolDefinitions(
 
 function descriptionForOperation(operation: PwrAgentMessagingOperationName): string {
   switch (operation) {
+    case "get_current_location":
+      return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
       return "Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "attach_thread_here":
@@ -77,6 +83,7 @@ function inputSchemaForOperation(
   operation: PwrAgentMessagingOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "get_current_location":
     case "get_current_messaging_surface":
       return {
         type: "object",
