@@ -9,6 +9,7 @@ import {
   subAgentTone,
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
+import { subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   subAgent: ThreadSubAgentSummary;
@@ -78,6 +79,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
+  const originLabel = subAgentOriginLabel(subAgent);
   const ariaLabel = subAgent.agentName
     ? `${subAgent.agentName}: ${subAgent.task}`
     : subAgent.task;
@@ -119,6 +121,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             <div>
               <dt>Name</dt>
               <dd>{subAgent.agentName}</dd>
+            </div>
+          ) : null}
+          {originLabel ? (
+            <div>
+              <dt>Source</dt>
+              <dd>{originLabel}</dd>
             </div>
           ) : null}
           {model ? (

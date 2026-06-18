@@ -352,7 +352,10 @@ describe("ThreadContextPanel", () => {
             task: "Check PR status",
             status: "success",
             createdAt: 2000,
+            completedAt: 3000,
             updatedAt: 2500,
+            agentName: "Peirce",
+            lastMessage: "PR #783 is open and all required checks are passing.",
             monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
             monitorUsage: {
               summary: "800 uncached in · 200 cached · 50 out",
@@ -372,9 +375,21 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByText("Codex usage: 800 uncached in · 200 cached · 50 out"),
     ).toBeInTheDocument();
+    expect(screen.getByText("Peirce")).toBeInTheDocument();
+    expect(
+      screen.getByText("Spawned by Codex native spawnAgent."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("PR #783 is open and all required checks are passing."),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText("Monitor usage: 800 uncached in · 200 cached · 50 out"),
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const modal = within(screen.getByRole("dialog"));
+    expect(modal.getByText("Source")).toBeInTheDocument();
+    expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {

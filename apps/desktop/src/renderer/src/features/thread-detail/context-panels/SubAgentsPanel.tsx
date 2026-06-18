@@ -8,20 +8,14 @@ import { formatTimestamp } from "./context-rail-shared";
 import { subAgentStatusLabel, subAgentTone } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
+import {
+  subAgentOriginSentence,
+  subAgentUsageLabel,
+} from "./subagent-kind";
 
 type SubAgentsPanelProps = {
   thread: NavigationThreadSummary;
 };
-
-function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
-  if (subAgent.monitorId.startsWith("codex-native:")) {
-    return "Codex";
-  }
-  if (subAgent.monitorId.startsWith("review:")) {
-    return "Review";
-  }
-  return "Monitor";
-}
 
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
@@ -37,6 +31,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         <ul className="context-list context-list--cards">
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
+            const originSentence = subAgentOriginSentence(subAgent);
             return (
               <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
@@ -68,6 +63,9 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     </>
                   ) : null}
                 </p>
+                {originSentence ? (
+                  <p className="rail-card__message">{originSentence}</p>
+                ) : null}
                 {subAgent.lastMessage ? (
                   <p className="rail-card__message">{subAgent.lastMessage}</p>
                 ) : null}
