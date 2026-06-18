@@ -11,6 +11,16 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 const ENV_ACTION_OUTPUT_MAX_LINES = 500;
 
+// Absolute clock time, matching the transcript-message and edited-files-panel
+// convention (e.g. "Jun 17, 6:31 PM"). Absolute rather than relative ("7h ago")
+// so the sidebar cards never need a re-render tick just to stay accurate.
+const sidebarStartedAtFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function tailLines(text: string, maxLines: number): string {
   const lines = text.split("\n");
   if (lines.length <= maxLines) return text;
@@ -113,6 +123,13 @@ export function EnvActionRunsView(props: {
 
   if (props.runs.length === 0) return null;
 
+  // The sidebar Actions panel reads as a scrollable log, so the newest run
+  // (and any live "running" one) belongs on top. actionRuns is append-ordered
+  // (oldest first) — which is what the composer anchors want, newest nearest
+  // the reply box — so only the sidebar flips it.
+  const orderedRuns =
+    props.placement === "sidebar" ? [...props.runs].reverse() : props.runs;
+
   return (
     <>
       {props.placement === "sidebar" ? (
@@ -138,7 +155,7 @@ export function EnvActionRunsView(props: {
       <div
         className={`env-action-runs env-action-runs--${props.placement}`}
       >
-        {props.runs.map((run) => (
+        {orderedRuns.map((run) => (
           <EnvActionRunEntry
             key={run.runId}
             environmentName={props.environmentName}
@@ -226,6 +243,16 @@ export function EnvActionRunEntry(props: {
             {props.environmentName ? ` · ${props.environmentName}` : ""}
             {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
           </span>
+          {props.placement === "sidebar" &&
+          typeof run.startedAt === "number" &&
+          run.startedAt > 0 ? (
+            <time
+              className="composer__queued-env-action-time"
+              dateTime={new Date(run.startedAt).toISOString()}
+            >
+              {sidebarStartedAtFormatter.format(run.startedAt)}
+            </time>
+          ) : null}
         </span>
         <span className="composer__queued-env-action-actions">
           {status === "started" ? (
@@ -373,14 +400,10 @@ function EnvActionStopIcon(): ReactNode {
       width="14"
       height="14"
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
       aria-hidden="true"
     >
-      <rect x="7" y="7" width="10" height="10" rx="1.5" />
+      <rect x="7" y="7" width="10" height="10" rx="2" />
     </svg>
   );
 }
@@ -394,14 +417,12 @@ function EnvActionTerminateIcon(): ReactNode {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.9"
+      strokeWidth="2"
       strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" />
-      <path d="m9 9 6 6" />
-      <path d="m15 9-6 6" />
+      <circle cx="12" cy="12" r="7" />
+      <line x1="7.05" y1="7.05" x2="16.95" y2="16.95" />
     </svg>
   );
 }
@@ -415,14 +436,13 @@ function EnvActionSidebarIcon(): ReactNode {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.9"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <rect x="4" y="5" width="16" height="14" rx="2" />
-      <path d="M10 5v14" />
-      <path d="m15 10 3 2-3 2" />
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <line x1="14" y1="5" x2="14" y2="19" />
     </svg>
   );
 }
