@@ -64,6 +64,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
       forceRefresh: request.forceRefresh,
+      limit: request.refreshMode === "active-recent" ? 50 : undefined,
+      maxPages: request.refreshMode === "active-recent" ? 1 : undefined,
+      skipArchivedMetadataRefresh: request.refreshMode === "active-recent",
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const queuedExecutionModesByThreadKey =
@@ -95,6 +98,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }): Promise<AppServerThreadStatus | undefined> {
     const response = await this.registry.readThread({
       backend: request.backend,
+      includeTurns: false,
       limit: 0,
       threadId: request.threadId,
     });

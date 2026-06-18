@@ -765,7 +765,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("forces background navigation refreshes to bypass backend thread-list cache", async () => {
+  it("uses broad forced background polling by default", async () => {
     let intervalHandler: (() => void) | undefined;
     const originalSetInterval = globalThis.setInterval;
     vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
@@ -822,7 +822,232 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({ forceRefresh: true });
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+        forceRefresh: true,
+      });
+    });
+
+    unmount();
+  });
+
+  it("uses a cheap active-recent refresh for opt-in foreground background polling", async () => {
+    let intervalHandler: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
+      if (timeout !== 5 * 60_000) {
+        return originalSetInterval(handler, timeout, ...args);
+      }
+      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+    };
+
+    const { result, unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(getNavigationSnapshot.mock.calls[0]).toEqual([]);
+    expect(intervalHandler).toBeDefined();
+
+    act(() => {
+      intervalHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      });
+    });
+
+    unmount();
+  });
+
+  it("uses the ordinary scheduled refresh on focus by default", async () => {
+    let focusListener: (() => void) | undefined;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onWindowFocus: (callback) => {
+        focusListener = callback;
+        return () => {
+          focusListener = undefined;
+        };
+      },
+    };
+
+    const { result, unmount } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    act(() => {
+      focusListener?.();
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(getNavigationSnapshot.mock.calls.at(-1)).toEqual([]);
+    });
+
+    unmount();
+  });
+
+  it("throttles full focus refreshes to one per minute after completion", async () => {
+    let focusListener: (() => void) | undefined;
+    let delayedFocusHandler: (() => void) | undefined;
+    const originalSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler, timeout, ...args) => {
+        if (typeof timeout === "number" && timeout > 10_000) {
+          delayedFocusHandler =
+            typeof handler === "function" ? () => handler(...args) : undefined;
+          return 42 as unknown as ReturnType<typeof setTimeout>;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      });
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy.mockReturnValue(1_000_000);
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onWindowFocus: (callback) => {
+        focusListener = callback;
+        return () => {
+          focusListener = undefined;
+        };
+      },
+    };
+
+    const { result, unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    act(() => {
+      focusListener?.();
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+        forceRefresh: true,
+        refreshMode: "full",
+      });
+    });
+
+    dateNowSpy.mockReturnValue(1_030_000);
+    act(() => {
+      focusListener?.();
+      focusListener?.();
+    });
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+
+    dateNowSpy.mockReturnValue(1_060_000);
+    act(() => {
+      delayedFocusHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(3);
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+        forceRefresh: true,
+        refreshMode: "full",
+      });
     });
 
     unmount();

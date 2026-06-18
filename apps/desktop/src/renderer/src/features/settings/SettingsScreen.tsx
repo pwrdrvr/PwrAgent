@@ -409,6 +409,11 @@ function SettingsSectionBody(props: {
             experimental: { liveTranscriptEventFiltering: enabled },
           });
         }}
+        onLightweightNavigationRefreshChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { lightweightNavigationRefresh: enabled },
+          });
+        }}
         onThreadPricingSummaryChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadPricingSummary: enabled },

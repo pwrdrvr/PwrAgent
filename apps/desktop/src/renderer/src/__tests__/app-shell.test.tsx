@@ -442,6 +442,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        lightweightNavigationRefresh: {
+          value: false,
+          source: "default",
+        },
         codexDefaultModeRequestUserInput: {
           value: false,
           source: "default",

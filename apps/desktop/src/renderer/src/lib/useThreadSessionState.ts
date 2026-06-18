@@ -49,6 +49,7 @@ import {
 } from "../features/thread-detail/live-transcript-activity";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+export const LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT = 5;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -129,9 +130,11 @@ type ThreadSessionEntry = {
   error?: string;
   expectOwnUpdate: boolean;
   failedHydrationVersion?: number | "unknown";
+  hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   interacted: boolean;
   lastTouchedAt: number;
+  loadedOlderHistory: boolean;
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
@@ -173,6 +176,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
+    loadedOlderHistory: false,
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
@@ -536,6 +540,36 @@ function mergeTranscriptMessages(
   }
 
   return merged;
+}
+
+function preserveLoadedTranscriptHistory(
+  response: AppServerReadThreadResponse,
+  retainedResponse: AppServerReadThreadResponse | undefined,
+  shouldPreserve: boolean
+): AppServerReadThreadResponse {
+  if (
+    !shouldPreserve ||
+    !retainedResponse ||
+    !response.replay.pagination.supportsPagination
+  ) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: mergeItems(
+        retainedResponse.replay.entries,
+        response.replay.entries
+      ),
+      messages: mergeItems(
+        retainedResponse.replay.messages,
+        response.replay.messages
+      ),
+      pagination: retainedResponse.replay.pagination,
+    },
+  };
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -2830,6 +2864,7 @@ function didHydrateCompletedTurn(
 
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
+  initialHistoryLimit?: number;
   liveTranscriptEventFiltering?: boolean;
   thread?: NavigationThreadSummary;
 }): {
@@ -2978,6 +3013,8 @@ export function useThreadSessionState(params: {
     [desktopApi?.logRendererDiagnostic]
   );
 
+  const initialHistoryLimit = params.initialHistoryLimit;
+
   const loadLatest = useCallback(
     async (targetThread: NavigationThreadSummary): Promise<void> => {
       const readThread = desktopApi?.readThread;
@@ -3014,6 +3051,9 @@ export function useThreadSessionState(params: {
         });
         const response = normalizeResponseImageBoundaryText(await readThread({
           backend: targetThread.source,
+          ...(initialHistoryLimit !== undefined
+            ? { limit: initialHistoryLimit }
+            : {}),
           threadId: targetThread.id,
         }));
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
@@ -3036,9 +3076,14 @@ export function useThreadSessionState(params: {
             [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
             liveTranscriptSources
           );
+          const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
+            orderedResponse,
+            current.response,
+            current.loadedOlderHistory
+          );
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
-            orderedResponse
+            responseWithLoadedHistory
           );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
@@ -3060,7 +3105,7 @@ export function useThreadSessionState(params: {
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,
-              response: orderedResponse,
+              response: responseWithLoadedHistory,
               targetThreadKey,
             });
           }
@@ -3076,6 +3121,7 @@ export function useThreadSessionState(params: {
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
+            hydratedInitialHistoryLimit: initialHistoryLimit,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
@@ -3086,7 +3132,7 @@ export function useThreadSessionState(params: {
             needsHydrationAfterCompletion,
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
-              orderedResponse
+              responseWithLoadedHistory
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -3094,7 +3140,7 @@ export function useThreadSessionState(params: {
             pendingStatusText: shouldClearStaleThinking
               ? undefined
               : current.pendingStatusText,
-            response: orderedResponse,
+            response: responseWithLoadedHistory,
           };
         });
       } catch (error) {
@@ -3119,6 +3165,7 @@ export function useThreadSessionState(params: {
     [
       desktopApi?.readThread,
       desktopApi?.recordStartupProfileEvent,
+      initialHistoryLimit,
       logStaleThinkingState,
       updateSession,
     ]
@@ -3300,6 +3347,9 @@ export function useThreadSessionState(params: {
     }
 
     if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
+      if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
+        void loadLatest(thread);
+      }
       return;
     }
 
@@ -3334,7 +3384,7 @@ export function useThreadSessionState(params: {
     }
 
     void loadLatest(thread);
-  }, [loadLatest, sessions, thread, threadKey, updateSession]);
+  }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
@@ -4422,6 +4472,7 @@ export function useThreadSessionState(params: {
               },
             }
           : olderResponse,
+        loadedOlderHistory: Boolean(current.response),
       }));
     } catch (error) {
       if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {

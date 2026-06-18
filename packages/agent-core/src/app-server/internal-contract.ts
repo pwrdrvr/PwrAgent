@@ -73,6 +73,11 @@ export type ThreadReplay = {
   items: ThreadReplayItem[];
   lastUserMessage?: string;
   lastAssistantMessage?: string;
+  pagination?: {
+    supportsPagination: boolean;
+    hasPreviousPage: boolean;
+    previousCursor?: string;
+  };
 };
 
 export type AppServerItemStatus =

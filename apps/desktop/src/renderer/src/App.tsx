@@ -55,7 +55,10 @@ import {
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
-import { useThreadSessionState } from "./lib/useThreadSessionState";
+import {
+  LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+  useThreadSessionState,
+} from "./lib/useThreadSessionState";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
@@ -461,6 +464,8 @@ function DesktopAppShell(props: {
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const navigation = useThreadNavigation(desktopApi, {
     enabled: normalAppEnabled,
+    lightweightNavigationRefresh:
+      settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
   // Keep the backend-error toast's thread lookup fresh without making the
@@ -744,8 +749,13 @@ function DesktopAppShell(props: {
     settings.snapshot?.onboarding?.completed.value,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
+  const lightweightNavigationRefresh =
+    settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false;
   const session = useThreadSessionState({
     desktopApi,
+    initialHistoryLimit: lightweightNavigationRefresh
+      ? LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT
+      : undefined,
     liveTranscriptEventFiltering:
       settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,

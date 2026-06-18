@@ -29,6 +29,10 @@ const listThreads = vi.fn(async (request?: {
   archived?: boolean;
   backend?: "codex" | "grok";
   filter?: string;
+  forceRefresh?: boolean;
+  limit?: number;
+  maxPages?: number;
+  skipArchivedMetadataRefresh?: boolean;
 }) =>
   request?.archived
     ? [
@@ -521,6 +525,10 @@ describe("app server ipc", () => {
       backend: undefined,
       callerReason: "navigation-snapshot",
       filter: undefined,
+      forceRefresh: undefined,
+      limit: undefined,
+      maxPages: undefined,
+      skipArchivedMetadataRefresh: false,
     });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
@@ -562,6 +570,87 @@ describe("app server ipc", () => {
         executionMode: "default",
       },
     });
+  });
+
+  it("uses one active recent page for lightweight navigation refreshes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      } satisfies GetNavigationSnapshotRequest,
+    );
+
+    expect(listThreads).toHaveBeenCalledWith({
+      backend: undefined,
+      callerReason: "navigation-snapshot:active-recent",
+      filter: undefined,
+      forceRefresh: true,
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+  });
+
+  it("merges lightweight navigation refreshes into the last full thread list", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const staleThread = {
+      id: "thread-stale",
+      title: "Stale thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      updatedAt: 1_000,
+    };
+    const recentThread = {
+      id: "thread-recent",
+      title: "Recent thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      updatedAt: 2_000,
+    };
+    const updatedRecentThread = {
+      ...recentThread,
+      title: "Updated recent thread",
+      updatedAt: 3_000,
+    };
+    listThreads
+      .mockResolvedValueOnce([recentThread, staleThread])
+      .mockResolvedValueOnce([updatedRecentThread]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    );
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      } satisfies GetNavigationSnapshotRequest,
+    );
+
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        threads: [
+          expect.objectContaining({
+            id: "thread-recent",
+            title: "Updated recent thread",
+          }),
+          expect.objectContaining({ id: "thread-stale" }),
+        ],
+      }),
+    );
   });
 
   it("returns backend scope all when listing threads without a backend filter", async () => {

@@ -290,7 +290,11 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
-    return this.state.readThread(threadId);
+    return this.state.readThread(threadId, {
+      before: asOptionalString(params.before),
+      includeTurns: asOptionalBoolean(params.includeTurns),
+      limit: asOptionalNonNegativeInteger(params.limit),
+    });
   }
 
   private async startCompaction(
@@ -478,6 +482,12 @@ function asOptionalString(value: unknown): string | undefined {
 
 function asOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function asOptionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
 }
 
 function asOptionalStringArray(value: unknown): string[] | undefined {

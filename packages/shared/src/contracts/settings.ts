@@ -460,6 +460,13 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
+     * Gates the lightweight navigation refresh experiment. When disabled,
+     * background navigation refreshes keep using broad forced snapshots.
+     * When enabled, foreground polling uses the one-page active-recent
+     * snapshot and focus refreshes are coalesced.
+     */
+    lightweightNavigationRefresh: DesktopSettingsValue<boolean>;
+    /**
      * Gates the thread context-rail Pricing tab. The pricing ledger may still
      * collect data for validation, but the user-visible summary stays hidden
      * while this experimental setting is disabled.
@@ -705,6 +712,7 @@ export type DesktopSettingsConfigPatch = {
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
+    lightweightNavigationRefresh?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
