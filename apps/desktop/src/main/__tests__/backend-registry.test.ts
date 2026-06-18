@@ -13310,7 +13310,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles thread inspection dynamic tool calls from active Agent turns", async () => {
+  it("handles thread inspection dynamic tool calls from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -13450,7 +13450,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles app management dynamic tool calls from active Agent turns", async () => {
+  it("handles app management dynamic tool calls from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -13534,7 +13534,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles thread handoff dynamic tool calls from active Agent turns", async () => {
+  it("handles thread handoff dynamic tool calls from active Codex turns", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-"));
     try {
       await git(root, ["init", "-b", "main"]);
@@ -13558,8 +13558,8 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
       threads: [
         {
-          id: "agent-thread",
-          title: "Parent Agent",
+          id: "ordinary-thread",
+          title: "Parent Thread",
           titleSource: "explicit",
           source: "codex",
           linkedDirectories: [
@@ -13576,9 +13576,9 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
-        "codex:agent-thread": {
+        "codex:ordinary-thread": {
           backend: "codex",
-          threadId: "agent-thread",
+          threadId: "ordinary-thread",
           executionMode: "full-access",
           model: "gpt-5.4",
           reasoningEffort: "high",
@@ -13592,12 +13592,6 @@ command = "pnpm dev"
               path: expectedDir(root),
             },
           ],
-          agent: {
-            name: "Parent Agent",
-            instructionLineCount: 0,
-            instructionsTooLong: false,
-            updatedAt: 1000,
-          },
         },
       },
     });
@@ -13642,7 +13636,7 @@ command = "pnpm dev"
               binding: {
                 id: "binding-parent",
                 backend: "codex",
-                threadId: "agent-thread",
+                threadId: "ordinary-thread",
                 targetKind: "agent_thread",
               },
               channel: "discord",
@@ -13669,7 +13663,7 @@ command = "pnpm dev"
       notification: {
         method: "turn/started",
         params: {
-          threadId: "agent-thread",
+          threadId: "ordinary-thread",
           turnId: "turn-1",
           turn: { id: "turn-1" },
         },
@@ -13679,7 +13673,7 @@ command = "pnpm dev"
     const response = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
-        threadId: "agent-thread",
+        threadId: "ordinary-thread",
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
@@ -13746,7 +13740,7 @@ command = "pnpm dev"
         operation: "attach_thread_here",
         context: {
           backend: "codex",
-          threadId: "agent-thread",
+          threadId: "ordinary-thread",
           turnId: "turn-1",
         },
         args: {
@@ -13786,7 +13780,7 @@ command = "pnpm dev"
         ? codexClient.lastStartTurnParams.input[0].text
         : "";
     expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
-    expect(prompt).toContain("- Thread ID: agent-thread");
+    expect(prompt).toContain("- Thread ID: ordinary-thread");
     expect(prompt).toContain("- Turn ID: turn-1");
     expect(prompt).toContain(`- CWD: ${normalizedRoot}`);
     expect(prompt).toContain("Additional context from parent:");
@@ -13802,9 +13796,9 @@ command = "pnpm dev"
       },
       handoffOrigin: {
         sourceBackend: "codex",
-        sourceThreadId: "agent-thread",
+        sourceThreadId: "ordinary-thread",
         sourceTurnId: "turn-1",
-        sourceTitle: "Parent Agent",
+        sourceTitle: "Parent Thread",
         taskTitle: "Investigate issue XYZ",
         seedMode: "clean",
         groupingMode: "none",
@@ -14291,7 +14285,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("mutates PwrAgent thread settings from active Agent turns", async () => {
+  it("mutates PwrAgent thread settings from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
@@ -14628,7 +14622,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("rejects Agent-only PwrAgent tools from active ordinary threads", async () => {
+  it("handles PwrAgent app management tools from active ordinary threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -14688,28 +14682,25 @@ command = "pnpm dev"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(response).toEqual({
-      success: false,
+    expect(response).toMatchObject({
+      success: true,
       contentItems: [
         {
           type: "inputText",
-          text: JSON.stringify(
-            {
-              code: "forbidden",
-              message: "App management tools are available only to Agent threads.",
-            },
-            null,
-            2,
-          ),
+          text: expect.stringContaining('"currentVersion": "1.2.3"'),
         },
       ],
     });
-    expect(appManagementHandler).not.toHaveBeenCalled();
+    expect(appManagementHandler).toHaveBeenCalledWith({
+      operation: "manage_pwragent",
+      context: {},
+      args: { action: "status" },
+    });
 
     await registry.close();
   });
 
-  it("rejects thread handoff dynamic tool calls that do not match an active Agent turn", async () => {
+  it("rejects thread handoff dynamic tool calls that do not match an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -14718,22 +14709,7 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock({
-        overlays: {
-          "codex:agent-thread": {
-            backend: "codex",
-            threadId: "agent-thread",
-            executionMode: "default",
-            extraLinkedDirectories: [],
-            agent: {
-              name: "Parent Agent",
-              instructionLineCount: 0,
-              instructionsTooLong: false,
-              updatedAt: 1000,
-            },
-          },
-        },
-      }),
+      overlayStore: createOverlayStoreMock(),
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -14770,7 +14746,7 @@ command = "pnpm dev"
             {
               code: "forbidden",
               message:
-                "Thread handoff tool calls must originate from an active Agent turn on the same thread.",
+                "Thread handoff tool calls must originate from an active turn on the same thread.",
             },
             null,
             2,
