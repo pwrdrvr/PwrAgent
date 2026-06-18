@@ -16,7 +16,7 @@ export const ELECTRON_DEV_ENV_KEYS = [
   "PNPM_SCRIPT_SRC_DIR"
 ];
 
-const TERMINAL_SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"];
+const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 
 export function sanitizeDevEnv(input = process.env) {
   const env = {};
@@ -49,6 +49,7 @@ function run(command, args, env) {
 }
 
 function exitCodeForSignal(signal) {
+  if (signal === "SIGHUP") return 129;
   return signal === "SIGINT" ? 130 : 143;
 }
 
@@ -135,7 +136,7 @@ export function runLongLived(command, args, env, options = {}) {
         resolve(0);
         return;
       }
-      if (signal === "SIGINT" || signal === "SIGTERM") {
+      if (signal === "SIGHUP" || signal === "SIGINT" || signal === "SIGTERM") {
         resolve(exitCodeForSignal(signal));
         return;
       }

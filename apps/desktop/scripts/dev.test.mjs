@@ -75,6 +75,7 @@ describe("dev launch wrapper", () => {
     });
 
     expect(spawnOptions.detached).toBe(true);
+    expect(fakeProcess.listenerCount("SIGHUP")).toBe(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(1);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(1);
 
@@ -84,6 +85,32 @@ describe("dev launch wrapper", () => {
     await expect(promise).resolves.toBe(0);
     expect(killCalls).toEqual([[-4242, "SIGINT"]]);
     expect(child.killCalls).toEqual([]);
+    expect(fakeProcess.listenerCount("SIGHUP")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("forwards terminal hangup to the detached POSIX process group", async () => {
+    const fakeProcess = createFakeProcess();
+    const child = createFakeChild(4343);
+    const killCalls = [];
+    const promise = runLongLived("node", ["electron-vite", "dev"], {}, {
+      killProcess: (pid, signal) => {
+        killCalls.push([pid, signal]);
+        return true;
+      },
+      platform: "darwin",
+      process: fakeProcess,
+      spawn: () => child
+    });
+
+    fakeProcess.emit("SIGHUP");
+    child.emit("close", null, null);
+
+    await expect(promise).resolves.toBe(0);
+    expect(killCalls).toEqual([[-4343, "SIGHUP"]]);
+    expect(child.killCalls).toEqual([]);
+    expect(fakeProcess.listenerCount("SIGHUP")).toBe(0);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
@@ -116,6 +143,20 @@ describe("dev launch wrapper", () => {
     child.emit("close", null, "SIGTERM");
 
     await expect(promise).resolves.toBe(143);
+  });
+
+  it("preserves nonzero status when the child exits by hangup independently", async () => {
+    const fakeProcess = createFakeProcess();
+    const child = createFakeChild(6162);
+    const promise = runLongLived("node", ["electron-vite", "dev"], {}, {
+      platform: "darwin",
+      process: fakeProcess,
+      spawn: () => child
+    });
+
+    child.emit("close", null, "SIGHUP");
+
+    await expect(promise).resolves.toBe(129);
   });
 
   it("forces the long-lived dev child down on a repeated terminal signal", async () => {
