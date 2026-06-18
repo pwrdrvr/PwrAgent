@@ -21,6 +21,10 @@ import {
   buildPwrAgentMessagingToolRouter,
   type PwrAgentMessagingHandler,
 } from "./pwragent-messaging-agent-tools.js";
+import {
+  buildPwrAgentThreadOrchestrationToolRouter,
+  type PwrAgentThreadOrchestrationHandler,
+} from "./pwragent-thread-orchestration-agent-tools.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -34,6 +38,7 @@ export function resolveAgentToolCatalogs(params: {
   automationInspectionHandler?: AutomationInspectionHandler;
   messagingHandler?: PwrAgentMessagingHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
+  threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
 }): ResolvedAgentToolCatalog[] {
   if (!params.agent) {
     return [];
@@ -49,6 +54,11 @@ export function resolveAgentToolCatalogs(params: {
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
+  const threadOrchestrationRouter = buildPwrAgentThreadOrchestrationToolRouter(
+    params.threadOrchestrationHandler,
+  );
+  const threadOrchestrationDynamicTools =
+    threadOrchestrationRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -107,6 +117,21 @@ export function resolveAgentToolCatalogs(params: {
           id: "messaging_context",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: messagingDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "thread_orchestration",
+      dynamicTools: threadOrchestrationDynamicTools,
+      summary: {
+        id: "thread_orchestration",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: threadOrchestrationDynamicTools.length,
+        fingerprint: buildCatalogFingerprint({
+          id: "thread_orchestration",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: threadOrchestrationDynamicTools,
         }),
       },
     },

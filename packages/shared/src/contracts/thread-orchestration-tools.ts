@@ -37,16 +37,29 @@ export type PwrAgentThreadOrchestrationContext = {
 };
 
 export type HandoffTaskSeedMode = "clean" | "fork";
+export const HANDOFF_TASK_SEED_MODES = ["clean", "fork"] as const;
 
 export type HandoffTaskGroupingMode = "none" | "subthread";
+export const HANDOFF_TASK_GROUPING_MODES = ["none", "subthread"] as const;
 
 export type HandoffTaskWorkspaceMode = "same" | "new_worktree" | "none";
+export const HANDOFF_TASK_WORKSPACE_MODES = [
+  "same",
+  "new_worktree",
+  "none",
+] as const;
 
 export type HandoffTaskMessagingAttachmentMode =
   | "none"
   | "auto"
   | "current_conversation"
   | "new_child";
+export const HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES = [
+  "none",
+  "auto",
+  "current_conversation",
+  "new_child",
+] as const;
 
 export type HandoffTaskToolArgs = {
   task: string;

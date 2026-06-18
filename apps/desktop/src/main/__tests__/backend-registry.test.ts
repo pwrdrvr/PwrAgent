@@ -5322,6 +5322,10 @@ script = "echo setup"
           namespace: "pwragent",
           name: "attach_thread_here",
         }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
+        }),
       ]),
     );
     expect(
@@ -5452,6 +5456,10 @@ script = "echo setup"
         expect.objectContaining({
           namespace: "pwragent",
           name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
         }),
         expect.objectContaining({
           namespace: "pwragent",
@@ -7386,6 +7394,10 @@ script = "pnpm install"
         expect.objectContaining({
           namespace: "pwragent",
           name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
         }),
       ]),
     );
