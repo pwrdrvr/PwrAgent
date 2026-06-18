@@ -1059,6 +1059,14 @@ function markThreadSeenInSnapshot(
       return thread;
     }
 
+    if (
+      params.seenUpdatedAt !== undefined &&
+      thread.updatedAt !== undefined &&
+      thread.updatedAt > params.seenUpdatedAt
+    ) {
+      return thread;
+    }
+
     if (!thread.inbox.inInbox && thread.inbox.lastSeenUpdatedAt === params.seenUpdatedAt) {
       return thread;
     }
@@ -2167,6 +2175,7 @@ export function useThreadNavigation(
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
   const queuedRefreshRef = useRef<
     | {
         forceRefresh?: boolean;
@@ -2188,6 +2197,12 @@ export function useThreadNavigation(
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
   stateRef.current = state;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     setNavigationBrowseModeRequestRef.current = setNavigationBrowseModeRequest;
@@ -3197,7 +3212,6 @@ export function useThreadNavigation(
 
     const markThreadSeenRequest = submitMarkThreadSeen;
     const threadToMarkSeen = selectedThread;
-    let cancelled = false;
 
     async function markSeen(): Promise<void> {
       const threadKey = buildThreadIdentityKey(
@@ -3215,10 +3229,11 @@ export function useThreadNavigation(
           threadId: threadToMarkSeen.id,
           seenUpdatedAt: threadToMarkSeen.updatedAt,
         });
-        if (!cancelled) {
+        if (mountedRef.current) {
+          const retainedThread = retainedUnreadThreadRef.current;
           if (
-            !retainedUnreadThread ||
-            buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id) !==
+            !retainedThread ||
+            buildThreadIdentityKey(retainedThread.source, retainedThread.id) !==
               threadKey
           ) {
             setState((current) => ({
@@ -3232,18 +3247,16 @@ export function useThreadNavigation(
           }
         }
       } finally {
-        if (!cancelled) {
-          setPendingSeenThreadKey(undefined);
+        if (mountedRef.current) {
+          setPendingSeenThreadKey((current) =>
+            current === threadKey ? undefined : current
+          );
         }
       }
     }
 
     void markSeen();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [markThreadSeen, pendingSeenThreadKey, retainedUnreadThread, selectedThread]);
+  }, [markThreadSeen, pendingSeenThreadKey, selectedThread]);
 
   const refreshThreadDirectoryGitStatuses = useCallback(
     (threadKey: string): void => {

@@ -386,6 +386,150 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("clears a selected-thread unread update when the seen write resolves after selecting away", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const delayedSeen = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      seenAt: number;
+      seenUpdatedAt?: number;
+    }>();
+    const markThreadSeen = vi.fn(
+      (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+      ) => {
+        const response = {
+          backend: request.backend,
+          threadId: request.threadId,
+          seenAt: Date.now(),
+          seenUpdatedAt: request.seenUpdatedAt,
+        } as const;
+
+        return request.seenUpdatedAt === 2_000
+          ? delayedSeen.promise
+          : Promise.resolve(response);
+      }
+    );
+    let refreshed = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: refreshed ? ["codex:thread-read"] : [],
+      threads: [
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: refreshed
+            ? {
+                inInbox: true,
+                reason: "updated-since-seen" as const,
+                lastSeenUpdatedAt: 1_000,
+              }
+            : {
+                inInbox: false,
+                lastSeenUpdatedAt: 1_000,
+              },
+          updatedAt: refreshed ? 2_000 : 1_000,
+        },
+        {
+          id: "thread-other",
+          title: "Other thread",
+          titleSource: "explicit" as const,
+          summary: "Other thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 900,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-read");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 1_000,
+      });
+    });
+
+    refreshed = true;
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-other",
+              turnId: "turn-other",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 2_000,
+      });
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[1]!);
+    });
+
+    await act(async () => {
+      delayedSeen.resolve({
+        backend: "codex",
+        threadId: "thread-read",
+        seenAt: Date.now(),
+        seenUpdatedAt: 2_000,
+      });
+      await delayedSeen.promise;
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-other");
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    });
+  });
+
   it("keeps selected refreshes unread while the window is backgrounded", async () => {
     const listeners = new Set<(event: any) => void>();
     const markThreadSeen = vi.fn(
