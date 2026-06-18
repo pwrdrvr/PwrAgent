@@ -6345,7 +6345,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("passes dynamic tool specs when resuming an existing thread before a turn", async () => {
+  it("passes dynamic tool specs when resuming and starting a turn on an existing thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -6375,8 +6375,26 @@ describe("CodexAppServerClient", () => {
     const resumePayload = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "thread/resume");
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
 
     expect(resumePayload?.params).toMatchObject({
+      threadId: "thread-2",
+      dynamicTools: [
+        {
+          namespace: "pwragent_task_monitors",
+          name: "create_monitor_delegation",
+          description: "Delegate monitoring work.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          deferLoading: false,
+        },
+      ],
+    });
+    expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-2",
       dynamicTools: [
         {
