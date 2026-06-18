@@ -2433,6 +2433,11 @@ textarea,
   align-items: center;
   gap: 6px;
   padding: 6px 0;
+  /* Pull out to the 8px lane inset (see `.sidebar-list--dense`) so the
+     pills and their divider line up with the thread/directory cards
+     below instead of sitting 8px narrower at the parent's 16px rail
+     padding. */
+  margin-inline: -8px;
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: no-drag;
 }
@@ -2565,7 +2570,13 @@ textarea,
 
 .lens-switch {
   display: inline-grid;
-  width: 100%;
+  /* Span the 8px lane inset (see `.sidebar-list--dense`) so the segmented
+     control's edges line up with the thread/directory cards below. The
+     parent (`.sidebar__section--fill`) carries no horizontal padding, so it
+     sits at the sidebar's 16px rail padding; `calc(100% + 16px)` + the
+     symmetric -8px margin widens it 8px on each side down to the 8px inset. */
+  width: calc(100% + 16px);
+  margin-inline: -8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
@@ -2575,7 +2586,7 @@ textarea,
   /* Width-query container so the longest label ("Directories") can swap to
      a short form once the (resizable) sidebar narrows past the point where it
      would otherwise spill past the segmented control. The width is extrinsic
-     (`width: 100%`), so inline-size containment is safe here. */
+     (`width: calc(100% + 16px)`), so inline-size containment is safe here. */
   container-type: inline-size;
 }
 
@@ -2764,9 +2775,10 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  /* Mirrors `.sidebar-list--dense` — see that block for the asymmetric
-     gutter rationale (4px left / 8px right for scrollbar clearance). */
-  padding-inline: 4px 8px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
+     rationale (8px left keeps the focus-visible outline off the wall;
+     8px right clears the reserved scrollbar thumb). */
+  padding-inline: 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
