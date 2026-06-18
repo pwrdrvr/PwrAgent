@@ -11,6 +11,16 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 const ENV_ACTION_OUTPUT_MAX_LINES = 500;
 
+// Absolute clock time, matching the transcript-message and edited-files-panel
+// convention (e.g. "Jun 17, 6:31 PM"). Absolute rather than relative ("7h ago")
+// so the sidebar cards never need a re-render tick just to stay accurate.
+const sidebarStartedAtFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function tailLines(text: string, maxLines: number): string {
   const lines = text.split("\n");
   if (lines.length <= maxLines) return text;
@@ -113,6 +123,13 @@ export function EnvActionRunsView(props: {
 
   if (props.runs.length === 0) return null;
 
+  // The sidebar Actions panel reads as a scrollable log, so the newest run
+  // (and any live "running" one) belongs on top. actionRuns is append-ordered
+  // (oldest first) — which is what the composer anchors want, newest nearest
+  // the reply box — so only the sidebar flips it.
+  const orderedRuns =
+    props.placement === "sidebar" ? [...props.runs].reverse() : props.runs;
+
   return (
     <>
       {props.placement === "sidebar" ? (
@@ -138,7 +155,7 @@ export function EnvActionRunsView(props: {
       <div
         className={`env-action-runs env-action-runs--${props.placement}`}
       >
-        {props.runs.map((run) => (
+        {orderedRuns.map((run) => (
           <EnvActionRunEntry
             key={run.runId}
             environmentName={props.environmentName}
@@ -226,6 +243,16 @@ export function EnvActionRunEntry(props: {
             {props.environmentName ? ` · ${props.environmentName}` : ""}
             {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
           </span>
+          {props.placement === "sidebar" &&
+          typeof run.startedAt === "number" &&
+          run.startedAt > 0 ? (
+            <time
+              className="composer__queued-env-action-time"
+              dateTime={new Date(run.startedAt).toISOString()}
+            >
+              {sidebarStartedAtFormatter.format(run.startedAt)}
+            </time>
+          ) : null}
         </span>
         <span className="composer__queued-env-action-actions">
           {status === "started" ? (
