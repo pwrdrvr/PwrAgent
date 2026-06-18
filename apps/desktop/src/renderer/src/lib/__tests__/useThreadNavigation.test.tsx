@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import {
   buildPullRequestStatusKey,
   shortenDerivedThreadTitle,
@@ -467,7 +468,9 @@ describe("useThreadNavigation", () => {
       },
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const { result } = renderHook(() => useThreadNavigation(desktopApi), {
+      wrapper: StrictMode,
+    });
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-read");

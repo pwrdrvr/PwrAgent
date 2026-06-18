@@ -2199,6 +2199,7 @@ export function useThreadNavigation(
   stateRef.current = state;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
