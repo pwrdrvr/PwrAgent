@@ -9,6 +9,7 @@ import type {
   MessagingThreadBindingSummary,
   ThreadAgentMetadata,
 } from "./navigation";
+import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
 import type {
   ThreadSearchContentMode,
   ThreadSearchConfidenceBand,
@@ -123,6 +124,7 @@ export type ThreadInspectionSummary = {
   updatedAt?: number;
   archivedAt?: number;
   agent?: ThreadAgentMetadata;
+  handoffOrigin?: ThreadHandoffOrigin;
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;

@@ -429,6 +429,25 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadHandoffOrigin: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      handoffOrigin: ThreadOverlayState["handoffOrigin"] | null;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key) ?? {
+        backend: settings.backend,
+        threadId: settings.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        handoffOrigin: settings.handoffOrigin ?? undefined,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadCodexEnvironmentRuntime: async (settings: {
       backend: "codex" | "grok";
       threadId: string;

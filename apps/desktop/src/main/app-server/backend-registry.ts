@@ -14973,7 +14973,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          overlay?.agent,
+          overlay,
           messagingBindings,
         );
       }),
@@ -14993,7 +14993,7 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay?.agent, messagingBindings);
+        return toThreadInspectionSummary(thread, overlay, messagingBindings);
       }),
     );
   }
@@ -15927,7 +15927,7 @@ function filterThreadInspectionSummaries(
 
 function toThreadInspectionSummary(
   thread: AppServerThreadSummary,
-  agent: ThreadAgentMetadata | undefined,
+  overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
@@ -15939,7 +15939,8 @@ function toThreadInspectionSummary(
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
-    agent,
+    agent: overlay?.agent,
+    handoffOrigin: overlay?.handoffOrigin,
     executionMode: thread.executionMode,
     model: thread.model,
     reasoningEffort: thread.reasoningEffort,
@@ -15952,7 +15953,7 @@ function toThreadInspectionSummary(
 
 function toThreadInspectionSummaryFromSearchResult(
   result: ThreadSearchResult,
-  agent: ThreadAgentMetadata | undefined,
+  overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
@@ -15964,7 +15965,8 @@ function toThreadInspectionSummaryFromSearchResult(
     createdAt: result.createdAt,
     updatedAt: result.updatedAt,
     archivedAt: result.archivedAt,
-    agent,
+    agent: overlay?.agent,
+    handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
     linkedDirectories: result.linkedDirectories,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
