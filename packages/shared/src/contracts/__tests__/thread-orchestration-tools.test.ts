@@ -68,7 +68,7 @@ describe("thread orchestration tool contracts", () => {
       },
     } satisfies ThreadHandoffOrigin;
 
-    const result = {
+    const result: HandoffTaskResult = {
       backend: "codex",
       threadId: "thread-child",
       turnId: "turn-child",
@@ -86,7 +86,7 @@ describe("thread orchestration tool contracts", () => {
         requested: false,
         outcome: "not_requested",
       },
-    } satisfies HandoffTaskResult;
+    };
 
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     expect(result.groupedUnderThreadId).toBeUndefined();
