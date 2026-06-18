@@ -25,7 +25,7 @@ describe("PwrAgent thread agent tools", () => {
         name: "get_thread_status",
       }),
       expect.objectContaining({
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         name: "mutate_thread",
       }),
     ]);

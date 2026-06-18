@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildPwrAgentMessagingToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
-import { isPwrAgentMessagingDynamicToolCall } from "../agent-tools/pwragent-messaging-codex-tools";
+import {
+  handlePwrAgentMessagingDynamicToolCall,
+  isPwrAgentMessagingDynamicToolCall,
+} from "../agent-tools/pwragent-messaging-codex-tools";
 
 describe("PwrAgent messaging agent tools", () => {
   it("does not advertise deprecated location tool but still recognizes legacy calls", async () => {
@@ -42,10 +45,43 @@ describe("PwrAgent messaging agent tools", () => {
         tool: "get_current_location",
       }),
     ).toBe(true);
+    expect(
+      isPwrAgentMessagingDynamicToolCall({
+        namespace: "pwragent",
+        tool: "get_current_location",
+      }),
+    ).toBe(true);
 
     await expect(
       router.handleDynamicToolCall({
         backend: "codex",
+        call: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "get_current_location",
+          arguments: {},
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: true,
+    });
+    expect(handler).toHaveBeenCalledWith({
+      operation: "get_current_location",
+      context: {
+        backend: "codex",
+        threadId: "agent-thread",
+        turnId: "turn-1",
+      },
+      args: {},
+    });
+
+    handler.mockClear();
+    await expect(
+      handlePwrAgentMessagingDynamicToolCall({
+        backend: "codex",
+        handler,
         call: {
           threadId: "agent-thread",
           turnId: "turn-1",

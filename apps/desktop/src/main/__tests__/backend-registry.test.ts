@@ -13331,7 +13331,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           agentOnly: true,
@@ -13852,7 +13852,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           query: "branch drift",
@@ -13987,7 +13987,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {},
       },
@@ -14074,7 +14074,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           query: "telegram naming OR playwright e2e OR desktop failures",
@@ -14168,7 +14168,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "get_thread_status",
         arguments: {
           backend: "codex",
@@ -14246,7 +14246,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
@@ -14352,7 +14352,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
@@ -14439,7 +14439,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
