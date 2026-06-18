@@ -13690,7 +13690,7 @@ command = "pnpm dev"
       },
     ]);
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      cwd: root,
+      cwd: normalizedRoot,
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -13704,7 +13704,7 @@ command = "pnpm dev"
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
-      cwd: root,
+      cwd: normalizedRoot,
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
