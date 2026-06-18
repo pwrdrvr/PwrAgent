@@ -1262,7 +1262,25 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readOptionalString(value: unknown): string | undefined {
+function readOptionalString(value: unknown): string | undefined;
+function readOptionalString(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined;
+function readOptionalString(
+  value: unknown,
+  keys?: string[],
+): string | undefined {
+  if (keys) {
+    return (
+      readStringLike(
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : undefined,
+        keys,
+      ) ?? undefined
+    );
+  }
   return typeof value === "string" ? value : undefined;
 }
 
@@ -1638,6 +1656,506 @@ type ReviewSubAgentRecord = {
   task: string;
   turnId: string;
 };
+
+type CodexNativeSubAgentTool =
+  | "spawnAgent"
+  | "sendInput"
+  | "resumeAgent"
+  | "wait"
+  | "closeAgent";
+
+type CodexNativeSubAgentCall = {
+  item: Record<string, unknown>;
+  itemId?: string;
+  parentTurnId?: string;
+  receiverThreadIds: string[];
+  receiverThreadNames: Map<string, string>;
+  tool: string;
+};
+
+type CodexNativeSubAgentReconciliation = {
+  attempts: number;
+  parentThreadId: string;
+  receiverThreadId: string;
+  startedAt: number;
+  timer?: NodeJS.Timeout;
+};
+
+type CodexNativeSubAgentNotification = {
+  lastMessage?: string;
+  receiverThreadId: string;
+  status: ThreadSubAgentSummary["status"];
+};
+
+const CODEX_NATIVE_SUBAGENT_TOOLS = new Set<CodexNativeSubAgentTool>([
+  "spawnAgent",
+  "sendInput",
+  "resumeAgent",
+  "wait",
+  "closeAgent",
+]);
+
+const CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS = 10_000;
+const CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS = 2_000;
+const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS = 30;
+const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS = 30 * 60 * 1000;
+const CODEX_NATIVE_SUBAGENT_FINAL_READ_LIMIT = 12;
+
+function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentTool {
+  return CODEX_NATIVE_SUBAGENT_TOOLS.has(tool as CodexNativeSubAgentTool);
+}
+
+function codexNativeSubAgentId(threadId: string): string {
+  return `codex-native:${threadId}`;
+}
+
+function shortCodexNativeAgentId(threadId: string): string {
+  return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
+}
+
+function truncateSubAgentText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function normalizeCodexItemType(value: unknown): string | undefined {
+  return typeof value === "string"
+    ? value.replace(/[^a-z0-9]/gi, "").toLowerCase()
+    : undefined;
+}
+
+function readStringArrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
+function readStringArrayLike(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string[] {
+  if (!record) {
+    return [];
+  }
+  for (const key of keys) {
+    const values = readStringArrayValue(record[key]);
+    if (values.length > 0) {
+      return values;
+    }
+  }
+  return [];
+}
+
+function normalizeCodexNativeAgentName(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim().replace(/^@+/, "");
+  return normalized ? truncateSubAgentText(normalized, 80) : undefined;
+}
+
+function extractCodexNativeSpawnedAgentNames(text: string): string[] {
+  const names: string[] = [];
+  const pattern =
+    /Spawned\s+sub-agent\s+(?:`([^`]+)`|@?([A-Za-z][A-Za-z0-9_.-]{0,79}))/gi;
+  for (const match of text.matchAll(pattern)) {
+    const name = normalizeCodexNativeAgentName(match[1] ?? match[2]);
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+function codexNativeNotificationMessage(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return truncateSubAgentText(value, 360);
+  }
+  const record = readRecord(value);
+  return record
+    ? truncateSubAgentText(
+        readOptionalString(record, ["message", "summary", "output", "text"]) ?? "",
+        360,
+      ) || undefined
+    : undefined;
+}
+
+function codexNativeNotificationStatus(
+  value: unknown,
+): { message?: string; status?: ThreadSubAgentSummary["status"] } {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["completed", "complete", "success", "succeeded"].includes(normalized)) {
+      return { status: "success" };
+    }
+    if (["failed", "failure", "errored", "error"].includes(normalized)) {
+      return { status: "failure" };
+    }
+    if (["cancelled", "canceled", "interrupted"].includes(normalized)) {
+      return { status: "cancelled" };
+    }
+    if (["running", "active", "in_progress", "inprogress"].includes(normalized)) {
+      return { status: "running" };
+    }
+    return {};
+  }
+
+  const record = readRecord(value);
+  if (!record) {
+    return {};
+  }
+  for (const [key, status] of [
+    ["completed", "success"],
+    ["complete", "success"],
+    ["success", "success"],
+    ["succeeded", "success"],
+    ["failed", "failure"],
+    ["failure", "failure"],
+    ["errored", "failure"],
+    ["error", "failure"],
+    ["cancelled", "cancelled"],
+    ["canceled", "cancelled"],
+    ["interrupted", "cancelled"],
+    ["running", "running"],
+    ["active", "running"],
+  ] as const) {
+    if (record[key] !== undefined) {
+      return {
+        message: codexNativeNotificationMessage(record[key]),
+        status,
+      };
+    }
+  }
+  return codexNativeNotificationStatus(
+    readOptionalString(record, ["status", "state"]) ?? undefined,
+  );
+}
+
+function extractCodexNativeSubAgentNotifications(
+  text: string,
+): CodexNativeSubAgentNotification[] {
+  const notifications: CodexNativeSubAgentNotification[] = [];
+  const pattern = /<subagent_notification>\s*([\s\S]*?)\s*<\/subagent_notification>/gi;
+  for (const match of text.matchAll(pattern)) {
+    const rawJson = match[1]?.trim();
+    if (!rawJson) {
+      continue;
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawJson);
+    } catch {
+      continue;
+    }
+    const record = readRecord(payload);
+    if (!record) {
+      continue;
+    }
+    const receiverThreadId = readOptionalString(record, [
+      "agent_path",
+      "agentPath",
+      "threadId",
+      "thread_id",
+      "receiverThreadId",
+      "receiver_thread_id",
+    ]);
+    if (!receiverThreadId) {
+      continue;
+    }
+    const parsedStatus = codexNativeNotificationStatus(record.status);
+    if (!parsedStatus.status) {
+      continue;
+    }
+    notifications.push({
+      receiverThreadId,
+      status: parsedStatus.status,
+      ...(parsedStatus.message ? { lastMessage: parsedStatus.message } : {}),
+    });
+  }
+  return notifications;
+}
+
+function readCodexNativeAgentNameFromSource(
+  source: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const direct =
+    normalizeCodexNativeAgentName(source.agentNickname) ??
+    normalizeCodexNativeAgentName(source.agent_nickname) ??
+    normalizeCodexNativeAgentName(source.nickname) ??
+    normalizeCodexNativeAgentName(source.name);
+  if (direct) {
+    return direct;
+  }
+
+  const subAgent = readRecord(source.subAgent) ?? readRecord(source.sub_agent);
+  const spawn =
+    readRecord(subAgent?.thread_spawn) ??
+    readRecord(subAgent?.threadSpawn) ??
+    readRecord(source.thread_spawn) ??
+    readRecord(source.threadSpawn);
+  return (
+    normalizeCodexNativeAgentName(spawn?.agent_nickname) ??
+    normalizeCodexNativeAgentName(spawn?.agentNickname) ??
+    normalizeCodexNativeAgentName(subAgent?.agentNickname) ??
+    normalizeCodexNativeAgentName(subAgent?.agent_nickname)
+  );
+}
+
+function readCodexNativeAgentNameFromThread(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+  return (
+    normalizeCodexNativeAgentName(thread.agentNickname) ??
+    normalizeCodexNativeAgentName(thread.agent_nickname) ??
+    normalizeCodexNativeAgentName(thread.nickname) ??
+    normalizeCodexNativeAgentName(thread.name) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.source)) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn)) ??
+    readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
+  );
+}
+
+function readCodexNativeReceiverThreadNames(
+  item: Record<string, unknown>,
+): Map<string, string> {
+  const names = new Map<string, string>();
+
+  const recordName = (threadId: string | undefined, name: string | undefined) => {
+    if (threadId && name) {
+      names.set(threadId, name);
+    }
+  };
+
+  const receiverThreads = Array.isArray(item.receiverThreads)
+    ? item.receiverThreads
+    : Array.isArray(item.receiver_threads)
+      ? item.receiver_threads
+      : [];
+  for (const receiverThread of receiverThreads) {
+    const receiver = readRecord(receiverThread);
+    if (!receiver) {
+      continue;
+    }
+    const threadId = readOptionalString(receiver, [
+      "threadId",
+      "thread_id",
+      "id",
+    ]);
+    const thread = readRecord(receiver.thread) ?? receiver;
+    recordName(
+      threadId,
+      readCodexNativeAgentNameFromThread(thread) ??
+        readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
+    );
+  }
+
+  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  for (const [threadId, state] of Object.entries(states ?? {})) {
+    const stateRecord = readRecord(state);
+    recordName(
+      threadId,
+      readCodexNativeAgentNameFromThread(stateRecord) ??
+        readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
+    );
+  }
+
+  return names;
+}
+
+function readCodexNativeSubAgentCalls(
+  notification: AppServerNotification,
+): CodexNativeSubAgentCall[] {
+  const params = readRecord(notification.params);
+  const candidates: Record<string, unknown>[] = [];
+  const item = readRecord(params?.item);
+  if (item) {
+    candidates.push(item);
+  }
+  const turn = readRecord(params?.turn);
+  const notificationTurnId =
+    readOptionalString(params, ["turnId", "turn_id"]) ??
+    readOptionalString(turn, ["id", "turnId", "turn_id"]);
+  const turnItems = Array.isArray(turn?.items) ? turn.items : [];
+  for (const turnItem of turnItems) {
+    const record = readRecord(turnItem);
+    if (record) {
+      candidates.push(record);
+    }
+  }
+  const paramItems = Array.isArray(params?.items) ? params.items : [];
+  for (const paramItem of paramItems) {
+    const record = readRecord(paramItem);
+    if (record) {
+      candidates.push(record);
+    }
+  }
+
+  return candidates.flatMap((candidate) => {
+    if (normalizeCodexItemType(candidate.type) !== "collabagenttoolcall") {
+      return [];
+    }
+    const tool = readOptionalString(candidate, ["tool"]) ?? "collabAgent";
+    return [
+      {
+        item: candidate,
+        itemId: readOptionalString(candidate, ["id", "itemId", "item_id"]),
+        parentTurnId:
+          readOptionalString(candidate, ["turnId", "turn_id"]) ??
+          notificationTurnId,
+        receiverThreadIds: readStringArrayLike(candidate, [
+          "receiverThreadIds",
+          "receiver_thread_ids",
+          "receivers",
+        ]),
+        receiverThreadNames: readCodexNativeReceiverThreadNames(candidate),
+        tool,
+      },
+    ];
+  });
+}
+
+function readCodexNativeAgentState(
+  item: Record<string, unknown>,
+  threadId: string,
+): { message?: string; status?: string } {
+  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  const state = states?.[threadId];
+  if (typeof state === "string") {
+    return { status: state };
+  }
+  const record = readRecord(state);
+  if (!record) {
+    return {};
+  }
+  return {
+    message: readOptionalString(record, ["message", "output", "summary"]),
+    status: readOptionalString(record, ["status", "state"]),
+  };
+}
+
+function mapCodexNativeSubAgentStatus(params: {
+  agentState?: string;
+  itemStatus?: string;
+  tool: string;
+}): ThreadSubAgentSummary["status"] {
+  const itemStatus = params.itemStatus?.toLowerCase();
+  const agentState = params.agentState?.toLowerCase();
+  if (itemStatus === "failed") {
+    return "failure";
+  }
+  if (agentState) {
+    if (["completed", "complete", "success", "succeeded"].includes(agentState)) {
+      return "success";
+    }
+    if (["failed", "failure", "errored", "error"].includes(agentState)) {
+      return "failure";
+    }
+    if (["cancelled", "canceled", "interrupted"].includes(agentState)) {
+      return "cancelled";
+    }
+    if (["blocked", "pendingapproval", "pendingapprovalrequest"].includes(agentState)) {
+      return "blocked";
+    }
+    if (["pendinginit", "pending", "running", "inprogress", "active"].includes(agentState)) {
+      return "running";
+    }
+    if (agentState === "shutdown") {
+      return params.tool === "closeAgent" ? "cancelled" : "success";
+    }
+    if (agentState === "notfound") {
+      return "failure";
+    }
+  }
+  if (itemStatus === "in_progress" || itemStatus === "running") {
+    return "running";
+  }
+  if (params.tool === "closeAgent" && itemStatus === "completed") {
+    return "cancelled";
+  }
+  if (params.tool === "spawnAgent" && itemStatus === "completed") {
+    return "running";
+  }
+  if (itemStatus === "completed" && params.tool === "wait") {
+    return "success";
+  }
+  return "running";
+}
+
+function codexNativeSubAgentOutcome(
+  status: ThreadSubAgentSummary["status"],
+): ThreadSubAgentSummary["outcome"] | undefined {
+  if (status === "success") {
+    return "success";
+  }
+  if (status === "failure") {
+    return "failure";
+  }
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  return undefined;
+}
+
+function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
+  return status === "success" || status === "failure" || status === "cancelled";
+}
+
+function codexNativeSubAgentNextReconciliationDelayMs(attempts: number): number {
+  if (attempts <= 1) {
+    return 15_000;
+  }
+  if (attempts <= 3) {
+    return 30_000;
+  }
+  return 60_000;
+}
+
+function codexNativeSubAgentTask(params: {
+  prompt?: string;
+  threadId: string;
+}): string {
+  const promptTitle = params.prompt
+    ? shortenDerivedThreadTitle(params.prompt) ?? params.prompt
+    : undefined;
+  return promptTitle
+    ? truncateSubAgentText(promptTitle, 120)
+    : `Codex subagent ${shortCodexNativeAgentId(params.threadId)}`;
+}
+
+function codexNativeSubAgentMessage(params: {
+  agentMessage?: string;
+  agentState?: string;
+  tool: string;
+}): string {
+  if (params.agentMessage) {
+    return truncateSubAgentText(params.agentMessage, 360);
+  }
+  switch (params.tool) {
+    case "spawnAgent":
+      return "Spawned by Codex native spawnAgent.";
+    case "sendInput":
+      return "Sent input to Codex native subagent.";
+    case "resumeAgent":
+      return "Resumed Codex native subagent.";
+    case "wait":
+      return params.agentState
+        ? `Observed Codex native subagent state: ${params.agentState}.`
+        : "Waited on Codex native subagent.";
+    case "closeAgent":
+      return "Closed Codex native subagent.";
+    default:
+      return `Observed Codex native ${params.tool} call.`;
+  }
+}
 
 function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
   operation: TOperation,
@@ -2404,13 +2922,54 @@ function finalTextFromTerminalNotification(
     AppServerNotification,
     { method: "turn/completed" }
   >;
-  const text = completed.params.turn.output
+  const output = Array.isArray(completed.params.turn.output)
+    ? completed.params.turn.output
+    : [];
+  const text = output
     .filter((item) => item.type === "text")
     .map((item) => item.text.trim())
     .filter(Boolean)
     .join("\n\n")
     .trim();
   return text || undefined;
+}
+
+function textFragmentsFromCodexNotification(
+  notification: AppServerNotification,
+): string[] {
+  const fragments: string[] = [];
+  const terminalText = finalTextFromTerminalNotification(notification);
+  if (terminalText) {
+    fragments.push(terminalText);
+  }
+
+  if (notification.method === "item/agentMessage/delta") {
+    const delta = readOptionalString(readRecord(notification.params), ["delta"]);
+    if (delta) {
+      fragments.push(delta);
+    }
+  }
+
+  if (
+    notification.method === "item/started" ||
+    notification.method === "item/completed"
+  ) {
+    const params = readRecord(notification.params);
+    const item = readRecord(params?.item);
+    const itemText =
+      readOptionalString(item, ["text", "content", "message", "summary"]) ??
+      readOptionalString(readRecord(item?.data), [
+        "text",
+        "content",
+        "message",
+        "summary",
+      ]);
+    if (itemText) {
+      fragments.push(itemText);
+    }
+  }
+
+  return fragments;
 }
 
 function errorMessageFromTerminalNotification(
@@ -3573,6 +4132,11 @@ export class DesktopBackendRegistry {
   private readonly reviewSubAgentsByReviewTurn = new Map<
     string,
     ReviewSubAgentRecord
+  >();
+  private readonly codexNativeSubAgentParents = new Map<string, string>();
+  private readonly codexNativeSubAgentReconciliations = new Map<
+    string,
+    CodexNativeSubAgentReconciliation
   >();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
@@ -9329,6 +9893,12 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
+    for (const reconciliation of this.codexNativeSubAgentReconciliations.values()) {
+      if (reconciliation.timer) {
+        clearTimeout(reconciliation.timer);
+      }
+    }
+    this.codexNativeSubAgentReconciliations.clear();
     for (const unsubscribe of this.unsubscribers.splice(0)) {
       unsubscribe();
     }
@@ -10794,6 +11364,7 @@ export class DesktopBackendRegistry {
       (record) => record.monitorThreadId === notification.params.threadId,
     );
     if (!monitorRecord) {
+      await this.recordCodexNativeSubAgentUsage(event);
       return;
     }
 
@@ -10889,6 +11460,9 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return;
     }
+    if (event.backend === "codex" && this.codexNativeSubAgentParents.has(threadId)) {
+      return;
+    }
     if (
       Array.from(this.taskMonitorDelegations.values()).some(
         (record) => record.monitorThreadId === threadId,
@@ -10962,6 +11536,107 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {
+    if (
+      event.backend !== "codex" ||
+      event.notification.method !== "thread/tokenUsage/updated"
+    ) {
+      return;
+    }
+    const parentThreadId = this.codexNativeSubAgentParents.get(
+      event.notification.params.threadId,
+    );
+    if (!parentThreadId) {
+      return;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(event.notification.params.threadId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    if (!existing) {
+      backendRegistryLog.warn("codex native subagent usage had no matching card", {
+        monitorId,
+        parentThreadId,
+        threadId: event.notification.params.threadId,
+      });
+      return;
+    }
+    const notificationParams = readRecord(event.notification.params);
+    const notificationModel = readTaskMonitorUsageModel({
+      notificationModel: event.notification.params.model,
+      tokenUsage: event.notification.params.tokenUsage,
+    });
+    const serviceTier = readTaskMonitorUsageServiceTier(
+      event.notification.params.tokenUsage,
+    );
+    const fastMode = readTaskMonitorUsageFastMode(
+      event.notification.params.tokenUsage,
+    );
+    const model = notificationModel ?? existing.preferredModel;
+    const usageSnapshot = buildTaskMonitorUsageSnapshot({
+      fastMode,
+      model,
+      serviceTier,
+      tokenUsage: event.notification.params.tokenUsage,
+    });
+    if (!usageSnapshot) {
+      return;
+    }
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: parentThreadId,
+      subAgent: {
+        ...existing,
+        monitorUsage: usageSnapshot,
+        updatedAt: Date.now(),
+      },
+    });
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: parentThreadId,
+        },
+      },
+    });
+    if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+      const line = buildTaskMonitorUsageLine({
+        backend: "codex",
+        fastMode,
+        model,
+        monitorId,
+        monitorThreadId: event.notification.params.threadId,
+        monitorTurnId:
+          readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
+          existing.monitorTurnId,
+        parentThreadId,
+        serviceTier,
+        source: "monitor",
+        usage: usageSnapshot,
+      });
+      logUnpricedThreadUsageLine(line);
+      await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.emitThreadPricingUpdated({
+        backend: "codex",
+        threadId: line.parentThreadId ?? line.threadId,
+      });
+    }
+    if (!codexNativeSubAgentIsTerminal(existing.status)) {
+      this.scheduleCodexNativeSubAgentReconciliation({
+        delayMs: CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS,
+        parentThreadId,
+        receiverThreadId: event.notification.params.threadId,
+      });
+    }
+  }
+
   private async persistExistingReviewSubAgentUsage(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
@@ -10996,6 +11671,488 @@ export class DesktopBackendRegistry {
     this.invalidateThreadListCache(params.backend);
     await this.emit({
       backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.parentThreadId,
+        },
+      },
+    });
+    return true;
+  }
+
+  private async recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void> {
+    if (event.backend !== "codex") {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const threadId = readOptionalString(params, ["threadId", "thread_id"]);
+    if (!threadId) {
+      return;
+    }
+    const calls = readCodexNativeSubAgentCalls(event.notification);
+    if (calls.length === 0) {
+      return;
+    }
+
+    for (const call of calls) {
+      if (!isCodexNativeSubAgentTool(call.tool)) {
+        backendRegistryLog.warn("unhandled codex native subagent tool", {
+          itemId: call.itemId,
+          method: event.notification.method,
+          threadId,
+          tool: call.tool,
+        });
+        continue;
+      }
+      if (call.receiverThreadIds.length === 0) {
+        backendRegistryLog.warn("codex native subagent call missing receiver thread ids", {
+          itemId: call.itemId,
+          method: event.notification.method,
+          threadId,
+          tool: call.tool,
+        });
+        continue;
+      }
+
+      for (const receiverThreadId of call.receiverThreadIds) {
+        await this.persistCodexNativeSubAgent({
+          call,
+          parentThreadId: threadId,
+          receiverThreadId,
+        });
+      }
+    }
+  }
+
+  private async recordCodexNativeSubAgentNames(event: AgentEvent): Promise<void> {
+    if (event.backend !== "codex") {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    if (!params) {
+      return;
+    }
+    const parentThreadId = readOptionalString(params, ["threadId", "thread_id"]);
+    const turn = readRecord(params.turn);
+    const turnId =
+      readOptionalString(params, ["turnId", "turn_id"]) ?? readOptionalString(turn, ["id"]);
+    if (!parentThreadId || !turnId) {
+      return;
+    }
+    const names = textFragmentsFromCodexNotification(event.notification).flatMap(
+      (text) => extractCodexNativeSpawnedAgentNames(text),
+    );
+    if (names.length === 0) {
+      return;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: parentThreadId,
+    });
+    const candidates = (overlay?.subAgents ?? [])
+      .filter(
+        (subAgent) =>
+          subAgent.monitorId.startsWith("codex-native:") &&
+          subAgent.monitorTurnId === turnId &&
+          !subAgent.agentName,
+      )
+      .sort((left, right) => left.createdAt - right.createdAt);
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const count = Math.min(candidates.length, names.length);
+    const now = Date.now();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidates[index];
+      const agentName = names[index];
+      if (!candidate || !agentName) {
+        continue;
+      }
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: "codex",
+        threadId: parentThreadId,
+        subAgent: {
+          ...candidate,
+          agentName,
+          updatedAt: now,
+        },
+      });
+    }
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: parentThreadId,
+        },
+      },
+    });
+  }
+
+  private async recordCodexNativeSubAgentNotifications(
+    event: AgentEvent,
+  ): Promise<void> {
+    if (event.backend !== "codex") {
+      return;
+    }
+    const notifications = textFragmentsFromCodexNotification(event.notification).flatMap(
+      (text) => extractCodexNativeSubAgentNotifications(text),
+    );
+    if (notifications.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    for (const notification of notifications) {
+      const parentThreadId =
+        this.codexNativeSubAgentParents.get(notification.receiverThreadId) ??
+        readOptionalString(readRecord(event.notification.params), [
+          "threadId",
+          "thread_id",
+        ]);
+      if (!parentThreadId) {
+        continue;
+      }
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: parentThreadId,
+      });
+      const monitorId = codexNativeSubAgentId(notification.receiverThreadId);
+      const existing = overlay?.subAgents?.find(
+        (subAgent) => subAgent.monitorId === monitorId,
+      );
+      if (!existing) {
+        continue;
+      }
+
+      const outcome = codexNativeSubAgentOutcome(notification.status);
+      const terminal = codexNativeSubAgentIsTerminal(notification.status);
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: "codex",
+        threadId: parentThreadId,
+        subAgent: {
+          ...existing,
+          status: codexNativeSubAgentIsTerminal(existing.status)
+            ? existing.status
+            : notification.status,
+          updatedAt: now,
+          ...(notification.lastMessage
+            ? { lastMessage: notification.lastMessage }
+            : {}),
+          ...(outcome && !existing.outcome ? { outcome } : {}),
+          ...(terminal ? { completedAt: existing.completedAt ?? now } : {}),
+        },
+      });
+      if (terminal) {
+        this.clearCodexNativeSubAgentReconciliation(notification.receiverThreadId);
+      }
+      this.invalidateThreadListCache("codex");
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/subAgents/updated",
+          params: {
+            threadId: parentThreadId,
+          },
+        },
+      });
+    }
+  }
+
+  private async persistCodexNativeSubAgent(params: {
+    call: CodexNativeSubAgentCall;
+    parentThreadId: string;
+    receiverThreadId: string;
+  }): Promise<void> {
+    const now = Date.now();
+    this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(params.receiverThreadId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    const prompt = readOptionalString(params.call.item, ["prompt"]);
+    const itemStatus = readOptionalString(params.call.item, ["status"]);
+    const agentState = readCodexNativeAgentState(
+      params.call.item,
+      params.receiverThreadId,
+    );
+    const mappedStatus = mapCodexNativeSubAgentStatus({
+      agentState: agentState.status,
+      itemStatus,
+      tool: params.call.tool,
+    });
+    const status =
+      existing && codexNativeSubAgentIsTerminal(existing.status)
+        ? existing.status
+        : mappedStatus;
+    const completedAt =
+      codexNativeSubAgentIsTerminal(status) && !existing?.completedAt
+        ? now
+        : existing?.completedAt;
+    const model = readOptionalString(params.call.item, ["model"]);
+    const reasoningEffort = readOptionalString(params.call.item, [
+      "reasoningEffort",
+      "reasoning_effort",
+    ]);
+    const agentName =
+      params.call.receiverThreadNames.get(params.receiverThreadId) ??
+      existing?.agentName;
+    const outcome = codexNativeSubAgentOutcome(status);
+    const nextLastMessage = codexNativeSubAgentMessage({
+      agentMessage: agentState.message,
+      agentState: agentState.status,
+      tool: params.call.tool,
+    });
+    const lastMessage =
+      existing &&
+      codexNativeSubAgentIsTerminal(existing.status) &&
+      !agentState.message &&
+      existing.lastMessage
+        ? existing.lastMessage
+        : nextLastMessage;
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId,
+      task:
+        existing?.task ??
+        codexNativeSubAgentTask({
+          prompt,
+          threadId: params.receiverThreadId,
+        }),
+      status,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      monitorThreadId: params.receiverThreadId,
+      ...(params.call.parentTurnId
+        ? { monitorTurnId: params.call.parentTurnId }
+        : existing?.monitorTurnId
+          ? { monitorTurnId: existing.monitorTurnId }
+          : {}),
+      ...(agentName ? { agentName } : {}),
+      ...(model
+        ? { preferredModel: model }
+        : existing?.preferredModel
+          ? { preferredModel: existing.preferredModel }
+          : {}),
+      ...(reasoningEffort
+        ? { preferredReasoningEffort: reasoningEffort }
+        : existing?.preferredReasoningEffort
+          ? { preferredReasoningEffort: existing.preferredReasoningEffort }
+          : {}),
+      lastMessage,
+      ...(outcome
+        ? { outcome }
+        : existing?.outcome
+          ? { outcome: existing.outcome }
+          : {}),
+      ...(completedAt ? { completedAt } : {}),
+      ...(existing?.monitorUsage ? { monitorUsage: existing.monitorUsage } : {}),
+    };
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: params.parentThreadId,
+      subAgent,
+    });
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.parentThreadId,
+        },
+      },
+    });
+    if (codexNativeSubAgentIsTerminal(status)) {
+      this.clearCodexNativeSubAgentReconciliation(params.receiverThreadId);
+    } else {
+      this.scheduleCodexNativeSubAgentReconciliation({
+        delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
+        parentThreadId: params.parentThreadId,
+        receiverThreadId: params.receiverThreadId,
+      });
+    }
+  }
+
+  private scheduleCodexNativeSubAgentReconciliation(params: {
+    delayMs: number;
+    parentThreadId: string;
+    receiverThreadId: string;
+  }): void {
+    const existing = this.codexNativeSubAgentReconciliations.get(
+      params.receiverThreadId,
+    );
+    if (existing?.timer) {
+      clearTimeout(existing.timer);
+    }
+    const reconciliation: CodexNativeSubAgentReconciliation = existing ?? {
+      attempts: 0,
+      parentThreadId: params.parentThreadId,
+      receiverThreadId: params.receiverThreadId,
+      startedAt: Date.now(),
+    };
+    reconciliation.parentThreadId = params.parentThreadId;
+    const timer = setTimeout(() => {
+      const scheduled = this.codexNativeSubAgentReconciliations.get(
+        params.receiverThreadId,
+      );
+      if (scheduled) {
+        scheduled.timer = undefined;
+      }
+      void this.reconcileCodexNativeSubAgent(params.receiverThreadId);
+    }, params.delayMs);
+    timer.unref?.();
+    reconciliation.timer = timer;
+    this.codexNativeSubAgentReconciliations.set(
+      params.receiverThreadId,
+      reconciliation,
+    );
+  }
+
+  private clearCodexNativeSubAgentReconciliation(receiverThreadId: string): void {
+    const reconciliation =
+      this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (reconciliation?.timer) {
+      clearTimeout(reconciliation.timer);
+    }
+    this.codexNativeSubAgentReconciliations.delete(receiverThreadId);
+  }
+
+  private async reconcileCodexNativeSubAgent(
+    receiverThreadId: string,
+  ): Promise<void> {
+    const reconciliation =
+      this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (!reconciliation) {
+      return;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: reconciliation.parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(receiverThreadId);
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    if (!existing || codexNativeSubAgentIsTerminal(existing.status)) {
+      this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      reconciliation.attempts >= CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS ||
+      now - reconciliation.startedAt > CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS
+    ) {
+      this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+      return;
+    }
+
+    try {
+      const probe = await this.withCodexThreadClient(
+        receiverThreadId,
+        async (client) =>
+          await client.readThread({
+            threadId: receiverThreadId,
+            includeTurns: false,
+            limit: 0,
+          }),
+        undefined,
+        false,
+      );
+      reconciliation.attempts += 1;
+      const status = probe.threadStatus;
+
+      if (status === "idle") {
+        const completed = await this.completeCodexNativeSubAgentFromThread({
+          existing,
+          parentThreadId: reconciliation.parentThreadId,
+          receiverThreadId,
+        });
+        if (completed) {
+          this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
+          return;
+        }
+      }
+    } catch (error) {
+      backendRegistryLog.debug("codex native subagent reconciliation failed", {
+        error: error instanceof Error ? error.message : String(error),
+        parentThreadId: reconciliation.parentThreadId,
+        receiverThreadId,
+      });
+    }
+
+    const latest = this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    if (!latest) {
+      return;
+    }
+    this.scheduleCodexNativeSubAgentReconciliation({
+      delayMs: codexNativeSubAgentNextReconciliationDelayMs(latest.attempts),
+      parentThreadId: latest.parentThreadId,
+      receiverThreadId,
+    });
+  }
+
+  private async completeCodexNativeSubAgentFromThread(params: {
+    existing: ThreadSubAgentSummary;
+    parentThreadId: string;
+    receiverThreadId: string;
+  }): Promise<boolean> {
+    const replay = await this.withCodexThreadClient(
+      params.receiverThreadId,
+      async (client) =>
+        await client.readThread({
+          threadId: params.receiverThreadId,
+          includeTurns: true,
+          limit: CODEX_NATIVE_SUBAGENT_FINAL_READ_LIMIT,
+        }),
+      undefined,
+      false,
+    );
+    if (replay.threadStatus === "active") {
+      return false;
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.parentThreadId,
+    });
+    const monitorId = codexNativeSubAgentId(params.receiverThreadId);
+    const existing =
+      overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId) ??
+      params.existing;
+    if (codexNativeSubAgentIsTerminal(existing.status)) {
+      return true;
+    }
+
+    const now = Date.now();
+    const lastMessage = replay.lastAssistantMessage
+      ? truncateSubAgentText(replay.lastAssistantMessage, 360)
+      : "Codex native sub-agent completed.";
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: params.parentThreadId,
+      subAgent: {
+        ...existing,
+        status: "success",
+        outcome: "success",
+        completedAt: existing.completedAt ?? now,
+        lastMessage,
+        updatedAt: now,
+      },
+    });
+    this.invalidateThreadListCache("codex");
+    await this.emit({
+      backend: "codex",
       notification: {
         method: "thread/subAgents/updated",
         params: {
@@ -14399,19 +15556,22 @@ export class DesktopBackendRegistry {
       });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
-        // now. Fire-and-forget; failures are logged + retried inside
+        // now. Fire-and-forget so terminal turn fan-out does not block on
+        // permission prompts; startTurn/startReview also await any in-flight
+        // flush before launching the next Codex request.
+        // Failures are logged + retried inside
         // flushQueuedExecutionModeIfPresent.
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
       } else if (isAcpBackendId(event.backend)) {
         if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
-          void this.flushQueuedExecutionModeIfPresent(
+          await this.flushQueuedExecutionModeIfPresent(
             notification.params.threadId,
             event.backend,
           );
         }
-        void this.flushQueuedAcpRuntimeOptionIfPresent(
+        await this.flushQueuedAcpRuntimeOptionIfPresent(
           event.backend,
           notification.params.threadId,
         );
@@ -14495,12 +15655,12 @@ export class DesktopBackendRegistry {
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
           if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
-            void this.flushQueuedExecutionModeIfPresent(
+            await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,
               event.backend,
             );
           }
-          void this.flushQueuedAcpRuntimeOptionIfPresent(
+          await this.flushQueuedAcpRuntimeOptionIfPresent(
             event.backend,
             event.notification.params.threadId,
           );
@@ -14530,7 +15690,7 @@ export class DesktopBackendRegistry {
         // on the protocol shape; we cover both for resilience). Idempotent
         // when no queue is set.
         if (!hasActiveCodexReviewTurn) {
-          void this.flushQueuedExecutionModeIfPresent(
+          await this.flushQueuedExecutionModeIfPresent(
             event.notification.params.threadId,
           );
         }
@@ -14580,6 +15740,9 @@ export class DesktopBackendRegistry {
     }
 
     await this.recordLiveThreadUsage(event);
+    await this.recordCodexNativeSubAgentActivity(event);
+    await this.recordCodexNativeSubAgentNotifications(event);
+    await this.recordCodexNativeSubAgentNames(event);
     await this.recordTaskMonitorUsage(event);
 
     this.rememberThreadTitleFromEvent(event);

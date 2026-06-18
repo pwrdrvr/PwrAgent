@@ -8,6 +8,10 @@ import { formatTimestamp } from "./context-rail-shared";
 import { subAgentStatusLabel, subAgentTone } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
+import {
+  subAgentOriginSentence,
+  subAgentUsageLabel,
+} from "./subagent-kind";
 
 type SubAgentsPanelProps = {
   thread: NavigationThreadSummary;
@@ -27,6 +31,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         <ul className="context-list context-list--cards">
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
+            const originSentence = subAgentOriginSentence(subAgent);
+            const latestMessage =
+              subAgent.lastMessage && subAgent.lastMessage !== originSentence
+                ? subAgent.lastMessage
+                : undefined;
             return (
               <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
@@ -36,6 +45,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     {subAgentStatusLabel(subAgent.status)}
                   </RailStatusChip>
                 </p>
+                {subAgent.agentName ? (
+                  <p className="rail-card__agent-name" title={subAgent.agentName}>
+                    {subAgent.agentName}
+                  </p>
+                ) : null}
                 <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}
                 </p>
@@ -53,12 +67,15 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     </>
                   ) : null}
                 </p>
-                {subAgent.lastMessage ? (
-                  <p className="rail-card__message">{subAgent.lastMessage}</p>
+                {originSentence ? (
+                  <p className="rail-card__message">{originSentence}</p>
+                ) : null}
+                {latestMessage ? (
+                  <p className="rail-card__message">{latestMessage}</p>
                 ) : null}
                 {subAgent.monitorUsage?.summary ? (
                   <p className="rail-card__usage">
-                    {subAgent.monitorId.startsWith("review:") ? "Review" : "Monitor"} usage:{" "}
+                    {subAgentUsageLabel(subAgent)} usage:{" "}
                     {subAgent.monitorUsage.summary}
                   </p>
                 ) : null}
@@ -75,8 +92,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         </ul>
       ) : (
         <p className="context-empty">
-          No sub-agents yet. Delegated task monitors started from this thread
-          will appear here.
+          No sub-agents yet. Delegated monitors, reviews, and observed native
+          Codex sub-agents started from this thread will appear here.
         </p>
       )}
       {detailsFor ? (

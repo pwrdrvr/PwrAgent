@@ -1503,6 +1503,7 @@ export function Composer(props: ComposerProps) {
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
+  const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -2346,6 +2347,9 @@ export function Composer(props: ComposerProps) {
     } else if (!nextTurnId || activeReviewTurnIdRef.current !== nextTurnId) {
       activeReviewTurnIdRef.current = undefined;
     }
+    if (!nextTurnId || confirmedActiveTurnIdRef.current !== nextTurnId) {
+      confirmedActiveTurnIdRef.current = undefined;
+    }
     activeTurnIdRef.current = nextTurnId;
     setActiveTurnId(nextTurnId);
   };
@@ -2829,6 +2833,7 @@ export function Composer(props: ComposerProps) {
           return;
         }
         updateActiveTurnId(startedTurnId);
+        confirmedActiveTurnIdRef.current = startedTurnId;
         props.onActiveTurnIdChange?.(startedTurnId);
       }
 
@@ -2889,10 +2894,18 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "thread/status/changed" &&
         statusRecord?.type === "idle"
       ) {
-        if (activeTurnIdRef.current) {
+        if (
+          activeReviewTurnIdRef.current &&
+          activeTurnIdRef.current === activeReviewTurnIdRef.current
+        ) {
           return;
         }
-
+        if (
+          activeTurnIdRef.current &&
+          activeTurnIdRef.current === confirmedActiveTurnIdRef.current
+        ) {
+          return;
+        }
         props.onPendingStatusChange?.(undefined);
         updateSending(false);
         setInterrupting(false);

@@ -284,6 +284,7 @@ export function buildNavigationSnapshotHash(params: {
         monitorId: subAgent.monitorId,
         task: subAgent.task,
         status: subAgent.status,
+        agentName: subAgent.agentName ?? null,
         createdAt: subAgent.createdAt,
         updatedAt: subAgent.updatedAt,
         preferredModel: subAgent.preferredModel ?? null,

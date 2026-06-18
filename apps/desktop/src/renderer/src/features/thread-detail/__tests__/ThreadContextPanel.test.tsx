@@ -227,6 +227,7 @@ describe("ThreadContextPanel", () => {
             status: "running",
             createdAt: 2000,
             updatedAt: 2500,
+            agentName: "Poincare",
             preferredModel: "gpt-5.4-mini",
             monitorThreadId: "monitor-thread-2",
             lastMessage: "Lint is still running.",
@@ -261,6 +262,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
+    expect(screen.getByText("Poincare")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Lint is still running.")).toBeInTheDocument();
     expect(
@@ -288,6 +290,8 @@ describe("ThreadContextPanel", () => {
       modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
     ).toBeInTheDocument();
     expect(modal.getByText("Latest message")).toBeInTheDocument();
+    expect(modal.getByText("Name")).toBeInTheDocument();
+    expect(modal.getByText("Poincare")).toBeInTheDocument();
     expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
     expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
     expect(modal.getByText("gpt-5.4-mini")).toBeInTheDocument();
@@ -334,6 +338,83 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByText("Review usage: 800 uncached in · 200 cached · 50 out"),
     ).toBeInTheDocument();
+  });
+
+  it("labels Codex native sub-agent usage separately from monitor usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "codex-native:019ed7df-5876-7882-9b75-7fd647372da7",
+            task: "Check PR status",
+            status: "success",
+            createdAt: 2000,
+            completedAt: 3000,
+            updatedAt: 2500,
+            agentName: "Peirce",
+            lastMessage: "PR #783 is open and all required checks are passing.",
+            monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+            monitorUsage: {
+              summary: "800 uncached in · 200 cached · 50 out",
+              tokenUsage: {
+                inputTokens: 1000,
+                cachedInputTokens: 200,
+                uncachedInputTokens: 800,
+                outputTokens: 50,
+                totalTokens: 1050,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      screen.getByText("Codex usage: 800 uncached in · 200 cached · 50 out"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Peirce")).toBeInTheDocument();
+    expect(
+      screen.getByText("Spawned by Codex native spawnAgent."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("PR #783 is open and all required checks are passing."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Monitor usage: 800 uncached in · 200 cached · 50 out"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const modal = within(screen.getByRole("dialog"));
+    expect(modal.getByText("Source")).toBeInTheDocument();
+    expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
+  });
+
+  it("does not duplicate the Codex native source line while running", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "codex-native:019ed7df-5876-7882-9b75-7fd647372da7",
+            task: "Check PR status",
+            status: "running",
+            createdAt: 2000,
+            updatedAt: 2500,
+            monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+            lastMessage: "Spawned by Codex native spawnAgent.",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getAllByText("Spawned by Codex native spawnAgent.")).toHaveLength(
+      1,
+    );
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
