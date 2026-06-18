@@ -1,0 +1,189 @@
+import type {
+  AppServerBackendKind,
+  CodexThreadEnvironmentRuntime,
+  LinkedDirectorySummary,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "./normalized-app-server";
+import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
+
+export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
+  "handoff_task",
+] as const;
+
+export type PwrAgentThreadOrchestrationOperationName =
+  (typeof PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES)[number];
+
+export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
+  "invalid_arguments",
+  "not_found",
+  "forbidden",
+  "unsupported_backend",
+  "unsupported_workspace",
+  "unsupported_operation",
+  "ambiguous_workspace",
+  "turn_start_failed",
+  "internal_error",
+] as const;
+
+export type PwrAgentThreadOrchestrationErrorCode =
+  (typeof PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES)[number];
+
+export type PwrAgentThreadOrchestrationContext = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  now?: number;
+};
+
+export type HandoffTaskSeedMode = "clean" | "fork";
+
+export type HandoffTaskGroupingMode = "none" | "subthread";
+
+export type HandoffTaskWorkspaceMode = "same" | "new_worktree" | "none";
+
+export type HandoffTaskMessagingAttachmentMode =
+  | "none"
+  | "auto"
+  | "current_conversation"
+  | "new_child";
+
+export type HandoffTaskToolArgs = {
+  task: string;
+  title?: string;
+  context?: string;
+  seedMode?: HandoffTaskSeedMode;
+  groupingMode?: HandoffTaskGroupingMode;
+  workspaceMode?: HandoffTaskWorkspaceMode;
+  messagingAttachment?: HandoffTaskMessagingAttachmentMode;
+  backend?: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  executionMode?: ThreadExecutionMode;
+  approvalPolicy?: string;
+  sandbox?: string;
+  branchName?: string;
+};
+
+export type ThreadHandoffOriginWorkspace = {
+  mode: HandoffTaskWorkspaceMode;
+  cwd?: string;
+  branch?: string;
+  linkedDirectory?: LinkedDirectorySummary;
+  git:
+    | { kind: "none"; worktreeCreationAvailable: false; unavailableReason: string }
+    | {
+        kind: "non_git";
+        worktreeCreationAvailable: false;
+        unavailableReason: string;
+      }
+    | {
+        kind: "git_local" | "git_worktree";
+        worktreeCreationAvailable: boolean;
+        unavailableReason?: string;
+      };
+};
+
+export type ThreadHandoffOrigin = {
+  sourceBackend: AppServerBackendKind;
+  sourceThreadId: ThreadIdentifier;
+  sourceTurnId?: string;
+  sourceTitle?: string;
+  taskTitle?: string;
+  seedMode: HandoffTaskSeedMode;
+  groupingMode: HandoffTaskGroupingMode;
+  createdAt: number;
+  workspace: ThreadHandoffOriginWorkspace;
+};
+
+export type HandoffTaskInheritedSettings = {
+  backend: AppServerBackendKind;
+  executionMode?: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  approvalPolicy?: string;
+  sandbox?: string;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+};
+
+export type HandoffTaskMessagingAttachment =
+  | {
+      requested: false;
+      outcome: "not_requested";
+    }
+  | {
+      requested: true;
+      outcome: "attached" | "created_and_attached";
+      channel: MessagingChannelKind;
+      conversation: {
+        id: string;
+        kind: MessagingConversationKind;
+        title?: string;
+      };
+      createdConversation?: {
+        id: string;
+        kind: MessagingConversationKind;
+        title?: string;
+      };
+    }
+  | {
+      requested: true;
+      outcome: "not_available" | "forbidden" | "unsupported" | "failed";
+      reason: string;
+    };
+
+export type HandoffTaskResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  title?: string;
+  seedMode: HandoffTaskSeedMode;
+  groupingMode: HandoffTaskGroupingMode;
+  groupedUnderThreadId?: ThreadIdentifier;
+  inheritedSettings: HandoffTaskInheritedSettings;
+  origin: ThreadHandoffOrigin;
+  workspace: ThreadHandoffOriginWorkspace;
+  messagingAttachment: HandoffTaskMessagingAttachment;
+  turnStartFailure?: {
+    message: string;
+    phase: "turn";
+  };
+};
+
+export type PwrAgentThreadOrchestrationToolArgsByOperation = {
+  handoff_task: HandoffTaskToolArgs;
+};
+
+export type PwrAgentThreadOrchestrationToolArgs<
+  TOperation extends PwrAgentThreadOrchestrationOperationName =
+    PwrAgentThreadOrchestrationOperationName,
+> = PwrAgentThreadOrchestrationToolArgsByOperation[TOperation];
+
+export type PwrAgentThreadOrchestrationRequest<
+  TOperation extends PwrAgentThreadOrchestrationOperationName =
+    PwrAgentThreadOrchestrationOperationName,
+> = {
+  [TOperationKey in TOperation]: {
+    operation: TOperationKey;
+    context: PwrAgentThreadOrchestrationContext;
+    args: PwrAgentThreadOrchestrationToolArgs<TOperationKey>;
+  };
+}[TOperation];
+
+export type PwrAgentThreadOrchestrationResponse =
+  | {
+      ok: true;
+      data: HandoffTaskResult;
+    }
+  | {
+      ok: false;
+      error: {
+        code: PwrAgentThreadOrchestrationErrorCode;
+        message: string;
+        data?: unknown;
+      };
+    };

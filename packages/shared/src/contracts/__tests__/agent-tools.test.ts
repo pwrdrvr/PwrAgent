@@ -18,11 +18,13 @@ describe("agent tool contracts", () => {
       "app_management",
       "thread_inspection",
       "messaging_context",
+      "thread_orchestration",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);
     expect(isAgentToolCatalogId("thread_inspection")).toBe(true);
     expect(isAgentToolCatalogId("messaging_context")).toBe(true);
+    expect(isAgentToolCatalogId("thread_orchestration")).toBe(true);
     expect(isAgentToolCatalogId("shell")).toBe(false);
   });
 
@@ -34,6 +36,7 @@ describe("agent tool contracts", () => {
         "app_management",
         "thread_inspection",
         "messaging_context",
+        "thread_orchestration",
         "unknown",
       ]),
     ).toEqual([
@@ -41,6 +44,7 @@ describe("agent tool contracts", () => {
       "app_management",
       "thread_inspection",
       "messaging_context",
+      "thread_orchestration",
     ]);
     expect(
       normalizeAgentToolCatalogIds(undefined, {
