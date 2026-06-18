@@ -64,6 +64,10 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
     };
   }
 
+  async hasSecret(name: DesktopSettingsSecretName): Promise<boolean> {
+    return Boolean(this.stateDb.getSecret(name));
+  }
+
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     const ciphertext = this.stateDb.getSecret(name);
     if (!ciphertext) return undefined;

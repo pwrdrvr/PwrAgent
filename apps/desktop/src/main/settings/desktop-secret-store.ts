@@ -31,6 +31,7 @@ export function isSecretStorageDisabledByEnv(
 
 export interface DesktopSecretStore {
   describe(): DesktopSettingsSecretStorageState;
+  hasSecret(name: DesktopSettingsSecretName): Promise<boolean>;
   getSecretSync?(name: DesktopSettingsSecretName): string | undefined;
   getSecret(name: DesktopSettingsSecretName): Promise<string | undefined>;
   setSecret(name: DesktopSettingsSecretName, value: string): Promise<void>;
@@ -50,6 +51,10 @@ export class MemoryDesktopSecretStore implements DesktopSecretStore {
 
   describe(): DesktopSettingsSecretStorageState {
     return this.state;
+  }
+
+  async hasSecret(name: DesktopSettingsSecretName): Promise<boolean> {
+    return this.values.has(name);
   }
 
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {

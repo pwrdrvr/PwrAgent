@@ -4288,6 +4288,7 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    resolveGrokApiKey?: () => string | undefined;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -4359,9 +4360,12 @@ export class DesktopBackendRegistry {
       createDefaultCodexEnvironmentHydrationStore();
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
-    const grokApiKey = createsLiveGrokClient
-      ? resolveGrokApiKeyForLiveClient()
-      : undefined;
+    const resolveLiveGrokApiKey = (): string | undefined => {
+      if (!resolveAgentCoreGrokEnabled()) {
+        return undefined;
+      }
+      return (options?.resolveGrokApiKey ?? resolveGrokApiKeyForLiveClient)();
+    };
 
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
@@ -4395,7 +4399,7 @@ export class DesktopBackendRegistry {
       options?.grokClient ??
       replayClients?.grokClient ??
       new GrokAppServerClient({
-        apiKey: grokApiKey,
+        resolveApiKey: resolveLiveGrokApiKey,
         connectionObserver: grokObserver,
       });
     this.acpWorktreeRepositoryResolver =
@@ -4457,7 +4461,7 @@ export class DesktopBackendRegistry {
                     : undefined,
                   grok: createsLiveGrokClient
                     ? new GrokThreadTitleGenerator({
-                        apiKey: grokApiKey,
+                        resolveApiKey: resolveLiveGrokApiKey,
                       })
                     : undefined,
                 },

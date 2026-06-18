@@ -34,6 +34,7 @@ export type XaiEphemeralObjectCallResult =
 
 export type XaiEphemeralObjectCallerOptions = {
   apiKey?: string;
+  resolveApiKey?: () => string | undefined;
   baseUrl?: string;
   client?: XaiObjectClientLike;
   model?: string;
@@ -42,6 +43,7 @@ export type XaiEphemeralObjectCallerOptions = {
 
 export class XaiEphemeralObjectCaller {
   private readonly configuredApiKey?: string;
+  private readonly resolveApiKey?: () => string | undefined;
   private readonly configuredBaseUrl?: string;
   private readonly configuredClient?: XaiObjectClientLike;
   private readonly configuredModel?: string;
@@ -51,6 +53,7 @@ export class XaiEphemeralObjectCaller {
 
   constructor(options: XaiEphemeralObjectCallerOptions = {}) {
     this.configuredApiKey = options.apiKey?.trim() || undefined;
+    this.resolveApiKey = options.resolveApiKey;
     this.configuredBaseUrl = options.baseUrl?.trim() || undefined;
     this.configuredClient = options.client;
     this.configuredModel = options.model?.trim() || undefined;
@@ -113,8 +116,12 @@ export class XaiEphemeralObjectCaller {
     }
 
     const runtimeConfig = this.getRuntimeConfig();
-    const apiKey = this.configuredApiKey;
+    const apiKey =
+      this.configuredApiKey || this.resolveApiKey?.()?.trim() || undefined;
     if (!apiKey) {
+      if (this.resolveApiKey) {
+        return null;
+      }
       this.envClient = null;
       return this.envClient;
     }

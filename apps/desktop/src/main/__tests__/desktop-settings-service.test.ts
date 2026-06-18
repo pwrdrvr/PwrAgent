@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
-import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import {
+  MemoryDesktopSecretStore,
+  type DesktopSecretStore,
+} from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 
 const tempRoots: string[] = [];
@@ -1175,6 +1178,44 @@ describe("DesktopSettingsService", () => {
     expect(await service.resolveGrokApiKey()).toBe("xai-keychain");
     expect(service.resolveCodexCommandPreference()).toBe("codex-env");
     expect(service.resolveGhCommandPreference()).toBe("/custom/bin/gh");
+  });
+
+  it("reads secret metadata without decrypting stored values", async () => {
+    const getSecret = vi.fn(async () => {
+      throw new Error("secret values should not be decrypted for settings snapshots");
+    });
+    const getSecretSync = vi.fn(() => {
+      throw new Error("secret values should not be decrypted for settings snapshots");
+    });
+    const hasSecret = vi.fn(async (name) => name === "grokApiKey");
+    const secretStore: DesktopSecretStore = {
+      describe: () => ({
+        available: true,
+        backend: "safeStorage",
+        encrypted: true,
+      }),
+      hasSecret,
+      getSecret,
+      getSecretSync,
+      setSecret: vi.fn(),
+      deleteSecret: vi.fn(),
+    };
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore,
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.models.grok.apiKey).toMatchObject({
+      configured: true,
+      source: "keychain",
+      writable: true,
+    });
+    expect(hasSecret).toHaveBeenCalledWith("grokApiKey");
+    expect(getSecret).not.toHaveBeenCalled();
+    expect(getSecretSync).not.toHaveBeenCalled();
   });
 
   it("writes non-secret patches without writing plaintext secrets to TOML", async () => {
