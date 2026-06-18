@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type {
@@ -67,12 +68,22 @@ export type PwrAgentMessagingActorSummary = {
   isBot?: boolean;
 };
 
+export type PwrAgentMessagingBoundThreadSummary = {
+  title: string;
+  projectKey?: string;
+  gitBranch?: string;
+  model?: string;
+  executionMode?: ThreadExecutionMode;
+  agentName?: string;
+};
+
 export type PwrAgentMessagingBindingSummary = {
   id: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   targetKind: MessagingBindingTargetKind;
   displayName?: string;
+  thread?: PwrAgentMessagingBoundThreadSummary;
 };
 
 export type PwrAgentMessagingManagedConversationOperationSummary = {

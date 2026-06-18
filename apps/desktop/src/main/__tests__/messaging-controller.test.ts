@@ -274,6 +274,21 @@ describe("MessagingController", () => {
   });
 
   it("reports the current messaging surface for an active Agent-thread turn", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Messaging Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1000,
+      },
+      executionMode: "default",
+      gitBranch: "main",
+      model: "gpt-5.5",
+      projectKey: "/repo/pwragent",
+      title: "node_modules, node version, pnpm build",
+    };
     const createManagedConversation = vi.fn(async () => ({
       channel: "telegram" as const,
       outcome: "unsupported" as const,
@@ -294,6 +309,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       getManagedConversationRights,
+      navigation,
     });
     const channelEvent = buildTelegramChannelCommandEvent("/agent");
     const event = buildTextEvent("attach it here", {
@@ -335,6 +351,14 @@ describe("MessagingController", () => {
           binding: {
             backend: "codex",
             targetKind: "agent_thread",
+            thread: {
+              agentName: "Messaging Agent",
+              executionMode: "default",
+              gitBranch: "main",
+              model: "gpt-5.5",
+              projectKey: "/repo/pwragent",
+              title: "node_modules, node version, pnpm build",
+            },
             threadId: "thread-1",
           },
           channel: "telegram",
@@ -367,6 +391,9 @@ describe("MessagingController", () => {
           binding: {
             backend: "codex",
             targetKind: "agent_thread",
+            thread: {
+              title: "node_modules, node version, pnpm build",
+            },
             threadId: "thread-1",
           },
           channel: "telegram",

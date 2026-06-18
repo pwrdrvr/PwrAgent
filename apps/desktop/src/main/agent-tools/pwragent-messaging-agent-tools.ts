@@ -71,9 +71,9 @@ export function buildPwrAgentMessagingToolDefinitions(
 function descriptionForOperation(operation: PwrAgentMessagingOperationName): string {
   switch (operation) {
     case "get_current_location":
-      return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
+      return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
-      return "Inspect the messaging platform, actor, conversation, binding, and native thread/topic creation capability for the surface that started this Agent turn.";
+      return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
   }
