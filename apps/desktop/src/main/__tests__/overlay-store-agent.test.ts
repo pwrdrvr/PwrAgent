@@ -122,11 +122,9 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
       createdAt: 1_773_000_000_000,
       workspace: {
         mode: "same",
-        path: "/tmp/project",
+        cwd: "/tmp/project",
         git: {
-          kind: "repo",
-          rootPath: "/tmp/project",
-          branch: "main",
+          kind: "git_local",
           worktreeCreationAvailable: true,
         },
       },

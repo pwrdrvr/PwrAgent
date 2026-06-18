@@ -115,6 +115,16 @@ import {
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ThreadMutationAppliedChange,
+  type PwrAgentThreadOrchestrationErrorCode,
+  type PwrAgentThreadOrchestrationRequest,
+  type PwrAgentThreadOrchestrationResponse,
+  type HandoffTaskResult,
+  type HandoffTaskSeedMode,
+  type HandoffTaskGroupingMode,
+  type HandoffTaskWorkspaceMode,
+  type HandoffTaskInheritedSettings,
+  type HandoffTaskMessagingAttachment,
+  type ThreadHandoffOriginWorkspace,
   type ThreadInspectionSummary,
   type ThreadSearchFilters,
   type ThreadSearchResult,
@@ -233,6 +243,13 @@ import {
   readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
+import {
+  buildPwrAgentThreadOrchestrationDynamicToolErrorResponse,
+  handlePwrAgentThreadOrchestrationDynamicToolCall,
+  isPwrAgentThreadOrchestrationDynamicToolCall,
+  readPwrAgentThreadOrchestrationDynamicToolCall,
+} from "../agent-tools/pwragent-thread-orchestration-codex-tools";
+import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -4076,6 +4093,98 @@ function pageNormalizedReplay(
   };
 }
 
+function threadOrchestrationFailure(
+  code: PwrAgentThreadOrchestrationErrorCode,
+  message: string,
+  data?: unknown,
+): PwrAgentThreadOrchestrationResponse {
+  return {
+    ok: false,
+    error: {
+      code,
+      message,
+      ...(data === undefined ? {} : { data }),
+    },
+  };
+}
+
+function buildHandoffTaskPrompt(params: {
+  task: string;
+  context?: string;
+  origin: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    sourceTurnId?: string;
+    sourceTitle?: string;
+  };
+  inheritedSettings: HandoffTaskInheritedSettings;
+  workspace: ThreadHandoffOriginWorkspace;
+}): string {
+  const lines = [
+    "You are a PwrAgent handoff thread created by another Agent thread.",
+    "",
+    "Task:",
+    params.task,
+    "",
+    "Source thread:",
+    `- Backend: ${params.origin.sourceBackend}`,
+    `- Thread ID: ${params.origin.sourceThreadId}`,
+    ...(params.origin.sourceTurnId
+      ? [`- Turn ID: ${params.origin.sourceTurnId}`]
+      : []),
+    ...(params.origin.sourceTitle
+      ? [`- Title: ${params.origin.sourceTitle}`]
+      : []),
+    "",
+    "Inherited settings:",
+    `- Backend: ${params.inheritedSettings.backend}`,
+    ...(params.inheritedSettings.model
+      ? [`- Model: ${params.inheritedSettings.model}`]
+      : []),
+    ...(params.inheritedSettings.reasoningEffort
+      ? [`- Reasoning effort: ${params.inheritedSettings.reasoningEffort}`]
+      : []),
+    ...(params.inheritedSettings.serviceTier
+      ? [`- Service tier: ${params.inheritedSettings.serviceTier}`]
+      : []),
+    ...(params.inheritedSettings.fastMode !== undefined
+      ? [`- Fast mode: ${params.inheritedSettings.fastMode ? "on" : "off"}`]
+      : []),
+    ...(params.inheritedSettings.executionMode
+      ? [`- Permission mode: ${params.inheritedSettings.executionMode}`]
+      : []),
+    ...(params.inheritedSettings.approvalPolicy
+      ? [`- Approval policy: ${params.inheritedSettings.approvalPolicy}`]
+      : []),
+    ...(params.inheritedSettings.sandbox
+      ? [`- Sandbox: ${params.inheritedSettings.sandbox}`]
+      : []),
+    "",
+    "Workspace:",
+    `- Mode: ${params.workspace.mode}`,
+    ...(params.workspace.cwd ? [`- CWD: ${params.workspace.cwd}`] : []),
+    ...(params.workspace.linkedDirectory?.path
+      ? [`- Project path: ${params.workspace.linkedDirectory.path}`]
+      : []),
+    ...(params.workspace.linkedDirectory?.worktreePath
+      ? [`- Worktree path: ${params.workspace.linkedDirectory.worktreePath}`]
+      : []),
+    ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
+    `- Git: ${params.workspace.git.kind}`,
+    `- New worktree supported: ${
+      params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
+    }`,
+    "",
+    "Parent context reference:",
+    "The thread that spawned this handoff is the source thread above. Use that reference if a future tool or UI surface can fetch more context from the parent.",
+  ];
+  const trimmedContext = params.context?.trim();
+  if (trimmedContext) {
+    lines.push("", "Additional context from parent:", trimmedContext);
+  }
+  return lines.join("\n");
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -4191,6 +4300,8 @@ export class DesktopBackendRegistry {
     };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
+  private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
+    async (request) => await this.handleThreadOrchestrationRequest(request);
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -6725,6 +6836,7 @@ export class DesktopBackendRegistry {
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
       threadInspectionHandler: this.threadInspectionHandler,
+      threadOrchestrationHandler: this.threadOrchestrationHandler,
     });
     const resolvedDynamicTools =
       backend === "codex"
@@ -7302,6 +7414,7 @@ export class DesktopBackendRegistry {
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
                 threadInspectionHandler: this.threadInspectionHandler,
+                threadOrchestrationHandler: this.threadOrchestrationHandler,
               });
               const started = await client.startTurn({
                 threadId: params.threadId,
@@ -13577,6 +13690,45 @@ export class DesktopBackendRegistry {
       });
     }
 
+    const threadOrchestrationToolCall =
+      readPwrAgentThreadOrchestrationDynamicToolCall({
+        method: request.method,
+        params: request.params,
+      });
+    if (
+      threadOrchestrationToolCall &&
+      isPwrAgentThreadOrchestrationDynamicToolCall(threadOrchestrationToolCall)
+    ) {
+      if (!this.isLiveDynamicToolCall(backend, threadOrchestrationToolCall)) {
+        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call", {
+          backend,
+          callId: threadOrchestrationToolCall.callId,
+          namespace: threadOrchestrationToolCall.namespace,
+          threadId: threadOrchestrationToolCall.threadId,
+          tool: threadOrchestrationToolCall.tool,
+          turnId: threadOrchestrationToolCall.turnId,
+        });
+        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Thread handoff tool calls must originate from an active Agent turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling thread orchestration dynamic tool call", {
+        backend,
+        callId: threadOrchestrationToolCall.callId,
+        namespace: threadOrchestrationToolCall.namespace,
+        threadId: threadOrchestrationToolCall.threadId,
+        tool: threadOrchestrationToolCall.tool,
+        turnId: threadOrchestrationToolCall.turnId,
+      });
+      return await handlePwrAgentThreadOrchestrationDynamicToolCall({
+        backend,
+        call: threadOrchestrationToolCall,
+        handler: this.threadOrchestrationHandler,
+      });
+    }
+
     const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
       method: request.method,
       params: request.params,
@@ -13716,6 +13868,469 @@ export class DesktopBackendRegistry {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private async handleThreadOrchestrationRequest(
+    request: PwrAgentThreadOrchestrationRequest,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    if (request.operation !== "handoff_task") {
+      return threadOrchestrationFailure(
+        "unsupported_operation",
+        "Unsupported PwrAgent thread orchestration operation.",
+      );
+    }
+    return await this.handoffTaskToThread(request);
+  }
+
+  private async handoffTaskToThread(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread handoff tools must be invoked from a live Agent turn.",
+      );
+    }
+    if (sourceBackend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread handoff tools are currently available only from Codex Agent threads.",
+      );
+    }
+
+    const backend = request.args.backend ?? sourceBackend;
+    if (backend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread handoff can currently create only Codex Agent threads.",
+      );
+    }
+
+    const sourceOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: sourceBackend,
+      threadId: sourceThreadId,
+    });
+    if (!sourceOverlay?.agent) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread handoff tools are available only to Agent threads.",
+      );
+    }
+
+    const task = request.args.task.trim();
+    if (!task) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "handoff_task requires a non-empty task string.",
+      );
+    }
+
+    const seedMode: HandoffTaskSeedMode = request.args.seedMode ?? "clean";
+    const groupingMode: HandoffTaskGroupingMode =
+      request.args.groupingMode ?? "none";
+    const workspaceMode: HandoffTaskWorkspaceMode =
+      request.args.workspaceMode ?? "same";
+    const sourceThread = await this.findThreadForWorkspaceHandoff({
+      backend: sourceBackend,
+      callerReason: "agent-handoff",
+      threadId: sourceThreadId,
+    });
+    const sourceCwd = await this.resolveThreadEnvironmentCwd(
+      sourceBackend,
+      sourceThreadId,
+      sourceOverlay,
+    );
+    const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
+      cwd: sourceCwd,
+      overlay: sourceOverlay,
+      thread: sourceThread,
+    });
+    const sourceWorkspace = await this.buildThreadHandoffWorkspaceSummary({
+      cwd: sourceCwd,
+      linkedDirectory: sourceLinkedDirectory,
+      mode: "same",
+    });
+
+    if (workspaceMode !== "none" && !sourceCwd?.trim()) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        "The source thread has no current workspace. Ask for workspaceMode=none to create an unscoped handoff thread.",
+      );
+    }
+    if (
+      workspaceMode === "new_worktree" &&
+      !sourceWorkspace.git.worktreeCreationAvailable
+    ) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        sourceWorkspace.git.unavailableReason ??
+          "The source workspace cannot create a new Git worktree.",
+        { workspace: sourceWorkspace },
+      );
+    }
+
+    const executionMode =
+      request.args.executionMode ??
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      ) ??
+      sourceOverlay.executionMode ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const inheritedSettings: HandoffTaskInheritedSettings = {
+      backend,
+      executionMode,
+      model: request.args.model ?? sourceOverlay.model,
+      reasoningEffort:
+        request.args.reasoningEffort ?? sourceOverlay.reasoningEffort,
+      serviceTier: request.args.serviceTier ?? sourceOverlay.serviceTier,
+      fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
+      approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
+      sandbox: request.args.sandbox ?? modeSettings.sandbox,
+      codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime,
+    };
+    const title =
+      request.args.title?.trim() ||
+      shortenDerivedThreadTitle(task) ||
+      "Delegated task";
+    const agent = {
+      name: title,
+      instructions:
+        "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
+    };
+    const cwdForChild = workspaceMode === "none" ? undefined : sourceCwd;
+
+    let threadId: string;
+    let createdLinkedDirectory: LinkedDirectorySummary | undefined;
+    let createdWorkspaceMode = workspaceMode;
+    try {
+      if (seedMode === "fork") {
+        const forked = await this.forkThread({
+          backend,
+          sourceThreadId,
+          ...(groupingMode === "subthread"
+            ? { parentThreadId: sourceThreadId }
+            : {}),
+          executionMode,
+          directoryLabel:
+            sourceLinkedDirectory?.label ||
+            (sourceCwd ? path.basename(sourceCwd) : undefined) ||
+            title,
+          directoryPath: cwdForChild,
+          workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
+          branchName: request.args.branchName,
+          model: inheritedSettings.model,
+          reasoningEffort: inheritedSettings.reasoningEffort,
+          serviceTier: inheritedSettings.serviceTier,
+          fastMode: inheritedSettings.fastMode,
+          approvalPolicy: inheritedSettings.approvalPolicy,
+          sandbox: inheritedSettings.sandbox,
+        });
+        threadId = forked.threadId;
+        createdLinkedDirectory = forked.linkedDirectory;
+        createdWorkspaceMode =
+          forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
+        await this.overlayStore.setThreadAgent({
+          backend,
+          threadId,
+          agent,
+        });
+      } else {
+        const started = await this.startThread({
+          backend,
+          executionMode,
+          cwd: cwdForChild,
+          workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
+          branchName: request.args.branchName,
+          model: inheritedSettings.model,
+          reasoningEffort: inheritedSettings.reasoningEffort,
+          serviceTier: inheritedSettings.serviceTier,
+          fastMode: inheritedSettings.fastMode,
+          approvalPolicy: inheritedSettings.approvalPolicy,
+          sandbox: inheritedSettings.sandbox,
+          codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          agent,
+        });
+        threadId = started.threadId;
+        if (groupingMode === "subthread") {
+          await this.overlayStore.setThreadParent?.({
+            backend,
+            threadId,
+            parentThreadId: sourceThreadId,
+          });
+        }
+      }
+      await this.renameThread({ backend, threadId, name: title }).catch(
+        (error) => {
+          backendRegistryLog.warn("thread handoff rename failed", {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            threadId,
+          });
+        },
+      );
+    } catch (error) {
+      return threadOrchestrationFailure(
+        workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
+    const childCwd =
+      resolveThreadWorkspaceCwd(pendingThread) ||
+      createdLinkedDirectory?.worktreePath ||
+      createdLinkedDirectory?.path ||
+      cwdForChild;
+    const childLinkedDirectory =
+      createdLinkedDirectory ??
+      this.resolveHandoffLinkedDirectory({
+        cwd: childCwd,
+        overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+        thread: pendingThread,
+      });
+    const workspace = await this.buildThreadHandoffWorkspaceSummary({
+      cwd: childCwd,
+      linkedDirectory: childLinkedDirectory,
+      mode: createdWorkspaceMode,
+    });
+    const createdAt = request.context.now ?? Date.now();
+    const origin = {
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      sourceTitle: sourceThread?.title,
+      taskTitle: title,
+      seedMode,
+      groupingMode,
+      createdAt,
+      workspace,
+    };
+    await this.overlayStore.setThreadHandoffOrigin({
+      backend,
+      threadId,
+      handoffOrigin: origin,
+    });
+    this.invalidateThreadListCache(backend);
+
+    const prompt = buildHandoffTaskPrompt({
+      task,
+      context: request.args.context,
+      origin,
+      inheritedSettings,
+      workspace,
+    });
+    let turnId: string | undefined;
+    let turnStartFailure: HandoffTaskResult["turnStartFailure"];
+    try {
+      const turn = await this.startTurn({
+        backend,
+        threadId,
+        input: [{ type: "text", text: prompt }],
+        executionMode,
+        model: inheritedSettings.model,
+        reasoningEffort: inheritedSettings.reasoningEffort,
+        serviceTier: inheritedSettings.serviceTier,
+        fastMode: inheritedSettings.fastMode,
+        approvalPolicy: inheritedSettings.approvalPolicy,
+        sandbox: inheritedSettings.sandbox,
+      });
+      turnId = turn.turnId;
+    } catch (error) {
+      turnStartFailure = {
+        phase: "turn",
+        message: error instanceof Error ? error.message : String(error),
+      };
+      backendRegistryLog.warn("thread handoff created thread but turn failed", {
+        backend,
+        error: turnStartFailure.message,
+        threadId,
+      });
+    }
+
+    const messagingAttachment = await this.attachHandoffThreadToMessaging({
+      mode: request.args.messagingAttachment,
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      backend,
+      threadId,
+      title,
+    });
+    return {
+      ok: true,
+      data: {
+        backend,
+        threadId,
+        turnId,
+        title,
+        seedMode,
+        groupingMode,
+        ...(groupingMode === "subthread"
+          ? { groupedUnderThreadId: sourceThreadId }
+          : {}),
+        inheritedSettings,
+        origin,
+        workspace,
+        messagingAttachment,
+        ...(turnStartFailure ? { turnStartFailure } : {}),
+      },
+    };
+  }
+
+  private async attachHandoffThreadToMessaging(params: {
+    mode?: "none" | "auto" | "current_conversation" | "new_child";
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    sourceTurnId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    title: string;
+  }): Promise<HandoffTaskMessagingAttachment> {
+    if (params.mode === "none") {
+      return { requested: false, outcome: "not_requested" };
+    }
+    const placement =
+      params.mode === "new_child"
+        ? "new_child"
+        : params.mode === "current_conversation"
+          ? "current_conversation"
+          : "auto";
+    const explicitRequest = params.mode !== undefined;
+    const response = await this.messagingHandler({
+      operation: "attach_thread_here",
+      context: {
+        backend: params.sourceBackend,
+        threadId: params.sourceThreadId,
+        turnId: params.sourceTurnId,
+      },
+      args: {
+        backend: params.backend,
+        threadId: params.threadId,
+        placement,
+        targetKind: "agent_thread",
+        title: params.title,
+      },
+    });
+    if (response.ok && "binding" in response.data) {
+      return {
+        requested: true,
+        outcome: response.data.outcome,
+        channel: response.data.channel,
+        conversation: {
+          id: response.data.conversation.id,
+          kind: response.data.conversation.kind,
+          title: response.data.conversation.title,
+        },
+        ...(response.data.createdConversation
+          ? {
+              createdConversation: {
+                id: response.data.createdConversation.id,
+                kind: response.data.createdConversation.kind,
+                title: response.data.createdConversation.title,
+              },
+            }
+          : {}),
+      };
+    }
+    if (!explicitRequest) {
+      return { requested: false, outcome: "not_requested" };
+    }
+    if (response.ok) {
+      return {
+        requested: true,
+        outcome: "failed",
+        reason: "Messaging location did not return an attachable binding.",
+      };
+    }
+    return {
+      requested: true,
+      outcome:
+        response.error.code === "not_found"
+          ? "not_available"
+          : response.error.code === "forbidden"
+            ? "forbidden"
+            : response.error.code === "unsupported_operation"
+              ? "unsupported"
+              : "failed",
+      reason: response.error.message,
+    };
+  }
+
+  private resolveHandoffLinkedDirectory(params: {
+    cwd?: string;
+    overlay?: ThreadOverlayState;
+    thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
+  }): LinkedDirectorySummary | undefined {
+    const candidates = [
+      ...(params.overlay?.extraLinkedDirectories ?? []),
+      ...(params.thread?.linkedDirectories ?? []),
+    ];
+    const cwd = params.cwd?.trim();
+    return (
+      (cwd
+        ? candidates.find(
+            (directory) =>
+              directory.worktreePath === cwd || directory.path === cwd,
+          )
+        : undefined) ??
+      candidates.find((directory) => directory.kind === "worktree") ??
+      candidates.find((directory) => directory.kind === "local") ??
+      candidates[0]
+    );
+  }
+
+  private async buildThreadHandoffWorkspaceSummary(params: {
+    cwd?: string;
+    linkedDirectory?: LinkedDirectorySummary;
+    mode: HandoffTaskWorkspaceMode;
+  }): Promise<ThreadHandoffOriginWorkspace> {
+    const cwd = params.cwd?.trim();
+    if (!cwd) {
+      return {
+        mode: params.mode,
+        git: {
+          kind: "none",
+          worktreeCreationAvailable: false,
+          unavailableReason: "No workspace is associated with this thread.",
+        },
+      };
+    }
+    const branch = await readCurrentGitBranch(cwd).catch(() => undefined);
+    if (!branch) {
+      return {
+        mode: params.mode,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind: "non_git",
+          worktreeCreationAvailable: false,
+          unavailableReason: "The workspace is not a Git repository.",
+        },
+      };
+    }
+    return {
+      mode: params.mode,
+      cwd,
+      branch,
+      linkedDirectory: params.linkedDirectory,
+      git: {
+        kind:
+          params.linkedDirectory?.kind === "worktree"
+            ? "git_worktree"
+            : "git_local",
+        worktreeCreationAvailable: true,
+      },
+    };
   }
 
   private async handleTaskMonitorRequest(

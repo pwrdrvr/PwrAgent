@@ -13465,6 +13465,291 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("handles thread handoff dynamic tool calls from active Agent turns", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+    } catch {
+      await git(root, ["init"]);
+      await git(root, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(root, "README.md"), "handoff\n", "utf8");
+    await git(root, ["add", "README.md"]);
+    await git(root, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Parent Agent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(root),
+              kind: "local",
+              label: "handoff",
+              path: expectedDir(root),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          backend: "codex",
+          threadId: "agent-thread",
+          executionMode: "full-access",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(root),
+              kind: "local",
+              label: "handoff",
+              path: expectedDir(root),
+            },
+          ],
+          agent: {
+            name: "Parent Agent",
+            instructionLineCount: 0,
+            instructionsTooLong: false,
+            updatedAt: 1000,
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const messagingRequests: unknown[] = [];
+    registry.setMessagingAgentToolService({
+      async handlePwrAgentMessagingRequest(request) {
+        messagingRequests.push(request);
+        return {
+          ok: true,
+          data: {
+            binding: {
+              id: "binding-child",
+              backend: "codex",
+              threadId: "thread-1",
+              targetKind: "agent_thread",
+              displayName: "Investigate issue XYZ",
+            },
+            channel: "discord",
+            conversation: {
+              id: "thread-123",
+              kind: "thread",
+              title: "Investigate issue XYZ",
+              parentId: "channel-1",
+              parentTitle: "ops",
+            },
+            createdConversation: {
+              id: "thread-123",
+              kind: "thread",
+              title: "Investigate issue XYZ",
+              parentId: "channel-1",
+              parentTitle: "ops",
+            },
+            location: {
+              binding: {
+                id: "binding-parent",
+                backend: "codex",
+                threadId: "agent-thread",
+                targetKind: "agent_thread",
+              },
+              channel: "discord",
+              conversation: {
+                id: "channel-1",
+                kind: "channel",
+                title: "ops",
+              },
+              managedConversation: {
+                canCreateChild: true,
+                operations: [],
+                outcome: "ok",
+                providerSupportsCreation: true,
+              },
+            },
+            outcome: "created_and_attached",
+            placement: "new_child",
+          },
+        };
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ and report back.",
+          title: "Investigate issue XYZ",
+          context: "Parent already checked the latest CI run.",
+          messagingAttachment: "new_child",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      title: "Investigate issue XYZ",
+      seedMode: "clean",
+      groupingMode: "none",
+      inheritedSettings: {
+        backend: "codex",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      },
+      workspace: {
+        mode: "same",
+        cwd: root,
+        branch: "main",
+        git: {
+          kind: "git_local",
+          worktreeCreationAvailable: true,
+        },
+      },
+      messagingAttachment: {
+        requested: true,
+        outcome: "created_and_attached",
+        channel: "discord",
+        conversation: {
+          id: "thread-123",
+          kind: "thread",
+          title: "Investigate issue XYZ",
+        },
+        createdConversation: {
+          id: "thread-123",
+          kind: "thread",
+          title: "Investigate issue XYZ",
+        },
+      },
+    });
+    expect(messagingRequests).toEqual([
+      {
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "agent-thread",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-1",
+          placement: "new_child",
+          targetKind: "agent_thread",
+          title: "Investigate issue XYZ",
+        },
+      },
+    ]);
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: root,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Investigate issue XYZ",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      cwd: root,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const prompt =
+      codexClient.lastStartTurnParams?.input[0]?.type === "text"
+        ? codexClient.lastStartTurnParams.input[0].text
+        : "";
+    expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
+    expect(prompt).toContain("- Thread ID: agent-thread");
+    expect(prompt).toContain("- Turn ID: turn-1");
+    expect(prompt).toContain("- CWD: ");
+    expect(prompt).toContain("Additional context from parent:");
+    expect(prompt).toContain("Parent already checked the latest CI run.");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Investigate issue XYZ",
+      },
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "agent-thread",
+        sourceTurnId: "turn-1",
+        sourceTitle: "Parent Agent",
+        taskTitle: "Investigate issue XYZ",
+        seedMode: "clean",
+        groupingMode: "none",
+        workspace: {
+          mode: "same",
+          cwd: root,
+          branch: "main",
+        },
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("routes thread inspection search through the thread search service when available", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
@@ -14250,6 +14535,80 @@ command = "pnpm dev"
       ],
     });
     expect(handler).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("rejects thread handoff dynamic tool calls that do not match an active Agent turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": {
+            backend: "codex",
+            threadId: "agent-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            agent: {
+              name: "Parent Agent",
+              instructionLineCount: 0,
+              instructionsTooLong: false,
+              updatedAt: 1000,
+            },
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "other-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "Thread handoff tool calls must originate from an active Agent turn on the same thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
 
     await registry.close();
   });
