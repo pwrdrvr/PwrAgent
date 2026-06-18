@@ -16,6 +16,8 @@ type SafeStorageLike = {
 };
 
 export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
+  private readonly unusableSecrets = new Set<DesktopSettingsSecretName>();
+
   constructor(
     private readonly safeStorage: SafeStorageLike,
     private readonly stateDb: StateDb,
@@ -65,18 +67,27 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
   }
 
   async hasSecret(name: DesktopSettingsSecretName): Promise<boolean> {
+    if (this.unusableSecrets.has(name)) {
+      return false;
+    }
     return Boolean(this.stateDb.getSecret(name));
   }
 
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     const ciphertext = this.stateDb.getSecret(name);
-    if (!ciphertext) return undefined;
+    if (!ciphertext) {
+      this.unusableSecrets.delete(name);
+      return undefined;
+    }
     try {
-      return this.safeStorage.decryptString(ciphertext);
+      const value = this.safeStorage.decryptString(ciphertext);
+      this.unusableSecrets.delete(name);
+      return value;
     } catch {
       // Decryption fails when the ciphertext was encrypted under a different
       // signing identity (e.g. dev build vs signed release). Return undefined
       // so callers treat it as "secret not set" and prompt re-entry.
+      this.unusableSecrets.add(name);
       return undefined;
     }
   }
@@ -102,10 +113,12 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
     this.assertWritable();
     const ciphertext = this.safeStorage.encryptString(value);
     this.stateDb.setSecret(name, ciphertext);
+    this.unusableSecrets.delete(name);
   }
 
   async deleteSecret(name: DesktopSettingsSecretName): Promise<void> {
     this.stateDb.deleteSecret(name);
+    this.unusableSecrets.delete(name);
   }
 
   private assertWritable(): void {
