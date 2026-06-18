@@ -631,6 +631,10 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
+    string,
+    ActiveAgentMessagingOrigin
+  >();
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
@@ -1053,6 +1057,31 @@ export class MessagingController {
     }
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {
+      if (
+        turnQueueUpdate.origin === "messaging" &&
+        turnQueueUpdate.queueEntryId
+      ) {
+        if (
+          turnQueueUpdate.status === "started" &&
+          turnQueueUpdate.turnId
+        ) {
+          this.promoteQueuedAgentMessagingOrigin({
+            backend: event.backend,
+            queueEntryId: turnQueueUpdate.queueEntryId,
+            threadId,
+            turnId: turnQueueUpdate.turnId,
+          });
+        } else if (
+          turnQueueUpdate.status === "failed" ||
+          turnQueueUpdate.status === "cancelled"
+        ) {
+          this.forgetQueuedAgentMessagingOrigin(
+            event.backend,
+            threadId,
+            turnQueueUpdate.queueEntryId,
+          );
+        }
+      }
       if (
         turnQueueUpdate.origin === "automation" &&
         turnQueueUpdate.status === "started" &&
@@ -2187,6 +2216,12 @@ export class MessagingController {
           threadId: params.binding.threadId,
           queueEntryId: started.queueEntryId ?? started.turnId,
           requestedExecutionMode: turnSettings.executionMode ?? "unset",
+        });
+        this.rememberQueuedAgentMessagingOrigin({
+          binding: params.binding,
+          event: params.event,
+          originBinding: params.originBinding,
+          queueEntryId: started.queueEntryId ?? started.turnId,
         });
         return "queued";
       }
@@ -11118,6 +11153,51 @@ export class MessagingController {
     );
   }
 
+  private rememberQueuedAgentMessagingOrigin(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    originBinding?: MessagingBindingRecord;
+    queueEntryId: string;
+  }): void {
+    if (!params.event || params.binding.targetKind !== "agent_thread") {
+      return;
+    }
+    this.queuedAgentMessagingOriginsByQueueKey.set(
+      agentMessagingQueueKey(
+        params.binding.backend,
+        params.binding.threadId,
+        params.queueEntryId,
+      ),
+      {
+        binding: params.originBinding ?? params.binding,
+        controlBinding: params.originBinding ? params.binding : undefined,
+        event: params.event,
+      },
+    );
+  }
+
+  private promoteQueuedAgentMessagingOrigin(params: {
+    backend: AppServerBackendKind;
+    queueEntryId: string;
+    threadId: ThreadIdentifier;
+    turnId: string;
+  }): void {
+    const queueKey = agentMessagingQueueKey(
+      params.backend,
+      params.threadId,
+      params.queueEntryId,
+    );
+    const origin = this.queuedAgentMessagingOriginsByQueueKey.get(queueKey);
+    if (!origin) {
+      return;
+    }
+    this.queuedAgentMessagingOriginsByQueueKey.delete(queueKey);
+    this.activeAgentMessagingOriginsByTurnKey.set(
+      agentMessagingTurnKey(params.backend, params.threadId, params.turnId),
+      origin,
+    );
+  }
+
   private deliveryBindingsForAgentTurn(params: {
     bindings: MessagingBindingRecord[];
     backend: AppServerBackendKind;
@@ -11148,6 +11228,16 @@ export class MessagingController {
   ): void {
     this.activeAgentMessagingOriginsByTurnKey.delete(
       agentMessagingTurnKey(backend, threadId, turnId),
+    );
+  }
+
+  private forgetQueuedAgentMessagingOrigin(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    queueEntryId: string,
+  ): void {
+    this.queuedAgentMessagingOriginsByQueueKey.delete(
+      agentMessagingQueueKey(backend, threadId, queueEntryId),
     );
   }
 
@@ -14123,6 +14213,14 @@ function agentMessagingTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function agentMessagingQueueKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+  queueEntryId: string,
+): string {
+  return `${backend}:${threadId}:${queueEntryId}`;
+}
+
 function summarizeMessagingConversation(
   conversation: MessagingChannelRef["conversation"],
 ): PwrAgentMessagingLocationSummary["conversation"] {
@@ -14240,6 +14338,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   automationRunId?: string;
   finalText?: string;
   origin?: string;
+  queueEntryId?: string;
   status?: string;
   suppressBindingBroadcast?: boolean;
   turnId?: string;
@@ -14252,6 +14351,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     automationRunId?: unknown;
     finalText?: unknown;
     origin?: unknown;
+    queueEntryId?: unknown;
     status?: unknown;
     suppressBindingBroadcast?: unknown;
     turnId?: unknown;
@@ -14263,6 +14363,8 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
       typeof params.automationRunId === "string" ? params.automationRunId : undefined,
     finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     origin: typeof params.origin === "string" ? params.origin : undefined,
+    queueEntryId:
+      typeof params.queueEntryId === "string" ? params.queueEntryId : undefined,
     status: typeof params.status === "string" ? params.status : undefined,
     suppressBindingBroadcast: params.suppressBindingBroadcast === true,
     turnId: typeof params.turnId === "string" ? params.turnId : undefined,

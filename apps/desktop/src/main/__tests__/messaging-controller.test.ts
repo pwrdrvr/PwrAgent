@@ -354,6 +354,93 @@ describe("MessagingController", () => {
     );
   });
 
+  it("preserves default Agent control routing when the backend queues the turn", async () => {
+    const harness = await createHarness();
+    const event = buildCommandEvent("/agent summarize after the active turn");
+    const agentSurfaceBindingId =
+      "binding:telegram:topic:-1001:200:codex:agent-thread";
+    harness.startTurn.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "agent-thread",
+      turnId: "queue-1",
+      queueStatus: "queued",
+      queueEntryId: "queue-1",
+    });
+    await harness.store.upsertBinding({
+      id: agentSurfaceBindingId,
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: buildTopicChannel("200"),
+      createdAt: 900,
+      targetKind: "agent_thread",
+      threadId: "agent-thread",
+      updatedAt: 900,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:chat-1",
+      backend: "codex",
+      channel: event.channel,
+      channelKind: "telegram",
+      createdAt: 950,
+      scopeKind: "conversation",
+      threadId: "agent-thread",
+      updatedAt: 950,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "agent-thread",
+          queueEntryId: "queue-1",
+          origin: "messaging",
+          status: "started",
+          turnId: "turn-from-queue",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-from-queue",
+          turn: {
+            id: "turn-from-queue",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Queued Agent answer.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const assistantMessages = harness.delivered.filter(
+      (intent) => intent.kind === "message" && intent.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      bindingId: expect.stringMatching(/^agent-control:/),
+      parts: [
+        expect.objectContaining({
+          text: "Queued Agent answer.",
+        }),
+      ],
+    });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        bindingId: agentSurfaceBindingId,
+      }),
+    );
+  });
+
   it("returns default Agent control pending requests only to the requesting surface", async () => {
     const harness = await createHarness();
     const event = buildCommandEvent("/agent ask the operator");
