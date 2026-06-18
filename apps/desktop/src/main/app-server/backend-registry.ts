@@ -2916,7 +2916,10 @@ function finalTextFromTerminalNotification(
     AppServerNotification,
     { method: "turn/completed" }
   >;
-  const text = completed.params.turn.output
+  const output = Array.isArray(completed.params.turn.output)
+    ? completed.params.turn.output
+    : [];
+  const text = output
     .filter((item) => item.type === "text")
     .map((item) => item.text.trim())
     .filter(Boolean)

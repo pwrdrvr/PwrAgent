@@ -9609,7 +9609,7 @@ describe("Composer", () => {
     );
   });
 
-  it("clears stale thinking when idle status arrives before completion", async () => {
+  it("keeps confirmed thinking when idle status arrives before completion", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -9703,10 +9703,8 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
-    });
-    expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
   });
 
   it("sends Codex turns with plan collaboration mode when plan mode is enabled", async () => {

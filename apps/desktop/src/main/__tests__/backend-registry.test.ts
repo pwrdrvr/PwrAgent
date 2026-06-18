@@ -12052,6 +12052,35 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("ignores Codex terminal notifications without turn output when parsing native sub-agent text", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+          },
+        },
+      } as AppServerNotification),
+    ).resolves.toBeUndefined();
+
+    await registry.close();
+  });
+
   it("completes no-wait Codex native sub-agents from async transcript notifications", async () => {
     vi.useFakeTimers();
     const codexClient = new MockBackendClient({
