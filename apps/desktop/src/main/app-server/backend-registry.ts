@@ -11544,9 +11544,21 @@ export class DesktopBackendRegistry {
       return;
     }
     const notificationParams = readRecord(event.notification.params);
-    const notificationModel = readOptionalString(notificationParams, ["model"]);
+    const notificationModel = readTaskMonitorUsageModel({
+      notificationModel: event.notification.params.model,
+      tokenUsage: event.notification.params.tokenUsage,
+    });
+    const serviceTier = readTaskMonitorUsageServiceTier(
+      event.notification.params.tokenUsage,
+    );
+    const fastMode = readTaskMonitorUsageFastMode(
+      event.notification.params.tokenUsage,
+    );
+    const model = notificationModel ?? existing.preferredModel;
     const usageSnapshot = buildTaskMonitorUsageSnapshot({
-      model: notificationModel ?? existing.preferredModel,
+      fastMode,
+      model,
+      serviceTier,
       tokenUsage: event.notification.params.tokenUsage,
     });
     if (!usageSnapshot) {
@@ -11572,6 +11584,28 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+      const line = buildTaskMonitorUsageLine({
+        backend: "codex",
+        fastMode,
+        model,
+        monitorId,
+        monitorThreadId: event.notification.params.threadId,
+        monitorTurnId:
+          readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
+          existing.monitorTurnId,
+        parentThreadId,
+        serviceTier,
+        source: "monitor",
+        usage: usageSnapshot,
+      });
+      logUnpricedThreadUsageLine(line);
+      await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.emitThreadPricingUpdated({
+        backend: "codex",
+        threadId: line.parentThreadId ?? line.threadId,
+      });
+    }
     if (!codexNativeSubAgentIsTerminal(existing.status)) {
       this.scheduleCodexNativeSubAgentReconciliation({
         delayMs: CODEX_NATIVE_SUBAGENT_ACTIVITY_STATUS_DELAY_MS,

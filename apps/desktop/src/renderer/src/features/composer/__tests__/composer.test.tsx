@@ -4527,6 +4527,10 @@ describe("Composer", () => {
           },
         },
       });
+    });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await act(async () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {

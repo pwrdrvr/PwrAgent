@@ -11930,6 +11930,8 @@ command = "pnpm dev"
       method: "thread/tokenUsage/updated",
       params: {
         threadId: nativeThreadId,
+        turnId: "turn-native-1",
+        model: "gpt-5.4-mini",
         tokenUsage: {
           total: {
             inputTokens: 1_000,
@@ -11957,6 +11959,22 @@ command = "pnpm dev"
         uncachedInputTokens: 900,
       },
     });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.4-mini",
+      parentThreadId: "thread-parent",
+      priceStatus: "priced",
+      scope: "monitor",
+      source: "monitor",
+      sourceItemId: `codex-native:${nativeThreadId}`,
+      threadId: nativeThreadId,
+      turnId: "turn-native-1",
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(2);
 
     await registry.close();

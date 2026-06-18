@@ -2889,6 +2889,12 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "thread/status/changed" &&
         statusRecord?.type === "idle"
       ) {
+        if (
+          activeReviewTurnIdRef.current &&
+          activeTurnIdRef.current === activeReviewTurnIdRef.current
+        ) {
+          return;
+        }
         props.onPendingStatusChange?.(undefined);
         updateSending(false);
         setInterrupting(false);
