@@ -2,6 +2,8 @@ import {
   spawn,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
+import { accessSync, constants as fsConstants, statSync } from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
@@ -31,6 +33,66 @@ export type StdioJsonRpcTransportOptions = {
 
 export { compareCodexCliVersions };
 
+export function prependCodexSiblingToolDirectoryToPath(
+  env: NodeJS.ProcessEnv,
+  codexCommand: string,
+): NodeJS.ProcessEnv {
+  const toolDirectory = resolveCodexSiblingToolDirectory(codexCommand);
+  if (!toolDirectory) {
+    return env;
+  }
+
+  const pathKey = resolvePathEnvKey(env);
+  const delimiter = process.platform === "win32" ? ";" : path.delimiter;
+  const currentPath = env[pathKey] ?? "";
+  const pathEntries = currentPath.split(delimiter).filter(Boolean);
+  const nextPathEntries = [
+    toolDirectory,
+    ...pathEntries.filter((entry) => entry !== toolDirectory),
+  ];
+  return {
+    ...env,
+    [pathKey]: nextPathEntries.join(delimiter),
+  };
+}
+
+function resolveCodexSiblingToolDirectory(codexCommand: string): string | undefined {
+  if (!codexCommand.includes("/") && !codexCommand.includes("\\")) {
+    return undefined;
+  }
+  const directory = path.dirname(codexCommand);
+  const ripgrepPath = path.join(
+    directory,
+    process.platform === "win32" ? "rg.exe" : "rg",
+  );
+  if (!isExecutableFile(ripgrepPath)) {
+    return undefined;
+  }
+  return directory;
+}
+
+function isExecutableFile(candidate: string): boolean {
+  try {
+    if (!statSync(candidate).isFile()) {
+      return false;
+    }
+    if (process.platform === "win32") {
+      return true;
+    }
+    accessSync(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolvePathEnvKey(env: NodeJS.ProcessEnv): string {
+  if (process.platform !== "win32") {
+    return "PATH";
+  }
+  return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+}
+
 export class StdioJsonRpcTransport implements JsonRpcTransport {
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private messageHandler: (message: string) => void = () => undefined;
@@ -51,16 +113,17 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       return;
     }
 
-    const env = this.options.resolveEnv
+    const baseEnv = this.options.resolveEnv
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
+    const command = await resolveCodexCommand({
+      command: this.options.command,
+      env: baseEnv,
+    });
+    const env = prependCodexSiblingToolDirectoryToPath(baseEnv, command.command);
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
       : this.options.args ?? [];
-    const command = await resolveCodexCommand({
-      command: this.options.command,
-      env,
-    });
     codexTransportLog.info("launch app-server", {
       command: command.command,
       source: command.source,
