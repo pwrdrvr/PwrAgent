@@ -413,7 +413,6 @@ type BackendClient = {
     threadId: string;
     includeTurns?: boolean;
     before?: string;
-    includeTurns?: boolean;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
@@ -1257,7 +1256,25 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readOptionalString(value: unknown): string | undefined {
+function readOptionalString(value: unknown): string | undefined;
+function readOptionalString(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined;
+function readOptionalString(
+  value: unknown,
+  keys?: string[],
+): string | undefined {
+  if (keys) {
+    return (
+      readStringLike(
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : undefined,
+        keys,
+      ) ?? undefined
+    );
+  }
   return typeof value === "string" ? value : undefined;
 }
 
@@ -1702,13 +1719,6 @@ function normalizeCodexItemType(value: unknown): string | undefined {
   return typeof value === "string"
     ? value.replace(/[^a-z0-9]/gi, "").toLowerCase()
     : undefined;
-}
-
-function readOptionalString(
-  record: Record<string, unknown> | undefined,
-  keys: string[],
-): string | undefined {
-  return readStringLike(record, keys) ?? undefined;
 }
 
 function readStringArrayValue(value: unknown): string[] {

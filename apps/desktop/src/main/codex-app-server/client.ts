@@ -5126,7 +5126,6 @@ function buildThreadReadPayload(params: {
   threadId: string;
   includeTurns?: boolean;
   before?: string;
-  includeTurns?: boolean;
   limit?: number;
 }): CodexThreadReadPayload {
   const payload: CodexThreadReadPayload = {
@@ -5968,7 +5967,6 @@ export class CodexAppServerClient {
     threadId: string;
     includeTurns?: boolean;
     before?: string;
-    includeTurns?: boolean;
     limit?: number;
   }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
