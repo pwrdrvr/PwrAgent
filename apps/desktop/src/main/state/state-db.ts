@@ -1357,15 +1357,13 @@ function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: nu
   db.exec("DELETE FROM thread_pricing_summaries");
   const rollups = db
     .prepare(
-      `SELECT DISTINCT provider, backend, currency, thread_id AS thread_id
+      `SELECT DISTINCT
+         provider,
+         backend,
+         currency,
+         COALESCE(NULLIF(parent_thread_id, ''), thread_id) AS thread_id
        FROM thread_usage_lines
-       WHERE status != 'superseded'
-       UNION
-       SELECT DISTINCT provider, backend, currency, parent_thread_id AS thread_id
-       FROM thread_usage_lines
-       WHERE status != 'superseded'
-         AND parent_thread_id IS NOT NULL
-         AND thread_id != parent_thread_id`,
+       WHERE status != 'superseded'`,
     )
     .all() as Array<{
       backend: string;
