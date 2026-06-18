@@ -1,7 +1,7 @@
 ---
 title: "feat: Add agent task handoff dynamic tool"
 type: feat
-status: active
+status: completed
 date: 2026-06-18
 ---
 
