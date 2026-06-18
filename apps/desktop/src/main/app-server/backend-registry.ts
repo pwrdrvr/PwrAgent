@@ -11454,6 +11454,9 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return;
     }
+    if (event.backend === "codex" && this.codexNativeSubAgentParents.has(threadId)) {
+      return;
+    }
     if (
       Array.from(this.taskMonitorDelegations.values()).some(
         (record) => record.monitorThreadId === threadId,

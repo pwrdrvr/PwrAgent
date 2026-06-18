@@ -245,3 +245,57 @@ describe("navigation Agent metadata", () => {
     );
   });
 });
+
+describe("navigation sub-agent metadata", () => {
+  it("includes sub-agent display names in the navigation snapshot hash", () => {
+    const baseSubAgent = {
+      monitorId: "codex-native:thread-agent",
+      task: "Check PR status",
+      status: "running" as const,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      monitorThreadId: "thread-agent",
+      monitorTurnId: "turn-1",
+    };
+    const [threadWithoutName] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [baseSubAgent],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+    const [threadWithName] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [{ ...baseSubAgent, agentName: "Huygens" }],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+
+    expect(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithoutName!],
+      }),
+    ).not.toBe(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithName!],
+      }),
+    );
+  });
+});

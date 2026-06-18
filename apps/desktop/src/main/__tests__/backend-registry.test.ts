@@ -11870,6 +11870,7 @@ command = "pnpm dev"
       overlayStore,
     });
     const nativeThreadId = "019ebb70-2c58-7143-850e-0a699607c755";
+    const upsertThreadUsageLine = vi.spyOn(overlayStore, "upsertThreadUsageLine");
 
     await codexClient.emit({
       method: "item/completed",
@@ -11962,6 +11963,15 @@ command = "pnpm dev"
     const pricing = await overlayStore.readThreadPricing({
       backend: "codex",
       threadId: "thread-parent",
+    });
+    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    expect(upsertThreadUsageLine).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        source: "monitor",
+        sourceItemId: `codex-native:${nativeThreadId}`,
+        parentThreadId: "thread-parent",
+        threadId: nativeThreadId,
+      }),
     });
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
