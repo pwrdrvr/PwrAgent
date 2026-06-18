@@ -13629,6 +13629,7 @@ command = "pnpm dev"
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
+    const normalizedRoot = expectedDir(root);
     expect(payload).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -13648,7 +13649,7 @@ command = "pnpm dev"
       },
       workspace: {
         mode: "same",
-        cwd: root,
+        cwd: normalizedRoot,
         branch: "main",
         git: {
           kind: "git_local",
@@ -13718,7 +13719,7 @@ command = "pnpm dev"
     expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
     expect(prompt).toContain("- Thread ID: agent-thread");
     expect(prompt).toContain("- Turn ID: turn-1");
-    expect(prompt).toContain("- CWD: ");
+    expect(prompt).toContain(`- CWD: ${normalizedRoot}`);
     expect(prompt).toContain("Additional context from parent:");
     expect(prompt).toContain("Parent already checked the latest CI run.");
     await expect(
@@ -13740,7 +13741,7 @@ command = "pnpm dev"
         groupingMode: "none",
         workspace: {
           mode: "same",
-          cwd: root,
+          cwd: normalizedRoot,
           branch: "main",
         },
       },
