@@ -6831,7 +6831,6 @@ export class DesktopBackendRegistry {
       runtime: acpRuntimeWithModel,
     });
     const agentToolCatalogs = resolveAgentToolCatalogs({
-      agent: request.agent,
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
@@ -7409,7 +7408,6 @@ export class DesktopBackendRegistry {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
               const agentToolCatalogs = resolveAgentToolCatalogs({
-                agent: overlay?.agent,
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
@@ -13607,6 +13605,21 @@ export class DesktopBackendRegistry {
             "Automation inspection tool calls must originate from an active turn on the same thread.",
         });
       }
+      if (!(await this.isAgentThreadForDynamicToolCall(backend, dynamicToolCall))) {
+        backendRegistryLog.warn("rejecting automation inspection dynamic tool call from non-Agent thread", {
+          backend,
+          callId: dynamicToolCall.callId,
+          namespace: dynamicToolCall.namespace,
+          threadId: dynamicToolCall.threadId,
+          tool: dynamicToolCall.tool,
+          turnId: dynamicToolCall.turnId,
+        });
+        return buildAutomationInspectionDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Automation inspection tools are available only to Agent threads.",
+        });
+      }
       backendRegistryLog.info("handling automation inspection dynamic tool call", {
         backend,
         callId: dynamicToolCall.callId,
@@ -13641,6 +13654,21 @@ export class DesktopBackendRegistry {
             "Thread inspection tool calls must originate from an active turn on the same thread.",
         });
       }
+      if (!(await this.isAgentThreadForDynamicToolCall(backend, threadToolCall))) {
+        backendRegistryLog.warn("rejecting thread inspection dynamic tool call from non-Agent thread", {
+          backend,
+          callId: threadToolCall.callId,
+          namespace: threadToolCall.namespace,
+          threadId: threadToolCall.threadId,
+          tool: threadToolCall.tool,
+          turnId: threadToolCall.turnId,
+        });
+        return buildPwrAgentThreadDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Thread inspection tools are available only to Agent threads.",
+        });
+      }
       backendRegistryLog.info("handling thread inspection dynamic tool call", {
         backend,
         callId: threadToolCall.callId,
@@ -13673,6 +13701,20 @@ export class DesktopBackendRegistry {
           code: "forbidden",
           message:
             "App management tool calls must originate from an active Agent turn on the same thread.",
+        });
+      }
+      if (!(await this.isAgentThreadForDynamicToolCall(backend, appToolCall))) {
+        backendRegistryLog.warn("rejecting app management dynamic tool call from non-Agent thread", {
+          backend,
+          callId: appToolCall.callId,
+          namespace: appToolCall.namespace,
+          threadId: appToolCall.threadId,
+          tool: appToolCall.tool,
+          turnId: appToolCall.turnId,
+        });
+        return buildPwrAgentAppDynamicToolErrorResponse({
+          code: "forbidden",
+          message: "App management tools are available only to Agent threads.",
         });
       }
       backendRegistryLog.info("handling app management dynamic tool call", {
@@ -13714,6 +13756,25 @@ export class DesktopBackendRegistry {
             "Thread handoff tool calls must originate from an active Agent turn on the same thread.",
         });
       }
+      if (
+        !(await this.isAgentThreadForDynamicToolCall(
+          backend,
+          threadOrchestrationToolCall,
+        ))
+      ) {
+        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call from non-Agent thread", {
+          backend,
+          callId: threadOrchestrationToolCall.callId,
+          namespace: threadOrchestrationToolCall.namespace,
+          threadId: threadOrchestrationToolCall.threadId,
+          tool: threadOrchestrationToolCall.tool,
+          turnId: threadOrchestrationToolCall.turnId,
+        });
+        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
+          code: "forbidden",
+          message: "Thread handoff tools are available only to Agent threads.",
+        });
+      }
       backendRegistryLog.info("handling thread orchestration dynamic tool call", {
         backend,
         callId: threadOrchestrationToolCall.callId,
@@ -13750,6 +13811,20 @@ export class DesktopBackendRegistry {
           code: "forbidden",
           message:
             "Messaging context tool calls must originate from an active turn on the same Agent thread.",
+        });
+      }
+      if (!(await this.isAgentThreadForDynamicToolCall(backend, messagingToolCall))) {
+        backendRegistryLog.warn("rejecting messaging context dynamic tool call from non-Agent thread", {
+          backend,
+          callId: messagingToolCall.callId,
+          namespace: messagingToolCall.namespace,
+          threadId: messagingToolCall.threadId,
+          tool: messagingToolCall.tool,
+          turnId: messagingToolCall.turnId,
+        });
+        return buildPwrAgentMessagingDynamicToolErrorResponse({
+          code: "forbidden",
+          message: "Messaging context tools are available only to Agent threads.",
         });
       }
       backendRegistryLog.info("handling messaging context dynamic tool call", {
@@ -13868,6 +13943,17 @@ export class DesktopBackendRegistry {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private async isAgentThreadForDynamicToolCall(
+    backend: AppServerBackendKind,
+    call: { threadId: string },
+  ): Promise<boolean> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: call.threadId,
+    });
+    return Boolean(overlay?.agent);
   }
 
   private async handleThreadOrchestrationRequest(

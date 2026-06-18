@@ -1,7 +1,6 @@
 import type {
   AgentToolCatalogId,
   AgentToolCatalogSummary,
-  ThreadAgentMetadata,
 } from "@pwragent/shared";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -33,17 +32,12 @@ export type ResolvedAgentToolCatalog = {
 };
 
 export function resolveAgentToolCatalogs(params: {
-  agent?: ThreadAgentMetadata | { name: string; instructions?: string } | null;
   appManagementHandler?: PwrAgentAppManagementHandler;
   automationInspectionHandler?: AutomationInspectionHandler;
   messagingHandler?: PwrAgentMessagingHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
 }): ResolvedAgentToolCatalog[] {
-  if (!params.agent) {
-    return [];
-  }
-
   const automationRouter = buildAutomationInspectionToolRouter(
     params.automationInspectionHandler,
   );
