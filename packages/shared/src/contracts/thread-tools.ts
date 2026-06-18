@@ -5,7 +5,10 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
-import type { ThreadAgentMetadata } from "./navigation";
+import type {
+  MessagingThreadBindingSummary,
+  ThreadAgentMetadata,
+} from "./navigation";
 import type {
   ThreadSearchContentMode,
   ThreadSearchConfidenceBand,
@@ -21,6 +24,7 @@ export const PWRAGENT_THREAD_TOOL_NAMESPACE = "pwragent_threads";
 export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "search_threads",
   "get_thread_status",
+  "mutate_thread",
 ] as const;
 
 export type PwrAgentThreadInspectionOperationName =
@@ -67,6 +71,47 @@ export type GetThreadStatusToolArgs = {
   threadId: ThreadIdentifier;
 };
 
+export type MutateThreadToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * Renames the PwrAgent thread itself. This does not rename any attached
+   * Telegram topic, Discord thread, or other messaging surface.
+   */
+  title?: string;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  executionMode?: ThreadExecutionMode;
+  /**
+   * Validate and report the requested mutations without applying them.
+   */
+  dryRun?: boolean;
+};
+
+export type ThreadMutationField =
+  | "title"
+  | "model_settings"
+  | "execution_mode";
+
+export type ThreadMutationChangeStatus =
+  | "would_apply"
+  | "applied";
+
+export type ThreadMutationAppliedChange = {
+  field: ThreadMutationField;
+  status: ThreadMutationChangeStatus;
+  to?: unknown;
+};
+
+export type ThreadMutationResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  dryRun: boolean;
+  changes: ThreadMutationAppliedChange[];
+};
+
 export type ThreadInspectionSummary = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -86,6 +131,7 @@ export type ThreadInspectionSummary = {
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
+  messagingBindings?: MessagingThreadBindingSummary[];
   snippets?: ThreadSearchSnippet[];
 };
 
@@ -98,6 +144,7 @@ export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
 export type PwrAgentThreadInspectionToolArgsByOperation = {
   search_threads: SearchThreadsToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
+  mutate_thread: MutateThreadToolArgs;
 };
 
 export type PwrAgentThreadInspectionToolArgs<
@@ -133,6 +180,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             thread: ThreadStatusInspectionSummary;
+          }
+        | {
+            mutation: ThreadMutationResult;
           };
     }
   | {

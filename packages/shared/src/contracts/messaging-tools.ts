@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type {
@@ -11,12 +12,27 @@ import type {
 export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
-  "get_current_location",
+  "get_current_messaging_surface",
   "attach_thread_here",
 ] as const;
 
-export type PwrAgentMessagingOperationName =
+export const PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES = [
+  "get_current_location",
+] as const;
+
+export const PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES = [
+  ...PWRAGENT_MESSAGING_OPERATION_NAMES,
+  ...PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES,
+] as const;
+
+export type PwrAgentMessagingAdvertisedOperationName =
   (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number];
+
+export type PwrAgentMessagingLegacyOperationName =
+  (typeof PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES)[number];
+
+export type PwrAgentMessagingOperationName =
+  (typeof PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES)[number];
 
 export const PWRAGENT_MESSAGING_ERROR_CODES = [
   "invalid_arguments",
@@ -52,12 +68,22 @@ export type PwrAgentMessagingActorSummary = {
   isBot?: boolean;
 };
 
+export type PwrAgentMessagingBoundThreadSummary = {
+  title: string;
+  projectKey?: string;
+  gitBranch?: string;
+  model?: string;
+  executionMode?: ThreadExecutionMode;
+  agentName?: string;
+};
+
 export type PwrAgentMessagingBindingSummary = {
   id: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   targetKind: MessagingBindingTargetKind;
   displayName?: string;
+  thread?: PwrAgentMessagingBoundThreadSummary;
 };
 
 export type PwrAgentMessagingManagedConversationOperationSummary = {
@@ -85,7 +111,7 @@ export type PwrAgentMessagingLocationSummary = {
   managedConversation: PwrAgentMessagingManagedConversationSummary;
 };
 
-export type GetCurrentMessagingLocationToolArgs = Record<string, never>;
+export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;
 
 export type AttachThreadHerePlacement =
   | "auto"
@@ -111,7 +137,8 @@ export type AttachThreadHereResult = {
 };
 
 export type PwrAgentMessagingToolArgsByOperation = {
-  get_current_location: GetCurrentMessagingLocationToolArgs;
+  get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
+  get_current_location: GetCurrentMessagingSurfaceToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
 };
 

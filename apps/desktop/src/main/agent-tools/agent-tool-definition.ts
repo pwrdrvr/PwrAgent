@@ -37,6 +37,11 @@ export type AgentToolDefinition<TName extends string = string> = {
   name: TName;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * Hidden definitions are callable compatibility facades, but are not
+   * advertised to new Agent turns or MCP clients.
+   */
+  advertise?: boolean;
   deferLoading?: boolean;
   dispatch: (
     args: Record<string, unknown>,

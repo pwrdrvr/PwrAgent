@@ -31,6 +31,7 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingToolUpdateMode,
+  PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
   PwrAgentMessagingManagedConversationSummary,
   PwrAgentMessagingRequest,
@@ -293,6 +294,14 @@ type ActiveAgentMessagingOrigin = {
 
 type AgentMessagingOriginResolution =
   | { ok: true; origin: ActiveAgentMessagingOrigin }
+  | Extract<PwrAgentMessagingResponse, { ok: false }>;
+
+type AttachTargetResolution =
+  | {
+      ok: true;
+      navigation: NavigationSnapshot;
+      thread: NavigationThreadSummary;
+    }
   | Extract<PwrAgentMessagingResponse, { ok: false }>;
 
 type ExecutionModeResolution = {
@@ -654,7 +663,8 @@ export class MessagingController {
     request: PwrAgentMessagingRequest,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
-      case "get_current_location": {
+      case "get_current_location":
+      case "get_current_messaging_surface": {
         const origin = await this.resolveAgentMessagingOrigin(request.context);
         if (!origin.ok) {
           return origin;
@@ -10989,7 +10999,9 @@ export class MessagingController {
       return target;
     }
 
-    const location = await this.summarizeAgentMessagingLocation(origin.origin);
+    const location = await this.summarizeAgentMessagingLocation(origin.origin, {
+      navigation: target.navigation,
+    });
     const resolvedPlacement = this.resolveAttachPlacement({
       location,
       origin: origin.origin,
@@ -11058,7 +11070,10 @@ export class MessagingController {
     return {
       ok: true,
       data: {
-        binding: summarizeMessagingBinding(visibleBinding),
+        binding: summarizeMessagingBinding(
+          visibleBinding,
+          summarizeNavigationThreadForMessaging(target.thread),
+        ),
         channel: visibleBinding.channel.channel,
         conversation: summarizeMessagingConversation(visibleBinding.channel.conversation),
         createdConversation: createdConversation
@@ -11076,7 +11091,7 @@ export class MessagingController {
   private async resolveAttachTarget(
     backend: AppServerBackendKind,
     threadId: string,
-  ): Promise<{ ok: true } | Extract<PwrAgentMessagingResponse, { ok: false }>> {
+  ): Promise<AttachTargetResolution> {
     let navigation: NavigationSnapshot;
     try {
       navigation = await this.options.backend.getNavigationSnapshot({ backend });
@@ -11108,7 +11123,7 @@ export class MessagingController {
       };
     }
 
-    return { ok: true };
+    return { ok: true, navigation, thread: target };
   }
 
   private resolveAttachPlacement(params: {
@@ -11217,14 +11232,51 @@ export class MessagingController {
 
   private async summarizeAgentMessagingLocation(
     origin: ActiveAgentMessagingOrigin,
+    options: { navigation?: NavigationSnapshot } = {},
   ): Promise<PwrAgentMessagingLocationSummary> {
     return {
       actor: summarizeMessagingActor(origin.event.actor),
-      binding: summarizeMessagingBinding(origin.binding),
+      binding: summarizeMessagingBinding(
+        origin.binding,
+        await this.resolveBoundThreadSummary(
+          origin.binding,
+          options.navigation,
+        ),
+      ),
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
       managedConversation: await this.resolveManagedConversationSummary(origin),
     };
+  }
+
+  private async resolveBoundThreadSummary(
+    binding: MessagingBindingRecord,
+    navigation?: NavigationSnapshot,
+  ): Promise<PwrAgentMessagingBoundThreadSummary | undefined> {
+    const existingThread = navigation
+      ? findThreadForBinding(navigation, binding)
+      : undefined;
+    if (existingThread) {
+      return summarizeNavigationThreadForMessaging(existingThread);
+    }
+    try {
+      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
+        backend: binding.backend,
+      });
+      const thread = findThreadForBinding(refreshedNavigation, binding);
+      if (!thread) {
+        return undefined;
+      }
+      return summarizeNavigationThreadForMessaging(thread);
+    } catch (error) {
+      this.logger.warn?.("failed to resolve messaging surface bound thread summary", {
+        backend: binding.backend,
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+      return undefined;
+    }
   }
 
   private async resolveManagedConversationSummary(
@@ -12928,6 +12980,7 @@ function summarizeMessagingActor(
 
 function summarizeMessagingBinding(
   binding: MessagingBindingRecord,
+  thread?: PwrAgentMessagingBoundThreadSummary,
 ): PwrAgentMessagingLocationSummary["binding"] {
   return {
     id: binding.id,
@@ -12935,6 +12988,21 @@ function summarizeMessagingBinding(
     threadId: binding.threadId,
     targetKind: binding.targetKind ?? "thread",
     displayName: binding.displayName,
+    ...(thread ? { thread } : {}),
+  };
+}
+
+function summarizeNavigationThreadForMessaging(
+  thread: NavigationThreadSummary,
+): PwrAgentMessagingBoundThreadSummary {
+  const gitBranch = thread.gitBranch ?? thread.observedGitBranch;
+  return {
+    title: thread.title,
+    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
+    ...(thread.model ? { model: thread.model } : {}),
+    ...(thread.executionMode ? { executionMode: thread.executionMode } : {}),
+    ...(thread.agent?.name ? { agentName: thread.agent.name } : {}),
   };
 }
 

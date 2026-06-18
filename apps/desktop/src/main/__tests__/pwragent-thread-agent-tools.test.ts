@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 
 describe("PwrAgent thread agent tools", () => {
-  it("projects search/status tools and dispatches with Agent thread context", async () => {
+  it("projects thread tools and dispatches with Agent thread context", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,
       data: {
@@ -23,6 +23,10 @@ describe("PwrAgent thread agent tools", () => {
       expect.objectContaining({
         namespace: "pwragent_threads",
         name: "get_thread_status",
+      }),
+      expect.objectContaining({
+        namespace: "pwragent_threads",
+        name: "mutate_thread",
       }),
     ]);
 

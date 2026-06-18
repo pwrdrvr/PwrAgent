@@ -5,7 +5,10 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { MessagingApprovalDecision } from "@pwragent/messaging-interface";
+import type {
+  MessagingApprovalDecision,
+  MessagingBindingRecord,
+} from "@pwragent/messaging-interface";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
@@ -107,8 +110,11 @@ import {
   type ThreadPermissionTransitionStatus,
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
+  type MessagingThreadBindingSummary,
+  type MutateThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+  type ThreadMutationAppliedChange,
   type ThreadInspectionSummary,
   type ThreadSearchFilters,
   type ThreadSearchResult,
@@ -13562,11 +13568,150 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (request.operation === "mutate_thread") {
+      return await this.handleMutateThreadInspectionRequest(request.args);
+    }
+
     return {
       ok: false,
       error: {
         code: "unsupported_operation",
         message: "Unsupported PwrAgent thread inspection operation.",
+      },
+    };
+  }
+
+  private async handleMutateThreadInspectionRequest(
+    args: MutateThreadToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const dryRun = args.dryRun === true;
+
+    let title: string | undefined;
+    if (Object.hasOwn(args, "title")) {
+      if (typeof args.title !== "string" || !args.title.trim()) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "title must be a non-empty string when provided.",
+          },
+        };
+      }
+      title = args.title.trim();
+    }
+
+    const modelSettings = readThreadMutationModelSettings(args);
+    if (modelSettings.error) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: modelSettings.error,
+        },
+      };
+    }
+
+    let executionMode: ThreadExecutionMode | undefined;
+    if (Object.hasOwn(args, "executionMode")) {
+      if (!isThreadMutationExecutionMode(args.executionMode)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "executionMode must be default or full-access when provided.",
+          },
+        };
+      }
+      executionMode = args.executionMode;
+    }
+
+    const changes: ThreadMutationAppliedChange[] = [];
+    if (title !== undefined) {
+      changes.push({
+        field: "title",
+        status: dryRun ? "would_apply" : "applied",
+        to: title,
+      });
+    }
+    if (modelSettings.value) {
+      changes.push({
+        field: "model_settings",
+        status: dryRun ? "would_apply" : "applied",
+        to: modelSettings.value,
+      });
+    }
+    if (executionMode !== undefined) {
+      changes.push({
+        field: "execution_mode",
+        status: dryRun ? "would_apply" : "applied",
+        to: executionMode,
+      });
+    }
+
+    if (changes.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, or executionMode.",
+        },
+      };
+    }
+
+    if (title !== undefined && !dryRun) {
+      await this.renameThread({
+        backend: args.backend,
+        threadId,
+        name: title,
+      });
+    }
+
+    if (modelSettings.value && !dryRun) {
+      await this.setThreadModelSettings({
+        backend: args.backend,
+        threadId,
+        ...modelSettings.value,
+      });
+    }
+
+    if (executionMode !== undefined && !dryRun) {
+      await this.setThreadExecutionMode({
+        backend: args.backend,
+        threadId,
+        executionMode,
+      });
+    }
+
+    return {
+      ok: true,
+      data: {
+        mutation: {
+          backend: args.backend,
+          threadId,
+          dryRun,
+          changes,
+        },
       },
     };
   }
@@ -13605,7 +13750,15 @@ export class DesktopBackendRegistry {
           backend: result.backend,
           threadId: result.threadId,
         });
-        return toThreadInspectionSummaryFromSearchResult(result, overlay?.agent);
+        const messagingBindings = await this.getThreadInspectionMessagingBindings({
+          backend: result.backend,
+          threadId: result.threadId,
+        });
+        return toThreadInspectionSummaryFromSearchResult(
+          result,
+          overlay?.agent,
+          messagingBindings,
+        );
       }),
     );
   }
@@ -13619,9 +13772,58 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay?.agent);
+        const messagingBindings = await this.getThreadInspectionMessagingBindings({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        return toThreadInspectionSummary(thread, overlay?.agent, messagingBindings);
       }),
     );
+  }
+
+  private async getThreadInspectionMessagingBindings(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingThreadBindingSummary[] | undefined> {
+    const store = this.resolveMessagingInspectionStore();
+    if (!store) {
+      return undefined;
+    }
+    try {
+      const bindings = await store.findActiveBindingsForThread(params);
+      if (bindings.length === 0) {
+        return undefined;
+      }
+      return bindings.map(toMessagingThreadBindingSummary);
+    } catch (error) {
+      backendRegistryLog.warn("failed to resolve thread inspection messaging bindings", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return undefined;
+    }
+  }
+
+  private resolveMessagingInspectionStore(): Pick<
+    MessagingStoreLike,
+    "findActiveBindingsForThread"
+  > | undefined {
+    if (this.messagingStore === null) {
+      return undefined;
+    }
+    if (this.messagingStore) {
+      return this.messagingStore;
+    }
+
+    try {
+      return getDesktopMessagingStore();
+    } catch (error) {
+      backendRegistryLog.debug("messaging store unavailable for thread inspection", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private notificationsEnabled(): boolean {
@@ -14421,6 +14623,53 @@ function readThreadInspectionBackend(
     : undefined;
 }
 
+function isThreadMutationExecutionMode(
+  value: unknown,
+): value is ThreadExecutionMode {
+  return value === "default" || value === "full-access";
+}
+
+function readThreadMutationModelSettings(
+  args: MutateThreadToolArgs,
+):
+  | {
+      value: Omit<SetThreadModelSettingsRequest, "backend" | "threadId">;
+      error?: never;
+    }
+  | { value?: never; error: string }
+  | { value?: undefined; error?: undefined } {
+  const settings: Omit<SetThreadModelSettingsRequest, "backend" | "threadId"> = {};
+  const stringFields = [
+    ["model", "model"],
+    ["serviceTier", "serviceTier"],
+    ["reasoningEffort", "reasoningEffort"],
+  ] as const;
+
+  for (const [inputField, outputField] of stringFields) {
+    if (!Object.hasOwn(args, inputField)) {
+      continue;
+    }
+    const value = args[inputField];
+    if (typeof value !== "string" || !value.trim()) {
+      return {
+        error: `${inputField} must be a non-empty string when provided.`,
+      };
+    }
+    settings[outputField] = value.trim();
+  }
+
+  if (Object.hasOwn(args, "fastMode")) {
+    if (typeof args.fastMode !== "boolean") {
+      return {
+        error: "fastMode must be a boolean when provided.",
+      };
+    }
+    settings.fastMode = args.fastMode;
+  }
+
+  return Object.keys(settings).length > 0 ? { value: settings } : {};
+}
+
 function clampInteger(
   value: unknown,
   defaultValue: number,
@@ -14456,6 +14705,7 @@ function filterThreadInspectionSummaries(
 function toThreadInspectionSummary(
   thread: AppServerThreadSummary,
   agent: ThreadAgentMetadata | undefined,
+  messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
     backend: thread.source,
@@ -14472,6 +14722,7 @@ function toThreadInspectionSummary(
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,
     fastMode: thread.fastMode,
+    ...(messagingBindings?.length ? { messagingBindings } : {}),
     linkedDirectories: thread.linkedDirectories,
   };
 }
@@ -14479,6 +14730,7 @@ function toThreadInspectionSummary(
 function toThreadInspectionSummaryFromSearchResult(
   result: ThreadSearchResult,
   agent: ThreadAgentMetadata | undefined,
+  messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
     backend: result.backend,
@@ -14492,6 +14744,7 @@ function toThreadInspectionSummaryFromSearchResult(
     agent,
     model: result.model,
     linkedDirectories: result.linkedDirectories,
+    ...(messagingBindings?.length ? { messagingBindings } : {}),
     score: result.score,
     confidence: result.confidence,
     matchReasons: result.matchReasons,
@@ -14614,6 +14867,25 @@ function toThreadInspectionSearchSummary(
     ...(thread.matchReasons?.length
       ? { matchReasons: thread.matchReasons.slice(0, 6) }
       : {}),
+    ...(thread.messagingBindings?.length
+      ? {
+          messagingBindings: thread.messagingBindings.slice(0, 5).map((binding) => ({
+            bindingId: binding.bindingId,
+            platform: binding.platform,
+            ...(binding.conversationKind
+              ? { conversationKind: binding.conversationKind }
+              : {}),
+            ...(binding.conversationTitle
+              ? { conversationTitle: binding.conversationTitle }
+              : {}),
+            ...(binding.parentTitle ? { parentTitle: binding.parentTitle } : {}),
+            ...(binding.ancestorTitle
+              ? { ancestorTitle: binding.ancestorTitle }
+              : {}),
+            ...(binding.activeAt !== undefined ? { activeAt: binding.activeAt } : {}),
+          })),
+        }
+      : {}),
     ...(thread.snippets?.length
       ? {
           snippets: thread.snippets.slice(0, 3).map((snippet) => ({
@@ -14631,6 +14903,21 @@ function toThreadInspectionSearchSummary(
       path: directory.path,
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
     })),
+  };
+}
+
+function toMessagingThreadBindingSummary(
+  binding: MessagingBindingRecord,
+): MessagingThreadBindingSummary {
+  const conversation = binding.channel.conversation;
+  return {
+    bindingId: binding.id,
+    platform: binding.channel.channel,
+    conversationKind: conversation.kind,
+    conversationTitle: conversation.title,
+    parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
+    activeAt: binding.updatedAt,
   };
 }
 

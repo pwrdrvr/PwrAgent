@@ -3,7 +3,7 @@ import type {
   PwrAgentMessagingOperationName,
 } from "@pwragent/shared";
 import {
-  PWRAGENT_MESSAGING_OPERATION_NAMES,
+  PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
@@ -27,7 +27,7 @@ export function isPwrAgentMessagingDynamicToolCall(
 } {
   return (
     call.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE &&
-    PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
+    PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.includes(
       call.tool as PwrAgentMessagingOperationName,
     )
   );

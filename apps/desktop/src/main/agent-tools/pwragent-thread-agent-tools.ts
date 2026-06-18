@@ -71,6 +71,8 @@ function descriptionForOperation(
       return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread.";
     case "get_thread_status":
       return "Read status and compact metadata for a known PwrAgent thread.";
+    case "mutate_thread":
+      return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }
 }
 
@@ -162,6 +164,54 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
+        },
+      };
+    case "mutate_thread":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: {
+            type: "string",
+          },
+          threadId: { type: "string" },
+          title: {
+            type: "string",
+            description:
+              "New PwrAgent thread title. This does not rename attached messaging topics or threads.",
+          },
+          model: {
+            type: "string",
+            description:
+              "Provider model id to use for future turns, for example `gpt-5.5`.",
+          },
+          serviceTier: {
+            type: "string",
+            description:
+              "Provider service tier to use for future turns when supported.",
+          },
+          reasoningEffort: {
+            type: "string",
+            description:
+              "Provider reasoning effort to use for future turns when supported.",
+          },
+          fastMode: {
+            type: "boolean",
+            description:
+              "Whether to enable the thread's fast-mode setting when supported.",
+          },
+          executionMode: {
+            type: "string",
+            enum: ["default", "full-access"],
+            description:
+              "Thread execution/permission mode. Active turns may queue this until the next safe boundary.",
+          },
+          dryRun: {
+            type: "boolean",
+            description:
+              "When true, validate and report requested mutations without applying them.",
+          },
         },
       };
   }

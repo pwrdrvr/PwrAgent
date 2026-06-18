@@ -1254,8 +1254,13 @@ function createMessagingArchiveCleanupStoreMock(options?: {
   bindings?: Array<{
     backend?: "codex" | "grok";
     channel?: "telegram" | "discord";
+    conversationKind?: MessagingBindingRecord["channel"]["conversation"]["kind"];
+    conversationTitle?: string;
     id: string;
+    parentTitle?: string;
+    targetKind?: MessagingBindingRecord["targetKind"];
     threadId: string;
+    updatedAt?: number;
   }>;
   pendingIntentIds?: string[];
 }) {
@@ -1271,14 +1276,16 @@ function createMessagingArchiveCleanupStoreMock(options?: {
         channel: {
           channel: binding.channel ?? "telegram",
           conversation: {
-            kind: "dm",
+            kind: binding.conversationKind ?? "dm",
             id: `${binding.id}:conversation`,
-            title: `${binding.id} conversation`,
+            title: binding.conversationTitle ?? `${binding.id} conversation`,
+            parentTitle: binding.parentTitle,
           },
         },
         authorizedActorIds: [`${binding.id}:actor`],
         createdAt: 1,
-        updatedAt: 1,
+        targetKind: binding.targetKind,
+        updatedAt: binding.updatedAt ?? 1,
       },
     ]),
   );
@@ -5284,8 +5291,12 @@ script = "echo setup"
           name: "get_thread_status",
         }),
         expect.objectContaining({
+          namespace: "pwragent_threads",
+          name: "mutate_thread",
+        }),
+        expect.objectContaining({
           namespace: "pwragent_messaging",
-          name: "get_current_location",
+          name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -7347,7 +7358,7 @@ script = "pnpm install"
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
-          name: "get_current_location",
+          name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
           namespace: "pwragent_messaging",
@@ -12659,6 +12670,21 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-telegram-jambalayah",
+            backend: "codex",
+            channel: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jambalayah",
+            parentTitle: "PwrAgent Mini Dev Group",
+            targetKind: "agent_thread",
+            threadId: "thread-1",
+            updatedAt: 2_500,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock({
         overlays: {
           "codex:thread-1": {
@@ -12726,6 +12752,16 @@ command = "pnpm dev"
           agent: {
             name: "Inbox Agent",
           },
+          messagingBindings: [
+            {
+              bindingId: "binding-telegram-jambalayah",
+              platform: "telegram",
+              conversationKind: "topic",
+              conversationTitle: "Jambalayah",
+              parentTitle: "PwrAgent Mini Dev Group",
+              activeAt: 2_500,
+            },
+          ],
         },
       ],
       totalCount: 1,
@@ -12804,6 +12840,20 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-discord-branch-drift",
+            backend: "codex",
+            channel: "discord",
+            conversationKind: "thread",
+            conversationTitle: "branch drift screenshots",
+            parentTitle: "dev",
+            threadId: "thread-1",
+            updatedAt: 4_000,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock(),
       threadSearchService: { search } as unknown as ThreadSearchService,
     });
@@ -12877,6 +12927,16 @@ command = "pnpm dev"
           threadId: "thread-1",
           title: "Branch drift dialog screenshots",
           confidence: "medium",
+          messagingBindings: [
+            {
+              bindingId: "binding-discord-branch-drift",
+              platform: "discord",
+              conversationKind: "thread",
+              conversationTitle: "branch drift screenshots",
+              parentTitle: "dev",
+              activeAt: 4_000,
+            },
+          ],
           snippets: [
             {
               scope: "provider_content",
@@ -13096,6 +13156,21 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      messagingStore: createMessagingArchiveCleanupStoreMock({
+        bindings: [
+          {
+            id: "binding-telegram-active",
+            backend: "codex",
+            channel: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jeeves",
+            parentTitle: "PwrAgent Mini Dev Group",
+            targetKind: "agent_thread",
+            threadId: "active-thread",
+            updatedAt: 3_000,
+          },
+        ],
+      }),
       overlayStore: createOverlayStoreMock(),
     });
     await registry.publishLocalEvent({
@@ -13135,12 +13210,297 @@ command = "pnpm dev"
         threadId: "active-thread",
         title: "Jeeves",
         status: "idle",
+        messagingBindings: [
+          {
+            bindingId: "binding-telegram-active",
+            platform: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "Jeeves",
+            parentTitle: "PwrAgent Mini Dev Group",
+            activeAt: 3_000,
+          },
+        ],
       },
     });
     expect(
       codexClient.listThreadsCalls
         .map((call) => call.params?.archived)
     ).toEqual([false]);
+
+    await registry.close();
+  });
+
+  it("mutates PwrAgent thread settings from active Agent turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          fastMode: true,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.any(String),
+        },
+      ],
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      mutation: {
+        backend: "codex",
+        threadId: "target-thread",
+        dryRun: false,
+        changes: [
+          {
+            field: "title",
+            status: "applied",
+            to: "Pizza Agent",
+          },
+          {
+            field: "model_settings",
+            status: "applied",
+            to: {
+              model: "gpt-5.5",
+              reasoningEffort: "medium",
+              fastMode: true,
+            },
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "target-thread",
+      name: "Pizza Agent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("dry-runs thread mutations without applying them", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          executionMode: "full-access",
+          dryRun: true,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      mutation: {
+        backend: "codex",
+        threadId: "target-thread",
+        dryRun: true,
+        changes: [
+          {
+            field: "title",
+            status: "would_apply",
+            to: "Pizza Agent",
+          },
+          {
+            field: "execution_mode",
+            status: "would_apply",
+            to: "full-access",
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "default",
+    });
+
+    await registry.close();
+  });
+
+  it("rejects invalid thread mutations before applying earlier requested fields", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          model: "gpt-5.5",
+          executionMode: "yolo",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                "executionMode must be default or full-access when provided.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    expect(overlay).toMatchObject({
+      executionMode: "default",
+    });
+    expect(overlay?.model).toBeUndefined();
 
     await registry.close();
   });
