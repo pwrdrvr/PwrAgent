@@ -9,7 +9,7 @@ import { StateDb } from "../state/state-db";
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
-const PRICING_CATALOG_TIME = Date.UTC(2026, 5, 16);
+const PRICING_CATALOG_TIME = Date.UTC(2026, 3, 23);
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-usage-pricing-"));
@@ -346,6 +346,72 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       pricedUsageLineCount: 0,
       totalCostMicros: 0,
       unpricedUsageLineCount: 1,
+    });
+  });
+
+  it("prices GPT-5.5 usage recorded on its April 23 release date", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputTokens: 1_000,
+        completedAt: Date.UTC(2026, 3, 23, 18, 0, 0),
+        createdAt: Date.UTC(2026, 3, 23, 18, 0, 0),
+        inputTokens: 4_000,
+        outputTokens: 2_000,
+        reasoningOutputTokens: 0,
+        totalTokens: 6_000,
+        uncachedInputTokens: 3_000,
+        usageLineId: "line-april-23-gpt-5-5",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-06-16:gpt-5.5:standard",
+      totalCostMicros: 75_500,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 1,
+      totalCostMicros: 75_500,
+      unpricedUsageLineCount: 0,
+    });
+  });
+
+  it("prices GPT-5.5 usage recorded on June 15", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputTokens: 38_272,
+        completedAt: Date.UTC(2026, 5, 15, 18, 40, 23),
+        createdAt: Date.UTC(2026, 5, 15, 18, 40, 23),
+        inputTokens: 80_351,
+        outputTokens: 58,
+        reasoningOutputTokens: 0,
+        totalTokens: 80_409,
+        uncachedInputTokens: 42_079,
+        usageLineId: "line-june-15-gpt-5-5",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-06-16:gpt-5.5:standard",
+      totalCostMicros: 231_271,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 1,
+      totalCostMicros: 231_271,
+      unpricedUsageLineCount: 0,
     });
   });
 

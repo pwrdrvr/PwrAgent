@@ -92,6 +92,40 @@ describe("token usage pricing", () => {
     ).toBeUndefined();
   });
 
+  it("prices GPT-5.5 usage from its April 23 release date", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 3, 23, 18, 0, 0),
+      cachedInputTokens: 1_000,
+      model: "gpt-5.5",
+      outputTokens: 2_000,
+      uncachedInputTokens: 3_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-06-16",
+      rateId: "openai:2026-06-16:gpt-5.5:standard",
+      serviceTier: "standard",
+      totalCostMicros: 75_500,
+    });
+  });
+
+  it("prices GPT-5.5 usage from June 15 even though the local catalog was captured June 16", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 5, 15, 18, 40, 23),
+      cachedInputTokens: 38_272,
+      model: "gpt-5.5",
+      outputTokens: 58,
+      uncachedInputTokens: 42_079,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-06-16",
+      rateId: "openai:2026-06-16:gpt-5.5:standard",
+      serviceTier: "standard",
+      totalCostMicros: 231_271,
+    });
+  });
+
   it("returns undefined for unsupported models or service tiers", () => {
     expect(
       estimateOpenAiTokenUsageCost({
