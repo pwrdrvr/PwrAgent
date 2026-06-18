@@ -2,9 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
+import {
+  estimateOpenAiTokenUsageCost,
+  resolveOpenAiPricingServiceTier,
+  type ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 21;
+export const CURRENT_STATE_DB_USER_VERSION = 22;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -788,6 +793,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 21) {
       db.transaction(() => {
         ensureThreadUsagePricingIndexes(db);
+        db.pragma("user_version = 21");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 22) {
+      db.transaction(() => {
+        repairOpenAiThreadUsagePricing(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1237,6 +1248,243 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
   ON thread_usage_lines(provider, backend, currency, parent_thread_id)
   WHERE status != 'superseded';
 `);
+}
+
+function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
+  if (
+    !tableExists(db, "thread_usage_lines") ||
+    !tableExists(db, "thread_pricing_summaries")
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+  const rows = db
+    .prepare(
+      `SELECT
+         usage_line_id,
+         cached_input_tokens,
+         created_at,
+         currency,
+         fast_mode,
+         model,
+         output_tokens,
+         price_status,
+         reasoning_output_tokens,
+         service_tier,
+         uncached_input_tokens
+       FROM thread_usage_lines
+       WHERE provider = 'openai'`,
+    )
+    .all() as Array<{
+      cached_input_tokens: number;
+      created_at: number;
+      currency: string;
+      fast_mode: number | null;
+      model: string | null;
+      output_tokens: number;
+      price_status: string;
+      reasoning_output_tokens: number;
+      service_tier: string | null;
+      uncached_input_tokens: number;
+      usage_line_id: string;
+    }>;
+  const updateLine = db.prepare(
+    `UPDATE thread_usage_lines
+     SET
+       price_status = @priceStatus,
+       price_unavailable_reason = @priceUnavailableReason,
+       currency = @currency,
+       pricing_catalog_id = @pricingCatalogId,
+       pricing_catalog_version = @pricingCatalogVersion,
+       pricing_rate_id = @pricingRateId,
+       uncached_input_cost_micros = @uncachedInputCostMicros,
+       cached_input_cost_micros = @cachedInputCostMicros,
+       output_cost_micros = @outputCostMicros,
+       total_cost_micros = @totalCostMicros,
+       updated_at = @updatedAt
+     WHERE usage_line_id = @usageLineId`,
+  );
+
+  for (const row of rows) {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: row.created_at,
+      cachedInputTokens: row.cached_input_tokens,
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      model: row.model ?? undefined,
+      outputTokens: row.output_tokens,
+      reasoningOutputTokens: row.reasoning_output_tokens,
+      serviceTier: row.service_tier ?? undefined,
+      uncachedInputTokens: row.uncached_input_tokens,
+    });
+    if (!cost && row.price_status === "priced") {
+      continue;
+    }
+
+    const pricingServiceTier = resolveOpenAiPricingServiceTier({
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      serviceTier: row.service_tier ?? undefined,
+    });
+    const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
+      cost
+        ? null
+        : !row.model
+          ? "missing-model"
+          : pricingServiceTier === undefined
+            ? "unsupported-service-tier"
+            : "missing-rate";
+
+    updateLine.run({
+      cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+      currency: cost?.currency ?? row.currency,
+      outputCostMicros: cost?.outputCostMicros ?? 0,
+      priceStatus: cost ? "priced" : "unpriced",
+      priceUnavailableReason,
+      pricingCatalogId: cost?.catalogId ?? null,
+      pricingCatalogVersion: cost?.catalogVersion ?? null,
+      pricingRateId: cost?.rateId ?? null,
+      totalCostMicros: cost?.totalCostMicros ?? 0,
+      uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+      updatedAt: now,
+      usageLineId: row.usage_line_id,
+    });
+  }
+
+  rebuildThreadPricingSummaries(db, now);
+}
+
+function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: number): void {
+  db.exec("DELETE FROM thread_pricing_summaries");
+  const rollups = db
+    .prepare(
+      `SELECT DISTINCT
+         provider,
+         backend,
+         currency,
+         COALESCE(NULLIF(parent_thread_id, ''), thread_id) AS thread_id
+       FROM thread_usage_lines
+       WHERE status != 'superseded'`,
+    )
+    .all() as Array<{
+      backend: string;
+      currency: string;
+      provider: string;
+      thread_id: string;
+    }>;
+  const readAggregate = db.prepare(
+    `SELECT
+       COUNT(*) AS usage_line_count,
+       SUM(CASE WHEN price_status = 'priced' THEN 1 ELSE 0 END) AS priced_usage_line_count,
+       SUM(CASE WHEN price_status != 'priced' THEN 1 ELSE 0 END) AS unpriced_usage_line_count,
+       COALESCE(SUM(input_tokens), 0) AS input_tokens,
+       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+       COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens,
+       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+       COALESCE(SUM(CASE WHEN price_status = 'priced' THEN total_cost_micros ELSE 0 END), 0)
+         AS total_cost_micros
+     FROM (
+       SELECT *
+       FROM thread_usage_lines
+       WHERE provider = ?
+         AND backend = ?
+         AND currency = ?
+         AND status != 'superseded'
+         AND thread_id = ?
+       UNION ALL
+       SELECT *
+       FROM thread_usage_lines
+       WHERE provider = ?
+         AND backend = ?
+         AND currency = ?
+         AND status != 'superseded'
+         AND parent_thread_id = ?
+         AND thread_id != ?
+     )`,
+  );
+  const insertSummary = db.prepare(
+    `INSERT INTO thread_pricing_summaries (
+      provider,
+      backend,
+      thread_id,
+      currency,
+      usage_line_count,
+      priced_usage_line_count,
+      unpriced_usage_line_count,
+      input_tokens,
+      cached_input_tokens,
+      uncached_input_tokens,
+      output_tokens,
+      reasoning_output_tokens,
+      total_tokens,
+      total_cost_micros,
+      updated_at
+    ) VALUES (
+      @provider,
+      @backend,
+      @threadId,
+      @currency,
+      @usageLineCount,
+      @pricedUsageLineCount,
+      @unpricedUsageLineCount,
+      @inputTokens,
+      @cachedInputTokens,
+      @uncachedInputTokens,
+      @outputTokens,
+      @reasoningOutputTokens,
+      @totalTokens,
+      @totalCostMicros,
+      @updatedAt
+    )`,
+  );
+
+  for (const rollup of rollups) {
+    const aggregate = readAggregate.get(
+      rollup.provider,
+      rollup.backend,
+      rollup.currency,
+      rollup.thread_id,
+      rollup.provider,
+      rollup.backend,
+      rollup.currency,
+      rollup.thread_id,
+      rollup.thread_id,
+    ) as {
+      cached_input_tokens: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      priced_usage_line_count: number | null;
+      reasoning_output_tokens: number | null;
+      total_cost_micros: number | null;
+      total_tokens: number | null;
+      uncached_input_tokens: number | null;
+      unpriced_usage_line_count: number | null;
+      usage_line_count: number;
+    };
+
+    if (aggregate.usage_line_count === 0) {
+      continue;
+    }
+
+    insertSummary.run({
+      backend: rollup.backend,
+      cachedInputTokens: aggregate.cached_input_tokens ?? 0,
+      currency: rollup.currency,
+      inputTokens: aggregate.input_tokens ?? 0,
+      outputTokens: aggregate.output_tokens ?? 0,
+      pricedUsageLineCount: aggregate.priced_usage_line_count ?? 0,
+      provider: rollup.provider,
+      reasoningOutputTokens: aggregate.reasoning_output_tokens ?? 0,
+      threadId: rollup.thread_id,
+      totalCostMicros: aggregate.total_cost_micros ?? 0,
+      totalTokens: aggregate.total_tokens ?? 0,
+      uncachedInputTokens: aggregate.uncached_input_tokens ?? 0,
+      unpricedUsageLineCount: aggregate.unpriced_usage_line_count ?? 0,
+      updatedAt,
+      usageLineCount: aggregate.usage_line_count,
+    });
+  }
 }
 
 function tableExists(
