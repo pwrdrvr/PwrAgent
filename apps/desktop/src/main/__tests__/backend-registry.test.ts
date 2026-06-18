@@ -13008,6 +13008,88 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rejects invalid thread mutations before applying earlier requested fields", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_threads",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          title: "Pizza Agent",
+          model: "gpt-5.5",
+          executionMode: "yolo",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                "executionMode must be default or full-access when provided.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    expect(overlay).toMatchObject({
+      executionMode: "default",
+    });
+    expect(overlay?.model).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("rejects automation inspection dynamic tool calls that do not match an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

@@ -12550,8 +12550,8 @@ export class DesktopBackendRegistry {
     }
 
     const dryRun = args.dryRun === true;
-    const changes: ThreadMutationAppliedChange[] = [];
 
+    let title: string | undefined;
     if (Object.hasOwn(args, "title")) {
       if (typeof args.title !== "string" || !args.title.trim()) {
         return {
@@ -12562,19 +12562,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      const title = args.title.trim();
-      if (!dryRun) {
-        await this.renameThread({
-          backend: args.backend,
-          threadId,
-          name: title,
-        });
-      }
-      changes.push({
-        field: "title",
-        status: dryRun ? "would_apply" : "applied",
-        to: title,
-      });
+      title = args.title.trim();
     }
 
     const modelSettings = readThreadMutationModelSettings(args);
@@ -12587,21 +12575,8 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    if (modelSettings.value) {
-      if (!dryRun) {
-        await this.setThreadModelSettings({
-          backend: args.backend,
-          threadId,
-          ...modelSettings.value,
-        });
-      }
-      changes.push({
-        field: "model_settings",
-        status: dryRun ? "would_apply" : "applied",
-        to: modelSettings.value,
-      });
-    }
 
+    let executionMode: ThreadExecutionMode | undefined;
     if (Object.hasOwn(args, "executionMode")) {
       if (!isThreadMutationExecutionMode(args.executionMode)) {
         return {
@@ -12612,17 +12587,29 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      if (!dryRun) {
-        await this.setThreadExecutionMode({
-          backend: args.backend,
-          threadId,
-          executionMode: args.executionMode,
-        });
-      }
+      executionMode = args.executionMode;
+    }
+
+    const changes: ThreadMutationAppliedChange[] = [];
+    if (title !== undefined) {
+      changes.push({
+        field: "title",
+        status: dryRun ? "would_apply" : "applied",
+        to: title,
+      });
+    }
+    if (modelSettings.value) {
+      changes.push({
+        field: "model_settings",
+        status: dryRun ? "would_apply" : "applied",
+        to: modelSettings.value,
+      });
+    }
+    if (executionMode !== undefined) {
       changes.push({
         field: "execution_mode",
         status: dryRun ? "would_apply" : "applied",
-        to: args.executionMode,
+        to: executionMode,
       });
     }
 
@@ -12635,6 +12622,30 @@ export class DesktopBackendRegistry {
             "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, or executionMode.",
         },
       };
+    }
+
+    if (title !== undefined && !dryRun) {
+      await this.renameThread({
+        backend: args.backend,
+        threadId,
+        name: title,
+      });
+    }
+
+    if (modelSettings.value && !dryRun) {
+      await this.setThreadModelSettings({
+        backend: args.backend,
+        threadId,
+        ...modelSettings.value,
+      });
+    }
+
+    if (executionMode !== undefined && !dryRun) {
+      await this.setThreadExecutionMode({
+        backend: args.backend,
+        threadId,
+        executionMode,
+      });
     }
 
     return {
