@@ -475,6 +475,114 @@ describe("ComposerTiptapInput", () => {
     expect(nestedItem).toHaveTextContent("Nested task");
   });
 
+  it("preserves prose and rich lists pasted together inside a blockquote", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Source:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Source:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Source:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return [
+              "<p>I’ll retry discovery now that the thread setup changed, then call the PwrAgent management tool if it’s exposed.</p>",
+              "<p><strong>AssistantJun 18, 8:27 AM</strong></p>",
+              "<p>No separate lazy-loaded PwrAgent app tool appeared.</p>",
+              "<p><strong>AssistantJun 18, 8:28 AM</strong></p>",
+              "<p>Current PwrAgent status:</p>",
+              "<ul>",
+              "<li>No active goal is set for this thread.</li>",
+              "<li>No token budget is active.</li>",
+              "<li>No completion budget report is available.</li>",
+              "</ul>",
+              "<p>I also retried app-tool discovery.</p>",
+            ].join("");
+          }
+          if (type === "text/plain") {
+            return [
+              "I’ll retry discovery now that the thread setup changed, then call the PwrAgent management tool if it’s exposed.",
+              "",
+              "AssistantJun 18, 8:27 AM",
+              "",
+              "No separate lazy-loaded PwrAgent app tool appeared.",
+              "",
+              "AssistantJun 18, 8:28 AM",
+              "",
+              "Current PwrAgent status:",
+              "",
+              "No active goal is set for this thread.",
+              "No token budget is active.",
+              "No completion budget report is available.",
+              "",
+              "I also retried app-tool discovery.",
+            ].join("\n");
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Source:",
+          "> ",
+          "> I’ll retry discovery now that the thread setup changed, then call the PwrAgent management tool if it’s exposed.",
+          "> ",
+          "> **AssistantJun 18, 8:27 AM**",
+          "> ",
+          "> No separate lazy-loaded PwrAgent app tool appeared.",
+          "> ",
+          "> **AssistantJun 18, 8:28 AM**",
+          "> ",
+          "> Current PwrAgent status:",
+          "> ",
+          "> - No active goal is set for this thread.",
+          "> - No token budget is active.",
+          "> - No completion budget report is available.",
+          "> ",
+          "> I also retried app-tool discovery.",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+
+    expect(container.querySelectorAll("blockquote > p")).toHaveLength(7);
+    expect(container.querySelectorAll("blockquote ul > li")).toHaveLength(3);
+    expect(container.querySelector("blockquote strong")).toHaveTextContent(
+      "AssistantJun 18, 8:27 AM",
+    );
+  });
+
   it("preserves paragraph separators when pasting a handoff prefix without a code block", async () => {
     const { onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });

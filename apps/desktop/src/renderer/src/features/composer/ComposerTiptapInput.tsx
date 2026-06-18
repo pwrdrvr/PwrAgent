@@ -381,6 +381,48 @@ function parseHtmlInlineContent(
   );
 }
 
+function isHtmlStructuredBlockElement(element: HTMLElement): boolean {
+  const tagName = element.tagName.toLowerCase();
+  return (
+    isHtmlListElement(element) ||
+    tagName === "blockquote" ||
+    tagName === "pre" ||
+    tagName === "p" ||
+    tagName === "div" ||
+    tagName === "section" ||
+    tagName === "article" ||
+    tagName === "main" ||
+    tagName === "header" ||
+    tagName === "footer" ||
+    /^h[1-6]$/.test(tagName)
+  );
+}
+
+function hasDirectHtmlStructuredBlockChild(element: HTMLElement): boolean {
+  return Array.from(element.children).some(
+    (child) => child instanceof HTMLElement && isHtmlStructuredBlockElement(child),
+  );
+}
+
+function htmlInlineContentHasText(nodes: Node[]): boolean {
+  return nodes.some((node) => (node.textContent ?? "").trim().length > 0);
+}
+
+function parseHtmlParagraphContent(element: HTMLElement): JSONContent | undefined {
+  const content = Array.from(element.childNodes).flatMap((child) =>
+    child instanceof HTMLElement && isHtmlStructuredBlockElement(child)
+      ? []
+      : parseHtmlInlineContent(child),
+  );
+  if (content.length === 0) {
+    return undefined;
+  }
+  return {
+    type: "paragraph",
+    content,
+  };
+}
+
 function parseHtmlListItemContent(listItem: HTMLElement): JSONContent[] {
   const inlineNodes = Array.from(listItem.childNodes).flatMap((child) =>
     child instanceof HTMLElement && isHtmlListElement(child)
@@ -437,6 +479,82 @@ function parseHtmlListElement(listElement: HTMLElement): JSONContent | undefined
   };
 }
 
+function parseHtmlStructuredBlockElement(element: HTMLElement): JSONContent[] {
+  const tagName = element.tagName.toLowerCase();
+
+  if (isHtmlListElement(element)) {
+    const list = parseHtmlListElement(element);
+    return list ? [list] : [];
+  }
+
+  if (tagName === "blockquote") {
+    return parseHtmlStructuredContent(element.childNodes);
+  }
+
+  if (/^h[1-6]$/.test(tagName)) {
+    const level = Number.parseInt(tagName.slice(1), 10);
+    const content = Array.from(element.childNodes).flatMap((child) =>
+      parseHtmlInlineContent(child),
+    );
+    return [
+      {
+        type: "heading",
+        attrs: { level: Number.isFinite(level) ? level : 1 },
+        content: content.length > 0 ? content : undefined,
+      },
+    ];
+  }
+
+  if (tagName === "pre") {
+    const text = (element.textContent ?? "").replace(/\n$/, "");
+    return [
+      {
+        type: "codeBlock",
+        content: text ? [{ type: "text", text }] : undefined,
+      },
+    ];
+  }
+
+  if (tagName === "p" || !hasDirectHtmlStructuredBlockChild(element)) {
+    const paragraph = parseHtmlParagraphContent(element);
+    return paragraph ? [paragraph] : [];
+  }
+
+  return parseHtmlStructuredContent(element.childNodes);
+}
+
+function parseHtmlStructuredContent(nodes: Iterable<Node>): JSONContent[] {
+  const content: JSONContent[] = [];
+  let inlineNodes: Node[] = [];
+
+  const flushInlineNodes = (): void => {
+    if (!htmlInlineContentHasText(inlineNodes)) {
+      inlineNodes = [];
+      return;
+    }
+    const inlineContent = inlineNodes.flatMap((node) => parseHtmlInlineContent(node));
+    if (inlineContent.length > 0) {
+      content.push({
+        type: "paragraph",
+        content: inlineContent,
+      });
+    }
+    inlineNodes = [];
+  };
+
+  Array.from(nodes).forEach((node) => {
+    if (node instanceof HTMLElement && isHtmlStructuredBlockElement(node)) {
+      flushInlineNodes();
+      content.push(...parseHtmlStructuredBlockElement(node));
+      return;
+    }
+    inlineNodes.push(node);
+  });
+
+  flushInlineNodes();
+  return content;
+}
+
 function parseClipboardHtmlStructuredContent(
   event: ClipboardEvent<HTMLDivElement>,
 ): JSONContent[] {
@@ -446,11 +564,7 @@ function parseClipboardHtmlStructuredContent(
   }
 
   const doc = new DOMParser().parseFromString(html, "text/html");
-  return Array.from(doc.body.querySelectorAll("ul, ol"))
-    .filter((child): child is HTMLElement => child instanceof HTMLElement)
-    .filter((child) => !child.parentElement?.closest("li"))
-    .map(parseHtmlListElement)
-    .filter((child): child is JSONContent => child !== undefined);
+  return parseHtmlStructuredContent(doc.body.childNodes);
 }
 
 function buildTiptapContent(
