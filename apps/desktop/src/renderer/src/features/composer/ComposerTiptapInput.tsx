@@ -398,6 +398,23 @@ function isHtmlStructuredBlockElement(element: HTMLElement): boolean {
   );
 }
 
+function hasUnsupportedHtmlStructuredBlocks(element: HTMLElement): boolean {
+  return element.querySelector(
+    [
+      "table",
+      "thead",
+      "tbody",
+      "tfoot",
+      "tr",
+      "th",
+      "td",
+      "dl",
+      "dt",
+      "dd",
+    ].join(","),
+  ) !== null;
+}
+
 function hasDirectHtmlStructuredBlockChild(element: HTMLElement): boolean {
   return Array.from(element.children).some(
     (child) => child instanceof HTMLElement && isHtmlStructuredBlockElement(child),
@@ -564,6 +581,9 @@ function parseClipboardHtmlStructuredContent(
   }
 
   const doc = new DOMParser().parseFromString(html, "text/html");
+  if (hasUnsupportedHtmlStructuredBlocks(doc.body)) {
+    return [];
+  }
   return parseHtmlStructuredContent(doc.body.childNodes);
 }
 

@@ -583,6 +583,62 @@ describe("ComposerTiptapInput", () => {
     );
   });
 
+  it("falls back to plain text for unsupported rich blocks pasted inside a blockquote", async () => {
+    const onChange = vi.fn();
+    render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Table:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Table:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Table:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<table><tr><td>A</td><td>B</td></tr></table>";
+          }
+          if (type === "text/plain") {
+            return "A\tB";
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        "> Table:A\tB",
+        [],
+        expect.any(Object),
+      );
+    });
+  });
+
   it("preserves paragraph separators when pasting a handoff prefix without a code block", async () => {
     const { onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
