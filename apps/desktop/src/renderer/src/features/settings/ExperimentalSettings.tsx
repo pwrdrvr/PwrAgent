@@ -124,7 +124,8 @@ export function ExperimentalSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Enable thread pricing summary"
-            sub="When on, the Pricing tab appears in the thread context rail with list-price totals and per-turn usage rows."
+            sub="Show the Pricing tab in the thread context rail."
+            help="Surfaces list-price totals and per-turn usage rows for the thread."
             source={sourceBadge(threadPricingSummary)}
             control={
               <SettingsSwitch
@@ -139,7 +140,8 @@ export function ExperimentalSettings(props: {
           />
           <SettingsField
             label="Display USD"
-            sub="Show OpenAI API list-price estimates in USD."
+            sub="Show list-price estimates in USD."
+            help="Estimated from OpenAI API list prices."
             source={sourceBadge(threadPricingDisplayUsd)}
             control={
               <SettingsSwitch
@@ -154,7 +156,8 @@ export function ExperimentalSettings(props: {
           />
           <SettingsField
             label="Display Codex Credits"
-            sub="Show Codex Credits estimates from Codex's token-based credit rate card."
+            sub="Show Codex Credits estimates."
+            help="Estimated from Codex's token-based credit rate card."
             source={sourceBadge(threadPricingDisplayCodexCredits)}
             control={
               <SettingsSwitch
@@ -206,7 +209,8 @@ export function ExperimentalSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Enable Codex skill questions"
-            sub="When on, PwrAgent enables Codex's default-mode request_user_input feature for Codex threads."
+            sub="Let Codex skills pause turns to ask questions."
+            help="Enables Codex's default-mode request_user_input feature for Codex threads."
             source={sourceBadge(codexDefaultModeRequestUserInput)}
             control={
               <SettingsSwitch
@@ -242,7 +246,8 @@ export function ExperimentalSettings(props: {
           <div className="settings-fields">
             <SettingsField
               label="Enable diff condensation"
-              sub="When on, focused-diff requests fire an xAI judgment call to decide which hunks to elide."
+              sub="Use an xAI call to hide diff hunks."
+              help="Each focused-diff request fires an xAI judgment call to decide which hunks to elide."
               source={sourceBadge(condensation.enabled)}
               control={
                 <SettingsSwitch
@@ -311,7 +316,8 @@ export function ExperimentalSettings(props: {
           <div className="settings-fields">
             <SettingsField
               label="Enable AgentCore - Grok"
-              sub="When on, the legacy agent-core Grok backend appears in the backend picker. Uses the Grok API key from Settings → Models → Grok."
+              sub="Add the legacy Grok backend to the picker."
+              help="Uses the Grok API key from Settings → Models → Grok."
               source={sourceBadge(agentCoreGrok)}
               control={
                 <SettingsSwitch
@@ -337,7 +343,8 @@ export function ExperimentalSettings(props: {
           <div className="settings-fields">
             <SettingsField
               label="Enable live transcript event filtering"
-              sub="When on, live transcript notifications for other threads no longer update the focused thread view."
+              sub="Ignore unrelated live transcript events."
+              help="Live transcript notifications for other threads no longer update the focused thread view."
               source={sourceBadge(liveTranscriptEventFiltering)}
               control={
                 <SettingsSwitch

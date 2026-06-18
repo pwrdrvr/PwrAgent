@@ -6091,6 +6091,10 @@ textarea,
 /* Switch — track + thumb + word, replaces native checkbox. */
 .settings-switch {
   display: inline-flex;
+  /* Opt out of `.settings-field__control`'s default `align-items: stretch`
+     (column flex) so the pill stays its natural width instead of spanning
+     the control column edge-to-edge — matches `.settings-segmented`. */
+  align-self: flex-start;
   align-items: center;
   gap: 8px;
   height: 28px;
