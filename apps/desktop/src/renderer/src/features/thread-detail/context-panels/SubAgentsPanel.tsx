@@ -32,6 +32,10 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
             const originSentence = subAgentOriginSentence(subAgent);
+            const latestMessage =
+              subAgent.lastMessage && subAgent.lastMessage !== originSentence
+                ? subAgent.lastMessage
+                : undefined;
             return (
               <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
@@ -66,8 +70,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 {originSentence ? (
                   <p className="rail-card__message">{originSentence}</p>
                 ) : null}
-                {subAgent.lastMessage ? (
-                  <p className="rail-card__message">{subAgent.lastMessage}</p>
+                {latestMessage ? (
+                  <p className="rail-card__message">{latestMessage}</p>
                 ) : null}
                 {subAgent.monitorUsage?.summary ? (
                   <p className="rail-card__usage">

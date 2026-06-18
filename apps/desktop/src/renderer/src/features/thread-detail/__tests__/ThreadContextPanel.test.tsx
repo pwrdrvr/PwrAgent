@@ -392,6 +392,31 @@ describe("ThreadContextPanel", () => {
     expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
   });
 
+  it("does not duplicate the Codex native source line while running", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "codex-native:019ed7df-5876-7882-9b75-7fd647372da7",
+            task: "Check PR status",
+            status: "running",
+            createdAt: 2000,
+            updatedAt: 2500,
+            monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+            lastMessage: "Spawned by Codex native spawnAgent.",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getAllByText("Spawned by Codex native spawnAgent.")).toHaveLength(
+      1,
+    );
+  });
+
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
 
