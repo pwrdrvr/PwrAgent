@@ -31,7 +31,7 @@ The plan builds on these existing repo capabilities:
 - `MessagingController` already parses commands before bound-thread input, so `/agent` can bypass the work binding without replacing it.
 - `MessagingBindingTargetKind` already includes `agent_thread`.
 - The Agent browse flow already supports `MessagingBrowseMode = "agents"` and creating new Agent threads.
-- Agent turns already remember messaging origin for `agent_thread` bindings and expose `pwragent_messaging.get_current_location` plus `pwragent_messaging.attach_thread_here`.
+- Agent turns already remember messaging origin for `agent_thread` bindings and expose `pwragent.get_current_messaging_surface` plus `pwragent.attach_thread_here`.
 - Turn admission already queues concurrent messages and renders steer/cancel actions.
 - Adapter contracts already require providers to emit normalized inbound events and keep workflow semantics in the desktop messaging core.
 
@@ -88,7 +88,7 @@ sequenceDiagram
   participant Controller as MessagingController
   participant Store as Messaging Store
   participant Agent as Agent Thread
-  participant Tools as pwragent_messaging tools
+  participant Tools as pwragent tools
 
   User->>Surface: /agent fork this and attach it here
   Surface->>Adapter: provider event
@@ -96,7 +96,7 @@ sequenceDiagram
   Controller->>Store: resolveDefaultAgent(origin surface)
   Store-->>Controller: Agent thread id
   Controller->>Agent: start or queue turn with origin owner
-  Agent->>Tools: get_current_location / attach_thread_here
+  Agent->>Tools: get_current_messaging_surface / attach_thread_here
   Tools->>Controller: request using turn origin
   Controller->>Store: attach work thread at origin surface
   Controller-->>Surface: Agent response for this request
@@ -145,7 +145,7 @@ Do not represent a work surface plus default Agent as two active bindings for th
 
 ### Agent tools remain the action surface
 
-The control request should be plain Agent input. We should not build a large bespoke parser for phrases like "fork this and attach it here." Instead, the Agent uses dynamic messaging tools, starting with the existing `get_current_location` and `attach_thread_here` operations.
+The control request should be plain Agent input. We should not build a large bespoke parser for phrases like "fork this and attach it here." Instead, the Agent uses dynamic messaging tools, starting with the advertised `get_current_messaging_surface` and `attach_thread_here` operations.
 
 Follow-up slices can add tools for preferences such as "fast mode" once the routing and origin model is stable.
 
@@ -216,7 +216,7 @@ Likely files:
 
 Behavior:
 
-- `get_current_location` reports the origin surface, actor, managed conversation capability, and current work binding if one exists.
+- `get_current_messaging_surface` reports the origin surface, actor, managed conversation capability, and current work binding if one exists.
 - `attach_thread_here` attaches at the origin surface, not at an Agent-bound shadow conversation.
 - Tool responses remain clear when the origin has no managed native child conversation support.
 

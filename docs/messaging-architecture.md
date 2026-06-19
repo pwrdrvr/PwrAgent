@@ -124,8 +124,8 @@ When `/agent <request>` starts a side-channel Agent turn, the controller uses an
 ephemeral Agent-thread binding for turn admission and response delivery. The
 recorded Agent origin still points at the originating messaging event and the
 conversation's real binding, if one exists, so Agent tools such as
-`pwragent_messaging.get_current_location` and
-`pwragent_messaging.attach_thread_here` interpret "here" as the surface that
+`pwragent.get_current_messaging_surface` and
+`pwragent.attach_thread_here` interpret "here" as the surface that
 asked the Agent.
 
 Multiple surfaces can target the same Agent thread. The surface and actor that
