@@ -4025,12 +4025,19 @@ export class MessagingController {
     if (!prepared) {
       return;
     }
+    const input = buildDefaultAgentControlInput({
+      assignment: params.assignment,
+      event: controlEvent,
+      input: prepared.input,
+      originBinding,
+      request: text,
+    });
     const threadKey = this.threadKeyForBinding(binding);
     if (await this.isTurnOccupied(binding, threadKey)) {
       await this.queuePreparedInput({
         binding,
         event: controlEvent,
-        input: prepared.input,
+        input,
         originBinding: originBinding ?? binding,
         preview: prepared.preview,
         renderStatus: false,
@@ -4042,7 +4049,7 @@ export class MessagingController {
     await this.startPreparedInput({
       binding,
       event: controlEvent,
-      input: prepared.input,
+      input,
       originBinding: originBinding ?? binding,
       preview: prepared.preview,
       renderStatus: false,
@@ -14859,6 +14866,82 @@ function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean): string {
     ? " To submit it as a steering message, click Steer."
     : "";
   return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
+}
+
+function buildDefaultAgentControlInput(params: {
+  assignment: MessagingDefaultAgentAssignmentRecord;
+  event: MessagingInboundEvent;
+  input: AppServerTurnInputItem[];
+  originBinding?: MessagingBindingRecord;
+  request: string;
+}): AppServerTurnInputItem[] {
+  const envelope = buildDefaultAgentControlPrompt(params);
+  const firstTextIndex = params.input.findIndex((item) => item.type === "text");
+  if (firstTextIndex < 0) {
+    return [{ type: "text", text: envelope }, ...params.input];
+  }
+  return params.input.map((item, index) =>
+    index === firstTextIndex && item.type === "text"
+      ? { ...item, text: envelope }
+      : item
+  );
+}
+
+function buildDefaultAgentControlPrompt(params: {
+  assignment: MessagingDefaultAgentAssignmentRecord;
+  event: MessagingInboundEvent;
+  originBinding?: MessagingBindingRecord;
+  request: string;
+}): string {
+  return [
+    "PwrAgent operator request",
+    "",
+    "This is a one-off `/agent` request from a messaging surface. It may be an escalation from a surface currently bound to a different PwrAgent thread.",
+    "Do not assume the source surface is now bound to this Agent thread. Reply normally; PwrAgent will route the response back to the requesting surface.",
+    "",
+    "If the user says \"here\", \"this thread\", \"this topic\", or asks to attach, fork, or hand off work, use `pwragent.get_current_messaging_surface` to inspect the origin surface before acting.",
+    "",
+    "Source surface:",
+    `- Provider: ${params.event.channel.channel}`,
+    `- Conversation: ${formatDefaultAgentControlConversation(params.event.channel.conversation)}`,
+    `- Actor: ${formatDefaultAgentControlActor(params.event.actor)}`,
+    params.originBinding
+      ? `- Active binding at source: ${params.originBinding.backend}/${params.originBinding.threadId} (${params.originBinding.targetKind})`
+      : "- Active binding at source: none",
+    `- Default Agent target: ${params.assignment.backend}/${params.assignment.threadId}`,
+    "",
+    "User request:",
+    params.request,
+  ].join("\n");
+}
+
+function formatDefaultAgentControlConversation(
+  conversation: MessagingChannelRef["conversation"],
+): string {
+  return [
+    `${conversation.kind} ${conversation.id}`,
+    conversation.title ? `title "${oneLine(conversation.title)}"` : undefined,
+    conversation.parentTitle
+      ? `parent "${oneLine(conversation.parentTitle)}"`
+      : undefined,
+    conversation.ancestorTitle
+      ? `ancestor "${oneLine(conversation.ancestorTitle)}"`
+      : undefined,
+  ].filter(Boolean).join(", ");
+}
+
+function formatDefaultAgentControlActor(
+  actor: MessagingInboundEvent["actor"],
+): string {
+  return [
+    actor.displayName ? oneLine(actor.displayName) : undefined,
+    actor.username ? `@${oneLine(actor.username)}` : undefined,
+    actor.platformUserId,
+  ].filter(Boolean).join(" ");
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function truncateText(text: string, limit: number): string {

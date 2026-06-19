@@ -235,18 +235,30 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(event);
 
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "codex",
-        threadId: "agent-thread",
-        input: [
-          {
-            type: "text",
-            text: "fork this and attach it here",
-          },
-        ],
-      }),
+    const startRequest = harness.startTurn.mock.calls[0]?.[0];
+    expect(startRequest).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    const inputItem = startRequest?.input[0];
+    if (!inputItem || inputItem.type !== "text") {
+      throw new Error("Expected default Agent control request text input");
+    }
+    expect(inputItem.text).toContain("PwrAgent operator request");
+    expect(inputItem.text).toContain(
+      "This is a one-off `/agent` request from a messaging surface.",
     );
+    expect(inputItem.text).toContain(
+      "Do not assume the source surface is now bound to this Agent thread.",
+    );
+    expect(inputItem.text).toContain(
+      "use `pwragent.get_current_messaging_surface` to inspect the origin surface",
+    );
+    expect(inputItem.text).toContain(
+      "- Active binding at source: codex/work-thread (thread)",
+    );
+    expect(inputItem.text).toContain("- Default Agent target: codex/agent-thread");
+    expect(inputItem.text).toContain("User request:\nfork this and attach it here");
     await expect(harness.store.findActiveBindingForChannel(event.channel)).resolves
       .toMatchObject({
         targetKind: "thread",
@@ -388,6 +400,15 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(event);
+    const startRequest = harness.startTurn.mock.calls[0]?.[0];
+    const inputItem = startRequest?.input[0];
+    if (!inputItem || inputItem.type !== "text") {
+      throw new Error("Expected queued default Agent control request text input");
+    }
+    expect(inputItem.text).toContain("PwrAgent operator request");
+    expect(inputItem.text).toContain(
+      "User request:\nsummarize after the active turn",
+    );
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -548,18 +569,19 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "thread-1",
     });
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "codex",
-        threadId: "thread-1",
-        input: [
-          {
-            type: "text",
-            text: "fork this",
-          },
-        ],
-      }),
-    );
+    const startRequest = harness.startTurn.mock.calls[0]?.[0];
+    expect(startRequest).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const inputItem = startRequest?.input[0];
+    if (!inputItem || inputItem.type !== "text") {
+      throw new Error("Expected default Agent picker request text input");
+    }
+    expect(inputItem.text).toContain("PwrAgent operator request");
+    expect(inputItem.text).toContain("- Active binding at source: none");
+    expect(inputItem.text).toContain("- Default Agent target: codex/thread-1");
+    expect(inputItem.text).toContain("User request:\nfork this");
   });
 
   it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
