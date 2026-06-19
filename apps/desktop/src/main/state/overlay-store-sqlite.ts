@@ -254,6 +254,7 @@ export class SqliteOverlayStore {
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
           subAgents: current?.subAgents,
+          handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -905,6 +906,26 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setThreadHandoffOrigin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    handoffOrigin: ThreadOverlayState["handoffOrigin"] | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      handoffOrigin: params.handoffOrigin ?? undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -2466,6 +2487,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setThreadHandoffOrigin"
   | "reorderThreadPins"
   | "updateSubthreadOrder"
   | "setSubthreadsCollapsed"

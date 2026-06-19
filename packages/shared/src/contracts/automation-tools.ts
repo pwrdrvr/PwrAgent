@@ -12,6 +12,7 @@ import type {
   AutomationTimelineCard,
 } from "./automations";
 
+/** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const AUTOMATION_INSPECTION_TOOL_NAMESPACE = "pwragent_automations";
 
 export const AUTOMATION_INSPECTION_OPERATION_NAMES = [

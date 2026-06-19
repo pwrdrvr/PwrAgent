@@ -10,13 +10,13 @@ describe("automation inspection Codex dynamic tools", () => {
     expect(buildAutomationInspectionDynamicToolSpecs()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
           inputSchema: expect.objectContaining({ type: "object" }),
           deferLoading: false,
         }),
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "get_automation_run_artifact",
           inputSchema: expect.objectContaining({ type: "object" }),
           deferLoading: false,

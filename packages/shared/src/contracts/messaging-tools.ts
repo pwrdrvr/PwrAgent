@@ -9,6 +9,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 
+/** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [

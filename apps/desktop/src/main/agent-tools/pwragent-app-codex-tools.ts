@@ -1,10 +1,10 @@
 import type {
   AppServerBackendKind,
-  PwrAgentThreadInspectionOperationName,
+  PwrAgentAppOperationName,
 } from "@pwragent/shared";
 import {
-  PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES,
-  PWRAGENT_THREAD_TOOL_NAMESPACE,
+  PWRAGENT_APP_OPERATION_NAMES,
+  PWRAGENT_APP_TOOL_NAMESPACE,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
@@ -16,40 +16,40 @@ import {
   toDynamicToolResponse,
 } from "./agent-tool-router.js";
 import {
-  buildPwrAgentThreadToolRouter,
-  type PwrAgentThreadInspectionHandler,
-} from "./pwragent-thread-agent-tools.js";
+  buildPwrAgentAppToolRouter,
+  type PwrAgentAppManagementHandler,
+} from "./pwragent-app-agent-tools.js";
 
-export function isPwrAgentThreadDynamicToolCall(
+export function isPwrAgentAppDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof PWRAGENT_THREAD_TOOL_NAMESPACE | typeof PWRAGENT_TOOL_NAMESPACE;
-  tool: PwrAgentThreadInspectionOperationName;
+  namespace: typeof PWRAGENT_APP_TOOL_NAMESPACE | typeof PWRAGENT_TOOL_NAMESPACE;
+  tool: PwrAgentAppOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE ||
+    call.namespace === PWRAGENT_APP_TOOL_NAMESPACE ||
     (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-      PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.includes(
-        call.tool as PwrAgentThreadInspectionOperationName,
+      PWRAGENT_APP_OPERATION_NAMES.includes(
+        call.tool as PwrAgentAppOperationName,
       ))
   );
 }
 
-export async function handlePwrAgentThreadDynamicToolCall(params: {
+export async function handlePwrAgentAppDynamicToolCall(params: {
   backend: AppServerBackendKind;
   call: DynamicToolCallParams;
-  handler: PwrAgentThreadInspectionHandler | undefined;
+  handler: PwrAgentAppManagementHandler | undefined;
 }): Promise<DynamicToolCallResponse> {
-  const call = isPwrAgentThreadDynamicToolCall(params.call)
+  const call = isPwrAgentAppDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
     : params.call;
-  return await buildPwrAgentThreadToolRouter(params.handler).handleDynamicToolCall({
+  return await buildPwrAgentAppToolRouter(params.handler).handleDynamicToolCall({
     backend: params.backend,
     call,
   });
 }
 
-export function buildPwrAgentThreadDynamicToolErrorResponse(params: {
+export function buildPwrAgentAppDynamicToolErrorResponse(params: {
   code: "forbidden" | "internal_error" | "unsupported_operation";
   message: string;
 }): DynamicToolCallResponse {
@@ -60,7 +60,7 @@ export function buildPwrAgentThreadDynamicToolErrorResponse(params: {
   });
 }
 
-export function readPwrAgentThreadDynamicToolCall(request: {
+export function readPwrAgentAppDynamicToolCall(request: {
   method: string;
   params: Record<string, unknown>;
 }): DynamicToolCallParams | undefined {

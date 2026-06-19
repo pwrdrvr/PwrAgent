@@ -114,6 +114,21 @@ function expectedDir(p: string): string {
   return path.resolve(p).replace(/\\/g, "/");
 }
 
+function createAgentOverlay(threadId = "agent-thread"): ThreadOverlayState {
+  return {
+    backend: "codex",
+    threadId,
+    executionMode: "default",
+    extraLinkedDirectories: [],
+    agent: {
+      name: "Parent Agent",
+      instructionLineCount: 0,
+      instructionsTooLong: false,
+      updatedAt: 1_000,
+    },
+  };
+}
+
 async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -425,6 +440,25 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         agent: settings.agent ?? undefined,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadHandoffOrigin: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      handoffOrigin: ThreadOverlayState["handoffOrigin"] | null;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key) ?? {
+        backend: settings.backend,
+        threadId: settings.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        handoffOrigin: settings.handoffOrigin ?? undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -1709,7 +1743,7 @@ describe("DesktopBackendRegistry", () => {
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
 
     const response = await registry.listBackends({ includeUnavailable: true });
@@ -5228,7 +5262,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("passes task monitor tools but not Agent tools when starting ordinary Codex threads", async () => {
+  it("advertises PwrAgent dynamic tools when starting ordinary Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -5249,12 +5283,45 @@ script = "echo setup"
     const dynamicTools = codexClient.lastStartThreadParams?.dynamicTools as
       | Array<{ namespace: string; name: string }>
       | undefined;
-    expect(dynamicTools).toEqual([
-      expect.objectContaining({
-        namespace: "pwragent_task_monitors",
-        name: "create_monitor_delegation",
-      }),
-    ]);
+    expect(dynamicTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "get_current_messaging_surface",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "create_monitor_delegation",
+        }),
+      ]),
+    );
+    expect(new Set(dynamicTools?.map((tool) => tool.namespace))).toEqual(
+      new Set(["pwragent"]),
+    );
 
     await registry.close();
   });
@@ -5287,36 +5354,52 @@ script = "echo setup"
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "get_automation_run_artifact",
         }),
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "get_thread_status",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "mutate_thread",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
         }),
       ]),
     );
@@ -5327,19 +5410,14 @@ script = "echo setup"
         }>).map((tool) => tool.namespace),
       ),
     ).toEqual(
-      new Set([
-        "pwragent_automations",
-        "pwragent_threads",
-        "pwragent_messaging",
-        "pwragent_task_monitors",
-      ]),
+      new Set(["pwragent"]),
     );
     expect(
       (codexClient.lastStartThreadParams?.dynamicTools as Array<{
         namespace: string;
         name: string;
       }> | undefined)
-        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        ?.filter((tool) => tool.name === "create_monitor_delegation")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
     await expect(
@@ -5356,7 +5434,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("passes task monitor parent tools when continuing existing Codex threads", async () => {
+  it("advertises PwrAgent dynamic tools when continuing existing Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -5379,19 +5457,47 @@ script = "echo setup"
     });
 
     expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
-      [
+      expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
+          name: "list_automations",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "search_threads",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "read_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "get_current_messaging_surface",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "send_message_to_thread",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
-      ],
+      ]),
     );
     expect(
       (codexClient.lastStartTurnParams?.dynamicTools as Array<{
         namespace: string;
         name: string;
       }> | undefined)
-        ?.filter((tool) => tool.namespace === "pwragent_task_monitors")
+        ?.filter((tool) => tool.name === "create_monitor_delegation")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
 
@@ -5439,19 +5545,27 @@ script = "echo setup"
     expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "attach_thread_here",
         }),
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
+          name: "handoff_task",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
       ]),
@@ -7365,20 +7479,28 @@ script = "pnpm install"
     expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_automations",
+          namespace: "pwragent",
           name: "list_automations",
         }),
         expect.objectContaining({
-          namespace: "pwragent_threads",
+          namespace: "pwragent",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
+          name: "manage_pwragent",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
           name: "get_current_messaging_surface",
         }),
         expect.objectContaining({
-          namespace: "pwragent_messaging",
+          namespace: "pwragent",
           name: "attach_thread_here",
+        }),
+        expect.objectContaining({
+          namespace: "pwragent",
+          name: "handoff_task",
         }),
       ]),
     );
@@ -7491,12 +7613,12 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      dynamicTools: [
+      dynamicTools: expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent_task_monitors",
+          namespace: "pwragent",
           name: "create_monitor_delegation",
         }),
-      ],
+      ]),
     });
 
     await registry.close();
@@ -13141,7 +13263,11 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": createAgentOverlay("thread-1"),
+        },
+      }),
     });
     const events: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -13208,7 +13334,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles thread inspection dynamic tool calls from active Agent turns", async () => {
+  it("handles thread inspection dynamic tool calls from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -13259,6 +13385,7 @@ command = "pnpm dev"
       }),
       overlayStore: createOverlayStoreMock({
         overlays: {
+          "codex:agent-thread": createAgentOverlay(),
           "codex:thread-1": {
             backend: "codex",
             threadId: "thread-1",
@@ -13293,7 +13420,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           agentOnly: true,
@@ -13343,6 +13470,513 @@ command = "pnpm dev"
     expect(codexClient.lastListThreadsDiagnostics).toMatchObject({
       callerReason: "agent-thread-inspection",
     });
+
+    await registry.close();
+  });
+
+  it("handles app management dynamic tool calls from active turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const appManagementHandler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        action: "status" as const,
+        runtime: {
+          currentVersion: "1.2.3",
+          startedAt: 1_000,
+          startedAtIso: "1970-01-01T00:00:01.000Z",
+          startedAtLocal: "Jan 1, 1970, 12:00:01 AM",
+          now: 61_000,
+          nowIso: "1970-01-01T00:01:01.000Z",
+          nowLocal: "Jan 1, 1970, 12:01:01 AM",
+          uptimeMs: 60_000,
+          uptimeHuman: "1m 0s",
+        },
+        update: {
+          status: { status: "idle" as const },
+          updateAvailableToDownload: false,
+          updateDownloadedWillInstallOnRestart: false,
+        },
+        result: { status: "reported" as const },
+      },
+    }));
+    const registry = new DesktopBackendRegistry({
+      appManagementHandler,
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "manage_pwragent",
+        arguments: {
+          action: "status",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining('"currentVersion": "1.2.3"'),
+        },
+      ],
+    });
+    expect(appManagementHandler).toHaveBeenCalledWith({
+      operation: "manage_pwragent",
+      context: {},
+      args: { action: "status" },
+    });
+
+    await registry.close();
+  });
+
+  it("handles thread handoff dynamic tool calls from active Codex turns", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+    } catch {
+      await git(root, ["init"]);
+      await git(root, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(root, "README.md"), "handoff\n", "utf8");
+    await git(root, ["add", "README.md"]);
+    await git(root, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(root),
+              kind: "local",
+              label: "handoff",
+              path: expectedDir(root),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(root),
+              kind: "local",
+              label: "handoff",
+              path: expectedDir(root),
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const messagingRequests: unknown[] = [];
+    registry.setMessagingAgentToolService({
+      async handlePwrAgentMessagingRequest(request) {
+        messagingRequests.push(request);
+        return {
+          ok: true,
+          data: {
+            binding: {
+              id: "binding-child",
+              backend: "codex",
+              threadId: "thread-1",
+              targetKind: "agent_thread",
+              displayName: "Investigate issue XYZ",
+            },
+            channel: "discord",
+            conversation: {
+              id: "thread-123",
+              kind: "thread",
+              title: "Investigate issue XYZ",
+              parentId: "channel-1",
+              parentTitle: "ops",
+            },
+            createdConversation: {
+              id: "thread-123",
+              kind: "thread",
+              title: "Investigate issue XYZ",
+              parentId: "channel-1",
+              parentTitle: "ops",
+            },
+            location: {
+              binding: {
+                id: "binding-parent",
+                backend: "codex",
+                threadId: "ordinary-thread",
+                targetKind: "agent_thread",
+              },
+              channel: "discord",
+              conversation: {
+                id: "channel-1",
+                kind: "channel",
+                title: "ops",
+              },
+              managedConversation: {
+                canCreateChild: true,
+                operations: [],
+                outcome: "ok",
+                providerSupportsCreation: true,
+              },
+            },
+            outcome: "created_and_attached",
+            placement: "new_child",
+          },
+        };
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ and report back.",
+          title: "Investigate issue XYZ",
+          context: "Parent already checked the latest CI run.",
+          messagingAttachment: "new_child",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    const normalizedRoot = expectedDir(root);
+    expect(payload).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      title: "Investigate issue XYZ",
+      seedMode: "clean",
+      groupingMode: "none",
+      inheritedSettings: {
+        backend: "codex",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      },
+      workspace: {
+        mode: "same",
+        cwd: normalizedRoot,
+        branch: "main",
+        git: {
+          kind: "git_local",
+          worktreeCreationAvailable: true,
+        },
+      },
+      messagingAttachment: {
+        requested: true,
+        outcome: "created_and_attached",
+        channel: "discord",
+        conversation: {
+          id: "thread-123",
+          kind: "thread",
+          title: "Investigate issue XYZ",
+        },
+        createdConversation: {
+          id: "thread-123",
+          kind: "thread",
+          title: "Investigate issue XYZ",
+        },
+      },
+    });
+    expect(messagingRequests).toEqual([
+      {
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-1",
+          placement: "new_child",
+          targetKind: "agent_thread",
+          title: "Investigate issue XYZ",
+        },
+      },
+    ]);
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: normalizedRoot,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Investigate issue XYZ",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      cwd: normalizedRoot,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const prompt =
+      codexClient.lastStartTurnParams?.input[0]?.type === "text"
+        ? codexClient.lastStartTurnParams.input[0].text
+        : "";
+    expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
+    expect(prompt).toContain("- Thread ID: ordinary-thread");
+    expect(prompt).toContain("- Turn ID: turn-1");
+    expect(prompt).toContain(`- CWD: ${normalizedRoot}`);
+    expect(prompt).toContain("Additional context from parent:");
+    expect(prompt).toContain("Parent already checked the latest CI run.");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Investigate issue XYZ",
+      },
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "ordinary-thread",
+        sourceTurnId: "turn-1",
+        sourceTitle: "Parent Thread",
+        taskTitle: "Investigate issue XYZ",
+        seedMode: "clean",
+        groupingMode: "none",
+        workspace: {
+          mode: "same",
+          cwd: normalizedRoot,
+          branch: "main",
+        },
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("sends a follow-up prompt to another thread from an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Please pick up the CI failure.",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+          executionMode: "full-access",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toEqual({
+      backend: "codex",
+      threadId: "target-thread",
+      turnId: "turn-1",
+      promptPreview: "Please pick up the CI failure.",
+      settings: {
+        executionMode: "full-access",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Please pick up the CI failure." }],
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await registry.close();
+  });
+
+  it("rejects sending a follow-up prompt to the invoking thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "parent-thread",
+          prompt: "Loop back into myself.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "send_message_to_thread targets another thread. Continue the current thread by replying normally.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
 
     await registry.close();
   });
@@ -13426,7 +14060,11 @@ command = "pnpm dev"
           },
         ],
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
       threadSearchService: { search } as unknown as ThreadSearchService,
     });
     await registry.publishLocalEvent({
@@ -13448,7 +14086,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           query: "branch drift",
@@ -13562,7 +14200,11 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -13583,7 +14225,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {},
       },
@@ -13649,7 +14291,11 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -13670,7 +14316,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "search_threads",
         arguments: {
           query: "telegram naming OR playwright e2e OR desktop failures",
@@ -13743,7 +14389,11 @@ command = "pnpm dev"
           },
         ],
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -13764,7 +14414,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "get_thread_status",
         arguments: {
           backend: "codex",
@@ -13802,12 +14452,155 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("mutates PwrAgent thread settings from active Agent turns", async () => {
+  it("reads bounded transcript content from another thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "entry-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+            createdAt: 1000,
+          },
+          {
+            type: "activity",
+            id: "entry-command-1",
+            summary: "Ran command",
+            status: "completed",
+            details: [
+              {
+                id: "detail-1",
+                kind: "command",
+                label: "pnpm test",
+                status: "completed",
+                command: {
+                  displayCommand: "pnpm test",
+                  output: `${"line ".repeat(1000)}done`,
+                  exitCode: 0,
+                },
+              },
+            ],
+          },
+        ],
+        messages: [
+          {
+            id: "message-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+            createdAt: 1000,
+          },
+        ],
+        lastUserMessage: "Please inspect this thread.",
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "read_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          limit: 5,
+          maxCharsPerEntry: 200,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      read: {
+        backend: "codex",
+        threadId: "target-thread",
+        limit: 5,
+        maxCharsPerEntry: 200,
+        status: "idle",
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        },
+        entries: [
+          {
+            type: "message",
+            id: "entry-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+          },
+          {
+            type: "activity",
+            id: "entry-command-1",
+            details: [
+              {
+                kind: "command",
+                command: {
+                  displayCommand: "pnpm test",
+                  output: expect.stringContaining("..."),
+                },
+                truncated: true,
+              },
+            ],
+          },
+        ],
+        messages: [
+          {
+            id: "message-user-1",
+            role: "user",
+            text: "Please inspect this thread.",
+          },
+        ],
+      },
+    });
+    expect(codexClient.lastReadThreadParams).toEqual({
+      threadId: "target-thread",
+      includeTurns: true,
+      limit: 5,
+    });
+
+    await registry.close();
+  });
+
+  it("mutates PwrAgent thread settings from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
+        "codex:agent-thread": createAgentOverlay(),
         "codex:target-thread": {
           backend: "codex",
           threadId: "target-thread",
@@ -13842,7 +14635,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
@@ -13914,6 +14707,7 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
+        "codex:agent-thread": createAgentOverlay(),
         "codex:target-thread": {
           backend: "codex",
           threadId: "target-thread",
@@ -13948,7 +14742,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
@@ -14001,6 +14795,7 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
+        "codex:agent-thread": createAgentOverlay(),
         "codex:target-thread": {
           backend: "codex",
           threadId: "target-thread",
@@ -14035,7 +14830,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_threads",
+        namespace: "pwragent",
         tool: "mutate_thread",
         arguments: {
           backend: "codex",
@@ -14136,7 +14931,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("returns a tool error for unknown PwrAgent automation dynamic tools", async () => {
+  it("handles PwrAgent app management tools from active ordinary threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -14146,6 +14941,147 @@ command = "pnpm dev"
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
+    });
+    const appManagementHandler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        action: "status" as const,
+        runtime: {
+          currentVersion: "1.2.3",
+          startedAt: 1_000,
+          startedAtIso: "1970-01-01T00:00:01.000Z",
+          startedAtLocal: "Jan 1, 1970, 12:00:01 AM",
+          now: 61_000,
+          nowIso: "1970-01-01T00:01:01.000Z",
+          nowLocal: "Jan 1, 1970, 12:01:01 AM",
+          uptimeMs: 60_000,
+          uptimeHuman: "1m 0s",
+        },
+        update: {
+          status: { status: "idle" as const },
+          updateAvailableToDownload: false,
+          updateDownloadedWillInstallOnRestart: false,
+        },
+        result: { status: "reported" as const },
+      },
+    }));
+    registry.setPwrAgentAppManagementHandler(appManagementHandler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "manage_pwragent",
+        arguments: { action: "status" },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining('"currentVersion": "1.2.3"'),
+        },
+      ],
+    });
+    expect(appManagementHandler).toHaveBeenCalledWith({
+      operation: "manage_pwragent",
+      context: {},
+      args: { action: "status" },
+    });
+
+    await registry.close();
+  });
+
+  it("rejects thread handoff dynamic tool calls that do not match an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "other-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "Thread handoff tool calls must originate from an active turn on the same thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("returns a tool error for unknown PwrAgent automation dynamic tools", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": createAgentOverlay("thread-1"),
+        },
+      }),
     });
     const events: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -15078,7 +16014,7 @@ command = "pnpm dev"
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
         : "",
-    ).toContain("pwragent_task_monitors.complete_monitoring");
+    ).toContain("pwragent.complete_monitoring");
     expect(
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
@@ -15282,7 +16218,7 @@ command = "pnpm dev"
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
         ? codexClient.startTurnCalls[1].input[0].text
         : "",
-    ).toContain("pwragent_task_monitors.complete_monitoring");
+    ).toContain("pwragent.complete_monitoring");
 
     await checkStaleTaskMonitors(Date.now() + 180_000);
 

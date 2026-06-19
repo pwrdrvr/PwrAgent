@@ -33,6 +33,7 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
+  type AppServerThreadMessage,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
@@ -112,9 +113,22 @@ import {
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
   type MutateThreadToolArgs,
+  type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
+  type ThreadReadEntrySummary,
+  type ThreadReadMessageSummary,
   type ThreadMutationAppliedChange,
+  type PwrAgentThreadOrchestrationErrorCode,
+  type PwrAgentThreadOrchestrationRequest,
+  type PwrAgentThreadOrchestrationResponse,
+  type HandoffTaskResult,
+  type HandoffTaskSeedMode,
+  type HandoffTaskGroupingMode,
+  type HandoffTaskWorkspaceMode,
+  type HandoffTaskInheritedSettings,
+  type HandoffTaskMessagingAttachment,
+  type ThreadHandoffOriginWorkspace,
   type ThreadInspectionSummary,
   type ThreadSearchFilters,
   type ThreadSearchResult,
@@ -149,8 +163,6 @@ import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
-  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
-  PWRAGENT_THREAD_TOOL_NAMESPACE,
   isThreadSearchContentMode,
   isThreadSearchSemanticMode,
   type PendingRequestDecision,
@@ -160,7 +172,6 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
-  TASK_MONITOR_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -197,6 +208,7 @@ import { GrokAppServerClient } from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
+  isAutomationInspectionDynamicToolCall,
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
@@ -207,6 +219,7 @@ import {
   buildTaskMonitorDynamicToolSpecs,
   findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
+  isTaskMonitorDynamicToolCall,
   normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
   normalizePreferredMonitorModel,
@@ -214,17 +227,33 @@ import {
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import {
+  buildPwrAgentAppDynamicToolErrorResponse,
+  handlePwrAgentAppDynamicToolCall,
+  isPwrAgentAppDynamicToolCall,
+  readPwrAgentAppDynamicToolCall,
+} from "../agent-tools/pwragent-app-codex-tools";
+import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
+import {
   buildPwrAgentThreadDynamicToolErrorResponse,
   handlePwrAgentThreadDynamicToolCall,
+  isPwrAgentThreadDynamicToolCall,
   readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
 import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
 import {
   buildPwrAgentMessagingDynamicToolErrorResponse,
   handlePwrAgentMessagingDynamicToolCall,
+  isPwrAgentMessagingDynamicToolCall,
   readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
+import {
+  buildPwrAgentThreadOrchestrationDynamicToolErrorResponse,
+  handlePwrAgentThreadOrchestrationDynamicToolCall,
+  isPwrAgentThreadOrchestrationDynamicToolCall,
+  readPwrAgentThreadOrchestrationDynamicToolCall,
+} from "../agent-tools/pwragent-thread-orchestration-codex-tools";
+import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -2244,13 +2273,13 @@ function buildTaskMonitorRecoveryPrompt(params: {
   return [
     "PwrAgent monitor recovery instruction:",
     "",
-    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent_task_monitors.complete_monitoring.`,
+    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent.complete_monitoring.`,
     "You must now report the final monitor result. Use only the monitor task context you already have.",
     "",
     `Monitor id: ${params.monitorId}`,
     `Task: ${params.task}`,
     "",
-    "Call pwragent_task_monitors.complete_monitoring exactly once.",
+    "Call pwragent.complete_monitoring exactly once.",
     "If you cannot determine a successful final outcome from the context you have, use outcome \"failure\" and explain that monitoring ended without a determinate result.",
     "Do not sleep, poll indefinitely, or do unrelated work in this recovery turn.",
   ].join("\n");
@@ -4068,6 +4097,98 @@ function pageNormalizedReplay(
   };
 }
 
+function threadOrchestrationFailure(
+  code: PwrAgentThreadOrchestrationErrorCode,
+  message: string,
+  data?: unknown,
+): PwrAgentThreadOrchestrationResponse {
+  return {
+    ok: false,
+    error: {
+      code,
+      message,
+      ...(data === undefined ? {} : { data }),
+    },
+  };
+}
+
+function buildHandoffTaskPrompt(params: {
+  task: string;
+  context?: string;
+  origin: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    sourceTurnId?: string;
+    sourceTitle?: string;
+  };
+  inheritedSettings: HandoffTaskInheritedSettings;
+  workspace: ThreadHandoffOriginWorkspace;
+}): string {
+  const lines = [
+    "You are a PwrAgent handoff thread created by another Agent thread.",
+    "",
+    "Task:",
+    params.task,
+    "",
+    "Source thread:",
+    `- Backend: ${params.origin.sourceBackend}`,
+    `- Thread ID: ${params.origin.sourceThreadId}`,
+    ...(params.origin.sourceTurnId
+      ? [`- Turn ID: ${params.origin.sourceTurnId}`]
+      : []),
+    ...(params.origin.sourceTitle
+      ? [`- Title: ${params.origin.sourceTitle}`]
+      : []),
+    "",
+    "Inherited settings:",
+    `- Backend: ${params.inheritedSettings.backend}`,
+    ...(params.inheritedSettings.model
+      ? [`- Model: ${params.inheritedSettings.model}`]
+      : []),
+    ...(params.inheritedSettings.reasoningEffort
+      ? [`- Reasoning effort: ${params.inheritedSettings.reasoningEffort}`]
+      : []),
+    ...(params.inheritedSettings.serviceTier
+      ? [`- Service tier: ${params.inheritedSettings.serviceTier}`]
+      : []),
+    ...(params.inheritedSettings.fastMode !== undefined
+      ? [`- Fast mode: ${params.inheritedSettings.fastMode ? "on" : "off"}`]
+      : []),
+    ...(params.inheritedSettings.executionMode
+      ? [`- Permission mode: ${params.inheritedSettings.executionMode}`]
+      : []),
+    ...(params.inheritedSettings.approvalPolicy
+      ? [`- Approval policy: ${params.inheritedSettings.approvalPolicy}`]
+      : []),
+    ...(params.inheritedSettings.sandbox
+      ? [`- Sandbox: ${params.inheritedSettings.sandbox}`]
+      : []),
+    "",
+    "Workspace:",
+    `- Mode: ${params.workspace.mode}`,
+    ...(params.workspace.cwd ? [`- CWD: ${params.workspace.cwd}`] : []),
+    ...(params.workspace.linkedDirectory?.path
+      ? [`- Project path: ${params.workspace.linkedDirectory.path}`]
+      : []),
+    ...(params.workspace.linkedDirectory?.worktreePath
+      ? [`- Worktree path: ${params.workspace.linkedDirectory.worktreePath}`]
+      : []),
+    ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
+    `- Git: ${params.workspace.git.kind}`,
+    `- New worktree supported: ${
+      params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
+    }`,
+    "",
+    "Parent context reference:",
+    "The thread that spawned this handoff is the source thread above. Use that reference if a future tool or UI surface can fetch more context from the parent.",
+  ];
+  const trimmedContext = params.context?.trim();
+  if (trimmedContext) {
+    lines.push("", "Additional context from parent:", trimmedContext);
+  }
+  return lines.join("\n");
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -4164,6 +4285,7 @@ export class DesktopBackendRegistry {
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
+  private appManagementHandler?: PwrAgentAppManagementHandler;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
@@ -4182,6 +4304,8 @@ export class DesktopBackendRegistry {
     };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
+  private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
+    async (request) => await this.handleThreadOrchestrationRequest(request);
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -4280,6 +4404,7 @@ export class DesktopBackendRegistry {
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
+    appManagementHandler?: PwrAgentAppManagementHandler | null;
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
@@ -4431,6 +4556,7 @@ export class DesktopBackendRegistry {
     });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
+    this.appManagementHandler = options?.appManagementHandler ?? undefined;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
@@ -4659,6 +4785,12 @@ export class DesktopBackendRegistry {
     handler: AutomationInspectionHandler | null | undefined,
   ): void {
     this.automationInspectionHandler = handler ?? undefined;
+  }
+
+  setPwrAgentAppManagementHandler(
+    handler: PwrAgentAppManagementHandler | null | undefined,
+  ): void {
+    this.appManagementHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -6703,10 +6835,11 @@ export class DesktopBackendRegistry {
       runtime: acpRuntimeWithModel,
     });
     const agentToolCatalogs = resolveAgentToolCatalogs({
-      agent: request.agent,
+      appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
       threadInspectionHandler: this.threadInspectionHandler,
+      threadOrchestrationHandler: this.threadOrchestrationHandler,
     });
     const resolvedDynamicTools =
       backend === "codex"
@@ -7279,10 +7412,11 @@ export class DesktopBackendRegistry {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
               const agentToolCatalogs = resolveAgentToolCatalogs({
-                agent: overlay?.agent,
+                appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
                 threadInspectionHandler: this.threadInspectionHandler,
+                threadOrchestrationHandler: this.threadOrchestrationHandler,
               });
               const started = await client.startTurn({
                 threadId: params.threadId,
@@ -13456,7 +13590,10 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (dynamicToolCall?.namespace === "pwragent_automations") {
+    if (
+      dynamicToolCall &&
+      isAutomationInspectionDynamicToolCall(dynamicToolCall)
+    ) {
       if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
         backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
           backend,
@@ -13490,7 +13627,7 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (threadToolCall?.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE) {
+    if (threadToolCall && isPwrAgentThreadDynamicToolCall(threadToolCall)) {
       if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
         backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
           backend,
@@ -13520,11 +13657,88 @@ export class DesktopBackendRegistry {
         handler: this.threadInspectionHandler,
       });
     }
+    const appToolCall = readPwrAgentAppDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (appToolCall && isPwrAgentAppDynamicToolCall(appToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, appToolCall)) {
+        backendRegistryLog.warn("rejecting app management dynamic tool call", {
+          backend,
+          callId: appToolCall.callId,
+          namespace: appToolCall.namespace,
+          threadId: appToolCall.threadId,
+          tool: appToolCall.tool,
+          turnId: appToolCall.turnId,
+        });
+        return buildPwrAgentAppDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "App management tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling app management dynamic tool call", {
+        backend,
+        callId: appToolCall.callId,
+        namespace: appToolCall.namespace,
+        threadId: appToolCall.threadId,
+        tool: appToolCall.tool,
+        turnId: appToolCall.turnId,
+      });
+      return await handlePwrAgentAppDynamicToolCall({
+        backend,
+        call: appToolCall,
+        handler: this.appManagementHandler,
+      });
+    }
+
+    const threadOrchestrationToolCall =
+      readPwrAgentThreadOrchestrationDynamicToolCall({
+        method: request.method,
+        params: request.params,
+      });
+    if (
+      threadOrchestrationToolCall &&
+      isPwrAgentThreadOrchestrationDynamicToolCall(threadOrchestrationToolCall)
+    ) {
+      if (!this.isLiveDynamicToolCall(backend, threadOrchestrationToolCall)) {
+        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call", {
+          backend,
+          callId: threadOrchestrationToolCall.callId,
+          namespace: threadOrchestrationToolCall.namespace,
+          threadId: threadOrchestrationToolCall.threadId,
+          tool: threadOrchestrationToolCall.tool,
+          turnId: threadOrchestrationToolCall.turnId,
+        });
+        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Thread handoff tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling thread orchestration dynamic tool call", {
+        backend,
+        callId: threadOrchestrationToolCall.callId,
+        namespace: threadOrchestrationToolCall.namespace,
+        threadId: threadOrchestrationToolCall.threadId,
+        tool: threadOrchestrationToolCall.tool,
+        turnId: threadOrchestrationToolCall.turnId,
+      });
+      return await handlePwrAgentThreadOrchestrationDynamicToolCall({
+        backend,
+        call: threadOrchestrationToolCall,
+        handler: this.threadOrchestrationHandler,
+      });
+    }
+
     const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
       method: request.method,
       params: request.params,
     });
-    if (messagingToolCall?.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE) {
+    if (
+      messagingToolCall &&
+      isPwrAgentMessagingDynamicToolCall(messagingToolCall)
+    ) {
       if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
         backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
           backend,
@@ -13537,7 +13751,7 @@ export class DesktopBackendRegistry {
         return buildPwrAgentMessagingDynamicToolErrorResponse({
           code: "forbidden",
           message:
-            "Messaging context tool calls must originate from an active turn on the same Agent thread.",
+            "Messaging context tool calls must originate from an active turn on the same thread.",
         });
       }
       backendRegistryLog.info("handling messaging context dynamic tool call", {
@@ -13559,7 +13773,7 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (taskMonitorToolCall?.namespace === TASK_MONITOR_TOOL_NAMESPACE) {
+    if (taskMonitorToolCall && isTaskMonitorDynamicToolCall(taskMonitorToolCall)) {
       if (backend !== "codex") {
         return buildTaskMonitorDynamicToolErrorResponse({
           code: "forbidden",
@@ -13656,6 +13870,564 @@ export class DesktopBackendRegistry {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private async handleThreadOrchestrationRequest(
+    request: PwrAgentThreadOrchestrationRequest,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    if (request.operation === "handoff_task") {
+      return await this.handoffTaskToThread(request);
+    }
+    if (request.operation === "send_message_to_thread") {
+      return await this.sendMessageToThread(request);
+    }
+    return threadOrchestrationFailure(
+      "unsupported_operation",
+      "Unsupported PwrAgent thread orchestration operation.",
+    );
+  }
+
+  private async sendMessageToThread(
+    request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(request.context.backend, {
+        threadId: request.context.threadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread orchestration tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    const threadId = request.args.threadId.trim();
+    const prompt = request.args.prompt.trim();
+    if (!threadId || !prompt) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "send_message_to_thread requires non-empty threadId and prompt strings.",
+      );
+    }
+    if (
+      backend === request.context.backend &&
+      threadId === request.context.threadId
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "send_message_to_thread targets another thread. Continue the current thread by replying normally.",
+      );
+    }
+
+    try {
+      const settings = {
+        ...(request.args.executionMode
+          ? { executionMode: request.args.executionMode }
+          : {}),
+        ...(request.args.model ? { model: request.args.model } : {}),
+        ...(request.args.reasoningEffort
+          ? { reasoningEffort: request.args.reasoningEffort }
+          : {}),
+        ...(request.args.serviceTier
+          ? { serviceTier: request.args.serviceTier }
+          : {}),
+        ...(Object.hasOwn(request.args, "fastMode")
+          ? { fastMode: request.args.fastMode }
+          : {}),
+        ...(request.args.approvalPolicy
+          ? { approvalPolicy: request.args.approvalPolicy }
+          : {}),
+        ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
+      };
+      const turn = await this.startTurn({
+        backend,
+        threadId,
+        input: [{ type: "text", text: prompt }],
+        executionMode: request.args.executionMode,
+        model: request.args.model,
+        reasoningEffort: request.args.reasoningEffort,
+        serviceTier: request.args.serviceTier,
+        fastMode: request.args.fastMode,
+        approvalPolicy: request.args.approvalPolicy,
+        sandbox: request.args.sandbox,
+      });
+      return {
+        ok: true,
+        data: {
+          backend,
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          promptPreview: truncateThreadInspectionText(prompt, 240),
+          settings,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return threadOrchestrationFailure(
+        /not found/i.test(message) ? "not_found" : "turn_start_failed",
+        message,
+      );
+    }
+  }
+
+  private async handoffTaskToThread(
+    request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread handoff tools must be invoked from a live turn.",
+      );
+    }
+    if (sourceBackend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread handoff tools are currently available only from Codex threads.",
+      );
+    }
+
+    const backend = request.args.backend ?? sourceBackend;
+    if (backend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread handoff can currently create only Codex Agent threads.",
+      );
+    }
+
+    const sourceOverlay =
+      (await this.overlayStore.getThreadOverlayState({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+      })) ??
+      ({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        extraLinkedDirectories: [],
+      } satisfies ThreadOverlayState);
+
+    const task = request.args.task.trim();
+    if (!task) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "handoff_task requires a non-empty task string.",
+      );
+    }
+
+    const seedMode: HandoffTaskSeedMode = request.args.seedMode ?? "clean";
+    const groupingMode: HandoffTaskGroupingMode =
+      request.args.groupingMode ?? "none";
+    const workspaceMode: HandoffTaskWorkspaceMode =
+      request.args.workspaceMode ?? "same";
+    const sourceThread = await this.findThreadForWorkspaceHandoff({
+      backend: sourceBackend,
+      callerReason: "agent-handoff",
+      threadId: sourceThreadId,
+    });
+    const sourceCwd = await this.resolveThreadEnvironmentCwd(
+      sourceBackend,
+      sourceThreadId,
+      sourceOverlay,
+    );
+    const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
+      cwd: sourceCwd,
+      overlay: sourceOverlay,
+      thread: sourceThread,
+    });
+    const sourceWorkspace = await this.buildThreadHandoffWorkspaceSummary({
+      cwd: sourceCwd,
+      linkedDirectory: sourceLinkedDirectory,
+      mode: "same",
+    });
+
+    if (workspaceMode !== "none" && !sourceCwd?.trim()) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        "The source thread has no current workspace. Ask for workspaceMode=none to create an unscoped handoff thread.",
+      );
+    }
+    if (
+      workspaceMode === "new_worktree" &&
+      !sourceWorkspace.git.worktreeCreationAvailable
+    ) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        sourceWorkspace.git.unavailableReason ??
+          "The source workspace cannot create a new Git worktree.",
+        { workspace: sourceWorkspace },
+      );
+    }
+
+    const executionMode =
+      request.args.executionMode ??
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      ) ??
+      sourceOverlay.executionMode ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const inheritedSettings: HandoffTaskInheritedSettings = {
+      backend,
+      executionMode,
+      model: request.args.model ?? sourceOverlay.model,
+      reasoningEffort:
+        request.args.reasoningEffort ?? sourceOverlay.reasoningEffort,
+      serviceTier: request.args.serviceTier ?? sourceOverlay.serviceTier,
+      fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
+      approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
+      sandbox: request.args.sandbox ?? modeSettings.sandbox,
+      codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime,
+    };
+    const title =
+      request.args.title?.trim() ||
+      shortenDerivedThreadTitle(task) ||
+      "Delegated task";
+    const agent = {
+      name: title,
+      instructions:
+        "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
+    };
+    const cwdForChild = workspaceMode === "none" ? undefined : sourceCwd;
+
+    let threadId: string;
+    let createdLinkedDirectory: LinkedDirectorySummary | undefined;
+    let createdWorkspaceMode = workspaceMode;
+    try {
+      if (seedMode === "fork") {
+        const forked = await this.forkThread({
+          backend,
+          sourceThreadId,
+          ...(groupingMode === "subthread"
+            ? { parentThreadId: sourceThreadId }
+            : {}),
+          executionMode,
+          directoryLabel:
+            sourceLinkedDirectory?.label ||
+            (sourceCwd ? path.basename(sourceCwd) : undefined) ||
+            title,
+          directoryPath: cwdForChild,
+          workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
+          branchName: request.args.branchName,
+          model: inheritedSettings.model,
+          reasoningEffort: inheritedSettings.reasoningEffort,
+          serviceTier: inheritedSettings.serviceTier,
+          fastMode: inheritedSettings.fastMode,
+          approvalPolicy: inheritedSettings.approvalPolicy,
+          sandbox: inheritedSettings.sandbox,
+        });
+        threadId = forked.threadId;
+        createdLinkedDirectory = forked.linkedDirectory;
+        createdWorkspaceMode =
+          forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
+        await this.overlayStore.setThreadAgent({
+          backend,
+          threadId,
+          agent,
+        });
+      } else {
+        const started = await this.startThread({
+          backend,
+          executionMode,
+          cwd: cwdForChild,
+          workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
+          branchName: request.args.branchName,
+          model: inheritedSettings.model,
+          reasoningEffort: inheritedSettings.reasoningEffort,
+          serviceTier: inheritedSettings.serviceTier,
+          fastMode: inheritedSettings.fastMode,
+          approvalPolicy: inheritedSettings.approvalPolicy,
+          sandbox: inheritedSettings.sandbox,
+          codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          agent,
+        });
+        threadId = started.threadId;
+        if (groupingMode === "subthread") {
+          await this.overlayStore.setThreadParent?.({
+            backend,
+            threadId,
+            parentThreadId: sourceThreadId,
+          });
+        }
+      }
+      await this.renameThread({ backend, threadId, name: title }).catch(
+        (error) => {
+          backendRegistryLog.warn("thread handoff rename failed", {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            threadId,
+          });
+        },
+      );
+    } catch (error) {
+      return threadOrchestrationFailure(
+        workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
+    const childCwd =
+      resolveThreadWorkspaceCwd(pendingThread) ||
+      createdLinkedDirectory?.worktreePath ||
+      createdLinkedDirectory?.path ||
+      cwdForChild;
+    const childLinkedDirectory =
+      createdLinkedDirectory ??
+      this.resolveHandoffLinkedDirectory({
+        cwd: childCwd,
+        overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+        thread: pendingThread,
+      });
+    const workspace = await this.buildThreadHandoffWorkspaceSummary({
+      cwd: childCwd,
+      linkedDirectory: childLinkedDirectory,
+      mode: createdWorkspaceMode,
+    });
+    const createdAt = request.context.now ?? Date.now();
+    const origin = {
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      sourceTitle: sourceThread?.title,
+      taskTitle: title,
+      seedMode,
+      groupingMode,
+      createdAt,
+      workspace,
+    };
+    await this.overlayStore.setThreadHandoffOrigin({
+      backend,
+      threadId,
+      handoffOrigin: origin,
+    });
+    this.invalidateThreadListCache(backend);
+
+    const prompt = buildHandoffTaskPrompt({
+      task,
+      context: request.args.context,
+      origin,
+      inheritedSettings,
+      workspace,
+    });
+    let turnId: string | undefined;
+    let turnStartFailure: HandoffTaskResult["turnStartFailure"];
+    try {
+      const turn = await this.startTurn({
+        backend,
+        threadId,
+        input: [{ type: "text", text: prompt }],
+        executionMode,
+        model: inheritedSettings.model,
+        reasoningEffort: inheritedSettings.reasoningEffort,
+        serviceTier: inheritedSettings.serviceTier,
+        fastMode: inheritedSettings.fastMode,
+        approvalPolicy: inheritedSettings.approvalPolicy,
+        sandbox: inheritedSettings.sandbox,
+      });
+      turnId = turn.turnId;
+    } catch (error) {
+      turnStartFailure = {
+        phase: "turn",
+        message: error instanceof Error ? error.message : String(error),
+      };
+      backendRegistryLog.warn("thread handoff created thread but turn failed", {
+        backend,
+        error: turnStartFailure.message,
+        threadId,
+      });
+    }
+
+    const messagingAttachment = await this.attachHandoffThreadToMessaging({
+      mode: request.args.messagingAttachment,
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      backend,
+      threadId,
+      title,
+    });
+    return {
+      ok: true,
+      data: {
+        backend,
+        threadId,
+        turnId,
+        title,
+        seedMode,
+        groupingMode,
+        ...(groupingMode === "subthread"
+          ? { groupedUnderThreadId: sourceThreadId }
+          : {}),
+        inheritedSettings,
+        origin,
+        workspace,
+        messagingAttachment,
+        ...(turnStartFailure ? { turnStartFailure } : {}),
+      },
+    };
+  }
+
+  private async attachHandoffThreadToMessaging(params: {
+    mode?: "none" | "auto" | "current_conversation" | "new_child";
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    sourceTurnId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    title: string;
+  }): Promise<HandoffTaskMessagingAttachment> {
+    if (params.mode === "none") {
+      return { requested: false, outcome: "not_requested" };
+    }
+    const placement =
+      params.mode === "new_child"
+        ? "new_child"
+        : params.mode === "current_conversation"
+          ? "current_conversation"
+          : "auto";
+    const explicitRequest = params.mode !== undefined;
+    const response = await this.messagingHandler({
+      operation: "attach_thread_here",
+      context: {
+        backend: params.sourceBackend,
+        threadId: params.sourceThreadId,
+        turnId: params.sourceTurnId,
+      },
+      args: {
+        backend: params.backend,
+        threadId: params.threadId,
+        placement,
+        targetKind: "agent_thread",
+        title: params.title,
+      },
+    });
+    if (response.ok && "binding" in response.data) {
+      return {
+        requested: true,
+        outcome: response.data.outcome,
+        channel: response.data.channel,
+        conversation: {
+          id: response.data.conversation.id,
+          kind: response.data.conversation.kind,
+          title: response.data.conversation.title,
+        },
+        ...(response.data.createdConversation
+          ? {
+              createdConversation: {
+                id: response.data.createdConversation.id,
+                kind: response.data.createdConversation.kind,
+                title: response.data.createdConversation.title,
+              },
+            }
+          : {}),
+      };
+    }
+    if (!explicitRequest) {
+      return { requested: false, outcome: "not_requested" };
+    }
+    if (response.ok) {
+      return {
+        requested: true,
+        outcome: "failed",
+        reason: "Messaging location did not return an attachable binding.",
+      };
+    }
+    return {
+      requested: true,
+      outcome:
+        response.error.code === "not_found"
+          ? "not_available"
+          : response.error.code === "forbidden"
+            ? "forbidden"
+            : response.error.code === "unsupported_operation"
+              ? "unsupported"
+              : "failed",
+      reason: response.error.message,
+    };
+  }
+
+  private resolveHandoffLinkedDirectory(params: {
+    cwd?: string;
+    overlay?: ThreadOverlayState;
+    thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
+  }): LinkedDirectorySummary | undefined {
+    const candidates = [
+      ...(params.overlay?.extraLinkedDirectories ?? []),
+      ...(params.thread?.linkedDirectories ?? []),
+    ];
+    const cwd = params.cwd?.trim();
+    return (
+      (cwd
+        ? candidates.find(
+            (directory) =>
+              directory.worktreePath === cwd || directory.path === cwd,
+          )
+        : undefined) ??
+      candidates.find((directory) => directory.kind === "worktree") ??
+      candidates.find((directory) => directory.kind === "local") ??
+      candidates[0]
+    );
+  }
+
+  private async buildThreadHandoffWorkspaceSummary(params: {
+    cwd?: string;
+    linkedDirectory?: LinkedDirectorySummary;
+    mode: HandoffTaskWorkspaceMode;
+  }): Promise<ThreadHandoffOriginWorkspace> {
+    const cwd = params.cwd?.trim();
+    if (!cwd) {
+      return {
+        mode: params.mode,
+        git: {
+          kind: "none",
+          worktreeCreationAvailable: false,
+          unavailableReason: "No workspace is associated with this thread.",
+        },
+      };
+    }
+    const branch = await readCurrentGitBranch(cwd).catch(() => undefined);
+    if (!branch) {
+      return {
+        mode: params.mode,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind: "non_git",
+          worktreeCreationAvailable: false,
+          unavailableReason: "The workspace is not a Git repository.",
+        },
+      };
+    }
+    return {
+      mode: params.mode,
+      cwd,
+      branch,
+      linkedDirectory: params.linkedDirectory,
+      git: {
+        kind:
+          params.linkedDirectory?.kind === "worktree"
+            ? "git_worktree"
+            : "git_local",
+        worktreeCreationAvailable: true,
+      },
+    };
   }
 
   private async handleTaskMonitorRequest(
@@ -14361,7 +15133,7 @@ export class DesktopBackendRegistry {
     await this.finishTaskMonitorDelegation({
       completionSource,
       details: [
-        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent_task_monitors.complete_monitoring.",
+        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent.complete_monitoring.",
         `Fallback reason: ${params.reason}.`,
         params.terminalStatus
           ? `Last monitor turn status: ${params.terminalStatus}.`
@@ -14725,6 +15497,10 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (request.operation === "read_thread") {
+      return await this.handleReadThreadInspectionRequest(request.args);
+    }
+
     if (request.operation === "mutate_thread") {
       return await this.handleMutateThreadInspectionRequest(request.args);
     }
@@ -14873,6 +15649,114 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private async handleReadThreadInspectionRequest(
+    args: ReadThreadToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+    const before = args.before?.trim();
+    const limit = clampInteger(
+      args.limit,
+      DEFAULT_THREAD_INSPECTION_READ_LIMIT,
+      MAX_THREAD_INSPECTION_READ_LIMIT,
+    );
+    const maxCharsPerEntry = clampInteger(
+      args.maxCharsPerEntry,
+      DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS,
+      MAX_THREAD_INSPECTION_READ_ENTRY_CHARS,
+    );
+
+    try {
+      const response = await this.readThread({
+        backend: args.backend,
+        threadId,
+        includeTurns: true,
+        ...(before ? { before } : {}),
+        limit,
+      });
+      const replay = response.replay;
+      const status = response.threadStatus ?? replay.threadStatus;
+      return {
+        ok: true,
+        data: {
+          read: {
+            backend: args.backend,
+            threadId,
+            limit,
+            ...(before ? { before } : {}),
+            maxCharsPerEntry,
+            ...(args.includeEntries === false
+              ? {}
+              : {
+                  entries: replay.entries
+                    .slice(0, limit)
+                    .map((entry) =>
+                      toThreadReadEntrySummary(entry, maxCharsPerEntry),
+                    ),
+                }),
+            ...(args.includeMessages === false
+              ? {}
+              : {
+                  messages: replay.messages
+                    .slice(0, limit)
+                    .map((message) =>
+                      toThreadReadMessageSummary(message, maxCharsPerEntry),
+                    ),
+                }),
+            ...(replay.lastUserMessage
+              ? {
+                  lastUserMessage: truncateThreadInspectionText(
+                    replay.lastUserMessage,
+                    maxCharsPerEntry,
+                  ),
+                }
+              : {}),
+            ...(replay.lastAssistantMessage
+              ? {
+                  lastAssistantMessage: truncateThreadInspectionText(
+                    replay.lastAssistantMessage,
+                    maxCharsPerEntry,
+                  ),
+                }
+              : {}),
+            pagination: replay.pagination,
+            ...(args.includeStatus === false
+              ? {}
+              : status
+                ? { status }
+                : {}),
+          },
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        error: {
+          code: /not found/i.test(message) ? "not_found" : "internal_error",
+          message,
+        },
+      };
+    }
+  }
+
   private getThreadInspectionSearchService(): ThreadSearchService | null {
     if (this.threadInspectionSearchService !== undefined) {
       return this.threadInspectionSearchService;
@@ -14913,7 +15797,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          overlay?.agent,
+          overlay,
           messagingBindings,
         );
       }),
@@ -14933,7 +15817,7 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay?.agent, messagingBindings);
+        return toThreadInspectionSummary(thread, overlay, messagingBindings);
       }),
     );
   }
@@ -15786,6 +16670,164 @@ function readThreadInspectionBackend(
     : undefined;
 }
 
+const DEFAULT_THREAD_INSPECTION_READ_LIMIT = 10;
+const MAX_THREAD_INSPECTION_READ_LIMIT = 20;
+const DEFAULT_THREAD_INSPECTION_READ_ENTRY_CHARS = 4_000;
+const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
+
+function toThreadReadMessageSummary(
+  message: AppServerThreadMessage,
+  maxCharsPerEntry: number,
+): ThreadReadMessageSummary {
+  const text = truncateThreadInspectionTextWithFlag(
+    message.text,
+    maxCharsPerEntry,
+  );
+  return {
+    id: message.id,
+    role: message.role,
+    ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
+    text: text.value,
+    ...(text.truncated ? { truncated: true } : {}),
+  };
+}
+
+function toThreadReadEntrySummary(
+  entry: AppServerThreadEntry,
+  maxCharsPerEntry: number,
+): ThreadReadEntrySummary {
+  switch (entry.type) {
+    case "message": {
+      const text = truncateThreadInspectionTextWithFlag(
+        entry.text,
+        maxCharsPerEntry,
+      );
+      return {
+        type: "message",
+        id: entry.id,
+        role: entry.role,
+        text: text.value,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.phase ? { phase: entry.phase } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        ...(text.truncated ? { truncated: true } : {}),
+      };
+    }
+    case "activity": {
+      const summary = truncateThreadInspectionTextWithFlag(
+        entry.summary,
+        maxCharsPerEntry,
+      );
+      const details = entry.details.slice(0, 10).map((detail) => {
+        const markdown = detail.markdown
+          ? truncateThreadInspectionTextWithFlag(detail.markdown, maxCharsPerEntry)
+          : undefined;
+        const output = detail.command?.output
+          ? truncateThreadInspectionTextWithFlag(
+              detail.command.output,
+              maxCharsPerEntry,
+            )
+          : undefined;
+        return {
+          id: detail.id,
+          kind: detail.kind,
+          label: truncateThreadInspectionText(detail.label, 320),
+          ...(markdown ? { markdown: markdown.value } : {}),
+          ...(detail.path ? { path: detail.path } : {}),
+          ...(detail.url ? { url: detail.url } : {}),
+          ...(detail.status ? { status: detail.status } : {}),
+          ...(detail.command
+            ? {
+                command: {
+                  displayCommand: detail.command.displayCommand,
+                  ...(detail.command.rawCommand
+                    ? { rawCommand: detail.command.rawCommand }
+                    : {}),
+                  ...(detail.command.cwd ? { cwd: detail.command.cwd } : {}),
+                  ...(output ? { output: output.value } : {}),
+                  ...(detail.command.exitCode !== undefined
+                    ? { exitCode: detail.command.exitCode }
+                    : {}),
+                  ...(detail.command.durationMs !== undefined
+                    ? { durationMs: detail.command.durationMs }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(summary.truncated || markdown?.truncated || output?.truncated
+            ? { truncated: true }
+            : {}),
+        };
+      });
+      return {
+        type: "activity",
+        id: entry.id,
+        summary: summary.value,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.status ? { status: entry.status } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        details,
+        ...(summary.truncated || entry.details.length > details.length
+          ? { truncated: true }
+          : {}),
+      };
+    }
+    case "plan": {
+      const explanation = entry.explanation
+        ? truncateThreadInspectionTextWithFlag(
+            entry.explanation,
+            maxCharsPerEntry,
+          )
+        : undefined;
+      const markdown = entry.markdown
+        ? truncateThreadInspectionTextWithFlag(entry.markdown, maxCharsPerEntry)
+        : undefined;
+      const steps = entry.steps.slice(0, 20).map((step) => ({
+        step: truncateThreadInspectionText(step.step, 500),
+        status: step.status,
+      }));
+      return {
+        type: "plan",
+        id: entry.id,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(explanation ? { explanation: explanation.value } : {}),
+        ...(markdown ? { markdown: markdown.value } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        steps,
+        ...(explanation?.truncated ||
+        markdown?.truncated ||
+        entry.steps.length > steps.length
+          ? { truncated: true }
+          : {}),
+      };
+    }
+    case "review": {
+      const review = truncateThreadInspectionTextWithFlag(
+        entry.review,
+        maxCharsPerEntry,
+      );
+      const displayText = entry.displayText
+        ? truncateThreadInspectionTextWithFlag(
+            entry.displayText,
+            maxCharsPerEntry,
+          )
+        : undefined;
+      return {
+        type: "review",
+        id: entry.id,
+        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.status ? { status: entry.status } : {}),
+        review: review.value,
+        ...(displayText ? { displayText: displayText.value } : {}),
+        ...(entry.turn ? { turn: entry.turn } : {}),
+        ...(review.truncated || displayText?.truncated
+          ? { truncated: true }
+          : {}),
+      };
+    }
+  }
+}
+
 function isThreadMutationExecutionMode(
   value: unknown,
 ): value is ThreadExecutionMode {
@@ -15867,7 +16909,7 @@ function filterThreadInspectionSummaries(
 
 function toThreadInspectionSummary(
   thread: AppServerThreadSummary,
-  agent: ThreadAgentMetadata | undefined,
+  overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
@@ -15879,7 +16921,8 @@ function toThreadInspectionSummary(
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
-    agent,
+    agent: overlay?.agent,
+    handoffOrigin: overlay?.handoffOrigin,
     executionMode: thread.executionMode,
     model: thread.model,
     reasoningEffort: thread.reasoningEffort,
@@ -15892,7 +16935,7 @@ function toThreadInspectionSummary(
 
 function toThreadInspectionSummaryFromSearchResult(
   result: ThreadSearchResult,
-  agent: ThreadAgentMetadata | undefined,
+  overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   return {
@@ -15904,7 +16947,8 @@ function toThreadInspectionSummaryFromSearchResult(
     createdAt: result.createdAt,
     updatedAt: result.updatedAt,
     archivedAt: result.archivedAt,
-    agent,
+    agent: overlay?.agent,
+    handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
     linkedDirectories: result.linkedDirectories,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
@@ -16117,11 +17161,21 @@ function buildThreadInspectionDateRange(params: {
 }
 
 function truncateThreadInspectionText(value: string, maxLength: number): string {
+  return truncateThreadInspectionTextWithFlag(value, maxLength).value;
+}
+
+function truncateThreadInspectionTextWithFlag(
+  value: string,
+  maxLength: number,
+): { value: string; truncated: boolean } {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
-    return normalized;
+    return { value: normalized, truncated: false };
   }
-  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  return {
+    value: `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`,
+    truncated: true,
+  };
 }
 
 let registry: DesktopBackendRegistry | null = null;

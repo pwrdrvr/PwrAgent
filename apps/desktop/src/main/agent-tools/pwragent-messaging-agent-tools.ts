@@ -6,7 +6,7 @@ import type {
 import {
   PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_OPERATION_NAMES,
-  PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -27,9 +27,11 @@ export type PwrAgentMessagingHandler = (
 
 export function buildPwrAgentMessagingToolRouter(
   handler: PwrAgentMessagingHandler | undefined,
-  options: { unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler), {
+  return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler, {
+    namespace: options.namespace,
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent messaging tool.",
   });
@@ -37,9 +39,10 @@ export function buildPwrAgentMessagingToolRouter(
 
 export function buildPwrAgentMessagingToolDefinitions(
   handler: PwrAgentMessagingHandler | undefined,
+  options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
   return PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.map((operation) => ({
-    namespace: PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+    namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),

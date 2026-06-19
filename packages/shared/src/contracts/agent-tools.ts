@@ -1,7 +1,11 @@
+export const PWRAGENT_TOOL_NAMESPACE = "pwragent";
+
 export const AGENT_TOOL_CATALOG_IDS = [
   "automation_inspection",
+  "app_management",
   "thread_inspection",
   "messaging_context",
+  "thread_orchestration",
 ] as const;
 
 export type AgentToolCatalogId = (typeof AGENT_TOOL_CATALOG_IDS)[number];
