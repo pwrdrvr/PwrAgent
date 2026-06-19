@@ -802,7 +802,21 @@ textarea,
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 0 16px;
+  /* Horizontal inset system for the rail — single source of truth.
+     `--sidebar-rail-inset` is the default chrome inset (the rail's side
+     padding, applied just below). The thread/directory lanes bleed past it
+     and re-inset to the narrower `--sidebar-lane-inset` (see
+     `.sidebar-list--dense`). Masthead rows (`.runtime-identity`,
+     `.lens-switch`) pull from rail to lane via the negative
+     `--sidebar-masthead-pull` margin, so the pills, tabs, and cards all
+     line up on both edges. Change an inset here once and every consumer
+     below follows. */
+  --sidebar-rail-inset: 16px;
+  --sidebar-lane-inset: 8px;
+  --sidebar-masthead-pull: calc(
+    var(--sidebar-lane-inset) - var(--sidebar-rail-inset)
+  );
+  padding: 0 var(--sidebar-rail-inset);
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
@@ -2433,6 +2447,12 @@ textarea,
   align-items: center;
   gap: 6px;
   padding: 6px 0;
+  /* Pull out to the lane inset so the pills and their divider line up with
+     the thread/directory cards below instead of sitting at the wider rail
+     inset. This is an auto-width flex row, so the negative margin simply
+     shrinks it onto the lane edges (cf. `.lens-switch`, which needs an
+     explicit width). See `--sidebar-masthead-pull` on `.sidebar`. */
+  margin-inline: var(--sidebar-masthead-pull);
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: no-drag;
 }
@@ -2511,16 +2531,16 @@ textarea,
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  /* Cancel the sidebar's 16px side padding so the thread lanes span
+  /* Cancel the sidebar's rail padding so the thread lanes span
      wall-to-wall and the reserved scrollbar gutter parks the thumb at
      the right edge — out from under the lens-switch header, which keeps
      its inset as a sibling above. The bleed clips cleanly at the sidebar
      walls (`.sidebar` is `overflow: hidden`); the only intervening
      ancestor (`.sidebar__section--fill`) is `overflow: visible`, so the
-     -16px reaches the walls instead of being clipped early. Transient
-     empty / loading / error messages that render directly here (no lane
-     wrapper) are re-inset just below. */
-  margin-inline: -16px;
+     negative margin reaches the walls instead of being clipped early.
+     Transient empty / loading / error messages that render directly here
+     (no lane wrapper) are re-inset just below. */
+  margin-inline: calc(-1 * var(--sidebar-rail-inset));
   overflow: hidden;
 }
 
@@ -2531,7 +2551,7 @@ textarea,
    (a `.sidebar` child, not a region child) are untouched. */
 .sidebar__scroll-region > .sidebar-empty,
 .sidebar__scroll-region > .sidebar-error {
-  margin-inline: 16px;
+  margin-inline: var(--sidebar-rail-inset);
 }
 
 .context-panel h3 {
@@ -2565,7 +2585,15 @@ textarea,
 
 .lens-switch {
   display: inline-grid;
-  width: 100%;
+  /* Pull out to the lane inset so the segmented control's edges line up
+     with the thread/directory cards below. Unlike `.runtime-identity` (an
+     auto-width flex row that just shrinks under the negative margin), this
+     is an inline-grid that won't stretch to fill its parent, so it needs an
+     explicit width: the negative `--sidebar-masthead-pull` margin on each
+     side, plus a width grown by twice that pull, lands both edges on the
+     lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
+  width: calc(100% - 2 * var(--sidebar-masthead-pull));
+  margin-inline: var(--sidebar-masthead-pull);
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
@@ -2575,7 +2603,8 @@ textarea,
   /* Width-query container so the longest label ("Directories") can swap to
      a short form once the (resizable) sidebar narrows past the point where it
      would otherwise spill past the segmented control. The width is extrinsic
-     (`width: 100%`), so inline-size containment is safe here. */
+     (set above from `--sidebar-masthead-pull`), so inline-size containment is
+     safe here. */
   container-type: inline-size;
 }
 
@@ -2739,8 +2768,10 @@ textarea,
      (2px @ 2px offset → 4px outside the row box) off the now-reachable
      left wall; 8px right holds row content — and the per-directory
      launchpad (+) button on directory headers — clear of the thumb in
-     the reserved gutter. */
-  padding-inline: 8px;
+     the reserved gutter. This `8px` is the canonical lane inset; the
+     `--sidebar-lane-inset` token on `.sidebar` carries the value so the
+     masthead chrome can line up with it. */
+  padding-inline: var(--sidebar-lane-inset);
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Reserve a stable gutter so the thin auto-hiding scrollbar never
@@ -2764,9 +2795,10 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  /* Mirrors `.sidebar-list--dense` — see that block for the asymmetric
-     gutter rationale (4px left / 8px right for scrollbar clearance). */
-  padding-inline: 4px 8px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
+     rationale (lane inset keeps the focus-visible outline off the wall on
+     the left and clears the reserved scrollbar thumb on the right). */
+  padding-inline: var(--sidebar-lane-inset);
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
