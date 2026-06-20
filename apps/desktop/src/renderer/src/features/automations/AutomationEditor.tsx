@@ -299,6 +299,98 @@ export function AutomationEditor(props: AutomationEditorProps) {
     (group) => group.id === groupSelection,
   );
 
+  const [captureEntryId, setCaptureEntryId] = useState<string>();
+  const [captureMessage, setCaptureMessage] = useState<string>();
+  const [captureStatus, setCaptureStatus] = useState<
+    "idle" | "waiting" | "captured" | "error"
+  >("idle");
+  const [captureError, setCaptureError] = useState<string>();
+  const [capturedName, setCapturedName] = useState<string>();
+  const [capturedGroupTitle, setCapturedGroupTitle] = useState<string>();
+  const canCaptureByCode = Boolean(props.desktopApi?.generateMessagingPairingToken);
+
+  const applyObservedChat = (chat: {
+    bucketId?: string;
+    id: string;
+    kind: MessagingConversationKind;
+    parentId?: string;
+    parentTitle?: string;
+    title?: string;
+  }): void => {
+    if (chat.kind === "topic") {
+      setInboundGroupId(chat.bucketId ?? chat.parentId ?? "");
+      setTelegramScope("topic");
+      setInboundTopicId(chat.id);
+      setCapturedGroupTitle(chat.parentTitle);
+      setCapturedName(chat.title ?? chat.parentTitle ?? chat.id);
+    } else {
+      setInboundGroupId(chat.id);
+      setTelegramScope("group");
+      setInboundTopicId("");
+      setCapturedGroupTitle(chat.title);
+      setCapturedName(chat.title ?? chat.id);
+    }
+    setGroupSelection(MANUAL_GROUP_VALUE);
+  };
+
+  useEffect(() => {
+    if (!captureEntryId) return;
+    const subscribe = props.desktopApi?.onMessagingPairingChanged;
+    const approve = props.desktopApi?.approveMessagingPairing;
+    const readSettings = props.desktopApi?.readSettings;
+    if (!subscribe) return;
+    return subscribe((event) => {
+      if (event.entry.id !== captureEntryId) return;
+      if (!event.entry.observedChat) return;
+      const chat = event.entry.observedChat;
+      applyObservedChat(chat);
+      setCaptureStatus("captured");
+      setCaptureMessage(undefined);
+      setValidationError(undefined);
+      // Authorize the conversation so the trigger can actually fire, then
+      // refresh the known-group list so it appears in the picker.
+      void (async () => {
+        try {
+          await approve?.({ entryId: event.entry.id });
+          const response = await readSettings?.();
+          if (response) {
+            setProviderGroups(readProviderGroups(response.snapshot));
+          }
+        } catch {
+          // Capture still succeeded; authorization can be completed in Settings.
+        }
+      })();
+      setCaptureEntryId(undefined);
+    });
+  }, [captureEntryId, props.desktopApi]);
+
+  const startCaptureByCode = async (): Promise<void> => {
+    const generate = props.desktopApi?.generateMessagingPairingToken;
+    if (!generate) return;
+    setCaptureError(undefined);
+    setCaptureStatus("waiting");
+    setCapturedName(undefined);
+    try {
+      const result = await generate({ platform: inboundProvider, scope: "bucket" });
+      setCaptureMessage(result.message);
+      setCaptureEntryId(result.entry.id);
+    } catch (caught) {
+      setCaptureStatus("error");
+      setCaptureError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const cancelCaptureByCode = (): void => {
+    const entryId = captureEntryId;
+    if (entryId) {
+      void props.desktopApi?.rejectMessagingPairing?.({ entryId }).catch(() => {});
+    }
+    setCaptureEntryId(undefined);
+    setCaptureMessage(undefined);
+    setCaptureStatus("idle");
+    setCaptureError(undefined);
+  };
+
   const agentOptions = useMemo(
     () => {
       const options: AgentThreadOption[] = (props.threads ?? [])
@@ -435,7 +527,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       broadcast: sourceReplyBroadcast,
       caseSensitive: inboundCaseSensitive,
       groupId: inboundGroupId,
-      groupTitle: selectedGroup?.title,
+      groupTitle: selectedGroup?.title ?? capturedGroupTitle,
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
@@ -927,6 +1019,58 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </p>
             </div>
           )}
+
+          {canCaptureByCode ? (
+            <div className="automation-capture">
+              {captureStatus === "idle" || captureStatus === "error" ? (
+                <button
+                  className="button button--ghost automation-capture__start"
+                  type="button"
+                  onClick={() => void startCaptureByCode()}
+                >
+                  Not sure of the ID? Register with a code
+                </button>
+              ) : null}
+              {captureStatus === "waiting" ? (
+                <div className="automation-capture__panel" role="status">
+                  <p className="automation-capture__lead">
+                    Paste this into the{" "}
+                    {inboundProvider === "telegram"
+                      ? "group or topic"
+                      : "channel"}{" "}
+                    you want to watch. PwrAgent will detect it and fill in the
+                    details.
+                  </p>
+                  {captureMessage ? (
+                    <pre className="automation-capture__code">{captureMessage}</pre>
+                  ) : null}
+                  <div className="automation-capture__actions">
+                    <span className="automation-capture__waiting">
+                      Waiting for the code to arrive...
+                    </span>
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      onClick={cancelCaptureByCode}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {captureStatus === "captured" ? (
+                <p className="automation-capture__captured" role="status">
+                  Captured {capturedName ?? "the conversation"} and authorized it.
+                  The fields above are filled in.
+                </p>
+              ) : null}
+              {captureStatus === "error" && captureError ? (
+                <p className="automation-editor__error" role="alert">
+                  {captureError}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {inboundProvider === "telegram" ? (
             <>

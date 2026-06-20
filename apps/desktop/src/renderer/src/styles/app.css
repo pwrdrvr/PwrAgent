@@ -11912,6 +11912,65 @@ textarea,
   line-height: 1.4;
 }
 
+.automation-capture {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.automation-capture__start {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.automation-capture__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+}
+
+.automation-capture__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.automation-capture__code {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg-elevated, var(--bg-app));
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.automation-capture__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.automation-capture__waiting {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.automation-capture__captured {
+  margin: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .automation-agent-field {
   position: relative;
 }

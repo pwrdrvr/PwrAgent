@@ -1,10 +1,18 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
   AutomationDetail,
   MessagingChannelKind,
+  MessagingPairingEntry,
   NavigationThreadSummary,
   ReadDesktopSettingsResponse,
 } from "@pwragent/shared";
@@ -327,6 +335,81 @@ describe("AutomationEditor", () => {
         executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"] },
       }),
     });
+  });
+
+  it("captures a Telegram topic via a pairing code", async () => {
+    let pairingListener:
+      | ((event: { at: number; entry: MessagingPairingEntry }) => void)
+      | undefined;
+    const approve = vi.fn(async () => ({
+      added: true,
+      entry: { id: "pair-1" } as MessagingPairingEntry,
+    }));
+    const desktopApi = {
+      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      generateMessagingPairingToken: async () => ({
+        entry: { id: "pair-1" } as MessagingPairingEntry,
+        expiresAt: 0,
+        message: "Send this code: ABC123",
+        token: "ABC123",
+      }),
+      onMessagingPairingChanged: (
+        callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
+      ) => {
+        pairingListener = callback;
+        return () => undefined;
+      },
+      approveMessagingPairing: approve,
+      rejectMessagingPairing: async () => ({ entry: { id: "pair-1" } }),
+    } as unknown as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Register with a code/ }),
+    );
+    expect(await screen.findByText(/Send this code: ABC123/)).toBeInTheDocument();
+
+    act(() => {
+      pairingListener?.({
+        at: 1,
+        entry: {
+          id: "pair-1",
+          observedChat: {
+            bucketId: "-100999",
+            id: "42",
+            kind: "topic",
+            parentId: "-100999",
+            parentTitle: "Ops",
+            title: "Incidents",
+          },
+        } as MessagingPairingEntry,
+      });
+    });
+
+    expect(
+      await screen.findByText(/Captured Incidents and authorized/),
+    ).toBeInTheDocument();
+    expect((screen.getByLabelText("Group ID") as HTMLInputElement).value).toBe(
+      "-100999",
+    );
+    expect((screen.getByLabelText("Topic ID") as HTMLInputElement).value).toBe(
+      "42",
+    );
+    await waitFor(() =>
+      expect(approve).toHaveBeenCalledWith({ entryId: "pair-1" }),
+    );
   });
 
   it("offers Agents first and regular threads on the Threads tab", async () => {
