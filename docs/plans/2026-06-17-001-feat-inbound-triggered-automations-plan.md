@@ -497,3 +497,65 @@ For the Datadog/AWS use case, the concrete automation package can later supply t
 - Slack Events API docs: event subscriptions deliver message events that business logic can filter and respond to: https://docs.slack.dev/apis/events-api/
 - Slack message event docs: message events include subtypes such as bot/integration messages and thread broadcasts: https://docs.slack.dev/reference/events/message/
 - Slack `app_mention` docs: app mentions are message-like events but not a replacement for general message subscriptions: https://docs.slack.dev/reference/events/app_mention/
+
+---
+
+## Build Progress & Design Corrections (2026-06-20)
+
+The first pass of U8 shipped a freeform, low-confidence config UI and U6 left
+Telegram source replies non-functional. This addendum records the corrections
+made while finishing the feature; the original units above are kept as the
+point-in-time record.
+
+**U6 correction — Telegram source-relative delivery (was broken).** The Slack
+adapter honored `delivery.sourceRelative`, but the Telegram adapter's
+`resolveTarget` ignored it and always replied inside the originating topic, so
+`source_channel` could not reach the supergroup root and the "broadcast" flag
+was meaningless. Fixed in `telegram-adapter.ts`: `source_channel` now replies at
+the supergroup (General) level; `source_thread`/default reply inside the topic.
+Added Telegram source-relative delivery tests. Broadcast is now correctly
+treated as Slack-only (`reply_broadcast`) and hidden for other providers.
+
+**U8 correction — trustworthy config UI.** Rebuilt the inbound section of
+`AutomationEditor`:
+- Provider list is gated to providers actually enabled in settings
+  (`readSettings`) instead of a hardcoded Slack/Telegram pair.
+- Replaced the conflated "Group / Topic" box. Telegram picks a group from
+  authorized supergroups (names from `messaging.telegram.authorizedSupergroups`)
+  or manual entry, plus an explicit Whole-group vs Specific-topic scope. Other
+  providers get a guided, validated conversation-id field. `conversationKind` /
+  `parentId` / `title` are captured correctly (no more hardcoded `"channel"`).
+- Added text match-mode + case sensitivity, optional sender scope
+  (any/bots/people), and a Reply control (same thread / group level /
+  Agent-context only).
+- Exposed the execution profile's MCP + tool allowlists so an automation can be
+  granted the MCP it needs (the Datadog use case) — the contract already
+  supported these; the UI was dropping them.
+
+**New — pairing-code conversation capture.** Reused the existing messaging
+pairing infrastructure so an operator can drop a one-time code into the target
+group/topic/channel; PwrAgent detects it, fills the conversation fields
+(group/topic/scope + title), and authorizes the conversation so the trigger can
+fire. This is the most reliable way to identify a conversation because the
+identity comes from a real inbound event rather than scraped state.
+
+**New — live filter preview.** Added a going-forward live preview
+(`inbound-preview-bus` + a controller tap + IPC fan-out) so operators can see
+recent senders/messages from the chosen conversation with the messages their
+filter would match highlighted. Provides the "is this actually going to work"
+confidence the freeform form lacked.
+
+### Deferred / follow-up
+
+- **Topic-name dropdown.** Telegram groups come from settings, but per-topic
+  name listing within a group still requires a `listInboundAutomationLocations`
+  IPC over `messaging_managed_topics`; for now topic IDs are entered manually or
+  captured via the pairing code (which carries the topic name).
+- **Slack history backfill for preview.** Preview is going-forward only and
+  uniform across providers. Slack `conversations.history` backfill (needs a
+  `channels:history` scope and a new adapter method) is deferred; Telegram has
+  no history API regardless.
+- **Ordered-actions editor.** The contract supports an arbitrary ordered
+  `outputActions` array and an alternate `messaging_target` destination; the UI
+  still composes the common pair (Agent context + one source reply). A general
+  ordered-action editor is deferred until there's demand.
