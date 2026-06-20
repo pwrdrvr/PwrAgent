@@ -66,6 +66,7 @@ type GrokServerLike = {
 
 type GrokClientOptions = {
   apiKey?: string;
+  resolveApiKey?: () => string | undefined;
   baseUrl?: string;
   connectionObserver?: JsonRpcObserver;
   model?: string;
@@ -1173,7 +1174,8 @@ export class GrokAppServerClient {
 
     loadLocalEnv({ override: false });
     const runtimeConfig = resolveGrokAppServerRuntimeConfig();
-    const apiKey = this.options.apiKey?.trim();
+    const apiKey =
+      this.options.apiKey?.trim() || this.options.resolveApiKey?.()?.trim();
     if (!apiKey) {
       throw new Error("grok app server unavailable: Grok API key is not set");
     }

@@ -1622,6 +1622,32 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("does not resolve the Grok API key while AgentCore-Grok is disabled", async () => {
+    const previous = process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "0";
+    const resolveGrokApiKey = vi.fn(() => "xai-stored-key");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      resolveGrokApiKey,
+      threadTitleGenerationService: null,
+    });
+
+    try {
+      const response = await registry.listBackends({ includeUnavailable: true });
+
+      expect(resolveGrokApiKey).not.toHaveBeenCalled();
+      expect(response.backends.map((backend) => backend.kind)).not.toContain("grok");
+    } finally {
+      await registry.close();
+      if (previous === undefined) {
+        delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+      } else {
+        process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = previous;
+      }
+    }
+  });
+
   it("returns ACP provider commands from session metadata", async () => {
     const session: AcpSessionMetadata = {
       backendId: "acp:kimi",

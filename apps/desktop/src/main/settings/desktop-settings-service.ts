@@ -1916,11 +1916,13 @@ export class DesktopSettingsService {
     }
 
     try {
-      const value = await this.options.secretStore.getSecret(secret);
+      const configured = await this.options.secretStore.hasSecret(secret);
+      const accessError = this.options.secretStore.getSecretAccessError?.(secret);
       return {
-        configured: Boolean(value),
-        source: value ? "keychain" : "unset",
+        configured,
+        source: configured ? "keychain" : "unset",
         writable: true,
+        ...(accessError ? { unavailableReason: accessError } : {}),
       };
     } catch (error) {
       return {
