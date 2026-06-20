@@ -11,6 +11,7 @@ import type {
   AutomationWeekday,
   CreateAutomationRequest,
   DesktopSettingsSnapshot,
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingConversationKind,
   NavigationThreadSummary,
@@ -389,6 +390,79 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setCaptureMessage(undefined);
     setCaptureStatus("idle");
     setCaptureError(undefined);
+  };
+
+  const previewSubscriptionId = useId();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewMessages, setPreviewMessages] = useState<InboundPreviewMessage[]>(
+    [],
+  );
+  const canPreview = Boolean(
+    props.desktopApi?.startInboundPreview &&
+      props.desktopApi?.onInboundPreviewMessage,
+  );
+  const previewScope =
+    inboundProvider === "telegram" && telegramScope === "topic"
+      ? inboundGroupId.trim() && inboundTopicId.trim()
+        ? { conversationId: inboundTopicId.trim(), parentId: inboundGroupId.trim() }
+        : undefined
+      : inboundGroupId.trim()
+        ? { conversationId: inboundGroupId.trim() }
+        : undefined;
+  const previewConversationId = previewScope?.conversationId;
+  const previewParentId = previewScope?.parentId;
+
+  useEffect(() => {
+    if (!previewOpen || !previewConversationId) return;
+    const start = props.desktopApi?.startInboundPreview;
+    const stop = props.desktopApi?.stopInboundPreview;
+    const subscribe = props.desktopApi?.onInboundPreviewMessage;
+    if (!start || !subscribe) return;
+    setPreviewMessages([]);
+    void start({
+      subscriptionId: previewSubscriptionId,
+      provider: inboundProvider,
+      conversationId: previewConversationId,
+      ...(previewParentId ? { parentId: previewParentId } : {}),
+    });
+    const unsubscribe = subscribe((message) => {
+      setPreviewMessages((current) => [message, ...current].slice(0, 25));
+    });
+    return () => {
+      unsubscribe?.();
+      void stop?.({ subscriptionId: previewSubscriptionId });
+    };
+  }, [
+    previewOpen,
+    previewConversationId,
+    previewParentId,
+    inboundProvider,
+    previewSubscriptionId,
+    props.desktopApi,
+  ]);
+
+  const previewMessageMatches = (message: InboundPreviewMessage): boolean => {
+    const filterText = inboundText.trim();
+    if (filterText) {
+      const haystack = inboundCaseSensitive
+        ? message.text
+        : message.text.toLowerCase();
+      const needle = inboundCaseSensitive ? filterText : filterText.toLowerCase();
+      const textOk =
+        inboundTextMode === "equals"
+          ? haystack === needle
+          : haystack.includes(needle);
+      if (!textOk) return false;
+    }
+    if (
+      inboundSenderScope !== "" &&
+      Boolean(message.actor.isBot) !== (inboundSenderScope === "true")
+    ) {
+      return false;
+    }
+    const senderId = inboundSenderId.trim();
+    if (senderId && message.actor.platformUserId !== senderId) return false;
+    return true;
   };
 
   const agentOptions = useMemo(
@@ -1230,6 +1304,65 @@ export function AutomationEditor(props: AutomationEditorProps) {
               />
               <span>Also broadcast the reply to the channel</span>
             </label>
+          ) : null}
+
+          {canPreview ? (
+            <div className="automation-preview">
+              <button
+                className="button button--ghost automation-preview__toggle"
+                disabled={!previewConversationId}
+                type="button"
+                onClick={() => setPreviewOpen((open) => !open)}
+              >
+                {previewOpen ? "Stop preview" : "Preview live messages"}
+              </button>
+              {!previewConversationId ? (
+                <p className="automation-field__hint">
+                  Enter a conversation above to preview its incoming messages.
+                </p>
+              ) : null}
+              {previewOpen && previewConversationId ? (
+                <div className="automation-preview__panel" role="status">
+                  <p className="automation-field__hint">
+                    Showing messages as they arrive (no history). Messages your
+                    filter would match are highlighted.
+                  </p>
+                  {previewMessages.length === 0 ? (
+                    <p className="automation-preview__empty">
+                      Waiting for messages...
+                    </p>
+                  ) : (
+                    <ul className="automation-preview__list">
+                      {previewMessages.map((message) => {
+                        const matched = previewMessageMatches(message);
+                        return (
+                          <li
+                            key={message.id}
+                            className={`automation-preview__item${
+                              matched ? " is-match" : ""
+                            }`}
+                          >
+                            <span className="automation-preview__sender">
+                              {message.actor.displayName ??
+                                message.actor.platformUserId}
+                              {message.actor.isBot ? " (bot)" : ""}
+                            </span>
+                            <span className="automation-preview__text">
+                              {message.text || "(no text)"}
+                            </span>
+                            {matched ? (
+                              <span className="automation-preview__badge">
+                                matches
+                              </span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </fieldset>
       )}

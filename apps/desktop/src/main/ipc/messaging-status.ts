@@ -8,6 +8,7 @@ import type {
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
+  InboundPreviewMessage,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -20,6 +21,9 @@ import type {
   RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
+  StartInboundPreviewRequest,
+  StartInboundPreviewResponse,
+  StopInboundPreviewRequest,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
@@ -46,6 +50,7 @@ import {
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+  MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
@@ -54,8 +59,15 @@ import {
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
+  MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
+  MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
+import {
+  setInboundPreviewSink,
+  startInboundPreview,
+  stopInboundPreview,
+} from "../messaging/inbound-preview-bus";
 
 const log = getMainLogger("pwragent:messaging-ipc");
 
@@ -482,6 +494,34 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  setInboundPreviewSink((message: InboundPreviewMessage) => {
+    fanOut(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, message);
+  });
+
+  ipcMain.removeHandler(MESSAGING_START_INBOUND_PREVIEW_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
+    async (
+      _event,
+      request: StartInboundPreviewRequest,
+    ): Promise<StartInboundPreviewResponse> => {
+      startInboundPreview(request.subscriptionId, {
+        conversationId: request.conversationId,
+        provider: request.provider,
+        ...(request.parentId ? { parentId: request.parentId } : {}),
+      });
+      return { ok: true };
+    },
+  );
+
+  ipcMain.removeHandler(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
+    async (_event, request: StopInboundPreviewRequest): Promise<void> => {
+      stopInboundPreview(request.subscriptionId);
+    },
+  );
+
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.handle(
     MESSAGING_LIST_ACTIVITY_CHANNEL,
@@ -737,6 +777,9 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   unsubscribeBindingsChanged = undefined;
   unsubscribePairingChanged?.();
   unsubscribePairingChanged = undefined;
+  setInboundPreviewSink(undefined);
+  ipcMain.removeHandler(MESSAGING_START_INBOUND_PREVIEW_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL);

@@ -96,10 +96,14 @@ import type {
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
+  InboundPreviewMessage,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  StartInboundPreviewRequest,
+  StartInboundPreviewResponse,
+  StopInboundPreviewRequest,
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
@@ -732,6 +736,17 @@ export type DesktopApi = {
   ) => Promise<RejectMessagingPairingResponse>;
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
+  ) => () => void;
+  /**
+   * Start a going-forward live preview of inbound messages for a conversation
+   * so the Automations editor can show what a trigger filter would match.
+   */
+  startInboundPreview?: (
+    request: StartInboundPreviewRequest,
+  ) => Promise<StartInboundPreviewResponse>;
+  stopInboundPreview?: (request: StopInboundPreviewRequest) => Promise<void>;
+  onInboundPreviewMessage?: (
+    callback: (message: InboundPreviewMessage) => void,
   ) => () => void;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;

@@ -97,10 +97,14 @@ import type {
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
+  InboundPreviewMessage,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  StartInboundPreviewRequest,
+  StartInboundPreviewResponse,
+  StopInboundPreviewRequest,
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
@@ -338,6 +342,7 @@ import {
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+  MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
@@ -346,6 +351,8 @@ import {
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
+  MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
+  MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
@@ -1373,6 +1380,25 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  startInboundPreview: async (
+    request: StartInboundPreviewRequest,
+  ): Promise<StartInboundPreviewResponse> =>
+    await ipcRenderer.invoke(MESSAGING_START_INBOUND_PREVIEW_CHANNEL, request),
+  stopInboundPreview: async (request: StopInboundPreviewRequest): Promise<void> => {
+    await ipcRenderer.invoke(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL, request);
+  },
+  onInboundPreviewMessage: (
+    callback: (message: InboundPreviewMessage) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: InboundPreviewMessage,
+    ) => callback(payload);
+    ipcRenderer.on(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, listener);
     };
   },
   // Windows custom title-bar menu bar (see shared/app-menu.ts). The renderer

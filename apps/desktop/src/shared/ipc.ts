@@ -190,6 +190,12 @@ export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
  */
 export const MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL =
   "messaging:bindings-changed";
+export const MESSAGING_START_INBOUND_PREVIEW_CHANNEL =
+  "messaging:start-inbound-preview";
+export const MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL =
+  "messaging:stop-inbound-preview";
+export const MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL =
+  "messaging:inbound-preview-event";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

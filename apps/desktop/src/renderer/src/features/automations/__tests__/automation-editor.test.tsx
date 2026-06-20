@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
   AutomationDetail,
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingPairingEntry,
   NavigationThreadSummary,
@@ -410,6 +411,76 @@ describe("AutomationEditor", () => {
     await waitFor(() =>
       expect(approve).toHaveBeenCalledWith({ entryId: "pair-1" }),
     );
+  });
+
+  it("previews live messages and highlights ones the filter matches", async () => {
+    let previewListener: ((message: InboundPreviewMessage) => void) | undefined;
+    const desktopApi = {
+      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      startInboundPreview: vi.fn(async () => ({ ok: true })),
+      stopInboundPreview: vi.fn(async () => undefined),
+      onInboundPreviewMessage: (
+        callback: (message: InboundPreviewMessage) => void,
+      ) => {
+        previewListener = callback;
+        return () => undefined;
+      },
+    } as unknown as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-100" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Preview live messages" }),
+    );
+
+    await waitFor(() =>
+      expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: "-100", provider: "telegram" }),
+      ),
+    );
+
+    act(() => {
+      previewListener?.({
+        actor: { displayName: "Datadog", isBot: true, platformUserId: "B1" },
+        conversationId: "-100",
+        id: "m1",
+        provider: "telegram",
+        receivedAt: 1,
+        text: "ERROR api latency",
+      });
+      previewListener?.({
+        actor: { displayName: "Alice", platformUserId: "U2" },
+        conversationId: "-100",
+        id: "m2",
+        provider: "telegram",
+        receivedAt: 2,
+        text: "good morning",
+      });
+    });
+
+    const matching = await screen.findByText("ERROR api latency");
+    const nonMatching = screen.getByText("good morning");
+    expect(matching.closest(".automation-preview__item")).toHaveClass("is-match");
+    expect(
+      nonMatching.closest(".automation-preview__item"),
+    ).not.toHaveClass("is-match");
   });
 
   it("offers Agents first and regular threads on the Threads tab", async () => {

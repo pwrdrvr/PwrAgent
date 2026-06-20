@@ -73,6 +73,7 @@ import {
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
+import { publishInboundPreview } from "./inbound-preview-bus";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 import {
@@ -909,6 +910,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
       automationInboundHandler: this.options.automationInboundHandler,
+      onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,
       channel: adapter.channel,
       deliveryBudget,

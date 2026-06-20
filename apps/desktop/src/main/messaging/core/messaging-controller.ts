@@ -543,6 +543,14 @@ export type MessagingControllerOptions = {
   automationInboundHandler?: (
     event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
   ) => Promise<boolean>;
+  /**
+   * Tap for the Automations editor live preview. Invoked for every authorized
+   * text/media event before trigger matching, regardless of whether a trigger
+   * matches, so operators can see what their filter would catch.
+   */
+  onInboundPreview?: (
+    event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+  ) => void;
   backend: MessagingBackendBridge;
   channel?: MessagingChannelKind;
   interactionMapper?: MessagingInteractionMapper;
@@ -767,6 +775,17 @@ export class MessagingController {
     if (event.kind === "callback") {
       await this.handleCallback(event);
       return;
+    }
+
+    if (event.kind === "text" || event.kind === "media") {
+      try {
+        this.options.onInboundPreview?.(event);
+      } catch (error) {
+        this.logger.debug?.("messaging inbound preview tap failed", {
+          eventId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     if (
