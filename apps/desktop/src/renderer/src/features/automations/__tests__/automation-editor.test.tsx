@@ -4,8 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
   AutomationDetail,
+  MessagingChannelKind,
   NavigationThreadSummary,
+  ReadDesktopSettingsResponse,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationEditor } from "../AutomationEditor";
 
 afterEach(() => {
@@ -77,6 +80,9 @@ describe("AutomationEditor", () => {
 
     render(
       <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({ enabled: { slack: true, telegram: true } }),
+        )}
         mode={{
           assignment: { backend: "codex", threadId: "thread-1" },
           kind: "create",
@@ -93,16 +99,27 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate the alert and summarize likely causes." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    fireEvent.change(screen.getByLabelText("Conversation ID"), {
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "slack" },
+    });
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C123" },
     });
-    fireEvent.change(screen.getByLabelText("Sender ID"), {
+    fireEvent.change(screen.getByLabelText("Sender type"), {
+      target: { value: "true" },
+    });
+    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
       target: { value: "B999" },
     });
     fireEvent.change(screen.getByLabelText("Text contains"), {
       target: { value: "Datadog monitor alert" },
     });
-    fireEvent.click(screen.getByLabelText("Broadcast source-thread reply"));
+    fireEvent.click(
+      screen.getByLabelText("Also broadcast the reply to the channel"),
+    );
     fireEvent.change(screen.getByLabelText("Access mode"), {
       target: { value: "full-access" },
     });
@@ -162,11 +179,17 @@ describe("AutomationEditor", () => {
     });
   });
 
-  it("submits an inbound Telegram trigger for a user sender", async () => {
+  it("submits an inbound Telegram trigger scoped to a specific topic", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
     render(
       <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-1001234567890" }],
+          }),
+        )}
         mode={{
           assignment: { backend: "codex", threadId: "thread-1" },
           kind: "create",
@@ -185,13 +208,21 @@ describe("AutomationEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
 
     expect(screen.getByText(/Each matching inbound message starts/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "telegram" },
-    });
-    fireEvent.change(screen.getByLabelText("Group or topic ID"), {
+    // The authorized group appears in the picker once settings load.
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-1001234567890" },
     });
-    fireEvent.change(screen.getByLabelText("Telegram user ID"), {
+    fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
+    fireEvent.change(screen.getByLabelText("Topic ID"), {
+      target: { value: "42" },
+    });
+    fireEvent.change(screen.getByLabelText("Sender type"), {
+      target: { value: "false" },
+    });
+    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
       target: { value: "123456" },
     });
     fireEvent.change(screen.getByLabelText("Text contains"), {
@@ -209,8 +240,10 @@ describe("AutomationEditor", () => {
           expect.objectContaining({
             conversation: {
               channel: "telegram",
-              conversationId: "-1001234567890",
-              conversationKind: "channel",
+              conversationId: "42",
+              conversationKind: "topic",
+              parentId: "-1001234567890",
+              parentTitle: "Ops Room",
             },
             sender: {
               isBot: false,
@@ -222,6 +255,76 @@ describe("AutomationEditor", () => {
             },
           }),
         ],
+      }),
+    });
+  });
+
+  it("only lists enabled providers and surfaces authorized groups", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-100777" }],
+          }),
+        )}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("option", { name: "Slack" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("option", { name: "Telegram" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument();
+  });
+
+  it("includes an MCP allowlist in the execution profile", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({ enabled: { telegram: true } }),
+        )}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Datadog incident bot" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate using Datadog." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-1001234567890" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.change(screen.getByLabelText("Allowed MCP servers"), {
+      target: { value: "datadog, aws-readonly" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"] },
       }),
     });
   });
@@ -583,6 +686,36 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
     updatedAt: 1,
     ...overrides,
   };
+}
+
+function fakeSettings(params: {
+  enabled: Partial<Record<MessagingChannelKind, boolean>>;
+  telegramGroups?: Array<{ displayName: string; id: string }>;
+}): ReadDesktopSettingsResponse {
+  const provider = (kind: MessagingChannelKind) => ({
+    enabled: { value: Boolean(params.enabled[kind]) },
+  });
+  return {
+    snapshot: {
+      messaging: {
+        telegram: {
+          enabled: { value: Boolean(params.enabled.telegram) },
+          authorizedSupergroups: { value: params.telegramGroups ?? [] },
+        },
+        slack: provider("slack"),
+        discord: provider("discord"),
+        mattermost: provider("mattermost"),
+        feishu: provider("feishu"),
+        line: provider("line"),
+      },
+    },
+  } as unknown as ReadDesktopSettingsResponse;
+}
+
+function fakeDesktopApi(settings: ReadDesktopSettingsResponse): DesktopApi {
+  return {
+    readSettings: async () => settings,
+  } as unknown as DesktopApi;
 }
 
 function buildThread(params: {

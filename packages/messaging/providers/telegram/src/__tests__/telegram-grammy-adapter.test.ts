@@ -501,6 +501,85 @@ describe("TelegramAdapter callback persistence", () => {
   });
 });
 
+describe("TelegramAdapter source-relative delivery", () => {
+  function adapterWithCapture(): {
+    adapter: TelegramAdapter;
+    sent: TelegramSendMessageRequest[];
+  } {
+    const sent: TelegramSendMessageRequest[] = [];
+    const api: TelegramBotApi = {
+      ...fakeTelegramApi(),
+      sendMessage: async (request) => {
+        sent.push(request);
+        return {
+          chat: { id: Number(request.chat_id), type: "supergroup" },
+          message_id: 500,
+        };
+      },
+    };
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-100123", displayName: "Ops" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+    return { adapter, sent };
+  }
+
+  function topicReplyIntent(sourceRelative: "source_thread" | "source_channel") {
+    return {
+      id: `automation-reply-${sourceRelative}`,
+      kind: "message" as const,
+      createdAt: 1,
+      role: "assistant" as const,
+      delivery: { sourceRelative },
+      parts: [{ type: "text" as const, text: "Investigated alert" }],
+      audit: {
+        actor: { platformUserId: "42" },
+        channel: {
+          channel: "telegram" as const,
+          conversation: {
+            id: "77",
+            kind: "topic" as const,
+            parentId: "-100123",
+            title: "Incidents",
+            parentTitle: "Ops",
+          },
+        },
+        occurredAt: 1,
+      },
+    };
+  }
+
+  it("replies inside the originating forum topic for source_thread", async () => {
+    const { adapter, sent } = adapterWithCapture();
+
+    await adapter.deliver(topicReplyIntent("source_thread"));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      chat_id: -100123,
+      message_thread_id: 77,
+    });
+    expect(sent[0]?.text).toContain("Investigated alert");
+  });
+
+  it("replies at the supergroup level (no topic) for source_channel", async () => {
+    const { adapter, sent } = adapterWithCapture();
+
+    await adapter.deliver(topicReplyIntent("source_channel"));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ chat_id: -100123 });
+    expect(sent[0]?.message_thread_id).toBeUndefined();
+  });
+});
+
 function createGrammyBot(): TelegramGrammyBotLike & {
   api: {
     answerCallbackQuery: ReturnType<typeof vi.fn>;

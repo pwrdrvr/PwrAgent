@@ -135,6 +135,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           {editorMode ? (
             <div className="automations-editor-panel">
               <AutomationEditor
+                desktopApi={props.desktopApi}
                 mode={
                   editorMode.kind === "create"
                     ? { kind: "create" }
