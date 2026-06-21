@@ -47,6 +47,7 @@ import {
 } from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
+import { RemoteWindowBadge } from "./RemoteWindowBadge";
 
 type ThreadContextMenuPosition = {
   x: number;
@@ -742,6 +743,7 @@ export function Sidebar(props: SidebarProps) {
       />
       <header className="sidebar__masthead">
         <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
+        <RemoteWindowBadge />
 
         <div className="sidebar__masthead-actions">
           <MastheadActionButton

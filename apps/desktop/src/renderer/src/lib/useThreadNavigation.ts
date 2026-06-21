@@ -3475,6 +3475,12 @@ export function useThreadNavigation(
       executionMode: ThreadExecutionMode = "default",
       options?: { forceWorkspace?: boolean }
     ): Promise<void> => {
+      if (readRendererFederationTarget()) {
+        setCreateThreadError(
+          "New threads can't be created in a remote window. Create it on the remote instance, then open it here.",
+        );
+        return;
+      }
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
         return;
@@ -4174,6 +4180,12 @@ export function useThreadNavigation(
       reviewTarget?: AppServerReviewTarget,
       parentThreadId?: string,
     ): Promise<void> => {
+      if (readRendererFederationTarget()) {
+        const message =
+          "New threads can't be created in a remote window. Create it on the remote instance, then open it here.";
+        setLaunchpadError(message);
+        throw new Error(message);
+      }
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
         return;
