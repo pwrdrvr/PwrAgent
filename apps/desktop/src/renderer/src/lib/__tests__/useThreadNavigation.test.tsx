@@ -2193,6 +2193,72 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
+  describe("remote federation window guards", () => {
+    function setRemoteFederationWindow(instanceId: string): void {
+      (
+        window as unknown as {
+          __pwragentFederationTarget?: { scope: "remote"; instanceId: string };
+        }
+      ).__pwragentFederationTarget = { scope: "remote", instanceId };
+    }
+
+    afterEach(() => {
+      delete (
+        window as unknown as { __pwragentFederationTarget?: unknown }
+      ).__pwragentFederationTarget;
+    });
+
+    const emptySnapshot = async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    });
+
+    it("blocks createThread in a remote window without touching the local backend", async () => {
+      setRemoteFederationWindow("client_remote_01");
+      const ensureDirectoryLaunchpad = vi.fn();
+      const desktopApi: DesktopApi = {
+        getNavigationSnapshot: vi.fn(emptySnapshot),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      };
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+      await act(async () => {
+        await result.current.createThread();
+      });
+
+      expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+      expect(result.current.createThreadError).toMatch(/remote window/i);
+    });
+
+    it("rejects materializeDirectoryLaunchpad in a remote window without touching the local backend", async () => {
+      setRemoteFederationWindow("client_remote_02");
+      const materializeDirectoryLaunchpad = vi.fn();
+      const desktopApi: DesktopApi = {
+        getNavigationSnapshot: vi.fn(emptySnapshot),
+        materializeDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      };
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+      await act(async () => {
+        await expect(
+          result.current.materializeDirectoryLaunchpad("directory:/tmp/whatever"),
+        ).rejects.toThrow(/remote window/i);
+      });
+
+      expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+      expect(result.current.launchpadError).toMatch(/remote window/i);
+    });
+  });
+
   it("carries the started review turn from launchpad materialization", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
