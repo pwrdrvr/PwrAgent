@@ -110,24 +110,45 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     stateDb.raw
       .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
       .run("fastMode", JSON.stringify(false));
+    stateDb.raw
+      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .run(
+        "providerSettings",
+        JSON.stringify({
+          codex: {
+            executionMode: "default",
+            serviceTier: "priority",
+            fastMode: false,
+          },
+        }),
+      );
 
     const readDefaults = await store.getLaunchpadDefaults();
-    expect(readDefaults.fastMode).toBe(false);
+    expect(readDefaults.fastMode).toBeUndefined();
     expect(readDefaults.serviceTier).toBeUndefined();
-    expect(listDefaultKeys()).toEqual(["backend", "executionMode", "fastMode"]);
+    expect(readDefaults.providerSettings?.codex?.fastMode).toBeUndefined();
+    expect(readDefaults.providerSettings?.codex?.serviceTier).toBeUndefined();
+    expect(listDefaultKeys()).toEqual([
+      "backend",
+      "executionMode",
+      "providerSettings",
+    ]);
+    expect(readDefaultValue("providerSettings")).toEqual({
+      codex: {
+        executionMode: "default",
+      },
+    });
 
     await store.setLaunchpadDefaults({ fastMode: false, serviceTier: undefined });
 
     expect(listDefaultKeys()).toEqual([
       "backend",
       "executionMode",
-      "fastMode",
       "providerSettings",
     ]);
     expect(readDefaultValue("providerSettings")).toEqual({
       codex: {
         executionMode: "default",
-        fastMode: false,
       },
     });
   });
@@ -152,10 +173,12 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     });
 
     expect(defaults.serviceTier).toBeUndefined();
+    expect(defaults.fastMode).toBeUndefined();
     expect(defaults).toMatchObject({
       futureExperimentalFlag: { enabled: true },
     });
     expect(readDefaultValue("serviceTier")).toBeUndefined();
+    expect(readDefaultValue("fastMode")).toBeUndefined();
     expect(readDefaultValue("futureExperimentalFlag")).toEqual({ enabled: true });
   });
 });

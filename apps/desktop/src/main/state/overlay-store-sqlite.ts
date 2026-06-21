@@ -179,11 +179,44 @@ function normalizeLaunchpadDefaults(
 ): NavigationLaunchpadDefaults {
   const next: NavigationLaunchpadDefaults =
     projectNavigationLaunchpadProviderSettings(defaults);
+  const providerSettings = next.providerSettings
+    ? { ...next.providerSettings }
+    : undefined;
+  const codexProviderSettings = providerSettings?.codex
+    ? { ...providerSettings.codex }
+    : undefined;
+
+  if (codexProviderSettings) {
+    if (
+      codexProviderSettings.serviceTier === "fast" ||
+      codexProviderSettings.serviceTier === "priority"
+    ) {
+      delete codexProviderSettings.serviceTier;
+    }
+    if (codexProviderSettings.fastMode === false) {
+      delete codexProviderSettings.fastMode;
+    }
+    if (Object.keys(codexProviderSettings).length > 0) {
+      providerSettings!.codex = codexProviderSettings;
+    } else {
+      delete providerSettings!.codex;
+    }
+  }
+
+  if (providerSettings && Object.keys(providerSettings).length > 0) {
+    next.providerSettings = providerSettings;
+  } else {
+    delete next.providerSettings;
+  }
+
   if (
     next.backend === "codex" &&
     (next.serviceTier === "fast" || next.serviceTier === "priority")
   ) {
     delete next.serviceTier;
+  }
+  if (next.backend === "codex" && next.fastMode === false) {
+    delete next.fastMode;
   }
   return next;
 }
@@ -1830,10 +1863,7 @@ export class SqliteOverlayStore {
         : { backend: "codex", executionMode: "default" }
     ) as NavigationLaunchpadDefaults;
     const normalized = normalizeLaunchpadDefaults(parsed);
-    if (
-      parsed.backend === "codex" &&
-      (parsed.serviceTier === "fast" || parsed.serviceTier === "priority")
-    ) {
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
       this.writeLaunchpadDefaults(normalized);
     }
     return normalized;
