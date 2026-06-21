@@ -2426,6 +2426,55 @@ textarea,
   color: var(--accent);
 }
 
+/* Remote federation window badge. Only mounted in windows that operate a
+   remote PwrAgent instance, so local windows are unaffected. Sits next to the
+   brand and pushes the masthead action cluster to the trailing edge. */
+.remote-window-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.remote-window-badge__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.remote-window-badge__dot--connected {
+  background: var(--success-text);
+}
+
+.remote-window-badge__dot--pending {
+  background: var(--status-warning);
+}
+
+.remote-window-badge__dot--down {
+  background: var(--danger-text);
+}
+
+.remote-window-badge__kind {
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.remote-window-badge__label {
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .runtime-identity {
   display: flex;
   position: relative;
