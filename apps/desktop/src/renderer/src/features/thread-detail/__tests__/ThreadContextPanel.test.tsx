@@ -108,6 +108,7 @@ type PanelOverrides = Partial<
   Pick<
     ComponentProps<typeof ThreadContextPanel>,
     | "activeTab"
+    | "activeTurnId"
     | "backends"
     | "desktopApi"
     | "pinned"
@@ -887,6 +888,7 @@ describe("ThreadContextPanel", () => {
 
     renderPanel({
       activeTab: "pricing",
+      activeTurnId: "turn-context-replays",
       pinned: true,
       pricing: {
         lines: [line],
@@ -925,6 +927,106 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("hides context replay estimates for inactive persisted pricing rows", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-inactive-context-replays",
+      threadId: "thread-1",
+      turnId: "turn-inactive-context-replays",
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      model: "gpt-5.5",
+      inputTokens: 550_000,
+      uncachedInputTokens: 100_000,
+      cachedInputTokens: 450_000,
+      outputTokens: 2_000,
+      reasoningOutputTokens: 500,
+      totalTokens: 552_500,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 500_000,
+      cachedInputCostMicros: 225_000,
+      outputCostMicros: 75_000,
+      totalCostMicros: 800_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.queryByText(/Estimated cold context replays/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Estimated hot context replays/)).not.toBeInTheDocument();
+  });
+
+  it("does not add later uncached tail tokens to a cumulative live cold replay estimate", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-cumulative-live-context-replays",
+      threadId: "thread-1",
+      turnId: "turn-cumulative-live-context-replays",
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      model: "gpt-5.5",
+      inputTokens: 2_014_925,
+      uncachedInputTokens: 205_261,
+      cachedInputTokens: 1_809_664,
+      outputTokens: 2_454,
+      reasoningOutputTokens: 417,
+      totalTokens: 2_017_796,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeInputTokens: 7_633_951,
+      cumulativeCachedInputTokens: 7_219_456,
+      cumulativeUncachedInputTokens: 414_495,
+      cumulativeOutputTokens: 9_000,
+      cumulativeReasoningOutputTokens: 1_200,
+      cumulativeTotalTokens: 7_644_151,
+      uncachedInputCostMicros: 2_570_000,
+      cachedInputCostMicros: 905_000,
+      outputCostMicros: 100_000,
+      totalCostMicros: 3_575_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-cumulative-live-context-replays",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 1 (201,074 uncached · $2.52)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 9 (~201,074 cached avg; 1,809,664 cached bucket · $0.91)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Estimated cold context replays: 1 (205,261 uncached · $2.57)",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("splits replay estimates that exceed a plausible context window size", () => {
     const line: ThreadUsageLineRecord = {
       backend: "codex",
@@ -953,6 +1055,7 @@ describe("ThreadContextPanel", () => {
 
     renderPanel({
       activeTab: "pricing",
+      activeTurnId: "turn-large-context-replays",
       pinned: true,
       pricing: {
         lines: [line],
@@ -1001,6 +1104,7 @@ describe("ThreadContextPanel", () => {
 
     const { rerender } = renderPanel({
       activeTab: "pricing",
+      activeTurnId: "turn-replay-display-options",
       pinned: true,
       pricing: {
         lines: [line],
@@ -1028,6 +1132,7 @@ describe("ThreadContextPanel", () => {
 
     rerender(
       <ThreadContextPanel
+        activeTurnId="turn-replay-display-options"
         activeTab="pricing"
         backends={[baseBackend]}
         onActiveTabChange={() => {}}
