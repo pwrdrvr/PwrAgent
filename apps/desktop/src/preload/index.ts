@@ -44,6 +44,8 @@ import type {
   SteerTurnResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
+  DraftAutomationPromptRequest,
+  DraftAutomationPromptResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   GetAutomationRunArtifactRequest,
@@ -278,6 +280,7 @@ import {
   ACP_AGENTS_LIST_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_DRAFT_PROMPT_CHANNEL,
   AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL,
   AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
@@ -638,6 +641,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
   listAutomationLoadIssues: async (): Promise<ListAutomationLoadIssuesResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_LOAD_ISSUES_CHANNEL),
+  draftAutomationPrompt: async (
+    request: DraftAutomationPromptRequest,
+  ): Promise<DraftAutomationPromptResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_DRAFT_PROMPT_CHANNEL, request),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (

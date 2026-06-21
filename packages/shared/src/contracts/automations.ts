@@ -241,6 +241,14 @@ export type AutomationScheduleValidationResult =
       error: string;
     };
 
+export type DraftAutomationPromptRequest = {
+  description: string;
+};
+
+export type DraftAutomationPromptResponse =
+  | { status: "generated"; prompt: string }
+  | { status: "unavailable" | "invalid" | "failed"; reason: string };
+
 export type AutomationGateConfig = {
   command: string;
   cwd?: string;

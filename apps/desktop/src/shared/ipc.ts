@@ -134,6 +134,7 @@ export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
 export const AUTOMATIONS_LOAD_ISSUES_CHANNEL = "automations:load-issues";
+export const AUTOMATIONS_DRAFT_PROMPT_CHANNEL = "automations:draft-prompt";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate

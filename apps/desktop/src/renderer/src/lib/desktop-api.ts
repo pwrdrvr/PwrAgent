@@ -50,6 +50,8 @@ import type {
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
+  DraftAutomationPromptRequest,
+  DraftAutomationPromptResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -320,6 +322,10 @@ export type DesktopApi = {
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;
   listAutomationLoadIssues?: () => Promise<ListAutomationLoadIssuesResponse>;
+  /** Draft an automation task prompt from a plain-language description. */
+  draftAutomationPrompt?: (
+    request: DraftAutomationPromptRequest,
+  ) => Promise<DraftAutomationPromptResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,

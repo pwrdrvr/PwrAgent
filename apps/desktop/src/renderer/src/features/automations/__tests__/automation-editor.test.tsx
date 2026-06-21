@@ -338,6 +338,49 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("drafts a task prompt from a plain description", async () => {
+    const draftAutomationPrompt = vi.fn(async () => ({
+      status: "generated" as const,
+      prompt: "Investigate the alert in the incoming message and summarize it.",
+    }));
+    const desktopApi = {
+      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      draftAutomationPrompt,
+    } as unknown as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Help me write a prompt" }),
+    );
+    fireEvent.change(
+      screen.getByLabelText("Describe what you want the automation to do"),
+      { target: { value: "tell me what's wrong when Datadog alerts" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Draft prompt" }));
+
+    await waitFor(() =>
+      expect(draftAutomationPrompt).toHaveBeenCalledWith({
+        description: "tell me what's wrong when Datadog alerts",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Task prompt")).toHaveValue(
+        "Investigate the alert in the incoming message and summarize it.",
+      ),
+    );
+  });
+
   it("captures a Telegram topic via a pairing code", async () => {
     let pairingListener:
       | ((event: { at: number; entry: MessagingPairingEntry }) => void)

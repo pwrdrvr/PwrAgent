@@ -135,6 +135,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
     : "";
   const [name, setName] = useState(initialAutomation?.name ?? "");
   const [taskPrompt, setTaskPrompt] = useState(initialAutomation?.taskPrompt ?? "");
+  const [promptHelpOpen, setPromptHelpOpen] = useState(false);
+  const [promptDraftOpen, setPromptDraftOpen] = useState(false);
+  const [promptDescription, setPromptDescription] = useState("");
+  const [promptDrafting, setPromptDrafting] = useState(false);
+  const [promptDraftError, setPromptDraftError] = useState<string>();
   const [gateEnabled, setGateEnabled] = useState(Boolean(initialAutomation?.gate));
   const [gateCommand, setGateCommand] = useState(initialAutomation?.gate?.command ?? "");
   const [gateCwd, setGateCwd] = useState(initialAutomation?.gate?.cwd ?? "");
@@ -182,7 +187,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [validationError, setValidationError] = useState<string>();
   const agentLabelId = useId();
   const agentHelpId = useId();
+  const promptLabelId = useId();
+  const promptHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
+  const canDraftPrompt = Boolean(props.desktopApi?.draftAutomationPrompt);
   const [triggerKind, setTriggerKind] = useState<TriggerFormKind>(
     initialInboundTrigger ? "inbound_message" : "schedule",
   );
@@ -635,6 +643,39 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
   };
 
+  const draftPrompt = async (): Promise<void> => {
+    const draft = props.desktopApi?.draftAutomationPrompt;
+    if (!draft) return;
+    const description = promptDescription.trim();
+    if (!description) {
+      setPromptDraftError("Describe what you want the automation to do.");
+      return;
+    }
+    setPromptDrafting(true);
+    setPromptDraftError(undefined);
+    try {
+      const result = await draft({ description });
+      if (result.status === "generated") {
+        setTaskPrompt(result.prompt);
+        setPromptDraftOpen(false);
+        setPromptDescription("");
+        setValidationError(undefined);
+      } else if (result.status === "unavailable") {
+        setPromptDraftError(
+          "Prompt drafting needs an xAI API key (Settings > Models).",
+        );
+      } else {
+        setPromptDraftError(
+          "Couldn't draft a prompt. Try rephrasing your description.",
+        );
+      }
+    } catch (error) {
+      setPromptDraftError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPromptDrafting(false);
+    }
+  };
+
   const submit = async (): Promise<void> => {
     const trimmedName = name.trim();
     const trimmedPrompt = taskPrompt.trim();
@@ -948,9 +989,85 @@ export function AutomationEditor(props: AutomationEditorProps) {
         </div>
       ) : null}
 
-      <label className="automation-field">
-        <span>Task prompt</span>
+      <div className="automation-field automation-prompt-field">
+        <div className="automation-prompt-field__label-row">
+          <span id={promptLabelId}>Task prompt</span>
+          <div className="automation-prompt-field__tools">
+            <button
+              aria-controls={promptHelpId}
+              aria-expanded={promptHelpOpen}
+              aria-label="Prompt examples"
+              className="automation-agent-help"
+              type="button"
+              onClick={() => setPromptHelpOpen((open) => !open)}
+            >
+              <HelpCircleIcon size={14} aria-hidden="true" />
+            </button>
+            {canDraftPrompt ? (
+              <button
+                className="automation-prompt-field__draft-toggle"
+                type="button"
+                onClick={() => {
+                  setPromptDraftOpen((open) => !open);
+                  setPromptDraftError(undefined);
+                }}
+              >
+                Help me write a prompt
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {promptHelpOpen ? (
+          <div className="automation-agent-help-popover" id={promptHelpId} role="note">
+            Write what the agent should do each time it runs, addressed to the
+            agent. For example: "Investigate the Datadog alert in the incoming
+            message. Check recent error rates and deploys, then post a 3-bullet
+            summary of the likely cause and whether it is still firing."
+          </div>
+        ) : null}
+        {promptDraftOpen ? (
+          <div className="automation-prompt-draft">
+            <textarea
+              aria-label="Describe what you want the automation to do"
+              className="automation-prompt-draft__input"
+              placeholder="e.g. tell me what's wrong when Datadog alerts, and whether we've seen it before"
+              rows={2}
+              value={promptDescription}
+              onChange={(event) => {
+                setPromptDescription(event.currentTarget.value);
+                setPromptDraftError(undefined);
+              }}
+            />
+            <div className="automation-prompt-draft__actions">
+              <button
+                className="button button--primary"
+                disabled={promptDrafting}
+                type="button"
+                onClick={() => void draftPrompt()}
+              >
+                {promptDrafting ? "Drafting..." : "Draft prompt"}
+              </button>
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => {
+                  setPromptDraftOpen(false);
+                  setPromptDraftError(undefined);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            {promptDraftError ? (
+              <p className="automation-editor__error" role="alert">
+                {promptDraftError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <textarea
+          aria-labelledby={promptLabelId}
+          placeholder="Investigate the alert in the incoming message and post a short summary of the likely cause."
           rows={5}
           value={taskPrompt}
           onChange={(event) => {
@@ -958,7 +1075,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
             setValidationError(undefined);
           }}
         />
-      </label>
+      </div>
 
       <fieldset className="automation-fieldset">
         <legend>Trigger</legend>
@@ -1601,6 +1718,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
         </fieldset>
       )}
 
+      <details className="automation-advanced">
+        <summary className="automation-advanced__summary">
+          Advanced settings — model, access, tools, gate, backlog
+        </summary>
+        <p className="automation-advanced__hint">
+          Optional. Leave these alone to inherit the Agent's settings.
+        </p>
       <fieldset className="automation-fieldset">
         <legend>Execution</legend>
         <div className="automation-inline-fields automation-inline-fields--single">
@@ -1754,6 +1878,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           <option value="drop_missed">Drop missed runs</option>
         </select>
       </label>
+      </details>
 
       <label className="automation-checkbox">
         <input

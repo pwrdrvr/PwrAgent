@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import type {
   AutomationIdRequest,
+  DraftAutomationPromptRequest,
+  DraftAutomationPromptResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   ListAutomationCardsRequest,
@@ -18,6 +20,7 @@ import type {
 import {
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_DRAFT_PROMPT_CHANNEL,
   AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL,
   AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
@@ -32,6 +35,8 @@ import {
   disposeDesktopAutomationService,
   getDesktopAutomationService,
 } from "../automations/desktop-automation-service";
+import { generateAutomationPromptDraft } from "../app-server/automation-prompt-draft-service";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 export function registerAutomationIpcHandlers(): void {
   getDesktopAutomationService();
@@ -134,6 +139,26 @@ export function registerAutomationIpcHandlers(): void {
     ): Promise<GetAutomationRunArtifactResponse> =>
       await getDesktopAutomationService().getRunArtifact(request),
   );
+
+  ipcMain.removeHandler(AUTOMATIONS_DRAFT_PROMPT_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_DRAFT_PROMPT_CHANNEL,
+    async (
+      _event,
+      request: DraftAutomationPromptRequest,
+    ): Promise<DraftAutomationPromptResponse> => {
+      let apiKey: string | undefined;
+      try {
+        apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
+      } catch {
+        apiKey = undefined;
+      }
+      return await generateAutomationPromptDraft({
+        apiKey,
+        description: request.description,
+      });
+    },
+  );
 }
 
 export function disposeAutomationIpcHandlers(): void {
@@ -148,5 +173,6 @@ export function disposeAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_LIST_RUNS_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_LIST_CARDS_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL);
+  ipcMain.removeHandler(AUTOMATIONS_DRAFT_PROMPT_CHANNEL);
   disposeDesktopAutomationService();
 }
