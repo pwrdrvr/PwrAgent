@@ -553,6 +553,73 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("sends the result to a different conversation via messaging_target", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+          }),
+        )}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Datadog to ops channel" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate and report." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Group"), {
+      target: { value: "-100" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    fireEvent.change(screen.getByLabelText("Destination group"), {
+      target: { value: "__manual__" },
+    });
+    fireEvent.change(screen.getByLabelText("Destination group ID"), {
+      target: { value: "-200" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        outputActions: [
+          { id: "agent-context", kind: "agent_context" },
+          {
+            id: "messaging-target",
+            kind: "messaging_target",
+            target: {
+              channel: "telegram",
+              conversationId: "-200",
+              conversationKind: "channel",
+            },
+          },
+        ],
+      }),
+    });
+  });
+
   it("offers Agents first and regular threads on the Threads tab", async () => {
     const onSubmit = vi.fn(async () => undefined);
 

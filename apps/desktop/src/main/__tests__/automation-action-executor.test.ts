@@ -3,11 +3,13 @@ import {
   executeAutomationOutputActions,
   registerAutomationSourceMessageDeliveryHandler,
   setAutomationSourceMessageDeliveryHandler,
+  setAutomationTargetMessageDeliveryHandler,
 } from "../automations/automation-action-executor";
 import type { AutomationRunArtifact } from "@pwragent/shared";
 
 afterEach(() => {
   setAutomationSourceMessageDeliveryHandler(undefined);
+  setAutomationTargetMessageDeliveryHandler(undefined);
 });
 
 describe("executeAutomationOutputActions", () => {
@@ -165,6 +167,64 @@ describe("executeAutomationOutputActions", () => {
 
     expect(unsupported).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers messaging_target actions to an alternate conversation", async () => {
+    const deliver = vi.fn(async () => ({ ok: true, message: "presented" }));
+    setAutomationTargetMessageDeliveryHandler(deliver);
+
+    await expect(
+      executeAutomationOutputActions({
+        actions: [
+          {
+            id: "ops-channel",
+            kind: "messaging_target",
+            target: {
+              channel: "telegram",
+              conversationId: "-100999",
+              conversationKind: "channel",
+              title: "Incident Reports",
+            },
+          },
+        ],
+        artifact: artifact({
+          outputDecision: { kind: "post_card", summary: "Investigated alert." },
+        }),
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        actionId: "ops-channel",
+        kind: "messaging_target",
+        status: "completed",
+        message: "presented",
+      }),
+    ]);
+    expect(deliver).toHaveBeenCalledWith({
+      intentId: "automation-action:run-1:ops-channel",
+      target: expect.objectContaining({ conversationId: "-100999" }),
+      text: "Investigated alert.",
+    });
+  });
+
+  it("reports messaging_target unsupported when no handler is registered", async () => {
+    await expect(
+      executeAutomationOutputActions({
+        actions: [
+          {
+            id: "ops-channel",
+            kind: "messaging_target",
+            target: { channel: "telegram", conversationId: "-100999" },
+          },
+        ],
+        artifact: artifact(),
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        actionId: "ops-channel",
+        kind: "messaging_target",
+        status: "unsupported",
+      }),
+    ]);
   });
 });
 

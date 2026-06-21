@@ -67,7 +67,7 @@ type ScheduleFormKind = "interval" | "weekdays" | "weekly";
 type TriggerFormKind = "schedule" | "inbound_message";
 type OptionalExecutionMode = "" | ThreadExecutionMode;
 type AgentPickerTab = "agents" | "threads";
-type ReplyDestination = AutomationSourceMessageDestination | "none";
+type ResultMode = "reply_source" | "different" | "agent_only";
 type TelegramScope = "group" | "topic";
 
 type AgentThreadOption = {
@@ -228,13 +228,38 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
-  const [replyDestination, setReplyDestination] = useState<ReplyDestination>(
-    initialReplyDestination(initialAutomation),
+  const initialTarget = initialAutomation?.outputActions.find(
+    (action) => action.kind === "messaging_target",
   );
+  const initialTargetSnapshot =
+    initialTarget?.kind === "messaging_target" ? initialTarget.target : undefined;
+  const initialTargetIsTopic =
+    initialTargetSnapshot?.conversationKind === "topic";
+  const [resultMode, setResultMode] = useState<ResultMode>(
+    initialResultMode(initialAutomation),
+  );
+  const [replyDestination, setReplyDestination] =
+    useState<AutomationSourceMessageDestination>(
+      initialReplySubDestination(initialAutomation),
+    );
   const [sourceReplyBroadcast, setSourceReplyBroadcast] = useState(
     initialAutomation?.outputActions.some(
       (action) => action.kind === "source_message" && action.broadcast,
     ) ?? false,
+  );
+  const [destProvider, setDestProvider] = useState<MessagingChannelKind>(
+    initialTargetSnapshot?.channel ?? initialConversation?.channel ?? "telegram",
+  );
+  const [destGroupSelection, setDestGroupSelection] = useState<string>(
+    initialTargetSnapshot ? MANUAL_GROUP_VALUE : "",
+  );
+  const [destGroupId, setDestGroupId] = useState(
+    initialTargetIsTopic
+      ? initialTargetSnapshot?.parentId ?? ""
+      : initialTargetSnapshot?.conversationId ?? "",
+  );
+  const [destTopicId, setDestTopicId] = useState(
+    initialTargetIsTopic ? initialTargetSnapshot?.conversationId ?? "" : "",
   );
   const [profileCwd, setProfileCwd] = useState(
     initialAutomation?.executionProfile?.cwd ?? "",
@@ -299,6 +324,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const telegramGroups = providerGroups[inboundProvider] ?? [];
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
+  );
+  const destGroups = providerGroups[destProvider] ?? [];
+  const selectedDestGroup = destGroups.find(
+    (group) => group.id === destGroupSelection,
   );
 
   const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
@@ -648,9 +677,16 @@ export function AutomationEditor(props: AutomationEditorProps) {
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
+      resultMode,
       schedule: selectedSchedule.ok ? selectedSchedule.schedule : undefined,
       senderId: inboundSenderId,
       senderScope: inboundSenderScope,
+      target: buildDestinationSnapshot({
+        groupId: destGroupId,
+        groupTitle: selectedDestGroup?.title,
+        provider: destProvider,
+        topicId: destTopicId,
+      }),
       telegramScope,
       text: inboundText,
       textMode: inboundTextMode,
@@ -1351,34 +1387,157 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
           <div className="automation-field-group">
             <label className="automation-field">
-              <span>Reply</span>
+              <span>Where should the result go?</span>
               <select
-                value={replyDestination}
+                value={resultMode}
                 onChange={(event) => {
-                  setReplyDestination(event.currentTarget.value as ReplyDestination);
+                  setResultMode(event.currentTarget.value as ResultMode);
                   setValidationError(undefined);
                 }}
               >
-                <option value="source_thread">{replyThreadLabel(inboundProvider)}</option>
-                <option value="source_channel">{replyChannelLabel(inboundProvider)}</option>
-                <option value="none">Don't reply (Agent context only)</option>
+                <option value="reply_source">
+                  Reply where the message came from
+                </option>
+                <option value="different">Send to a different conversation</option>
+                <option value="agent_only">Only the Agent (no message back)</option>
               </select>
             </label>
             <p className="automation-field__hint">
-              The Agent thread always receives the analysis as context. This only
-              controls whether PwrAgent also posts a reply where the message
-              arrived.
+              The Agent thread always gets the analysis as context. This controls
+              whether PwrAgent also posts the result somewhere people will see it.
             </p>
           </div>
-          {replyDestination !== "none" && inboundProvider === "slack" ? (
-            <label className="automation-checkbox">
-              <input
-                checked={sourceReplyBroadcast}
-                type="checkbox"
-                onChange={(event) => setSourceReplyBroadcast(event.currentTarget.checked)}
-              />
-              <span>Also broadcast the reply to the channel</span>
-            </label>
+
+          {resultMode === "reply_source" ? (
+            <>
+              <label className="automation-field">
+                <span>Reply location</span>
+                <select
+                  value={replyDestination}
+                  onChange={(event) => {
+                    setReplyDestination(
+                      event.currentTarget.value as AutomationSourceMessageDestination,
+                    );
+                    setValidationError(undefined);
+                  }}
+                >
+                  <option value="source_thread">
+                    {replyThreadLabel(inboundProvider)}
+                  </option>
+                  <option value="source_channel">
+                    {replyChannelLabel(inboundProvider)}
+                  </option>
+                </select>
+              </label>
+              {inboundProvider === "slack" ? (
+                <label className="automation-checkbox">
+                  <input
+                    checked={sourceReplyBroadcast}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setSourceReplyBroadcast(event.currentTarget.checked)
+                    }
+                  />
+                  <span>Also broadcast the reply to the channel</span>
+                </label>
+              ) : null}
+            </>
+          ) : null}
+
+          {resultMode === "different" ? (
+            <div className="automation-field-group">
+              <div className="automation-inline-fields">
+                <label className="automation-field">
+                  <span>Destination provider</span>
+                  <select
+                    value={destProvider}
+                    onChange={(event) => {
+                      setDestProvider(
+                        event.currentTarget.value as MessagingChannelKind,
+                      );
+                      setDestGroupSelection("");
+                      setDestGroupId("");
+                      setValidationError(undefined);
+                    }}
+                  >
+                    {availableProviders.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {INBOUND_PROVIDER_LABELS[provider] ?? provider}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {destProvider === "telegram" && destGroups.length > 0 ? (
+                  <label className="automation-field">
+                    <span>Destination group</span>
+                    <select
+                      value={destGroupSelection}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setDestGroupSelection(value);
+                        setDestGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
+                        setValidationError(undefined);
+                      }}
+                    >
+                      <option value="">Choose a group</option>
+                      {destGroups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.title}
+                        </option>
+                      ))}
+                      <option value={MANUAL_GROUP_VALUE}>
+                        Enter group ID manually...
+                      </option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+              {destProvider === "telegram" ? (
+                destGroups.length === 0 ||
+                destGroupSelection === MANUAL_GROUP_VALUE ? (
+                  <label className="automation-field">
+                    <span>Destination group ID</span>
+                    <input
+                      placeholder="-1001234567890"
+                      value={destGroupId}
+                      onChange={(event) => {
+                        setDestGroupId(event.currentTarget.value);
+                        setValidationError(undefined);
+                      }}
+                    />
+                  </label>
+                ) : null
+              ) : (
+                <label className="automation-field">
+                  <span>Destination {conversationLabel(destProvider).toLowerCase()}</span>
+                  <input
+                    placeholder={conversationPlaceholder(destProvider)}
+                    value={destGroupId}
+                    onChange={(event) => {
+                      setDestGroupId(event.currentTarget.value);
+                      setValidationError(undefined);
+                    }}
+                  />
+                </label>
+              )}
+              {destProvider === "telegram" ? (
+                <label className="automation-field">
+                  <span>Destination topic ID (optional)</span>
+                  <input
+                    placeholder="42"
+                    value={destTopicId}
+                    onChange={(event) => {
+                      setDestTopicId(event.currentTarget.value);
+                      setValidationError(undefined);
+                    }}
+                  />
+                </label>
+              ) : null}
+              <p className="automation-field__hint">
+                The result is posted here instead of back where the trigger
+                fired.
+              </p>
+            </div>
           ) : null}
 
           {canPreview ? (
@@ -1884,10 +2043,12 @@ function buildTriggerConfig(params: {
   groupTitle?: string;
   includeThreadReplies: boolean;
   provider: MessagingChannelKind;
-  replyDestination: ReplyDestination;
+  replyDestination: AutomationSourceMessageDestination;
+  resultMode: ResultMode;
   schedule?: AutomationScheduleDefinition;
   senderId: string;
   senderScope: "" | "true" | "false";
+  target?: AutomationMessagingConversationSnapshot;
   telegramScope: TelegramScope;
   text: string;
   textMode: AutomationInboundTextMatchMode;
@@ -1944,6 +2105,12 @@ function buildTriggerConfig(params: {
       ok: false,
     };
   }
+  if (params.resultMode === "different" && !params.target) {
+    return {
+      error: "Choose where to send the result, or pick a different option.",
+      ok: false,
+    };
+  }
 
   const conversation: AutomationMessagingConversationSnapshot = isTopic
     ? {
@@ -1974,12 +2141,18 @@ function buildTriggerConfig(params: {
   const outputActions: NonNullable<CreateAutomationRequest["outputActions"]> = [
     { id: "agent-context", kind: "agent_context" },
   ];
-  if (params.replyDestination !== "none") {
+  if (params.resultMode === "reply_source") {
     outputActions.push({
       broadcast: params.broadcast,
       destination: params.replyDestination,
       id: "source-thread-reply",
       kind: "source_message",
+    });
+  } else if (params.resultMode === "different" && params.target) {
+    outputActions.push({
+      id: "messaging-target",
+      kind: "messaging_target",
+      target: params.target,
     });
   }
 
@@ -2036,14 +2209,53 @@ function replyChannelLabel(provider: MessagingChannelKind): string {
   return "Reply in the channel";
 }
 
-function initialReplyDestination(
+function initialResultMode(automation: AutomationDetail | undefined): ResultMode {
+  if (!automation) return "reply_source";
+  const actions = automation.outputActions;
+  if (actions.some((action) => action.kind === "messaging_target")) {
+    return "different";
+  }
+  if (actions.some((action) => action.kind === "source_message")) {
+    return "reply_source";
+  }
+  return "agent_only";
+}
+
+function initialReplySubDestination(
   automation: AutomationDetail | undefined,
-): ReplyDestination {
-  if (!automation) return "source_thread";
-  const source = automation.outputActions.find(
+): AutomationSourceMessageDestination {
+  const source = automation?.outputActions.find(
     (action) => action.kind === "source_message",
   );
-  return source && source.kind === "source_message" ? source.destination : "none";
+  return source && source.kind === "source_message"
+    ? source.destination
+    : "source_thread";
+}
+
+function buildDestinationSnapshot(params: {
+  groupId: string;
+  groupTitle?: string;
+  provider: MessagingChannelKind;
+  topicId: string;
+}): AutomationMessagingConversationSnapshot | undefined {
+  const groupId = params.groupId.trim();
+  if (!groupId) return undefined;
+  const topicId = params.topicId.trim();
+  if (params.provider === "telegram" && topicId) {
+    return {
+      channel: params.provider,
+      conversationId: topicId,
+      conversationKind: "topic",
+      parentId: groupId,
+      ...(params.groupTitle ? { parentTitle: params.groupTitle } : {}),
+    };
+  }
+  return {
+    channel: params.provider,
+    conversationId: groupId,
+    conversationKind: "channel",
+    ...(params.groupTitle ? { title: params.groupTitle } : {}),
+  };
 }
 
 function readEnabledProviders(

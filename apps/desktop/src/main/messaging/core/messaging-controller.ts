@@ -15,6 +15,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
+  AutomationMessagingConversationSnapshot,
   AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
@@ -223,7 +224,10 @@ import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,
 } from "../../automations/automation-output-decision.js";
-import { registerAutomationSourceMessageDeliveryHandler } from "../../automations/automation-action-executor.js";
+import {
+  registerAutomationSourceMessageDeliveryHandler,
+  registerAutomationTargetMessageDeliveryHandler,
+} from "../../automations/automation-action-executor.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -653,6 +657,7 @@ export class MessagingController {
     PendingQueueAuditMessage
   >();
   private readonly unregisterAutomationSourceMessageDeliveryHandler: () => void;
+  private readonly unregisterAutomationTargetMessageDeliveryHandler: () => void;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -680,6 +685,10 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler =
       registerAutomationSourceMessageDeliveryHandler((params) =>
         this.deliverAutomationSourceMessage(params),
+      );
+    this.unregisterAutomationTargetMessageDeliveryHandler =
+      registerAutomationTargetMessageDeliveryHandler((params) =>
+        this.deliverAutomationTargetMessage(params),
       );
   }
 
@@ -834,6 +843,71 @@ export class MessagingController {
           sourceRelative: params.destination,
           broadcastThreadReply: params.broadcast,
         },
+        parts: [
+          {
+            type: "text",
+            text: params.text,
+            markdown: "markdown",
+          },
+        ],
+      },
+      undefined,
+      event,
+    );
+    return {
+      ok:
+        result.outcome === "presented" ||
+        result.outcome === "presented_new" ||
+        result.outcome === "updated" ||
+        result.outcome === "signaled",
+      unsupported: result.outcome === "unsupported",
+      message: result.outcome,
+      errorMessage: result.errorMessage,
+    };
+  }
+
+  /**
+   * Deliver an automation result to an operator-chosen conversation that may
+   * differ from (or have no) inbound source. Routed to the controller whose
+   * provider matches the target; others report unsupported so the executor can
+   * try the next registered handler.
+   */
+  async deliverAutomationTargetMessage(params: {
+    intentId: string;
+    target: AutomationMessagingConversationSnapshot;
+    text: string;
+  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
+    if (this.options.channel && this.options.channel !== params.target.channel) {
+      return {
+        ok: false,
+        unsupported: true,
+        errorMessage: "Messaging target belongs to another provider.",
+      };
+    }
+    const event: MessagingInboundTextEvent = {
+      id: params.intentId,
+      kind: "text",
+      actor: { platformUserId: "pwragent-automation", isBot: true },
+      channel: {
+        channel: params.target.channel,
+        conversation: {
+          id: params.target.conversationId,
+          kind: params.target.conversationKind ?? "channel",
+          parentId: params.target.parentId,
+          title: params.target.title,
+          parentTitle: params.target.parentTitle,
+          ancestorTitle: params.target.ancestorTitle,
+        },
+      },
+      receivedAt: this.now(),
+      text: "",
+    };
+    const result = await this.deliver(
+      {
+        id: params.intentId,
+        kind: "message",
+        createdAt: this.now(),
+        role: "assistant",
         parts: [
           {
             type: "text",
@@ -3594,6 +3668,7 @@ export class MessagingController {
   dispose(): void {
     this.disposed = true;
     this.unregisterAutomationSourceMessageDeliveryHandler();
+    this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);

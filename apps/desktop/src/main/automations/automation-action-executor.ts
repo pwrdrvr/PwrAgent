@@ -20,7 +20,17 @@ export type AutomationSourceMessageDeliveryHandler = (params: {
   text: string;
 }) => Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }>;
 
+export type AutomationTargetMessageDeliveryHandler = (params: {
+  intentId: string;
+  target: Extract<
+    AutomationOutputActionDefinition,
+    { kind: "messaging_target" }
+  >["target"];
+  text: string;
+}) => Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }>;
+
 const sourceMessageDeliveryHandlers = new Set<AutomationSourceMessageDeliveryHandler>();
+const targetMessageDeliveryHandlers = new Set<AutomationTargetMessageDeliveryHandler>();
 
 export function registerAutomationSourceMessageDeliveryHandler(
   handler: AutomationSourceMessageDeliveryHandler,
@@ -37,6 +47,24 @@ export function setAutomationSourceMessageDeliveryHandler(
   sourceMessageDeliveryHandlers.clear();
   if (handler) {
     sourceMessageDeliveryHandlers.add(handler);
+  }
+}
+
+export function registerAutomationTargetMessageDeliveryHandler(
+  handler: AutomationTargetMessageDeliveryHandler,
+): () => void {
+  targetMessageDeliveryHandlers.add(handler);
+  return () => {
+    targetMessageDeliveryHandlers.delete(handler);
+  };
+}
+
+export function setAutomationTargetMessageDeliveryHandler(
+  handler: AutomationTargetMessageDeliveryHandler | undefined,
+): void {
+  targetMessageDeliveryHandlers.clear();
+  if (handler) {
+    targetMessageDeliveryHandlers.add(handler);
   }
 }
 
@@ -66,9 +94,38 @@ export async function executeAutomationOutputActions(params: {
       continue;
     }
     if (action.kind === "messaging_target") {
-      results.push(resultFor(action, "unsupported", {
-        errorMessage: "Alternate messaging targets are not supported yet.",
-      }));
+      if (targetMessageDeliveryHandlers.size === 0) {
+        results.push(resultFor(action, "unsupported", {
+          errorMessage: "Alternate messaging target delivery is not available.",
+        }));
+        continue;
+      }
+      const text = renderActionMessage(params.artifact);
+      if (!text) {
+        results.push(resultFor(action, "skipped", {
+          message: "No user-visible automation output to deliver.",
+        }));
+        continue;
+      }
+      const attemptedAt = Date.now();
+      const delivery = await deliverTargetMessage({
+        intentId: `automation-action:${params.artifact.runId}:${action.id}`,
+        target: action.target,
+        text,
+      });
+      results.push({
+        actionId: action.id,
+        kind: action.kind,
+        status: delivery.ok
+          ? "completed"
+          : delivery.unsupported
+            ? "unsupported"
+            : "failed",
+        attemptedAt,
+        completedAt: delivery.ok ? Date.now() : undefined,
+        message: delivery.message,
+        errorMessage: delivery.errorMessage,
+      });
       continue;
     }
     if (!params.source) {
@@ -132,6 +189,26 @@ async function deliverSourceMessage(
     ok: false,
     unsupported: true,
     errorMessage: "Source-message delivery is not available.",
+  };
+}
+
+async function deliverTargetMessage(
+  params: Parameters<AutomationTargetMessageDeliveryHandler>[0],
+): ReturnType<AutomationTargetMessageDeliveryHandler> {
+  let unsupported:
+    | Awaited<ReturnType<AutomationTargetMessageDeliveryHandler>>
+    | undefined;
+  for (const handler of targetMessageDeliveryHandlers) {
+    const result = await handler(params);
+    if (result.ok || !result.unsupported) {
+      return result;
+    }
+    unsupported = result;
+  }
+  return unsupported ?? {
+    ok: false,
+    unsupported: true,
+    errorMessage: "Alternate messaging target delivery is not available.",
   };
 }
 
