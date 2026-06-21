@@ -497,6 +497,50 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("ignores a redelivered inbound event with the same source-event key", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+
+    const source = {
+      kind: "messaging" as const,
+      sourceEventKey: "slack:C123:1::B123",
+      receivedAt: 1_000,
+      matchedTriggerId: "datadog-error",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR first" },
+    };
+
+    now = 1_000;
+    const first = await scheduler.runFromInboundEvent({ automation, source, now });
+    now = 1_500;
+    const redelivered = await scheduler.runFromInboundEvent({
+      automation,
+      source,
+      now,
+    });
+
+    expect(first).toBeDefined();
+    expect(redelivered).toBeUndefined();
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+    expect(queue.submitted).toHaveLength(1);
+  });
+
   it("includes successful gate output in the automation run prompt", async () => {
     createIntervalAutomation({
       backend: "codex",

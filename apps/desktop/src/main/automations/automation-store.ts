@@ -524,6 +524,20 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
+  findRunBySourceEventKey(params: {
+    automationId: string;
+    sourceEventKey: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND source_event_key = ? ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(params.automationId, params.sourceEventKey) as
+      | AutomationRunRow
+      | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
@@ -941,8 +955,9 @@ export class AutomationStore {
           queue_entry_id,
           created_at,
           updated_at,
+          source_event_key,
           payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_id) DO UPDATE SET
           status = excluded.status,
           scheduled_for = excluded.scheduled_for,
@@ -952,6 +967,7 @@ export class AutomationStore {
           backend_turn_id = excluded.backend_turn_id,
           queue_entry_id = excluded.queue_entry_id,
           updated_at = excluded.updated_at,
+          source_event_key = excluded.source_event_key,
           payload = excluded.payload`,
       )
       .run(
@@ -969,6 +985,7 @@ export class AutomationStore {
         metadata.queueEntryId ?? null,
         metadata.createdAt,
         metadata.updatedAt,
+        run.source?.sourceEventKey ?? null,
         JSON.stringify(payload),
       );
   }

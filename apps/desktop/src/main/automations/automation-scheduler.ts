@@ -95,6 +95,16 @@ export class AutomationScheduler {
     now?: number;
   }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const now = params.now ?? this.now();
+    // Idempotency: a provider can redeliver the same event (slow ack, retry).
+    // If a run already exists for this stable source-event key, skip rather than
+    // launch a duplicate headless run and re-post its actions.
+    const existing = this.options.store.findRunBySourceEventKey({
+      automationId: params.automation.id,
+      sourceEventKey: params.source.sourceEventKey,
+    });
+    if (existing) {
+      return undefined;
+    }
     const active = this.options.store.findActiveRunForAutomation(params.automation.id);
     const run = this.options.store.createRun({
       automationId: params.automation.id,
