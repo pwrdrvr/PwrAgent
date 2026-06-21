@@ -34,7 +34,10 @@ import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
-import { executeAutomationOutputActions } from "./automation-action-executor.js";
+import {
+  buildPendingDeliveryActionResults,
+  executeAutomationOutputActions,
+} from "./automation-action-executor.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
@@ -604,6 +607,34 @@ export class DesktopAutomationService {
         ),
       });
       if (artifact && automation) {
+        // Persist in-flight markers for delivery actions BEFORE posting, so a
+        // crash mid-delivery leaves a "pending" marker that prevents a
+        // duplicate post on restart. We still execute with `artifact` (which
+        // does not carry these just-written markers) so the first attempt
+        // posts normally; only a re-entry sees the persisted "pending".
+        const pendingResults = buildPendingDeliveryActionResults(
+          automation.outputActions,
+          artifact.actionResults ?? [],
+        );
+        if (pendingResults.length > 0) {
+          const pendingIds = new Set(
+            pendingResults.map((result) => result.actionId),
+          );
+          this.options.store.upsertRunArtifact({
+            runId: run.id,
+            status: run.status,
+            finalText: artifact.finalText,
+            errorMessage: artifact.errorMessage,
+            outputDecision: artifact.outputDecision,
+            actionResults: [
+              ...(artifact.actionResults ?? []).filter(
+                (result) => !pendingIds.has(result.actionId),
+              ),
+              ...pendingResults,
+            ],
+            transcriptEvents: artifact.transcriptEvents,
+          });
+        }
         const actionResults = await executeAutomationOutputActions({
           actions: automation.outputActions,
           artifact,

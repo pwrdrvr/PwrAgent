@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildPendingDeliveryActionResults,
   executeAutomationOutputActions,
   registerAutomationSourceMessageDeliveryHandler,
   setAutomationSourceMessageDeliveryHandler,
@@ -204,6 +205,66 @@ describe("executeAutomationOutputActions", () => {
       target: expect.objectContaining({ conversationId: "-100999" }),
       text: "Investigated alert.",
     });
+  });
+
+  it("does not re-post a delivery action left pending by a prior attempt", async () => {
+    const deliver = vi.fn(async () => ({ ok: true, message: "presented" }));
+    setAutomationSourceMessageDeliveryHandler(deliver);
+
+    await expect(
+      executeAutomationOutputActions({
+        actions: [
+          { id: "slack-thread", kind: "source_message", destination: "source_thread" },
+        ],
+        artifact: artifact({
+          actionResults: [
+            {
+              actionId: "slack-thread",
+              kind: "source_message",
+              status: "pending",
+              attemptedAt: 1_500,
+            },
+          ],
+        }),
+        source: {
+          kind: "messaging",
+          sourceEventKey: "slack:C123:171::B123",
+          receivedAt: 1_000,
+          matchedTriggerId: "datadog-error",
+          actor: { platformUserId: "B123", isBot: true },
+          conversation: { channel: "slack", conversationId: "C123" },
+        },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ actionId: "slack-thread", status: "pending" }),
+    ]);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("builds pending markers only for fresh delivery actions", () => {
+    const pending = buildPendingDeliveryActionResults(
+      [
+        { id: "agent-context", kind: "agent_context" },
+        { id: "reply", kind: "source_message", destination: "source_thread" },
+        {
+          id: "ops",
+          kind: "messaging_target",
+          target: { channel: "telegram", conversationId: "-100" },
+        },
+        { id: "done", kind: "source_message", destination: "source_channel" },
+      ],
+      [
+        {
+          actionId: "done",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 1,
+        },
+      ],
+    );
+
+    expect(pending.map((result) => result.actionId)).toEqual(["reply", "ops"]);
+    expect(pending.every((result) => result.status === "pending")).toBe(true);
   });
 
   it("reports messaging_target unsupported when no handler is registered", async () => {

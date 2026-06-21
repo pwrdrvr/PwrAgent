@@ -83,7 +83,11 @@ export async function executeAutomationOutputActions(params: {
       continue;
     }
     const previous = existing.get(action.id);
-    if (previous?.status === "completed") {
+    // "completed" → already delivered. "pending" → a prior attempt persisted an
+    // in-flight marker and the process restarted before recording the outcome;
+    // do not blindly re-post (favor no-duplicate over guaranteed delivery). The
+    // analysis is still preserved via the artifact/agent_context.
+    if (previous?.status === "completed" || previous?.status === "pending") {
       results.push(previous);
       continue;
     }
@@ -170,6 +174,38 @@ export async function executeAutomationOutputActions(params: {
     });
   }
   return results;
+}
+
+/**
+ * Build "pending" (in-flight) markers for delivery actions that haven't already
+ * reached a terminal/pending state. Persisted BEFORE the provider post so a
+ * crash mid-delivery leaves a marker that fences re-posting on restart.
+ * Only network-delivery actions need this; agent_context completes locally.
+ */
+export function buildPendingDeliveryActionResults(
+  actions: AutomationOutputActionDefinition[],
+  existing: AutomationOutputActionResult[],
+): AutomationOutputActionResult[] {
+  const byId = new Map(existing.map((result) => [result.actionId, result]));
+  const now = Date.now();
+  const pending: AutomationOutputActionResult[] = [];
+  for (const action of actions) {
+    if (action.enabled === false) continue;
+    if (action.kind !== "source_message" && action.kind !== "messaging_target") {
+      continue;
+    }
+    const previous = byId.get(action.id);
+    if (previous?.status === "completed" || previous?.status === "pending") {
+      continue;
+    }
+    pending.push({
+      actionId: action.id,
+      kind: action.kind,
+      status: "pending",
+      attemptedAt: now,
+    });
+  }
+  return pending;
 }
 
 async function deliverSourceMessage(
