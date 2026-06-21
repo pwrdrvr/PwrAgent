@@ -596,6 +596,114 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("emits only an Agent-context action for agent-only result mode", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+          }),
+        )}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Quiet incident memory" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Record the incident for later." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "agent_only" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        outputActions: [{ id: "agent-context", kind: "agent_context" }],
+      }),
+    });
+  });
+
+  it("clears a stale topic when the group changes", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const desktopApi = {
+      readSettings: async () =>
+        fakeSettings({
+          enabled: { telegram: true },
+          telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+        }),
+      listInboundTopics: async () => ({
+        topics: [{ id: "42", title: "Incidents" }],
+      }),
+    } as unknown as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Topic reset" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Topic"), { target: { value: "42" } });
+    // Switch the group to manual entry — the previously chosen topic must clear.
+    fireEvent.change(screen.getByLabelText("Group"), {
+      target: { value: "__manual__" },
+    });
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-200" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // Topic was cleared, so submit is blocked rather than sending a stale topic.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Enter a topic ID or switch to Whole group.",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("sends the result to a different conversation via messaging_target", async () => {
     const onSubmit = vi.fn(async () => undefined);
 

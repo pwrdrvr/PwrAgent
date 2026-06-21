@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
@@ -191,6 +191,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const promptHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
   const canDraftPrompt = Boolean(props.desktopApi?.draftAutomationPrompt);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (validationError && typeof errorRef.current?.scrollIntoView === "function") {
+      errorRef.current.scrollIntoView({ block: "center" });
+    }
+  }, [validationError]);
   const [triggerKind, setTriggerKind] = useState<TriggerFormKind>(
     initialInboundTrigger ? "inbound_message" : "schedule",
   );
@@ -1215,6 +1221,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   );
                   setGroupSelection("");
                   setInboundGroupId("");
+                  setTopicSelection("");
+                  setInboundTopicId("");
                   setValidationError(undefined);
                 }}
               >
@@ -1234,6 +1242,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     const value = event.currentTarget.value;
                     setGroupSelection(value);
                     setInboundGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
+                    setTopicSelection("");
+                    setInboundTopicId("");
                     setValidationError(undefined);
                   }}
                 >
@@ -1574,6 +1584,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       );
                       setDestGroupSelection("");
                       setDestGroupId("");
+                      setDestTopicId("");
                       setValidationError(undefined);
                     }}
                   >
@@ -1890,7 +1901,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       </label>
 
       {validationError ? (
-        <p className="automation-editor__error" role="alert">
+        <p className="automation-editor__error" ref={errorRef} role="alert">
           {validationError}
         </p>
       ) : null}

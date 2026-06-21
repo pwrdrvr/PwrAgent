@@ -11944,7 +11944,7 @@ textarea,
   margin: 0;
   padding: 8px;
   border-radius: 6px;
-  background: var(--bg-elevated, var(--bg-app));
+  background: var(--bg-panel-elevated);
   color: var(--text-primary);
   font-family: var(--font-mono, monospace);
   font-size: 12px;
@@ -12016,14 +12016,14 @@ textarea,
   align-items: baseline;
   padding: 6px 8px;
   border-radius: 6px;
-  background: var(--bg-elevated, var(--bg-app));
+  background: var(--bg-panel-elevated);
   font-size: 12px;
   font-weight: 400;
 }
 
 .automation-preview__item.is-match {
   border: 1px solid var(--accent-border, var(--accent));
-  background: var(--accent-surface, var(--bg-app));
+  background: var(--accent-soft);
 }
 
 .automation-preview__sender {

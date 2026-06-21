@@ -67,6 +67,7 @@ import {
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import {
+  resetInboundPreview,
   setInboundPreviewSink,
   startInboundPreview,
   stopInboundPreview,
@@ -506,13 +507,18 @@ export function registerMessagingStatusIpcHandlers(): void {
   ipcMain.handle(
     MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
     async (
-      _event,
+      event,
       request: StartInboundPreviewRequest,
     ): Promise<StartInboundPreviewResponse> => {
       startInboundPreview(request.subscriptionId, {
         conversationId: request.conversationId,
         provider: request.provider,
         ...(request.parentId ? { parentId: request.parentId } : {}),
+      });
+      // Reap the scope if the renderer goes away without sending stop (window
+      // close, reload, or crash) so it can't keep matching forever.
+      event.sender.once("destroyed", () => {
+        stopInboundPreview(request.subscriptionId);
       });
       // Best-effort history backfill (Slack today). Pushed through the same
       // preview event channel as live messages, oldest-first, so the renderer
