@@ -75,6 +75,29 @@ describe("RemoteWindowBadge", () => {
     );
   });
 
+  it("shows a pending status dot while the peer is connecting", async () => {
+    setRemoteTarget("client_connecting_01");
+    setDesktopApi({
+      readFederationHealth: vi.fn(async () => ({
+        health: healthWithPeer({
+          id: "client_connecting_01",
+          label: "Laptop",
+          role: "client",
+          status: "connecting",
+          capabilities: [],
+        }),
+      })),
+    });
+
+    render(<RemoteWindowBadge />);
+
+    expect(await screen.findByText("Laptop")).toBeInTheDocument();
+    const dot = document.querySelector(".remote-window-badge__dot");
+    await waitFor(() =>
+      expect(dot).toHaveClass("remote-window-badge__dot--pending"),
+    );
+  });
+
   it("falls back to a down dot and short id when the peer is absent from health", async () => {
     setRemoteTarget("client_absent_peer_0123456789");
     setDesktopApi({
