@@ -491,17 +491,31 @@ function extractThreadIdFromNotification(
   );
 }
 
-function extractGeneratedTitleObject(value: unknown): unknown | undefined {
+type StructuredRecordPredicate = (record: Record<string, unknown>) => boolean;
+
+const TITLE_RECORD_PREDICATE: StructuredRecordPredicate = (record) =>
+  isThreadTitleObject(record);
+
+/**
+ * Locate the structured-output record in a helper-turn result tree. The shape
+ * is identified by a caller-supplied predicate (a `{title}` record for title
+ * generation, an arbitrary-schema record for other one-shots), so the same
+ * extraction serves both title generation and generic structured output.
+ */
+function findStructuredRecord(
+  value: unknown,
+  isMatch: StructuredRecordPredicate,
+): Record<string, unknown> | undefined {
   if (typeof value === "string") {
-    const parsed = parseStructuredValue(value);
-    return isThreadTitleObject(parsed) ? parsed : undefined;
+    const record = asRecord(parseStructuredValue(value));
+    return record && isMatch(record) ? record : undefined;
   }
 
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const object = extractGeneratedTitleObject(entry);
-      if (object) {
-        return object;
+      const found = findStructuredRecord(entry, isMatch);
+      if (found) {
+        return found;
       }
     }
     return undefined;
@@ -511,8 +525,8 @@ function extractGeneratedTitleObject(value: unknown): unknown | undefined {
   if (!record) {
     return undefined;
   }
-  if (isThreadTitleObject(record)) {
-    return { title: record.title };
+  if (isMatch(record)) {
+    return record;
   }
 
   for (const key of [
@@ -527,9 +541,9 @@ function extractGeneratedTitleObject(value: unknown): unknown | undefined {
     "result",
     "data",
   ]) {
-    const object = extractGeneratedTitleObject(record[key]);
-    if (object) {
-      return object;
+    const found = findStructuredRecord(record[key], isMatch);
+    if (found) {
+      return found;
     }
   }
 
@@ -5376,6 +5390,11 @@ export class CodexAppServerClient {
   private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
   private readonly helperTurnTitleObjects = new Map<string, unknown>();
   private readonly helperTurnTokenUsage = new Map<string, unknown>();
+  /** Per-helper-thread output-shape predicate (defaults to the title shape). */
+  private readonly helperThreadPredicates = new Map<
+    string,
+    StructuredRecordPredicate
+  >();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -5486,6 +5505,7 @@ export class CodexAppServerClient {
     this.completedHelperTurnResults.clear();
     this.helperTurnTitleObjects.clear();
     this.helperTurnTokenUsage.clear();
+    this.helperThreadPredicates.clear();
     await this.connection.close();
   }
 
@@ -5633,6 +5653,8 @@ export class CodexAppServerClient {
       return;
     }
 
+    const predicate =
+      this.helperThreadPredicates.get(threadId) ?? TITLE_RECORD_PREDICATE;
     const key = buildHelperTurnKey(threadId, turnId);
     if (method === "thread/tokenUsage/updated") {
       const tokenUsage = readHelperTokenUsage(notification.params);
@@ -5642,7 +5664,7 @@ export class CodexAppServerClient {
       return;
     }
     if (method === "item/completed") {
-      const object = extractGeneratedTitleObject(notification.params);
+      const object = findStructuredRecord(notification.params, predicate);
       if (object) {
         this.helperTurnTitleObjects.set(key, object);
       }
@@ -5668,7 +5690,7 @@ export class CodexAppServerClient {
     }
 
     const object =
-      extractGeneratedTitleObject(notification.params) ??
+      findStructuredRecord(notification.params, predicate) ??
       this.helperTurnTitleObjects.get(key);
     const tokenUsage =
       readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
@@ -6262,6 +6284,34 @@ export class CodexAppServerClient {
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    return await this.runHelperStructuredTurn({
+      prompt: params.prompt,
+      schema: params.schema,
+      isMatch: TITLE_RECORD_PREDICATE,
+      timeoutMs: params.timeoutMs,
+    });
+  }
+
+  /**
+   * Run a single ephemeral helper turn that returns a structured object of an
+   * arbitrary schema (e.g. drafting an automation prompt). Mirrors the title
+   * generation path; the output record is identified by `isMatch`.
+   */
+  async generateStructuredObject(params: {
+    prompt: string;
+    schema: Record<string, unknown>;
+    isMatch: StructuredRecordPredicate;
+    timeoutMs?: number;
+  }): Promise<ThreadTitleAdapterResult> {
+    return await this.runHelperStructuredTurn(params);
+  }
+
+  private async runHelperStructuredTurn(params: {
+    prompt: string;
+    schema: Record<string, unknown>;
+    isMatch: StructuredRecordPredicate;
+    timeoutMs?: number;
+  }): Promise<ThreadTitleAdapterResult> {
     await this.ensureInitialized();
 
     let helperThreadId: string | undefined;
@@ -6313,6 +6363,7 @@ export class CodexAppServerClient {
         };
       }
       this.helperThreadIds.add(helperThreadId);
+      this.helperThreadPredicates.set(helperThreadId, params.isMatch);
 
       const turnStartResult = await requestWithFallbacks({
         client: this.connection,
@@ -6336,7 +6387,7 @@ export class CodexAppServerClient {
         ],
         timeoutMs,
       });
-      const immediateObject = extractGeneratedTitleObject(turnStartResult);
+      const immediateObject = findStructuredRecord(turnStartResult, params.isMatch);
       if (immediateObject) {
         const immediateTurnId = extractTurnIdFromValue(turnStartResult);
         const tokenUsage = readHelperTokenUsage(turnStartResult);
@@ -6382,6 +6433,10 @@ export class CodexAppServerClient {
         status: "failed",
         reason: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      if (helperThreadId) {
+        this.helperThreadPredicates.delete(helperThreadId);
+      }
     }
   }
 

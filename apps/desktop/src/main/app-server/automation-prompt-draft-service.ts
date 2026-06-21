@@ -1,10 +1,3 @@
-import {
-  XaiEphemeralObjectCaller,
-  type XaiObjectClientLike,
-} from "./ephemeral-object-call";
-
-export const AUTOMATION_PROMPT_DRAFT_VERSION = "automation-prompt-draft-v1";
-const DEFAULT_MODEL = "grok-4-1-fast-non-reasoning";
 const TIMEOUT_MS = 20_000;
 const MAX_PROMPT_CHARS = 4_000;
 
@@ -39,49 +32,42 @@ export type AutomationPromptDraftResult =
   | { status: "generated"; prompt: string }
   | { status: "unavailable" | "invalid" | "failed"; reason: string };
 
-export type GenerateAutomationPromptDraftParams = {
-  apiKey?: string;
-  client?: XaiObjectClientLike;
-  description: string;
-  model?: string;
-  timeoutMs?: number;
-};
-
 /**
- * One-shot "help me write a prompt" drafter. Reuses the ephemeral xAI object
- * caller (the same path as thread-title generation) so it stays a single
- * non-streaming completion. Returns `unavailable` (not an error) when no xAI
- * key is configured so the UI can degrade gracefully.
+ * Provider-agnostic structured one-shot. Supplied by the backend registry so
+ * drafting runs on the operator's configured backend (Codex/Grok), not a
+ * hardcoded provider.
  */
-export async function generateAutomationPromptDraft(
-  params: GenerateAutomationPromptDraftParams,
-): Promise<AutomationPromptDraftResult> {
+export type StructuredGenerator = (request: {
+  system: string;
+  prompt: string;
+  schema: Record<string, unknown>;
+  schemaName?: string;
+  timeoutMs?: number;
+}) => Promise<
+  { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
+>;
+
+export async function generateAutomationPromptDraft(params: {
+  description: string;
+  generate: StructuredGenerator;
+}): Promise<AutomationPromptDraftResult> {
   const description = params.description.trim();
   if (!description) {
     return { status: "invalid", reason: "empty_description" };
   }
 
-  const caller = new XaiEphemeralObjectCaller({
-    apiKey: params.apiKey,
-    client: params.client,
-    model: params.model ?? DEFAULT_MODEL,
-  });
-
-  const result = await caller.generateObject({
-    model: params.model ?? DEFAULT_MODEL,
-    promptCacheKey: AUTOMATION_PROMPT_DRAFT_VERSION,
-    schema: RESPONSE_SCHEMA,
-    schemaName: "automation_prompt",
+  const result = await params.generate({
     system: SYSTEM_PROMPT,
     prompt: description,
-    timeoutMs: params.timeoutMs ?? TIMEOUT_MS,
+    schema: RESPONSE_SCHEMA,
+    schemaName: "automation_prompt",
+    timeoutMs: TIMEOUT_MS,
   });
-
   if (result.status !== "ok") {
     return result;
   }
 
-  const object = result.response.object;
+  const object = result.object;
   const prompt =
     object && typeof object === "object" && !Array.isArray(object)
       ? (object as { prompt?: unknown }).prompt
@@ -93,8 +79,5 @@ export async function generateAutomationPromptDraft(
   if (!cleaned) {
     return { status: "invalid", reason: "prompt_empty" };
   }
-  if (cleaned.length > MAX_PROMPT_CHARS) {
-    return { status: "generated", prompt: cleaned.slice(0, MAX_PROMPT_CHARS) };
-  }
-  return { status: "generated", prompt: cleaned };
+  return { status: "generated", prompt: cleaned.slice(0, MAX_PROMPT_CHARS) };
 }

@@ -36,7 +36,7 @@ import {
   getDesktopAutomationService,
 } from "../automations/desktop-automation-service";
 import { generateAutomationPromptDraft } from "../app-server/automation-prompt-draft-service";
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 
 export function registerAutomationIpcHandlers(): void {
   getDesktopAutomationService();
@@ -147,15 +147,10 @@ export function registerAutomationIpcHandlers(): void {
       _event,
       request: DraftAutomationPromptRequest,
     ): Promise<DraftAutomationPromptResponse> => {
-      let apiKey: string | undefined;
-      try {
-        apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
-      } catch {
-        apiKey = undefined;
-      }
+      const registry = getDesktopBackendRegistry();
       return await generateAutomationPromptDraft({
-        apiKey,
         description: request.description,
+        generate: (req) => registry.generateStructuredObject(req),
       });
     },
   );

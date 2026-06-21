@@ -673,7 +673,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         setValidationError(undefined);
       } else if (result.status === "unavailable") {
         setPromptDraftError(
-          "Prompt drafting needs an xAI API key (Settings > Models).",
+          "Prompt drafting isn't available for your configured agent backend. Write the prompt manually or see the example.",
         );
       } else {
         setPromptDraftError(

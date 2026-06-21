@@ -309,6 +309,7 @@ import {
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
+import { XaiEphemeralObjectCaller } from "./ephemeral-object-call";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -457,6 +458,12 @@ type BackendClient = {
     } | null;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
+  generateStructuredObject?(params: {
+    prompt: string;
+    schema: Record<string, unknown>;
+    isMatch: (record: Record<string, unknown>) => boolean;
+    timeoutMs?: number;
+  }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -4488,6 +4495,23 @@ function launchpadDefaultsEqual(
     left.fastMode === right.fastMode &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {})
   );
+}
+
+function schemaRequiredKeys(schema: Record<string, unknown>): string[] {
+  const required = schema.required;
+  if (Array.isArray(required)) {
+    return required.filter((key): key is string => typeof key === "string");
+  }
+  const properties = schema.properties;
+  if (properties && typeof properties === "object") {
+    return Object.keys(properties as Record<string, unknown>);
+  }
+  return [];
+}
+
+function isNonEmptyStructuredValue(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== undefined && value !== null;
 }
 
 function resolveGrokApiKeyForLiveClient(): string | undefined {
@@ -11034,6 +11058,59 @@ export class DesktopBackendRegistry {
     }
 
     return resolveModelSettingsFromOptions(backend, launchpadOptions, settings);
+  }
+
+  /**
+   * One-shot structured generation using the operator's configured backend
+   * (launchpad default), reusing the existing per-backend one-shot paths. Codex
+   * runs an ephemeral helper turn; Grok uses the xAI ephemeral caller. Backends
+   * without a one-shot path (ACP) return "unavailable" rather than failing.
+   */
+  async generateStructuredObject(params: {
+    system: string;
+    prompt: string;
+    schema: Record<string, unknown>;
+    schemaName?: string;
+    timeoutMs?: number;
+  }): Promise<
+    { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
+  > {
+    const defaults = await this.overlayStore.getLaunchpadDefaults();
+    const backend = await this.resolveLaunchpadBackend(defaults.backend);
+    const requiredKeys = schemaRequiredKeys(params.schema);
+
+    if (backend.kind === "codex" && this.codexClient.generateStructuredObject) {
+      return await this.codexClient.generateStructuredObject({
+        prompt: params.prompt,
+        schema: params.schema,
+        isMatch: (record) =>
+          requiredKeys.every((key) => isNonEmptyStructuredValue(record[key])),
+        timeoutMs: params.timeoutMs,
+      });
+    }
+
+    if (backend.kind === "grok") {
+      const apiKey = resolveGrokApiKeyForLiveClient();
+      if (!apiKey) {
+        return { status: "unavailable", reason: "grok_api_key_unavailable" };
+      }
+      const result = await new XaiEphemeralObjectCaller({ apiKey }).generateObject({
+        schema: params.schema,
+        schemaName: params.schemaName,
+        system: params.system,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+      });
+      if (result.status === "ok") {
+        return { status: "ok", object: result.response.object };
+      }
+      return result;
+    }
+
+    return {
+      status: "unavailable",
+      reason: `${backend.kind}_structured_generation_unavailable`,
+    };
   }
 
   private async resolveLaunchpadBackend(

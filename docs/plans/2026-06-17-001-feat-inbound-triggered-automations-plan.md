@@ -603,12 +603,14 @@ From a review of the branch:
 
 ### Deferred / follow-up
 
-- **Provider-agnostic prompt drafting.** "Help me write a prompt" currently uses
-  the xAI ephemeral one-shot. Routing it through the user's configured backend is
-  not a clean swap: the Codex one-shot is title-locked at the result parser, ACP
-  has no one-shot path at all, and Grok isn't guaranteed present. Pending a
-  product decision (generalize the Codex structured one-shot, backend-aware with
-  graceful "unavailable", or drop the LLM drafter and keep the example/help).
+- **Provider-agnostic prompt drafting — done.** "Help me write a prompt" now
+  runs on the operator's configured backend, not hardcoded xAI. The Codex
+  helper-turn extraction was generalized from title-locked to predicate-driven
+  (the title path stays semantically identical: default predicate = title shape),
+  so Codex (OAI) returns arbitrary structured output. The backend registry's new
+  `generateStructuredObject` resolves the launchpad-default backend and routes to
+  Codex's helper turn or Grok's ephemeral caller; ACP (no one-shot path) returns
+  "unavailable" and the UI falls back to the example/help.
 - **Ordered-actions editor.** The contract supports an arbitrary ordered
   `outputActions` array; the UI now composes one of: Agent context + source
   reply, Agent context + alternate target, or Agent context only. A general

@@ -1707,6 +1707,38 @@ async function emitCompletedTurn(
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("routes structured generation to the configured Codex backend", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const generateStructuredObject = vi.fn(async () => ({
+      status: "ok" as const,
+      object: { prompt: "drafted prompt" },
+    }));
+    (
+      codexClient as unknown as {
+        generateStructuredObject: typeof generateStructuredObject;
+      }
+    ).generateStructuredObject = generateStructuredObject;
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const result = await registry.generateStructuredObject({
+      system: "system",
+      prompt: "describe what to do",
+      schema: {
+        type: "object",
+        required: ["prompt"],
+        properties: { prompt: { type: "string" } },
+      },
+      schemaName: "automation_prompt",
+    });
+
+    expect(result).toEqual({ status: "ok", object: { prompt: "drafted prompt" } });
+    expect(generateStructuredObject).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({
