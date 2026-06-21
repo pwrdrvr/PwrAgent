@@ -87,6 +87,10 @@ export type SlackApi = {
   }): Promise<void>;
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
+  conversationsHistory?(params: {
+    channel: string;
+    limit?: number;
+  }): Promise<SlackHistoryMessageInfo[]>;
   conversationsReplies?(params: {
     channel: string;
     limit?: number;
@@ -140,6 +144,15 @@ export type SlackConversationInfo = {
 export type SlackThreadMessageInfo = {
   text?: string;
   ts?: string;
+};
+
+export type SlackHistoryMessageInfo = {
+  bot_id?: string;
+  subtype?: string;
+  text?: string;
+  ts?: string;
+  user?: string;
+  username?: string;
 };
 
 export type SlackFileInfo = {
@@ -1780,6 +1793,63 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  /**
+   * Fetch recent channel messages for the Automations editor live preview.
+   * Best-effort: returns `[]` when the bot lacks `conversations.history` scope
+   * or the call fails, so the preview simply falls back to going-forward
+   * capture. Newest-first Slack history is reversed to oldest-first.
+   */
+  async fetchRecentMessages(request: {
+    conversationId: string;
+    limit?: number;
+  }): Promise<MessagingInboundEvent[]> {
+    const history = this.api.conversationsHistory;
+    if (!history) return [];
+    const channelId = request.conversationId;
+    let messages: SlackHistoryMessageInfo[];
+    try {
+      messages = await history({
+        channel: channelId,
+        limit: Math.min(Math.max(request.limit ?? 15, 1), 50),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.logger.warn?.("slack history preview unavailable", {
+          reason: "missing_scope",
+          requiredScope: requiredConversationHistoryScope(channelId),
+        });
+      } else {
+        this.logger.warn?.("slack history preview failed", { reason });
+      }
+      return [];
+    }
+    const events: MessagingInboundEvent[] = [];
+    for (const message of messages) {
+      const text = message.text;
+      if (!text) continue;
+      if (message.subtype && message.subtype !== "bot_message") continue;
+      const actor = message.bot_id
+        ? this.actorForSlackBot(message.bot_id)
+        : message.user
+          ? await this.actorForSlackUser(message.user, message.username)
+          : undefined;
+      if (!actor) continue;
+      events.push({
+        id: `slack:history:${channelId}:${message.ts ?? this.newEventId("slack-history")}`,
+        kind: "text",
+        actor,
+        channel: {
+          channel: this.channel,
+          conversation: { id: channelId, kind: "channel" },
+        },
+        receivedAt: slackTimestampToMs(message.ts) ?? this.now(),
+        text,
+      });
+    }
+    return events.reverse();
+  }
+
   private describeFile(file: SlackFileInfo): MessagingAttachmentDescriptor[] {
     const fileIdValidation = validateSlackFileId(file.id);
     if (!file.id) {
@@ -1984,6 +2054,10 @@ export function createSlackApi(botToken: string): SlackApi {
     async conversationsInfo(params) {
       const response = await client.conversations.info(params);
       return response.channel as SlackConversationInfo | undefined;
+    },
+    async conversationsHistory(params) {
+      const response = await client.conversations.history(params);
+      return (response.messages ?? []) as SlackHistoryMessageInfo[];
     },
     async conversationsReplies(params) {
       const response = await client.conversations.replies(params);
@@ -2263,6 +2337,12 @@ function requiredConversationHistoryScope(channelId: string): string {
   if (channelId.startsWith("D")) return "im:history";
   if (channelId.startsWith("G")) return "groups:history or mpim:history";
   return "channels:history/groups:history/im:history/mpim:history";
+}
+
+function slackTimestampToMs(ts: string | undefined): number | undefined {
+  if (!ts) return undefined;
+  const seconds = Number.parseFloat(ts);
+  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : undefined;
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {

@@ -587,6 +587,62 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("fetches recent channel messages for preview, oldest-first", async () => {
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({}),
+        conversationsHistory: async () => [
+          { ts: "1712023032.000200", text: "newest", bot_id: "B012DATADOG" },
+          { ts: "1712023032.000100", text: "older", user: "U2", username: "alice" },
+          { ts: "1712023032.000050", subtype: "channel_join", text: "joined" },
+        ],
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    const events = await adapter.fetchRecentMessages({
+      conversationId: "C012ABCDEF0",
+    });
+
+    expect(
+      events.map((event) => (event.kind === "text" ? event.text : undefined)),
+    ).toEqual(["older", "newest"]);
+    expect(events[0]).toMatchObject({
+      kind: "text",
+      actor: { platformUserId: "U2" },
+      channel: {
+        channel: "slack",
+        conversation: { id: "C012ABCDEF0", kind: "channel" },
+      },
+    });
+    expect(events[1]?.actor).toMatchObject({
+      platformUserId: "B012DATADOG",
+      isBot: true,
+    });
+  });
+
+  it("returns no preview messages when history scope is missing", async () => {
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({}),
+        conversationsHistory: async () => {
+          throw new Error("missing_scope");
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1,
+    });
+
+    expect(
+      await adapter.fetchRecentMessages({ conversationId: "C012ABCDEF0" }),
+    ).toEqual([]);
+  });
+
   it("keeps fan-out callback records scoped per routed binding", async () => {
     const store = fakeStore();
     const spies: { posted: unknown[] } = { posted: [] };

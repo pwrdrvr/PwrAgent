@@ -78,6 +78,18 @@ function matchesAnyScope(
   return false;
 }
 
+/**
+ * Map an inbound event to the compact preview shape. Returns undefined for
+ * non-text/media events (callbacks, commands) which have no preview content.
+ * Exported for history backfill, which reuses the same mapping.
+ */
+export function inboundEventToPreviewMessage(
+  event: MessagingInboundEvent,
+): InboundPreviewMessage | undefined {
+  if (event.kind !== "text" && event.kind !== "media") return undefined;
+  return toPreviewMessage(event);
+}
+
 function toPreviewMessage(
   event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>,
 ): InboundPreviewMessage {

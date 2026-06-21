@@ -483,6 +483,76 @@ describe("AutomationEditor", () => {
     ).not.toHaveClass("is-match");
   });
 
+  it("offers a topic picker from known topics and submits its name", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const desktopApi = {
+      readSettings: async () =>
+        fakeSettings({
+          enabled: { telegram: true },
+          telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+        }),
+      listInboundTopics: async () => ({
+        topics: [{ id: "42", title: "Incidents" }],
+      }),
+    } as unknown as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Incident bot" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Group"), {
+      target: { value: "-100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Topic"), {
+      target: { value: "42" },
+    });
+    fireEvent.change(screen.getByLabelText("Text contains"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        triggers: [
+          expect.objectContaining({
+            conversation: {
+              channel: "telegram",
+              conversationId: "42",
+              conversationKind: "topic",
+              parentId: "-100",
+              title: "Incidents",
+              parentTitle: "Ops Room",
+            },
+          }),
+        ],
+      }),
+    });
+  });
+
   it("offers Agents first and regular threads on the Threads tab", async () => {
     const onSubmit = vi.fn(async () => undefined);
 

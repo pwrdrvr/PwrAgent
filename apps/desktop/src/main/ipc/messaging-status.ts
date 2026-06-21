@@ -9,6 +9,8 @@ import type {
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
   InboundPreviewMessage,
+  ListInboundTopicsRequest,
+  ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -52,6 +54,7 @@ import {
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
+  MESSAGING_LIST_INBOUND_TOPICS_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
@@ -68,6 +71,7 @@ import {
   startInboundPreview,
   stopInboundPreview,
 } from "../messaging/inbound-preview-bus";
+import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 
 const log = getMainLogger("pwragent:messaging-ipc");
 
@@ -510,6 +514,23 @@ export function registerMessagingStatusIpcHandlers(): void {
         provider: request.provider,
         ...(request.parentId ? { parentId: request.parentId } : {}),
       });
+      // Best-effort history backfill (Slack today). Pushed through the same
+      // preview event channel as live messages, oldest-first, so the renderer
+      // shows recent context immediately instead of an empty "waiting" panel.
+      void (async () => {
+        try {
+          const history = await runtime.fetchRecentPreviewMessages({
+            provider: request.provider,
+            conversationId: request.conversationId,
+            ...(request.parentId ? { parentId: request.parentId } : {}),
+          });
+          for (const message of history) {
+            fanOut(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, message);
+          }
+        } catch {
+          // History is optional; live capture continues regardless.
+        }
+      })();
       return { ok: true };
     },
   );
@@ -519,6 +540,27 @@ export function registerMessagingStatusIpcHandlers(): void {
     MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
     async (_event, request: StopInboundPreviewRequest): Promise<void> => {
       stopInboundPreview(request.subscriptionId);
+    },
+  );
+
+  ipcMain.removeHandler(MESSAGING_LIST_INBOUND_TOPICS_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_LIST_INBOUND_TOPICS_CHANNEL,
+    async (
+      _event,
+      request: ListInboundTopicsRequest,
+    ): Promise<ListInboundTopicsResponse> => {
+      if (!request.groupId) return { topics: [] };
+      const records = await getDesktopMessagingStore().findManagedTopicsForSupergroup(
+        { channel: request.provider, supergroupId: request.groupId },
+      );
+      const topics = records
+        .filter((record) => record.lifecycle !== "deleted")
+        .map((record) => ({
+          id: record.topicId,
+          title: record.conversation.title ?? record.topicId,
+        }));
+      return { topics };
     },
   );
 
@@ -780,6 +822,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   setInboundPreviewSink(undefined);
   ipcMain.removeHandler(MESSAGING_START_INBOUND_PREVIEW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_LIST_INBOUND_TOPICS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL);

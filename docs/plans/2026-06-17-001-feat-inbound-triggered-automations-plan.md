@@ -545,16 +545,21 @@ recent senders/messages from the chosen conversation with the messages their
 filter would match highlighted. Provides the "is this actually going to work"
 confidence the freeform form lacked.
 
+### Follow-up landed (2026-06-21)
+
+- **Topic-name dropdown.** Added a `messaging:list-inbound-topics` IPC over the
+  `messaging_managed_topics` registry. When a Telegram group is chosen and the
+  scope is a specific topic, the editor offers known topics by name (with a
+  manual-id fallback); the picked topic's name is stored on the trigger.
+- **Slack history backfill for preview.** Added `conversations.history` to the
+  Slack API + a `fetchRecentMessages` adapter method, surfaced through
+  `DesktopMessagingRuntime.fetchRecentPreviewMessages`. Starting a preview on a
+  Slack channel now backfills recent messages (best-effort; `[]` on missing
+  `channels:history` scope) through the same preview event channel, oldest
+  first. Telegram remains going-forward only (no Bot API history).
+
 ### Deferred / follow-up
 
-- **Topic-name dropdown.** Telegram groups come from settings, but per-topic
-  name listing within a group still requires a `listInboundAutomationLocations`
-  IPC over `messaging_managed_topics`; for now topic IDs are entered manually or
-  captured via the pairing code (which carries the topic name).
-- **Slack history backfill for preview.** Preview is going-forward only and
-  uniform across providers. Slack `conversations.history` backfill (needs a
-  `channels:history` scope and a new adapter method) is deferred; Telegram has
-  no history API regardless.
 - **Ordered-actions editor.** The contract supports an arbitrary ordered
   `outputActions` array and an alternate `messaging_target` destination; the UI
   still composes the common pair (Agent context + one source reply). A general

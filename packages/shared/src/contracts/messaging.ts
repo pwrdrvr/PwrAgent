@@ -423,3 +423,22 @@ export type StartInboundPreviewResponse = {
 export type StopInboundPreviewRequest = {
   subscriptionId: string;
 };
+
+/**
+ * Known sub-conversations (Telegram forum topics) within a group, so the
+ * Automations editor can offer a topic picker by name instead of asking the
+ * operator to paste a numeric topic id. Backed by the managed-topic registry.
+ */
+export type ListInboundTopicsRequest = {
+  provider: MessagingChannelKind;
+  groupId: string;
+};
+
+export type InboundTopicOption = {
+  id: string;
+  title: string;
+};
+
+export type ListInboundTopicsResponse = {
+  topics: InboundTopicOption[];
+};

@@ -12,6 +12,7 @@ import type {
   CreateAutomationRequest,
   DesktopSettingsSnapshot,
   InboundPreviewMessage,
+  InboundTopicOption,
   MessagingChannelKind,
   MessagingConversationKind,
   NavigationThreadSummary,
@@ -300,6 +301,38 @@ export function AutomationEditor(props: AutomationEditorProps) {
     (group) => group.id === groupSelection,
   );
 
+  const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
+  const [topicSelection, setTopicSelection] = useState<string>(
+    initialIsTopic ? MANUAL_GROUP_VALUE : "",
+  );
+  const selectedTopic = topicOptions.find((topic) => topic.id === topicSelection);
+
+  useEffect(() => {
+    const list = props.desktopApi?.listInboundTopics;
+    const groupId = inboundGroupId.trim();
+    if (
+      !list ||
+      inboundProvider !== "telegram" ||
+      telegramScope !== "topic" ||
+      !groupId
+    ) {
+      setTopicOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await list({ provider: "telegram", groupId });
+        if (!cancelled) setTopicOptions(result.topics);
+      } catch {
+        if (!cancelled) setTopicOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.desktopApi, inboundProvider, telegramScope, inboundGroupId]);
+
   const [captureEntryId, setCaptureEntryId] = useState<string>();
   const [captureMessage, setCaptureMessage] = useState<string>();
   const [captureStatus, setCaptureStatus] = useState<
@@ -426,7 +459,17 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ...(previewParentId ? { parentId: previewParentId } : {}),
     });
     const unsubscribe = subscribe((message) => {
-      setPreviewMessages((current) => [message, ...current].slice(0, 25));
+      if (
+        message.conversationId !== previewConversationId &&
+        message.parentId !== previewConversationId
+      ) {
+        return;
+      }
+      setPreviewMessages((current) =>
+        current.some((entry) => entry.id === message.id)
+          ? current
+          : [message, ...current].slice(0, 25),
+      );
     });
     return () => {
       unsubscribe?.();
@@ -612,6 +655,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       text: inboundText,
       textMode: inboundTextMode,
       topicId: inboundTopicId,
+      topicTitle: selectedTopic?.title,
       triggerKind,
     });
     if (!triggerConfig.ok) {
@@ -1175,21 +1219,52 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </div>
               {telegramScope === "topic" ? (
                 <div className="automation-field-group">
-                  <label className="automation-field">
-                    <span>Topic ID</span>
-                    <input
-                      placeholder="42"
-                      value={inboundTopicId}
-                      onChange={(event) => {
-                        setInboundTopicId(event.currentTarget.value);
-                        setValidationError(undefined);
-                      }}
-                    />
-                  </label>
-                  <p className="automation-field__hint">
-                    The forum topic's numeric ID. Keep "Whole group" to watch
-                    every topic in the group.
-                  </p>
+                  {topicOptions.length > 0 ? (
+                    <label className="automation-field">
+                      <span>Topic</span>
+                      <select
+                        value={topicSelection}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setTopicSelection(value);
+                          setInboundTopicId(
+                            value === MANUAL_GROUP_VALUE ? "" : value,
+                          );
+                          setValidationError(undefined);
+                        }}
+                      >
+                        <option value="">Choose a topic</option>
+                        {topicOptions.map((topic) => (
+                          <option key={topic.id} value={topic.id}>
+                            {topic.title}
+                          </option>
+                        ))}
+                        <option value={MANUAL_GROUP_VALUE}>
+                          Enter topic ID manually...
+                        </option>
+                      </select>
+                    </label>
+                  ) : null}
+                  {topicOptions.length === 0 ||
+                  topicSelection === MANUAL_GROUP_VALUE ? (
+                    <>
+                      <label className="automation-field">
+                        <span>Topic ID</span>
+                        <input
+                          placeholder="42"
+                          value={inboundTopicId}
+                          onChange={(event) => {
+                            setInboundTopicId(event.currentTarget.value);
+                            setValidationError(undefined);
+                          }}
+                        />
+                      </label>
+                      <p className="automation-field__hint">
+                        The forum topic's numeric ID. Keep "Whole group" to watch
+                        every topic in the group.
+                      </p>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </>
@@ -1817,6 +1892,7 @@ function buildTriggerConfig(params: {
   text: string;
   textMode: AutomationInboundTextMatchMode;
   topicId: string;
+  topicTitle?: string;
   triggerKind: TriggerFormKind;
 }):
   | {
@@ -1875,6 +1951,7 @@ function buildTriggerConfig(params: {
         conversationId: topicId,
         conversationKind: "topic",
         parentId: groupId,
+        ...(params.topicTitle ? { title: params.topicTitle } : {}),
         ...(params.groupTitle ? { parentTitle: params.groupTitle } : {}),
       }
     : {

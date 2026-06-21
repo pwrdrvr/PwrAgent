@@ -97,6 +97,8 @@ import type {
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
   InboundPreviewMessage,
+  ListInboundTopicsRequest,
+  ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -748,6 +750,10 @@ export type DesktopApi = {
   onInboundPreviewMessage?: (
     callback: (message: InboundPreviewMessage) => void,
   ) => () => void;
+  /** List known Telegram forum topics within a group, for the topic picker. */
+  listInboundTopics?: (
+    request: ListInboundTopicsRequest,
+  ) => Promise<ListInboundTopicsResponse>;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   /** Shut down the messaging runtime in *this* process and release
