@@ -558,9 +558,34 @@ confidence the freeform form lacked.
   `channels:history` scope) through the same preview event channel, oldest
   first. Telegram remains going-forward only (no Bot API history).
 
+### Usability pass — make it operable by a non-expert (2026-06-21)
+
+Critique: the editor was powerful but overwhelming, the prompt was a blank box,
+and the alternate-destination action was a backend stub.
+
+- **Alternate destination (was stubbed).** Implemented the `messaging_target`
+  output action end to end: `automation-action-executor` delivers via a
+  registered target handler; `MessagingController.deliverAutomationTargetMessage`
+  builds a message intent addressed to the target snapshot and routes through
+  the existing `deliver()` path (provider chosen by the target's channel). The
+  editor's "Reply" control became "Where should the result go?" — reply in place
+  / send to a different conversation (provider + group/topic picker) /
+  Agent-context only.
+- **Prompt help.** Added an example/help popover + placeholder, and a "Help me
+  write a prompt" drafter backed by a one-shot Grok call
+  (`automations:draft-prompt` IPC reusing the ephemeral object caller). Degrades
+  to "unavailable" with no xAI key.
+- **De-clutter.** Execution + Gate + Backlog are now inside a closed-by-default
+  "Advanced settings" disclosure ("inherit the Agent's settings"), leaving the
+  core path (agent → trigger → prompt → destination) visible first.
+
 ### Deferred / follow-up
 
 - **Ordered-actions editor.** The contract supports an arbitrary ordered
-  `outputActions` array and an alternate `messaging_target` destination; the UI
-  still composes the common pair (Agent context + one source reply). A general
-  ordered-action editor is deferred until there's demand.
+  `outputActions` array; the UI now composes one of: Agent context + source
+  reply, Agent context + alternate target, or Agent context only. A general
+  multi-action editor (e.g. reply in place AND mirror to another channel) is
+  deferred until there's demand.
+- **Cross-provider target validation.** The alternate-destination picker lets
+  any enabled provider be chosen; delivery still requires that provider to be
+  running. Live capability checks on the destination are deferred.
