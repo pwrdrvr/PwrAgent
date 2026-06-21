@@ -1,9 +1,11 @@
 import type {
+  AutomationRunSourceBatchedEntry,
   AutomationGateRunResult,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunWindow,
 } from "@pwragent/shared";
+import { DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS } from "@pwragent/shared";
 import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
@@ -24,10 +26,21 @@ export type AutomationSchedulerOptions = {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
+type InboundCoalesceWindow = {
+  timer: ReturnType<typeof setTimeout>;
+  sources: AutomationRunSourceMetadata[];
+  totalChars: number;
+};
+
+const MAX_COALESCED_EVENTS = 100;
+const COALESCE_TOTAL_CHAR_BUDGET = 16_000;
+const COALESCE_SUMMARY_CHARS = 500;
+
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private readonly sessionStartedAt: number;
+  private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -48,6 +61,10 @@ export class AutomationScheduler {
       this.clearTimer(this.timer);
       this.timer = null;
     }
+    for (const open of this.coalesceWindows.values()) {
+      this.clearTimer(open.timer);
+    }
+    this.coalesceWindows.clear();
   }
 
   async evaluateDueAutomations(): Promise<void> {
@@ -95,6 +112,44 @@ export class AutomationScheduler {
     now?: number;
   }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const now = params.now ?? this.now();
+    const windowMs =
+      params.automation.inboundCoalesceWindowMs ??
+      DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+
+    if (windowMs > 0) {
+      const open = this.coalesceWindows.get(params.automation.id);
+      if (open) {
+        // A window is already collecting follow-ups: batch this message into it
+        // (deduped, capped) and fire nothing now. The window timer flushes one
+        // coalesced run when it elapses.
+        if (
+          !this.options.store.findRunBySourceEventKey({
+            automationId: params.automation.id,
+            sourceEventKey: params.source.sourceEventKey,
+          })
+        ) {
+          appendCoalesceSource(open, params.source);
+        }
+        return undefined;
+      }
+      // Leading edge: open an empty window for any follow-ups, then fire this
+      // first message immediately.
+      this.openCoalesceWindow(params.automation, windowMs);
+    }
+
+    return await this.dispatchInboundRun({
+      automation: params.automation,
+      source: params.source,
+      now,
+    });
+  }
+
+  private async dispatchInboundRun(params: {
+    automation: AutomationRecord;
+    source: AutomationRunSourceMetadata;
+    now: number;
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+    const { now } = params;
     // Idempotency: a provider can redeliver the same event (slow ack, retry).
     // If a run already exists for this stable source-event key, skip rather than
     // launch a duplicate headless run and re-post its actions.
@@ -146,6 +201,33 @@ export class AutomationScheduler {
       windows: [],
       now,
     });
+  }
+
+  private openCoalesceWindow(automation: AutomationRecord, windowMs: number): void {
+    const timer = this.setTimer(() => {
+      void this.flushCoalesceWindow(automation.id);
+    }, windowMs);
+    timer.unref?.();
+    this.coalesceWindows.set(automation.id, {
+      timer,
+      sources: [],
+      totalChars: 0,
+    });
+  }
+
+  private async flushCoalesceWindow(automationId: string): Promise<void> {
+    const open = this.coalesceWindows.get(automationId);
+    this.coalesceWindows.delete(automationId);
+    if (!open || open.sources.length === 0) return;
+    const automation = this.options.store.getAutomation(automationId);
+    if (!automation || automation.status !== "enabled") return;
+    const [primary, ...rest] = open.sources;
+    if (!primary) return;
+    const source: AutomationRunSourceMetadata =
+      rest.length > 0
+        ? { ...primary, batchedEvents: rest.map(toBatchedEntry) }
+        : primary;
+    await this.dispatchInboundRun({ automation, source, now: this.now() });
   }
 
   async handleTurnQueueUpdate(params: {
@@ -511,6 +593,49 @@ function classifyTerminalStatus(
 
 function buildLaneQueueEntryId(runId: string): string {
   return `automation-lane:${runId}`;
+}
+
+function appendCoalesceSource(
+  window: InboundCoalesceWindow,
+  source: AutomationRunSourceMetadata,
+): void {
+  if (window.sources.length >= MAX_COALESCED_EVENTS) return;
+  if (
+    window.sources.some((entry) => entry.sourceEventKey === source.sourceEventKey)
+  ) {
+    return;
+  }
+  // Once the batch nears its char budget, keep only a short summary of each
+  // further message so a burst can't balloon the prompt/artifact.
+  const bounded =
+    window.totalChars >= COALESCE_TOTAL_CHAR_BUDGET * 0.8
+      ? truncateSourceMessage(source, COALESCE_SUMMARY_CHARS)
+      : source;
+  window.sources.push(bounded);
+  window.totalChars += bounded.message?.text?.length ?? 0;
+}
+
+function truncateSourceMessage(
+  source: AutomationRunSourceMetadata,
+  maxChars: number,
+): AutomationRunSourceMetadata {
+  const text = source.message?.text;
+  if (!text || text.length <= maxChars) return source;
+  return {
+    ...source,
+    message: { text: `${text.slice(0, maxChars)}…`, textTruncated: true },
+  };
+}
+
+function toBatchedEntry(
+  source: AutomationRunSourceMetadata,
+): AutomationRunSourceBatchedEntry {
+  return {
+    sourceEventKey: source.sourceEventKey,
+    receivedAt: source.receivedAt,
+    actor: source.actor,
+    ...(source.message ? { message: source.message } : {}),
+  };
 }
 
 function buildLaneQueuedResult(params: {

@@ -25,6 +25,7 @@ import type {
 import {
   AUTOMATION_SCHEDULE_KINDS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
+  DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
 } from "@pwragent/shared";
@@ -65,6 +66,7 @@ export type AutomationRecord = {
   backlogPolicy: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
   outputActions: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
@@ -85,6 +87,7 @@ export type CreateAutomationInput = {
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   status?: AutomationStatus;
   nextRunAt?: number;
   now?: number;
@@ -101,6 +104,7 @@ export type UpdateAutomationInput = {
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
   outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   status?: AutomationStatus;
   nextRunAt?: number | null;
   now?: number;
@@ -187,6 +191,7 @@ type AutomationPayload = {
   scheduleSummary: string;
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   lastRunStatus?: AutomationRunStatus;
 };
 
@@ -267,6 +272,9 @@ export class AutomationStore {
       backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
       executionProfile: input.executionProfile,
       outputActions: normalizeAutomationOutputActions(input.outputActions),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        input.inboundCoalesceWindowMs,
+      ),
       nextRunAt: input.nextRunAt,
       createdAt: now,
       updatedAt: now,
@@ -308,6 +316,10 @@ export class AutomationStore {
           ? undefined
           : input.executionProfile ?? current.executionProfile,
       outputActions: input.outputActions ?? current.outputActions,
+      inboundCoalesceWindowMs:
+        input.inboundCoalesceWindowMs === undefined
+          ? current.inboundCoalesceWindowMs
+          : normalizeInboundCoalesceWindowMs(input.inboundCoalesceWindowMs),
       nextRunAt,
       updatedAt: now,
     };
@@ -876,6 +888,7 @@ export class AutomationStore {
       scheduleSummary: record.scheduleSummary,
       executionProfile: record.executionProfile,
       outputActions: record.outputActions,
+      inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
       lastRunStatus: record.lastRunStatus,
     };
     this.stateDb.raw
@@ -1072,6 +1085,9 @@ export class AutomationStore {
       backlogPolicy: row.backlog_policy,
       executionProfile: payload.executionProfile,
       outputActions: normalizeAutomationOutputActions(payload.outputActions),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        payload.inboundCoalesceWindowMs,
+      ),
       nextRunAt: row.next_run_at ?? undefined,
       lastRunAt: row.last_run_at ?? undefined,
       lastRunStatus: payload.lastRunStatus,
@@ -1240,6 +1256,14 @@ function formatAutomationTriggerSummary(
     return inbound.name ? `inbound: ${inbound.name}` : "inbound message";
   }
   return "not scheduled";
+}
+
+function normalizeInboundCoalesceWindowMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  if (!Number.isFinite(value) || value < 0) {
+    return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  }
+  return Math.floor(value);
 }
 
 function normalizeAutomationOutputActions(

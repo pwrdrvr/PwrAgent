@@ -396,6 +396,9 @@ describe("AutomationScheduler", () => {
       threadId: "thread-1",
       name: "Datadog alert triage",
       taskPrompt: "Investigate.",
+      // Disable coalescing so each event creates a run immediately; this test
+      // exercises the lane queue, not the coalescing window.
+      inboundCoalesceWindowMs: 0,
       triggers: [
         {
           id: "datadog-error",
@@ -539,6 +542,83 @@ describe("AutomationScheduler", () => {
     expect(redelivered).toBeUndefined();
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
     expect(queue.submitted).toHaveLength(1);
+  });
+
+  it("coalesces an inbound burst into a leading run plus one batched run", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Burst triage",
+      taskPrompt: "Investigate.",
+      inboundCoalesceWindowMs: 60_000,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    let windowCallback: (() => void) | undefined;
+    const scheduler = new AutomationScheduler({
+      store,
+      runner: new ThreadQueueAutomationRunner(queue),
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        windowCallback = callback;
+        return 1;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    const src = (key: string, text: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({ automation, source: src("k1", "ERROR one"), now });
+    // Leading edge fires immediately.
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+    expect(queue.submitted).toHaveLength(1);
+
+    // Two more within the window are buffered, not run.
+    now = 1_100;
+    await scheduler.runFromInboundEvent({ automation, source: src("k2", "ERROR two"), now });
+    now = 1_200;
+    await scheduler.runFromInboundEvent({ automation, source: src("k3", "ERROR three"), now });
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+
+    // Leading run completes so the lane is free.
+    const leading = store.listRunsForAutomation("automation-1")[0];
+    now = 2_000;
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: leading?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now,
+    });
+
+    // Window elapses → one batched run carrying the buffered messages.
+    now = 61_000;
+    windowCallback?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const runs = store.listRunsForAutomation("automation-1");
+    expect(runs).toHaveLength(2);
+    expect(queue.submitted).toHaveLength(2);
+    const batched = runs[0];
+    expect(batched?.source?.sourceEventKey).toBe("k2");
+    expect(batched?.source?.batchedEvents).toEqual([
+      expect.objectContaining({ sourceEventKey: "k3" }),
+    ]);
   });
 
   it("includes successful gate output in the automation run prompt", async () => {

@@ -273,6 +273,7 @@ export class DesktopAutomationService {
       backlogPolicy: request.backlogPolicy,
       executionProfile: request.executionProfile,
       outputActions: request.outputActions,
+      inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
@@ -335,6 +336,7 @@ export class DesktopAutomationService {
       backlogPolicy: request.backlogPolicy,
       executionProfile: request.executionProfile,
       outputActions: request.outputActions,
+      inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       status:
         request.enabled === undefined
           ? undefined
@@ -924,6 +926,7 @@ function toAutomationDetail(
     backlogPolicy: record.backlogPolicy,
     executionProfile: record.executionProfile,
     outputActions: record.outputActions,
+    inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,

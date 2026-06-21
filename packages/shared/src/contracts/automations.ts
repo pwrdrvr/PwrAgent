@@ -20,6 +20,15 @@ export type AutomationBacklogPolicy =
 export const DEFAULT_AUTOMATION_BACKLOG_POLICY: AutomationBacklogPolicy =
   "coalesce";
 
+/**
+ * Default inbound coalescing window. The first matching message fires a run
+ * immediately (leading edge); further messages in the same automation within
+ * this window are batched into a single follow-up run, bounding the cost of a
+ * burst (or a misconfigured firehose / message loop). Set to 0 to disable and
+ * fire one run per message.
+ */
+export const DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS = 60_000;
+
 export const AUTOMATION_STATUSES = ["enabled", "paused", "deleted"] as const;
 
 export type AutomationStatus = (typeof AUTOMATION_STATUSES)[number];
@@ -176,6 +185,19 @@ export type AutomationRunSourceMetadata = {
   conversation: AutomationMessagingConversationSnapshot;
   message?: AutomationRunSourceMessage;
   routingState?: Record<string, unknown>;
+  /**
+   * Additional messages coalesced into this run within the inbound coalescing
+   * window. The primary fields above describe the first message; these are the
+   * follow-ups, bounded in count and size.
+   */
+  batchedEvents?: AutomationRunSourceBatchedEntry[];
+};
+
+export type AutomationRunSourceBatchedEntry = {
+  sourceEventKey: string;
+  receivedAt: number;
+  actor: AutomationRunSourceActorSnapshot;
+  message?: AutomationRunSourceMessage;
 };
 
 export type AutomationExecutionProfile = {
@@ -299,6 +321,11 @@ export type AutomationDetail = AutomationListItemSummary & {
   gate?: AutomationGateConfig;
   executionProfile?: AutomationExecutionProfile;
   outputActions: AutomationOutputActionDefinition[];
+  /**
+   * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
+   * per matching message). Undefined inherits the default.
+   */
+  inboundCoalesceWindowMs?: number;
   createdAt: number;
   deletedAt?: number;
 };
@@ -400,6 +427,7 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   enabled?: boolean;
   nextRunAt?: number;
 };
@@ -416,6 +444,7 @@ export type UpdateAutomationRequest = {
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
   outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
   enabled?: boolean;
   nextRunAt?: number | null;
 };

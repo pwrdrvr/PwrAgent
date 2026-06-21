@@ -242,6 +242,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
+  const [coalesceWindowSeconds, setCoalesceWindowSeconds] = useState(
+    initialAutomation?.inboundCoalesceWindowMs !== undefined
+      ? String(Math.round(initialAutomation.inboundCoalesceWindowMs / 1000))
+      : "60",
+  );
   const initialTarget = initialAutomation?.outputActions.find(
     (action) => action.kind === "messaging_target",
   );
@@ -769,6 +774,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
           enabled,
           executionProfile,
           gate: gate.gate,
+          ...(triggerKind === "inbound_message"
+            ? {
+                inboundCoalesceWindowMs: parseCoalesceWindowMs(
+                  coalesceWindowSeconds,
+                ),
+              }
+            : {}),
           name: trimmedName,
           nextRunAt: triggerKind === "inbound_message" ? null : undefined,
           outputActions: triggerConfig.outputActions,
@@ -796,6 +808,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
         enabled,
         executionProfile,
         gate: gate.gate,
+        ...(triggerKind === "inbound_message"
+          ? {
+              inboundCoalesceWindowMs: parseCoalesceWindowMs(
+                coalesceWindowSeconds,
+              ),
+            }
+          : {}),
         name: trimmedName,
         outputActions: triggerConfig.outputActions,
         schedule: triggerConfig.schedule,
@@ -1668,6 +1687,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </div>
           ) : null}
 
+          <div className="automation-field-group">
+            <label className="automation-field">
+              <span>Coalesce window (seconds)</span>
+              <input
+                min={0}
+                type="number"
+                value={coalesceWindowSeconds}
+                onChange={(event) => {
+                  setCoalesceWindowSeconds(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              />
+            </label>
+            <p className="automation-field__hint">
+              The first matching message runs immediately; more messages within
+              this window are batched into a single run. Protects against bursts
+              and loops. Set to 0 to run once per message.
+            </p>
+          </div>
+
           {canPreview ? (
             <div className="automation-preview">
               <button
@@ -2145,6 +2184,12 @@ function buildExecutionProfile(params: {
     ...(mcpAllowlist.length > 0 ? { mcpAllowlist } : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
   };
+}
+
+function parseCoalesceWindowMs(value: string): number | undefined {
+  const seconds = Number(value.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.floor(seconds) * 1000;
 }
 
 function parseAllowlist(value: string): string[] {

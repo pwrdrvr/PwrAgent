@@ -1,6 +1,7 @@
 import type {
   AppServerTurnInputItem,
   AutomationGateRunResult,
+  AutomationRunSourceMetadata,
   AutomationRunSummary,
 } from "@pwragent/shared";
 import type { AutomationRecord } from "./automation-store.js";
@@ -73,7 +74,27 @@ function formatInboundSource(run: AutomationRunSummary): string[] {
     source.message?.text ? "Message:" : "",
     source.message?.text ?? "",
     source.message?.textTruncated ? "[source message truncated]" : "",
+    ...formatBatchedSources(source.batchedEvents),
   ].filter(Boolean);
+}
+
+function formatBatchedSources(
+  batched: AutomationRunSourceMetadata["batchedEvents"],
+): string[] {
+  if (!batched || batched.length === 0) return [];
+  const lines = [
+    "",
+    `Additional messages in this batch (${batched.length}):`,
+  ];
+  for (const entry of batched) {
+    const sender =
+      entry.actor.displayName ??
+      entry.actor.username ??
+      entry.actor.platformUserId;
+    const text = entry.message?.text ?? "(no text)";
+    lines.push(`- [${new Date(entry.receivedAt).toISOString()}] ${sender}: ${text}`);
+  }
+  return lines;
 }
 
 function formatGateOutput(gateResult: AutomationGateRunResult | undefined): string[] {
