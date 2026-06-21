@@ -579,8 +579,36 @@ and the alternate-destination action was a backend stub.
   "Advanced settings" disclosure ("inherit the Agent's settings"), leaving the
   core path (agent → trigger → prompt → destination) visible first.
 
+### Code-review hardening (2026-06-21)
+
+From a review of the branch:
+
+- **Run idempotency.** `sourceEventKey` was computed/stored but never enforced;
+  promoted it to an indexed column (`automation_runs`, db user_version 23) and
+  skip `runFromInboundEvent` when a run already exists for
+  `(automationId, sourceEventKey)` — so a provider redelivery/restart can't
+  double-run and re-post.
+- **Inbound coalescing window.** Added a per-automation window
+  (`inboundCoalesceWindowMs`, default 60s, 0 = off): the first matching message
+  runs immediately (leading edge), further messages within the window batch into
+  one run (`AutomationRunSourceMetadata.batchedEvents`), with dedup + count/char
+  caps. Bounds the cost of a chatty channel, a loose filter, or a message loop.
+- **Crash-safe delivery.** Persist a "pending" marker before posting an output
+  action; the executor treats a persisted "pending" as a fence and won't blindly
+  re-post on restart (favoring no-duplicate; analysis still preserved).
+- **Editor correctness/UX.** Reset the selected topic when the group/provider
+  changes (was submitting a stale topic id); reap live-preview scopes on
+  webContents destroy + IPC dispose; use the real `--bg-panel-elevated` /
+  `--accent-soft` tokens; scroll the validation banner into view.
+
 ### Deferred / follow-up
 
+- **Provider-agnostic prompt drafting.** "Help me write a prompt" currently uses
+  the xAI ephemeral one-shot. Routing it through the user's configured backend is
+  not a clean swap: the Codex one-shot is title-locked at the result parser, ACP
+  has no one-shot path at all, and Grok isn't guaranteed present. Pending a
+  product decision (generalize the Codex structured one-shot, backend-aware with
+  graceful "unavailable", or drop the LLM drafter and keep the example/help).
 - **Ordered-actions editor.** The contract supports an arbitrary ordered
   `outputActions` array; the UI now composes one of: Agent context + source
   reply, Agent context + alternate target, or Agent context only. A general
