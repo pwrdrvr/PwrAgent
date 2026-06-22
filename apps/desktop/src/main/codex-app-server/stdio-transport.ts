@@ -31,6 +31,23 @@ export type StdioJsonRpcTransportOptions = {
 
 export { compareCodexCliVersions };
 
+function isJsonRpcResponseEnvelope(message: string): boolean {
+  try {
+    const envelope = JSON.parse(message) as unknown;
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+      return false;
+    }
+    const record = envelope as Record<string, unknown>;
+    return (
+      record.id !== undefined &&
+      typeof record.method !== "string" &&
+      ("result" in record || "error" in record)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class StdioJsonRpcTransport implements JsonRpcTransport {
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private messageHandler: (message: string) => void = () => undefined;
@@ -151,7 +168,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   send(message: string): void {
     const child = this.childProcess;
     if (!child?.stdin) {
-      if (this.closeRequested) {
+      if (this.closeRequested && isJsonRpcResponseEnvelope(message)) {
         if (!this.droppedSendAfterCloseLogged) {
           this.droppedSendAfterCloseLogged = true;
           codexTransportLog.info("dropped app-server send after close");
