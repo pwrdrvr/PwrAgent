@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.0.0-beta.36 - 2026-06-21
+
+- Agent Handoff Tools - Added PwrAgent app, thread, messaging, and task handoff tools so agents can inspect and coordinate work across PwrAgent surfaces.
+- Codex Subagents - Added native Codex subagent visibility in the context rail, including clearer subagent kinds and details.
+- Integrated Terminal - Added a per-thread terminal from the thread header so command-line work can stay attached to the active thread and workspace.
+- Worktree Edits - Added non-turn file changes to the context rail and sidebar chips, while filtering noisy untracked directories and deduping active-turn edits.
+- Pricing - Added a persistent thread pricing ledger with running totals, context replay estimates, and corrected GPT-5.5 historical pricing.
+- Messaging Attachments - Added Markdown artifact previews and file attachments so messaging surfaces can share generated docs and inspect attachments from agent tools.
+- Messaging Questionnaires - Added support for Codex skill questionnaires, durable pending prompts, and direct final-answer submission from messaging flows.
+- Worktree Launchpad - Added a searchable branch picker and unified project/branch picker popovers for repos with many branches.
+- Composer - Improved complex Markdown pastes, including blockquoted lists, mixed blockquote content, nested rich lists, and prefixed initial code blocks.
+- Approvals - Improved approval prompts with backend-provided choices and clearer file-change approval context.
+- Thread List - Fixed input-needed threads, delayed unread clearing, PR chip check refreshes, overflowing sidebar chips, and masthead/sidebar alignment.
+- Thread UI - Improved env action cards, settings toggles, tooltip dismissal, image lightbox close behavior, terminal resize blending, and sidebar resize CPU usage.
+- Security and Privacy - Avoided unnecessary keychain prompts and redacted Codex environment success logs.
+- Minor - Refreshed PwrAgent v2 design prototypes, resolved Dependabot npm alerts, stabilized test flakes, improved CI ripgrep installation, and updated release-note guidance.
+
 ## v1.0.0-beta.35 - 2026-06-15
 
 - Improved composer paste handling so rich clipboard content reconstructs lists, preserves inline code styling, and handles nested fenced code blocks consistently.
