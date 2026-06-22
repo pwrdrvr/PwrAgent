@@ -382,8 +382,10 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
   ON automation_runs(automation_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_automation_runs_source_event
-  ON automation_runs(automation_id, source_event_key);
+-- NOTE: idx_automation_runs_source_event is created in the v23 migration
+-- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
+-- before migrations, and on an existing DB the source_event_key column does
+-- not exist until the migration's ALTER runs — referencing it here would fail.
 CREATE INDEX IF NOT EXISTS idx_automation_runs_thread_updated
   ON automation_runs(backend, thread_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_status

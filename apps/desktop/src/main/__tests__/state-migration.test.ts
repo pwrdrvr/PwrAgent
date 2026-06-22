@@ -76,6 +76,45 @@ describe("state migration", () => {
     }
   });
 
+  it("upgrades an existing database that predates the source_event_key column", () => {
+    const root = createTempRoot();
+    const dbPath = path.join(root, "state.db");
+    // Build a current DB, then roll it back to look like a pre-v23 database
+    // without the source_event_key column/index.
+    StateDb.open(dbPath).close();
+    const raw = new Database(dbPath);
+    raw.exec("DROP INDEX IF EXISTS idx_automation_runs_source_event");
+    raw.exec("ALTER TABLE automation_runs DROP COLUMN source_event_key");
+    raw.pragma("user_version = 22");
+    raw.close();
+
+    // Reopening must migrate cleanly. Regression: ensureCurrentSchema runs
+    // before migrations, so an index in the schema string referencing the
+    // not-yet-added column threw "no such column: source_event_key" on boot.
+    const stateDb = StateDb.open(dbPath);
+    try {
+      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+        CURRENT_STATE_DB_USER_VERSION,
+      );
+      const columns = stateDb.raw
+        .prepare("PRAGMA table_info(automation_runs)")
+        .all() as Array<{ name: string }>;
+      expect(columns.some((column) => column.name === "source_event_key")).toBe(
+        true,
+      );
+      const indexes = stateDb.raw
+        .prepare("PRAGMA index_list(automation_runs)")
+        .all() as Array<{ name: string }>;
+      expect(
+        indexes.some(
+          (index) => index.name === "idx_automation_runs_source_event",
+        ),
+      ).toBe(true);
+    } finally {
+      stateDb.close();
+    }
+  });
+
   it("does not copy legacy default settings into a new named profile", () => {
     const root = createTempRoot();
     const pwragentHome = path.join(root, "pwragent");
