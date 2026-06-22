@@ -89,6 +89,23 @@ describe("StdioJsonRpcTransport", () => {
     expect(child.writes).toHaveLength(1);
   });
 
+  it("rejects client requests after an intentional close", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await transport.connect();
+    await transport.close();
+
+    expect(() =>
+      transport.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" })),
+    ).toThrow("codex app server stdio not connected");
+    expect(child.writes).toHaveLength(0);
+  });
+
   it("still throws when the app-server exits unexpectedly", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);
