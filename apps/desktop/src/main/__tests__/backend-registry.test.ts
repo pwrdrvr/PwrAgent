@@ -995,6 +995,7 @@ class MockBackendClient {
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
       listThreadsError?: Error;
+      listThreadsDelay?: Promise<unknown>;
       archivedThreads?: AppServerThreadSummary[];
       startThreadResult?: { threadId: string };
       startTurnError?: Error;
@@ -1035,6 +1036,9 @@ class MockBackendClient {
     this.listThreadsCalls.push({ diagnostics, params });
     if (this.options.listThreadsError) {
       throw this.options.listThreadsError;
+    }
+    if (this.options.listThreadsDelay) {
+      await this.options.listThreadsDelay;
     }
     if (params?.archived === true && this.options.archivedThreads) {
       return this.options.archivedThreads;
@@ -19087,6 +19091,65 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  it("does not persist branch drift after registry shutdown starts", async () => {
+    let releaseListThreads!: () => void;
+    const listThreadsDelay = new Promise<void>((resolve) => {
+      releaseListThreads = resolve;
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Moved thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      gitBranch: "fix/steering-composer-navigation",
+      observedGitBranch: "fix/steering-composer-navigation",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "full-access",
+          observedGitBranch: "fix/queued-composer-navigation",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const setThreadObservedBranch = vi.spyOn(overlayStore, "setThreadObservedBranch");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+        listThreadsDelay,
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const responsePromise = registry.checkThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "fix/queued-composer-navigation",
+      threadId: "thread-1",
+    });
+    await Promise.resolve();
+
+    const closePromise = registry.close();
+    releaseListThreads();
+
+    await expect(responsePromise).resolves.toMatchObject({
+      expectedBranch: "fix/queued-composer-navigation",
+      observedBranch: "fix/steering-composer-navigation",
+      drifted: true,
+    });
+    expect(setThreadObservedBranch).not.toHaveBeenCalled();
+
+    await closePromise;
   });
 
   it("adopts a named branch change from an active turn before notifying listeners", async () => {

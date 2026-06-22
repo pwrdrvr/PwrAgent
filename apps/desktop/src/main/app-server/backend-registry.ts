@@ -4198,6 +4198,7 @@ export class DesktopBackendRegistry {
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpBackend: AcpBackendAdapter;
+  private closed = false;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
   // (e.g. Grok) worktree threads group under the same directory row as their
   // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
@@ -8827,10 +8828,26 @@ export class DesktopBackendRegistry {
   async checkThreadBranchDrift(
     params: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse> {
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        drifted: false,
+        checkedAt: Date.now(),
+      };
+    }
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
     });
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        drifted: false,
+        checkedAt: Date.now(),
+      };
+    }
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
       callerReason: "branch-drift",
@@ -8855,6 +8872,17 @@ export class DesktopBackendRegistry {
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
     const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
+
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        expectedBranch,
+        observedBranch: normalizedObservedBranch,
+        drifted,
+        checkedAt: Date.now(),
+      };
+    }
 
     await this.overlayStore.setThreadObservedBranch({
       backend: params.backend,
@@ -10028,6 +10056,7 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }

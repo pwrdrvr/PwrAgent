@@ -1018,6 +1018,10 @@ describe("bootstrapApp", () => {
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
+      disposeAppStateMock.mock.invocationCallOrder[0],
+    );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
   });
 

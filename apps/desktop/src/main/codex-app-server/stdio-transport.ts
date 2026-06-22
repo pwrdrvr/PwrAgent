@@ -35,6 +35,8 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
+  private closeRequested = false;
+  private droppedSendAfterCloseLogged = false;
 
   constructor(private readonly options: StdioJsonRpcTransportOptions) {}
 
@@ -50,6 +52,8 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (this.childProcess) {
       return;
     }
+    this.closeRequested = false;
+    this.droppedSendAfterCloseLogged = false;
 
     const env = this.options.resolveEnv
       ? await this.options.resolveEnv()
@@ -135,6 +139,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   }
 
   async close(): Promise<void> {
+    this.closeRequested = true;
     const child = this.childProcess;
     this.childProcess = null;
     if (!child) {
@@ -146,6 +151,13 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   send(message: string): void {
     const child = this.childProcess;
     if (!child?.stdin) {
+      if (this.closeRequested) {
+        if (!this.droppedSendAfterCloseLogged) {
+          this.droppedSendAfterCloseLogged = true;
+          codexTransportLog.info("dropped app-server send after close");
+        }
+        return;
+      }
       throw new Error("codex app server stdio not connected");
     }
     child.stdin.write(`${message}\n`);
