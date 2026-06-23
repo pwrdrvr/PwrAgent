@@ -22,6 +22,7 @@ type StreamToolCall = {
 
 function createStreamTextMock(params: {
   text?: string;
+  reasoningText?: string;
   responseId?: string;
   toolCalls?: StreamToolCall[];
   sources?: unknown[];
@@ -44,6 +45,7 @@ function createStreamTextMock(params: {
     const text = run();
     return {
       text,
+      reasoningText: text.then(() => params.reasoningText),
       response: text.then(() => ({ id: params.responseId ?? "resp_123" })),
       sources: Promise.resolve(params.sources ?? []),
       providerMetadata: Promise.resolve(undefined),
@@ -236,6 +238,37 @@ describe("GrokProvider tool loop", () => {
         }),
       }),
     );
+  });
+
+  it("falls back to final reasoning text when xAI returns no text after tool use", async () => {
+    const streamTextImpl = createStreamTextMock({
+      text: "",
+      reasoningText: "Needle located.",
+      responseId: "resp_reasoning_final",
+      toolCalls: [{ id: "call_search", name: "search_code", input: { query: "needle" } }],
+    });
+    const { executor } = createStubToolExecutor();
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      streamTextImpl,
+    });
+
+    const activeTurn = provider.startTurn({
+      thread: {
+        threadId: "thread-123",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-reasoning",
+      },
+      input: [{ type: "text", text: "Find the needle." }],
+      tools: executor,
+    });
+
+    await expect(activeTurn.result).resolves.toEqual({
+      assistantText: "Needle located.",
+      providerResponseId: "resp_reasoning_final",
+      sources: [],
+      providerMetadata: undefined,
+    });
   });
 
   it("includes thread history when starting a chat-model turn", async () => {

@@ -99,20 +99,22 @@ async function runAiSdkTurn(params: {
     }),
   }) as {
     text: PromiseLike<string>;
+    reasoningText?: PromiseLike<string | undefined>;
     response: PromiseLike<{ id?: string }>;
     sources?: PromiseLike<unknown[]>;
     providerMetadata?: PromiseLike<unknown>;
   };
 
-  const [assistantText, response, sources, providerMetadata] = await Promise.all([
+  const [assistantText, reasoningText, response, sources, providerMetadata] = await Promise.all([
     result.text,
+    result.reasoningText ?? Promise.resolve(undefined),
     result.response,
     result.sources ?? Promise.resolve([]),
     result.providerMetadata ?? Promise.resolve(undefined),
   ]);
 
   return {
-    assistantText,
+    assistantText: assistantText.trim() ? assistantText : (reasoningText ?? assistantText),
     providerResponseId: response.id,
     sources: normalizeAiSdkSources(sources),
     providerMetadata: normalizeProviderMetadata(providerMetadata),
