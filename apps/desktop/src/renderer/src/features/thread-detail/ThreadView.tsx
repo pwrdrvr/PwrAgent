@@ -966,7 +966,7 @@ export function ThreadView(props: ThreadViewProps) {
   // Defaults to pinned-open (matches the persisted default) when App hasn't
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
-  const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? false;
+  const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
   const activeContextTab =
     !threadPricingSummaryEnabled && props.activeContextTab === "pricing"
       ? DEFAULT_CONTEXT_TAB

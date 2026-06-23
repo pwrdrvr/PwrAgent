@@ -1755,7 +1755,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults thread pricing summary to false and persists it", async () => {
+  it("defaults thread pricing summary to true and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -1766,7 +1766,7 @@ describe("DesktopSettingsService", () => {
 
     const initial = await service.readSettings();
     expect(initial.experimental.threadPricingSummary).toEqual({
-      value: false,
+      value: true,
       source: "default",
     });
     expect(initial.experimental.threadPricingDisplayUsd).toEqual({
@@ -1780,7 +1780,7 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatch({
       experimental: {
-        threadPricingSummary: true,
+        threadPricingSummary: false,
         threadPricingDisplayUsd: false,
         threadPricingDisplayCodexCredits: true,
       },
@@ -1788,7 +1788,7 @@ describe("DesktopSettingsService", () => {
 
     const updated = await service.readSettings();
     expect(updated.experimental.threadPricingSummary).toEqual({
-      value: true,
+      value: false,
       source: "config",
     });
     expect(updated.experimental.threadPricingDisplayUsd).toEqual({
@@ -1800,7 +1800,7 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "thread_pricing_summary = true",
+      "thread_pricing_summary = false",
     );
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_display_usd = false",
