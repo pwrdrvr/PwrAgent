@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 import { formatTimestamp } from "./context-rail-shared";
 import {
+  formatSubAgentUsageEstimates,
+  formatSubAgentUsageSummary,
   formatTokenCount,
-  formatUsd,
+  type PricingDisplayOptions,
   subAgentStatusLabel,
   subAgentTone,
 } from "./subagent-format";
@@ -12,6 +14,7 @@ import { RailStatusChip } from "./RailStatusChip";
 import { subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
+  pricingDisplayOptions?: PricingDisplayOptions;
   subAgent: ThreadSubAgentSummary;
   onClose: () => void;
 };
@@ -79,6 +82,13 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
+  const usageEstimates = usage
+    ? formatSubAgentUsageEstimates({
+        displayOptions: props.pricingDisplayOptions,
+        model,
+        usage,
+      })
+    : undefined;
   const originLabel = subAgentOriginLabel(subAgent);
   const ariaLabel = subAgent.agentName
     ? `${subAgent.agentName}: ${subAgent.task}`
@@ -188,15 +198,21 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
                   <dd>{formatTokenCount(usage.tokenUsage.totalTokens)}</dd>
                 </div>
               ) : null}
-              {usage.cost ? (
+              {usageEstimates ? (
                 <div>
                   <dt>Cost</dt>
-                  <dd>{formatUsd(usage.cost.totalUsd)}</dd>
+                  <dd>{usageEstimates}</dd>
                 </div>
               ) : null}
             </dl>
             {usage.summary ? (
-              <p className="subagent-modal__usage-summary">{usage.summary}</p>
+              <p className="subagent-modal__usage-summary">
+                {formatSubAgentUsageSummary({
+                  displayOptions: props.pricingDisplayOptions,
+                  model,
+                  usage,
+                })}
+              </p>
             ) : null}
           </section>
         ) : null}

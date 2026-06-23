@@ -54,7 +54,9 @@ export type TaskMonitorUsageSnapshot = {
     model: string;
     totalUsd: number;
   };
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   summary: string;
   tokenUsage: {
     cachedInputTokens?: number;

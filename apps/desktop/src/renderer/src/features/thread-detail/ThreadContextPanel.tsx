@@ -689,7 +689,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "subagents":
-        return <SubAgentsPanel thread={props.thread} />;
+        return (
+          <SubAgentsPanel
+            pricingDisplayOptions={props.pricingDisplayOptions}
+            thread={props.thread}
+          />
+        );
       case "automations":
         return (
           <ThreadAutomationsPanel
