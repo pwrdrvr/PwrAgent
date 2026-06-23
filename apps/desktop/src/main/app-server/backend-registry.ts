@@ -2345,7 +2345,9 @@ function buildTaskMonitorUsageSnapshot(params: {
 
   return {
     ...(cost ? { cost } : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
     summary,
     tokenUsage: {
       cachedInputTokens,

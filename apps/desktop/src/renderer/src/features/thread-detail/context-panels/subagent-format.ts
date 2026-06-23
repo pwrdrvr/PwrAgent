@@ -117,12 +117,14 @@ export function formatSubAgentUsageEstimates(params: {
         0,
         params.usage.tokenUsage.cachedInputTokens ?? 0,
       ),
+      fastMode: params.usage.fastMode,
       model: params.model ?? params.usage.model ?? params.usage.cost?.model,
       outputTokens: Math.max(0, params.usage.tokenUsage.outputTokens ?? 0),
       reasoningOutputTokens: Math.max(
         0,
         params.usage.tokenUsage.reasoningOutputTokens ?? 0,
       ),
+      serviceTier: params.usage.serviceTier,
       uncachedInputTokens: Math.max(
         0,
         params.usage.tokenUsage.uncachedInputTokens ??

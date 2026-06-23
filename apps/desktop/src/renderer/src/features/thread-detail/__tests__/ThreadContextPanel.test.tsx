@@ -326,9 +326,11 @@ describe("ThreadContextPanel", () => {
             completedAt: 2600,
             preferredModel: "gpt-5.5",
             monitorUsage: {
+              fastMode: true,
               model: "gpt-5.5",
+              serviceTier: "priority",
               summary:
-                "1,500 uncached in · 500 cached · 300 out (120 reasoning) · $0.010 list price",
+                "1,500 uncached in · 500 cached · 300 out (120 reasoning) · $0.024 list price",
               tokenUsage: {
                 inputTokens: 2000,
                 cachedInputTokens: 500,
@@ -339,7 +341,7 @@ describe("ThreadContextPanel", () => {
               },
               cost: {
                 model: "gpt-5.5",
-                totalUsd: 0.0095,
+                totalUsd: 0.02375,
               },
             },
           },
@@ -349,21 +351,21 @@ describe("ThreadContextPanel", () => {
 
     expect(
       screen.getByText(
-        "Monitor usage: 1,500 uncached in · 500 cached · 300 out (120 reasoning) · 0.5 Codex Credits",
+        "Monitor usage: 1,500 uncached in · 500 cached · 300 out (120 reasoning) · 1.3 Codex Credits",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/\$0\.010 list price/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     const modal = within(screen.getByRole("dialog"));
     expect(modal.getByText("Cost")).toBeInTheDocument();
-    expect(modal.getByText("0.5 Codex Credits")).toBeInTheDocument();
+    expect(modal.getByText("1.3 Codex Credits")).toBeInTheDocument();
     expect(
       modal.getByText(
-        "1,500 uncached in · 500 cached · 300 out (120 reasoning) · 0.5 Codex Credits",
+        "1,500 uncached in · 500 cached · 300 out (120 reasoning) · 1.3 Codex Credits",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/\$0\.010 list price/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
   });
 
   it("labels review sub-agent usage separately from monitor usage", () => {

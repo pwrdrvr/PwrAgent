@@ -11693,6 +11693,15 @@ command = "pnpm dev"
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
       startReviewResult: {
         threadId: "thread-1",
         reviewThreadId: "thread-1",
@@ -11739,10 +11748,12 @@ command = "pnpm dev"
         model: "gpt-5.5",
         tokenUsage: {
           total: {
+            fastMode: true,
             inputTokens: 1_000,
             cachedInputTokens: 200,
             outputTokens: 50,
             reasoningOutputTokens: 10,
+            serviceTier: "priority",
           },
         },
       },
@@ -11757,6 +11768,8 @@ command = "pnpm dev"
         return overlay?.subAgents?.[0]?.monitorUsage;
       })
       .toMatchObject({
+        fastMode: true,
+        serviceTier: "priority",
         summary: expect.stringContaining(
           "800 uncached in · 200 cached · 50 out (10 reasoning)"
         ),
@@ -11775,10 +11788,12 @@ command = "pnpm dev"
     });
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
+      fastMode: true,
       model: "gpt-5.5",
       parentThreadId: "thread-1",
       priceStatus: "priced",
       scope: "monitor",
+      serviceTier: "priority",
       threadId: "thread-1",
       turnId: "turn-review-1",
     });
