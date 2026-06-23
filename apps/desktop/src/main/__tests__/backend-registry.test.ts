@@ -44,6 +44,7 @@ import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
+import { GitDirectoryService } from "../app-server/git-directory-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -13654,6 +13655,9 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      gitDirectoryService: new GitDirectoryService({
+        resolveWorktreeStorage: () => "in-repo",
+      }),
       overlayStore,
       threadTitleGenerationService: null,
     });
@@ -13737,6 +13741,7 @@ command = "pnpm dev"
           task: "Investigate issue XYZ and report back.",
           title: "Investigate issue XYZ",
           context: "Parent already checked the latest CI run.",
+          workspaceMode: "new_worktree",
           messagingAttachment: "new_child",
         },
       },
@@ -13746,7 +13751,6 @@ command = "pnpm dev"
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
-    const normalizedRoot = expectedDir(root);
     expect(payload).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -13765,11 +13769,11 @@ command = "pnpm dev"
         sandbox: "danger-full-access",
       },
       workspace: {
-        mode: "same",
-        cwd: normalizedRoot,
-        branch: "main",
+        mode: "new_worktree",
+        cwd: expect.stringContaining("handoff"),
+        branch: "HEAD",
         git: {
-          kind: "git_local",
+          kind: "git_worktree",
           worktreeCreationAvailable: true,
         },
       },
@@ -13807,7 +13811,7 @@ command = "pnpm dev"
       },
     ]);
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      cwd: normalizedRoot,
+      cwd: expect.stringContaining("handoff"),
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -13821,7 +13825,7 @@ command = "pnpm dev"
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
-      cwd: normalizedRoot,
+      cwd: expect.stringContaining("handoff"),
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -13836,7 +13840,7 @@ command = "pnpm dev"
     expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
     expect(prompt).toContain("- Thread ID: ordinary-thread");
     expect(prompt).toContain("- Turn ID: turn-1");
-    expect(prompt).toContain(`- CWD: ${normalizedRoot}`);
+    expect(prompt).toContain("- CWD: ");
     expect(prompt).toContain("Additional context from parent:");
     expect(prompt).toContain("Parent already checked the latest CI run.");
     await expect(
@@ -13857,15 +13861,77 @@ command = "pnpm dev"
         seedMode: "clean",
         groupingMode: "none",
         workspace: {
-          mode: "same",
-          cwd: normalizedRoot,
-          branch: "main",
+          mode: "new_worktree",
+          cwd: expect.stringContaining("handoff"),
+          branch: "HEAD",
         },
       },
     });
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects ungrouped same-workspace thread handoff dynamic tool calls", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ and report back.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                'workspaceMode="same" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for an ungrouped delegated thread with an isolated worktree, or workspaceMode="none" for an unscoped local thread.',
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
   });
 
   it("sends a follow-up prompt to another thread from an active turn", async () => {

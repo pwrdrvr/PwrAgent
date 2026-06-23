@@ -14069,6 +14069,12 @@ export class DesktopBackendRegistry {
       request.args.groupingMode ?? "none";
     const workspaceMode: HandoffTaskWorkspaceMode =
       request.args.workspaceMode ?? "same";
+    if (workspaceMode === "same" && groupingMode !== "subthread") {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        'workspaceMode="same" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for an ungrouped delegated thread with an isolated worktree, or workspaceMode="none" for an unscoped local thread.',
+      );
+    }
     const sourceThread = await this.findThreadForWorkspaceHandoff({
       backend: sourceBackend,
       callerReason: "agent-handoff",
