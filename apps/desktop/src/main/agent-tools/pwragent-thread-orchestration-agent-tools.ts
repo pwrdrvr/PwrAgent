@@ -94,7 +94,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread, and groupingMode=subthread only when the user asks for a sub-thread.";
+      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread, and groupingMode=subthread only when the user asks for a sub-thread. For ungrouped handoffs, explicitly choose workspaceMode=new_worktree or workspaceMode=none.";
     case "send_message_to_thread":
       return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead.";
   }
@@ -141,7 +141,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_WORKSPACE_MODES,
             description:
-              "`same` inherits the current workspace and is the default. `new_worktree` requests an isolated Git worktree. `none` allows a no-workspace thread.",
+              "`same` inherits the current workspace and is valid only with groupingMode=subthread. `new_worktree` requests an isolated Git worktree. `none` allows a no-workspace thread.",
           },
           messagingAttachment: {
             type: "string",
