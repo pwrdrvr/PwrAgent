@@ -438,14 +438,29 @@ describe("ThreadContextPanel", () => {
     );
   });
 
-  it("hides the Pricing tab by default while the experimental flag is off", () => {
+  it("shows the Pricing tab by default", () => {
     renderPanel({
       activeTab: "pricing",
       pinned: true,
     });
 
+    expect(screen.getByRole("tab", { name: "Pricing" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Pricing" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the Pricing tab while the experimental flag is off", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      threadPricingSummaryEnabled: false,
+    });
+
     expect(screen.queryByRole("tab", { name: "Pricing" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Pricing" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 

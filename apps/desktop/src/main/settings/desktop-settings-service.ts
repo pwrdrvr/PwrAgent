@@ -561,7 +561,7 @@ export class DesktopSettingsService {
         ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
-          false,
+          true,
         ),
         threadPricingDisplayUsd: this.resolveConfigBoolean(
           config.experimental?.threadPricingDisplayUsd,

@@ -48,7 +48,7 @@ const DEFAULT_AGENT_CORE_GROK = {
 };
 
 const DEFAULT_THREAD_PRICING_SUMMARY = {
-  value: false,
+  value: true,
   source: "default" as const,
 };
 

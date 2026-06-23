@@ -821,7 +821,7 @@ function DesktopAppShell(props: {
     contextWindow: session.contextWindow,
     pricing: session.response?.pricing,
     threadPricingSummaryEnabled:
-      settings.snapshot?.experimental.threadPricingSummary?.value ?? false,
+      settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {
       codexCredits:
         settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??

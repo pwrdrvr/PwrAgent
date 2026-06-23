@@ -146,7 +146,7 @@ function createSnapshot(
         source: "default",
       },
       threadPricingSummary: {
-        value: false,
+        value: true,
         source: "default",
       },
       threadPricingDisplayUsd: {
@@ -650,15 +650,15 @@ describe("SettingsScreen", () => {
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { threadPricingSummary: true },
+        experimental: { threadPricingSummary: false },
       });
     });
     expect(
       screen.getByRole("switch", { name: "Display USD" }),
-    ).toBeDisabled();
+    ).not.toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Display Codex Credits" }),
-    ).toBeDisabled();
+    ).not.toBeDisabled();
 
     fireEvent.click(
       screen.getByRole("switch", {
@@ -888,6 +888,29 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
+  });
+
+  it("disables thread pricing display unit toggles when summary is off", () => {
+    const baseSnapshot = createSnapshot();
+    const settings = createSettingsState(
+      createSnapshot({
+        experimental: {
+          ...baseSnapshot.experimental,
+          threadPricingSummary: { value: false, source: "config" },
+          threadPricingDisplayUsd: { value: true, source: "default" },
+          threadPricingDisplayCodexCredits: { value: false, source: "default" },
+        },
+      }),
+    );
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
+
+    expect(screen.getByRole("switch", { name: "Display USD" })).toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: "Display Codex Credits" }),
+    ).toBeDisabled();
   });
 
   it("saves hot CPU profiling delay and trigger mode presets", async () => {

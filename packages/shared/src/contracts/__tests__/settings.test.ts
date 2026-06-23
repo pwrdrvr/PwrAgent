@@ -84,7 +84,7 @@ describe("desktop settings contracts", () => {
           source: "default",
         },
         threadPricingSummary: {
-          value: false,
+          value: true,
           source: "default",
         },
         threadPricingDisplayUsd: {
