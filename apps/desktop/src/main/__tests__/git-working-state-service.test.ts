@@ -179,6 +179,44 @@ describe("probeWorktreeWorkingState", () => {
     });
   });
 
+  it("does not infer a release base for an attached default branch checkout", async () => {
+    const mainTip = "1".repeat(40);
+    const releaseTip = "2".repeat(40);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-parse") && args.includes("--verify")) {
+        const target = args[args.length - 1];
+        if (target === "HEAD^{commit}") return `${mainTip}\n`;
+        if (target === "releases/4.3^{commit}") return `${releaseTip}\n`;
+      }
+      if (args.includes("rev-parse") && args.includes("--abbrev-ref")) {
+        return "main\n";
+      }
+      if (args.includes("rev-list") && args.includes("--count")) return "0\n";
+      if (
+        args.includes("config") ||
+        args.includes("symbolic-ref") ||
+        args.includes("for-each-ref") ||
+        args.includes("merge-base")
+      ) {
+        throw new Error(`base inference should short-circuit before ${args.join(" ")}`);
+      }
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", { runGit });
+
+    expect(state).toEqual({
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+    });
+  });
+
   it("keeps base metadata when detached HEAD is exactly at the base tip", async () => {
     const baseTip = "f".repeat(40);
     const { runGit } = fakeGit((args) => {

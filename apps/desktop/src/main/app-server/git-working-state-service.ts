@@ -209,6 +209,9 @@ async function resolveWorktreeBaseState(
   const currentBranch = rawCurrentBranch && rawCurrentBranch !== "HEAD"
     ? rawCurrentBranch
     : undefined;
+  if (currentBranch && isLikelyBaseBranch(currentBranch)) {
+    return undefined;
+  }
 
   const [configuredBase, remoteHead, refsOutput] = await Promise.all([
     currentBranch
