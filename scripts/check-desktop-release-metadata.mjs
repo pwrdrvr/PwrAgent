@@ -49,8 +49,13 @@ function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner
   const bodyStart = match.index + match[0].length;
   const remainder = workflow.slice(bodyStart);
   const nextJobOffset = remainder.search(/^  [A-Za-z0-9_-]+:/m);
-  const jobBody = nextJobOffset === -1 ? remainder : remainder.slice(0, nextJobOffset);
-  const runnerPattern = new RegExp(`^    runs-on:\\s+${escapeRegex(expectedRunner)}\\s*$`, "m");
+  const jobBody = nextJobOffset === -1
+    ? remainder
+    : remainder.slice(0, nextJobOffset);
+  const runnerPattern = new RegExp(
+    `^    runs-on:\\s+${escapeRegex(expectedRunner)}\\s*$`,
+    "m",
+  );
   if (!runnerPattern.test(jobBody)) {
     fail(`${workflowPath} ${jobName} must run on ${expectedRunner}`);
   }
@@ -152,7 +157,12 @@ for (const expected of [
     fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
   }
 }
-assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", "windows-package", "windows-2022");
+assertWorkflowJobRunner(
+  ciWorkflow,
+  ".github/workflows/ci.yml",
+  "windows-package",
+  "windows-2022",
+);
 
 for (const expected of [
   "ubuntu-24.04-arm",
