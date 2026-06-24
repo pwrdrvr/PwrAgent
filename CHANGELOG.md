@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.37 - 2026-06-24
+
+- Thread Pricing - Enabled the Pricing tab by default and kept sub-agent rows aligned with the selected USD and Codex Credits display units.
+- Agent Handoffs - Fixed agent-created handoffs so ungrouped delegated threads can no longer silently reuse the caller's worktree outside grouped subthreads.
+- Shutdown Reliability - Quieted branch-drift and app-server close races so late Codex responses and shutdown refreshes do not produce noisy errors during app close.
+- Security and Dependencies - Updated production and test dependencies, refreshed third-party licenses, and forced transitive Undici versions to patched releases.
+- Minor Fixes - Fixed reasoning-only and empty tool-response handling in the legacy direct-xAI Grok backend. This does not apply to Grok Build via ACP.
+
 ## v1.0.0-beta.36 - 2026-06-21
 
 - Agent Handoff Tools - Added PwrAgent app, thread, messaging, and task handoff tools so agents can inspect and coordinate work across PwrAgent surfaces.
