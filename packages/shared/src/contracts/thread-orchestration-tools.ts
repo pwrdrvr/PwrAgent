@@ -5,6 +5,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
+import type { CodexEnvironmentStartupFailure } from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
@@ -186,6 +187,7 @@ export type HandoffTaskResult = {
   origin: ThreadHandoffOrigin;
   workspace: ThreadHandoffOriginWorkspace;
   messagingAttachment: HandoffTaskMessagingAttachment;
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
   turnStartFailure?: {
     message: string;
     phase: "turn";

@@ -14139,6 +14139,185 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("creates new-worktree handoff threads when inherited environment setup is unavailable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-env-missing-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await mkdir(worktreePath, { recursive: true });
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      executionTarget: "local",
+      cwd: repoPath,
+      setupEnabled: true,
+      setupStatus: "completed",
+      setupCommand: "printf setup",
+      selectedActionIdByEnvironmentId: {
+        environment: "dev",
+      },
+      actions: [
+        {
+          id: "dev",
+          name: "Dev",
+          command: "pnpm dev",
+        },
+      ],
+    };
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      workMode: "worktree" as const,
+      rollback: vi.fn(async () => {}),
+    }));
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async () => {
+      throw new Error("setup should not run without an environment file");
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Backport the fix from master.",
+          title: "Backport fix",
+          workspaceMode: "new_worktree",
+          branchName: "origin/master",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(commandRunner).not.toHaveBeenCalled();
+    expect(codexClient.lastStartThreadParams?.cwd).toBe(worktreePath);
+    expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      cwd: worktreePath,
+      setupStatus: "failed",
+      setupOutput: expect.stringContaining("is not available in the forked worktree"),
+    });
+    expect(codexClient.lastStartTurnParams?.threadId).toBe("thread-1");
+    const prompt =
+      (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
+        ?.text ?? "";
+    expect(prompt).toContain("Codex environment startup:");
+    expect(prompt).toContain("- Status: failed");
+    expect(prompt).toContain("is not available in the forked worktree");
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.codexEnvironmentStartupFailure).toMatchObject({
+      phase: "setup",
+      worktreeCleanupAvailable: true,
+      message: expect.stringContaining("is not available in the forked worktree"),
+    });
+    expect(payload.inheritedSettings.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      cwd: worktreePath,
+      setupStatus: "failed",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        cwd: worktreePath,
+        setupStatus: "failed",
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("rejects ungrouped same-workspace thread handoff dynamic tool calls", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

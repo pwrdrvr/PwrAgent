@@ -289,6 +289,7 @@ describe("GitDirectoryService", () => {
     expect(status?.baseBranches).toEqual(
       expect.arrayContaining(["main", "release", "origin/main", "origin/release"]),
     );
+    expect(status?.baseBranches).not.toContain("origin");
     expect(status?.baseBranches).not.toContain("origin/HEAD");
     expect(status?.baseBranchDetails?.map((detail) => detail.name)).toEqual(
       status?.baseBranches,

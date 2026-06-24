@@ -303,6 +303,48 @@ function parseGitBranchDetails(
 }
 
 /**
+ * Parses `for-each-ref refs/heads refs/remotes` output formatted as
+ * `<full-refname>\t<short-name>\t<committerdate:unix>\t<symref>`.
+ *
+ * Remote HEAD aliases must be filtered before callers see the shortened name:
+ * Git can shorten `refs/remotes/origin/HEAD` to `origin`, which otherwise
+ * looks like a selectable branch.
+ */
+function parseGitBaseBranchDetails(
+  output: string,
+): { name: string; lastCommitAt?: number }[] {
+  const details: { name: string; lastCommitAt?: number }[] = [];
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line.trim()) {
+      continue;
+    }
+    const [refname = "", shortName = "", unixRaw = "", symref = ""] =
+      line.split("\t");
+    const fullRefname = refname.trim();
+    if (
+      fullRefname.startsWith("refs/remotes/") &&
+      fullRefname.endsWith("/HEAD")
+    ) {
+      continue;
+    }
+    if (symref.trim()) {
+      continue;
+    }
+    const name = shortName.trim();
+    if (!name) {
+      continue;
+    }
+    const unixValue = Number.parseInt(unixRaw.trim(), 10);
+    details.push({
+      name,
+      lastCommitAt: Number.isFinite(unixValue) ? unixValue : undefined,
+    });
+  }
+  return details;
+}
+
+/**
  * Upper bound on how many branches we enrich, hold in the navigation
  * snapshot, and persist to the directory git-status cache. Repos can have
  * thousands of branches; the picker (and the messaging / PR-status surfaces
@@ -674,7 +716,7 @@ export class GitDirectoryService {
             "refs/heads",
             "refs/remotes",
             "--sort=-committerdate",
-            "--format=%(refname:short)%09%(committerdate:unix)",
+            "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
           ],
           gitEnv,
         ).catch(() => ""),
@@ -700,9 +742,7 @@ export class GitDirectoryService {
       gitEnv,
     ).catch(() => "");
     const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
-    const parsedBaseBranchDetailsAll = parseGitBranchDetails(baseBranchesOutput).filter(
-      (detail) => !detail.name.endsWith("/HEAD"),
-    );
+    const parsedBaseBranchDetailsAll = parseGitBaseBranchDetails(baseBranchesOutput);
     // Resolve the default branch against the FULL list so a rarely-committed
     // `main` is still found, then cap everything we hold/persist downstream.
     const defaultBranch = resolveDefaultBranch({
