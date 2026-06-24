@@ -15858,7 +15858,19 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay, messagingBindings);
+        const worktreePath = thread.projectKey?.trim();
+        const gitWorkingState =
+          thread.gitWorkingState ??
+          (worktreePath
+            ? await this.gitWorkingStateService.readWorkingState(worktreePath).catch(
+                () => undefined,
+              )
+            : undefined);
+        return toThreadInspectionSummary(
+          gitWorkingState ? { ...thread, gitWorkingState } : thread,
+          overlay,
+          messagingBindings,
+        );
       }),
     );
   }
@@ -16969,6 +16981,7 @@ function toThreadInspectionSummary(
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,
     fastMode: thread.fastMode,
+    gitWorkingState: thread.gitWorkingState,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     linkedDirectories: thread.linkedDirectories,
   };

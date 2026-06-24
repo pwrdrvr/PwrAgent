@@ -4,6 +4,7 @@ import type {
   AppServerThreadMessage,
   AppServerThreadReplayPagination,
   AppServerThreadTurnMetadata,
+  ThreadGitWorkingState,
   AppServerThreadStatus,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -167,6 +168,7 @@ export type ThreadInspectionSummary = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  gitWorkingState?: ThreadGitWorkingState;
   linkedDirectories: LinkedDirectorySummary[];
   score?: number;
   confidence?: ThreadSearchConfidenceBand;

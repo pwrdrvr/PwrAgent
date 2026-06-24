@@ -169,6 +169,7 @@ export function ThreadMetaChips({
             kind: thread.gitBranch ? "expected" : "current",
           })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+          tooltipText={formatBranchTooltip(branchChip, gitWorking)}
           value={branchChip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
@@ -247,15 +248,51 @@ function formatBranchCopyLabel(params: {
   return `Copy ${branchKind} ${params.branch}`;
 }
 
+function formatCommit(value: string | undefined): string | undefined {
+  const commit = value?.trim();
+  return commit ? commit.slice(0, 12) : undefined;
+}
+
+function formatCommitCount(value: number | undefined, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return `${label}: ${value.toLocaleString()} commit${value === 1 ? "" : "s"}`;
+}
+
+function formatBranchTooltip(
+  branch: string,
+  gitWorking: NavigationThreadSummary["gitWorkingState"],
+): string {
+  if (!gitWorking?.baseBranch) {
+    return branch;
+  }
+  const baseCommit = formatCommit(gitWorking.baseCommit);
+  const baseTipCommit = formatCommit(gitWorking.baseTipCommit);
+
+  return [
+    branch,
+    `Base: ${gitWorking.baseBranch}`,
+    baseCommit ? `Base commit: ${baseCommit}` : undefined,
+    baseTipCommit ? `Base tip: ${baseTipCommit}` : undefined,
+    formatCommitCount(gitWorking.baseBehindCommitCount, "Behind base"),
+    formatCommitCount(gitWorking.baseAheadCommitCount, "Ahead of base"),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function CopyableThreadChip(props: {
   "aria-label": string;
   children: ReactNode;
   className: string;
+  tooltipText?: string;
   value: string;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const [copied, setCopied] = useState(false);
-  const tooltipText = copied ? "Copied" : `${props.value}\nClick to copy to clipboard`;
+  const tooltipBody = props.tooltipText ?? props.value;
+  const tooltipText = copied ? "Copied" : `${tooltipBody}\nClick to copy to clipboard`;
 
   useEffect(() => {
     if (!copied) {

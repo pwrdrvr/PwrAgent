@@ -110,6 +110,108 @@ describe("probeWorktreeWorkingState", () => {
     expect(state?.unpushedCommits).toBe(1);
   });
 
+  it("infers the likely base branch and behind-base count from git refs", async () => {
+    const headCommit = "a".repeat(40);
+    const mainTip = "b".repeat(40);
+    const mainBase = "c".repeat(40);
+    const releaseTip = "d".repeat(40);
+    const releaseBase = "e".repeat(40);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-parse") && args.includes("--verify")) {
+        const target = args[args.length - 1];
+        if (target === "HEAD^{commit}") return `${headCommit}\n`;
+        if (target === "origin/main^{commit}") return `${mainTip}\n`;
+        if (target === "main^{commit}") return `${mainTip}\n`;
+        if (target === "releases/4.3^{commit}") return `${releaseTip}\n`;
+        if (target === "origin/releases/4.3^{commit}") return `${releaseTip}\n`;
+      }
+      if (args.includes("rev-parse") && args.includes("--abbrev-ref")) {
+        return "feature/work\n";
+      }
+      if (args.includes("config")) return "";
+      if (args.includes("symbolic-ref")) return "origin/main\n";
+      if (args.includes("for-each-ref")) {
+        return [
+          "main",
+          "releases/4.3",
+          "feature/work",
+          "origin/main",
+          "origin/releases/4.3",
+        ].join("\n");
+      }
+      if (args.includes("merge-base")) {
+        const target = args[args.length - 1];
+        if (target === "origin/main" || target === "main") return `${mainBase}\n`;
+        if (target === "releases/4.3" || target === "origin/releases/4.3") {
+          return `${releaseBase}\n`;
+        }
+      }
+      if (args.includes("rev-list") && args.includes("--count")) {
+        const range = args[args.length - 1];
+        if (range === "HEAD") return "0\n";
+        if (range === `${mainBase}..origin/main` || range === `${mainBase}..main`) {
+          return "7\n";
+        }
+        if (range === `${mainBase}..HEAD`) return "30\n";
+        if (
+          range === `${releaseBase}..releases/4.3` ||
+          range === `${releaseBase}..origin/releases/4.3`
+        ) {
+          return "2\n";
+        }
+        if (range === `${releaseBase}..HEAD`) return "5\n";
+      }
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", { runGit });
+
+    expect(state).toMatchObject({
+      baseBranch: "releases/4.3",
+      baseCommit: releaseBase,
+      baseTipCommit: releaseTip,
+      baseBehindCommitCount: 2,
+      baseAheadCommitCount: 5,
+      isBehindBase: true,
+    });
+  });
+
+  it("keeps base metadata when detached HEAD is exactly at the base tip", async () => {
+    const baseTip = "f".repeat(40);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "";
+      if (args.includes("rev-parse") && args.includes("--verify")) {
+        const target = args[args.length - 1];
+        if (target === "HEAD^{commit}") return `${baseTip}\n`;
+        if (target === "main^{commit}") return `${baseTip}\n`;
+      }
+      if (args.includes("rev-parse") && args.includes("--abbrev-ref")) {
+        return "HEAD\n";
+      }
+      if (args.includes("symbolic-ref")) return "";
+      if (args.includes("for-each-ref")) return "main\n";
+      if (args.includes("merge-base")) return `${baseTip}\n`;
+      if (args.includes("rev-list") && args.includes("--count")) return "0\n";
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", { runGit });
+
+    expect(state).toMatchObject({
+      baseBranch: "main",
+      baseCommit: baseTip,
+      baseTipCommit: baseTip,
+      baseBehindCommitCount: 0,
+      baseAheadCommitCount: 0,
+      isBehindBase: false,
+    });
+  });
+
   it("returns undefined when the directory is not a git checkout", async () => {
     const { runGit } = fakeGit(() => undefined);
     expect(await probeWorktreeWorkingState("/not/a/repo", { runGit })).toBeUndefined();
@@ -156,8 +258,8 @@ describe("GitWorkingStateService", () => {
     ]);
 
     expect(a).toEqual(b);
-    // numstat + status + remote + rev-list = 4 git calls for ONE probe.
-    expect(responder).toHaveBeenCalledTimes(4);
+    // numstat + status + remote + base HEAD probe + rev-list = 5 git calls for ONE probe.
+    expect(responder).toHaveBeenCalledTimes(5);
   });
 
   it("serves a fresh cache entry without re-probing, and re-probes after invalidate", async () => {
@@ -166,14 +268,14 @@ describe("GitWorkingStateService", () => {
     const service = new GitWorkingStateService({ runGit, cacheTtlMs: 60_000 });
 
     await service.readWorkingState("/repo/wt");
-    expect(responder).toHaveBeenCalledTimes(4);
+    expect(responder).toHaveBeenCalledTimes(5);
 
     await service.readWorkingState("/repo/wt");
-    expect(responder).toHaveBeenCalledTimes(4); // cached
+    expect(responder).toHaveBeenCalledTimes(5); // cached
 
     service.invalidate("/repo/wt");
     await service.readWorkingState("/repo/wt");
-    expect(responder).toHaveBeenCalledTimes(8); // re-probed
+    expect(responder).toHaveBeenCalledTimes(10); // re-probed
   });
 
   it("streams entries for many worktrees", async () => {

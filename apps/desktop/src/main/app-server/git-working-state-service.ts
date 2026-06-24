@@ -25,6 +25,7 @@ const DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
 const HARD_OTHER_CHANGE_DIFF_MAX_BYTES = 500_000;
 const UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES = 128_000;
 const UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS = 1_500;
+const MAX_BASE_BRANCH_CANDIDATES = 24;
 
 type GitCommandRunner = (
   cwd: string,
@@ -35,6 +36,31 @@ type UntrackedPathFilter = (repoPath: string) => boolean;
 
 type AcceptedPushedCommitOptions = {
   acceptedPushedCommitShas?: string[];
+};
+
+type WorktreeBaseState = Pick<
+  ThreadGitWorkingState,
+  | "baseBranch"
+  | "baseCommit"
+  | "baseTipCommit"
+  | "baseBehindCommitCount"
+  | "baseAheadCommitCount"
+  | "isBehindBase"
+>;
+
+type ResolvedWorktreeBaseState = {
+  baseBranch: string;
+  baseCommit: string;
+  baseTipCommit: string;
+  baseBehindCommitCount: number;
+  baseAheadCommitCount: number;
+  isBehindBase: boolean;
+};
+
+type BaseBranchCandidate = {
+  ref: string;
+  label: string;
+  sourceRank: number;
 };
 
 function buildAcceptedPushedCommitSet(
@@ -87,6 +113,202 @@ function parseNumstat(output: string): {
     }
   }
   return { files, additions, deletions };
+}
+
+function parseGitCount(value: string | undefined): number {
+  const parsed = Number.parseInt(value?.trim() ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseGitLines(output: string | undefined): string[] {
+  return (output ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function normalizeBaseBranchLabel(refName: string): string {
+  return refName
+    .trim()
+    .replace(/^refs\/heads\//, "")
+    .replace(/^refs\/remotes\//, "");
+}
+
+function remoteAgnosticBranchName(refName: string): string {
+  return normalizeBaseBranchLabel(refName).replace(
+    /^[^/]+\/(?=(?:main|master|develop|development|trunk)$|(?:release|releases|stable|support|maintenance)\/)/,
+    "",
+  );
+}
+
+function isLikelyBaseBranch(refName: string): boolean {
+  const branch = remoteAgnosticBranchName(refName);
+  return (
+    /^(main|master|develop|development|trunk)$/.test(branch) ||
+    /^(release|releases|stable|support|maintenance)\//.test(branch)
+  );
+}
+
+function isCurrentBranchRef(refName: string, currentBranch?: string): boolean {
+  if (!currentBranch) {
+    return false;
+  }
+  const label = normalizeBaseBranchLabel(refName);
+  return label === currentBranch || label.endsWith(`/${currentBranch}`);
+}
+
+function addBaseBranchCandidate(
+  candidates: BaseBranchCandidate[],
+  seen: Set<string>,
+  ref: string | undefined,
+  sourceRank: number,
+): void {
+  const normalizedRef = normalizeBaseBranchLabel(ref ?? "");
+  const label = remoteAgnosticBranchName(normalizedRef);
+  if (!normalizedRef || !label || label === "HEAD" || seen.has(label)) {
+    return;
+  }
+  seen.add(label);
+  candidates.push({ ref: normalizedRef, label, sourceRank });
+}
+
+function isBetterBaseState(
+  state: ResolvedWorktreeBaseState & { sourceRank: number },
+  best: (ResolvedWorktreeBaseState & { sourceRank: number }) | undefined,
+): boolean {
+  if (!best) {
+    return true;
+  }
+  if (state.sourceRank !== best.sourceRank) {
+    return state.sourceRank < best.sourceRank;
+  }
+  if (state.baseAheadCommitCount !== best.baseAheadCommitCount) {
+    return state.baseAheadCommitCount < best.baseAheadCommitCount;
+  }
+  if (state.baseBehindCommitCount !== best.baseBehindCommitCount) {
+    return state.baseBehindCommitCount < best.baseBehindCommitCount;
+  }
+  return state.baseBranch.localeCompare(best.baseBranch) < 0;
+}
+
+async function resolveWorktreeBaseState(
+  runGitNoLocks: (args: string[]) => Promise<string>,
+): Promise<WorktreeBaseState | undefined> {
+  const headCommit = (
+    await runGitNoLocks(["rev-parse", "--verify", "HEAD^{commit}"]).catch(
+      () => "",
+    )
+  ).trim();
+  if (!headCommit) {
+    return undefined;
+  }
+
+  const rawCurrentBranch = (
+    await runGitNoLocks(["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")
+  ).trim();
+  const currentBranch = rawCurrentBranch && rawCurrentBranch !== "HEAD"
+    ? rawCurrentBranch
+    : undefined;
+
+  const [configuredBase, remoteHead, refsOutput] = await Promise.all([
+    currentBranch
+      ? runGitNoLocks([
+          "config",
+          "--get",
+          `branch.${currentBranch}.vscode-merge-base`,
+        ]).catch(() => "")
+      : Promise.resolve(""),
+    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+      () => "",
+    ),
+    runGitNoLocks([
+      "for-each-ref",
+      "refs/heads",
+      "refs/remotes",
+      "--sort=-committerdate",
+      "--format=%(refname:short)",
+    ]).catch(() => ""),
+  ]);
+
+  const candidates: BaseBranchCandidate[] = [];
+  const seen = new Set<string>();
+  addBaseBranchCandidate(candidates, seen, configuredBase, 0);
+  if (!isCurrentBranchRef(remoteHead, currentBranch)) {
+    addBaseBranchCandidate(candidates, seen, remoteHead, 10);
+  }
+
+  for (const ref of parseGitLines(refsOutput)) {
+    const label = normalizeBaseBranchLabel(ref);
+    if (
+      label === "origin/HEAD" ||
+      isCurrentBranchRef(label, currentBranch) ||
+      !isLikelyBaseBranch(label)
+    ) {
+      continue;
+    }
+    addBaseBranchCandidate(candidates, seen, label, 10);
+    if (candidates.length >= MAX_BASE_BRANCH_CANDIDATES) {
+      break;
+    }
+  }
+
+  let best:
+    | (ResolvedWorktreeBaseState & {
+        sourceRank: number;
+      })
+    | undefined;
+
+  for (const candidate of candidates) {
+    const baseTipCommit = (
+      await runGitNoLocks([
+        "rev-parse",
+        "--verify",
+        `${candidate.ref}^{commit}`,
+      ]).catch(() => "")
+    ).trim();
+    if (!baseTipCommit) {
+      continue;
+    }
+
+    const baseCommit = (
+      await runGitNoLocks(["merge-base", "HEAD", candidate.ref]).catch(() => "")
+    ).trim();
+    if (!baseCommit) {
+      continue;
+    }
+
+    const [baseBehindOutput, baseAheadOutput] = await Promise.all([
+      runGitNoLocks([
+        "rev-list",
+        "--count",
+        `${baseCommit}..${candidate.ref}`,
+      ]).catch(() => ""),
+      runGitNoLocks(["rev-list", "--count", `${baseCommit}..HEAD`]).catch(
+        () => "",
+      ),
+    ]);
+    const baseBehindCommitCount = parseGitCount(baseBehindOutput);
+    const baseAheadCommitCount = parseGitCount(baseAheadOutput);
+    const state: ResolvedWorktreeBaseState & { sourceRank: number } = {
+      baseBranch: candidate.label,
+      baseCommit,
+      baseTipCommit,
+      baseBehindCommitCount,
+      baseAheadCommitCount,
+      isBehindBase: baseBehindCommitCount > 0,
+      sourceRank: candidate.sourceRank,
+    };
+
+    if (isBetterBaseState(state, best)) {
+      best = state;
+    }
+  }
+
+  if (!best) {
+    return undefined;
+  }
+  const { sourceRank: _sourceRank, ...state } = best;
+  return state;
 }
 
 function clampPositiveInteger(
@@ -564,7 +786,7 @@ export async function probeWorktreeWorkingState(
   const runGitNoLocks = (args: string[]): Promise<string> =>
     runGit(worktreePath, ["--no-optional-locks", ...args], gitEnv);
 
-  const [numstatOutput, statusOutput, remotesOutput] = await Promise.all([
+  const [numstatOutput, statusOutput, remotesOutput, baseState] = await Promise.all([
     // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
     // (fresh repo with no commits) — treated as "no tracked changes".
     runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
@@ -575,6 +797,7 @@ export async function probeWorktreeWorkingState(
       "--untracked-files=normal",
     ]).catch(() => undefined),
     runGitNoLocks(["remote"]).catch(() => undefined),
+    resolveWorktreeBaseState(runGitNoLocks).catch(() => undefined),
   ]);
   if (numstatOutput === undefined && statusOutput === undefined) {
     return undefined;
@@ -623,6 +846,7 @@ export async function probeWorktreeWorkingState(
     dirtyDeletions: numstat.deletions,
     untrackedFiles: untracked.files,
     unpushedCommits,
+    ...(baseState ?? {}),
   };
 }
 
