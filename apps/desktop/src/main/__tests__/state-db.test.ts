@@ -80,101 +80,6 @@ describe("StateDb", () => {
     ]);
   });
 
-  it("creates bounded append tables without AUTOINCREMENT counters", () => {
-    expect(tableSql("messaging_activity_log")).not.toMatch(/AUTOINCREMENT/i);
-    expect(tableSql("composer_draft_journal")).not.toMatch(/AUTOINCREMENT/i);
-    expect(
-      stateDb.raw
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'")
-        .get(),
-    ).toBeUndefined();
-  });
-
-  it("migrates bounded append tables away from AUTOINCREMENT without losing rows", () => {
-    stateDb.close();
-
-    const dbPath = path.join(tempDir, "legacy-autoincrement-state.db");
-    const raw = openRawDb(dbPath);
-    raw.exec(`
-      PRAGMA user_version = 22;
-      CREATE TABLE messaging_activity_log (
-        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-        platform                 TEXT NOT NULL,
-        kind                     TEXT NOT NULL,
-        thread_id                TEXT,
-        binding_id               TEXT,
-        conversation_id          TEXT,
-        conversation_title       TEXT,
-        actor_id                 TEXT,
-        actor_display_name       TEXT,
-        summary                  TEXT NOT NULL,
-        created_at               INTEGER NOT NULL,
-        payload                  TEXT NOT NULL
-      );
-      CREATE TABLE composer_draft_journal (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        scope_key    TEXT NOT NULL,
-        scope_kind   TEXT NOT NULL,
-        status       TEXT NOT NULL,
-        content_hash TEXT NOT NULL,
-        char_count   INTEGER NOT NULL,
-        created_at   INTEGER NOT NULL,
-        updated_at   INTEGER NOT NULL,
-        payload      TEXT NOT NULL
-      );
-      INSERT INTO messaging_activity_log (
-        platform, kind, summary, created_at, payload
-      ) VALUES (
-        'telegram', 'inbound-routed', 'Inbound from Ada', 1000, '{}'
-      );
-      INSERT INTO composer_draft_journal (
-        scope_key, scope_kind, status, content_hash, char_count,
-        created_at, updated_at, payload
-      ) VALUES (
-        'thread:1', 'thread', 'unsent', 'hash-1', 12, 1000, 1000, '{}'
-      );
-      UPDATE sqlite_sequence
-      SET seq = 5000000
-      WHERE name IN ('messaging_activity_log', 'composer_draft_journal');
-    `);
-    raw.close();
-
-    stateDb = StateDb.open(dbPath);
-
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
-      CURRENT_STATE_DB_USER_VERSION,
-    );
-    expect(tableSql("messaging_activity_log")).not.toMatch(/AUTOINCREMENT/i);
-    expect(tableSql("composer_draft_journal")).not.toMatch(/AUTOINCREMENT/i);
-    expect(
-      stateDb.raw
-        .prepare(
-          "SELECT name FROM sqlite_sequence WHERE name IN ('messaging_activity_log', 'composer_draft_journal')",
-        )
-        .all(),
-    ).toEqual([]);
-    expect(
-      stateDb.raw
-        .prepare("SELECT id, platform, kind, summary FROM messaging_activity_log")
-        .get(),
-    ).toEqual({
-      id: 1,
-      kind: "inbound-routed",
-      platform: "telegram",
-      summary: "Inbound from Ada",
-    });
-    expect(
-      stateDb.raw
-        .prepare("SELECT id, scope_key, status, content_hash FROM composer_draft_journal")
-        .get(),
-    ).toEqual({
-      content_hash: "hash-1",
-      id: 1,
-      scope_key: "thread:1",
-      status: "unsent",
-    });
-  });
-
   it("indexes thread usage pricing reads and rollups without full line-table scans", () => {
     expect(indexNames("thread_usage_lines")).toEqual(
       expect.arrayContaining([
@@ -971,14 +876,6 @@ function queryPlanDetails(sql: string, params: unknown[]): string {
   )
     .map((row) => row.detail)
     .join("\n");
-}
-
-function tableSql(tableName: string): string {
-  return (
-    stateDb.raw
-      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(tableName) as { sql: string }
-  ).sql;
 }
 
 function readTableInfo(

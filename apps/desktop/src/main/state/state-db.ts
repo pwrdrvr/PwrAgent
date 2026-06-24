@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 23;
+export const CURRENT_STATE_DB_USER_VERSION = 22;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -109,7 +109,7 @@ CREATE TABLE secrets (
 
 const SCHEMA_V2 = `
 CREATE TABLE messaging_activity_log (
-  id                       INTEGER PRIMARY KEY,
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
   platform                 TEXT NOT NULL,
   kind                     TEXT NOT NULL,
   thread_id                TEXT,
@@ -236,7 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_composer_draft_latest_updated
   ON composer_draft_latest(updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS composer_draft_journal (
-  id           INTEGER PRIMARY KEY,
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_key    TEXT NOT NULL,
   scope_kind   TEXT NOT NULL,
   status       TEXT NOT NULL,
@@ -799,12 +799,6 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 22) {
       db.transaction(() => {
         repairOpenAiThreadUsagePricing(db);
-        db.pragma("user_version = 22");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 23) {
-      db.transaction(() => {
-        removeAutoincrementFromBoundedTables(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -972,152 +966,6 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
-}
-
-function removeAutoincrementFromBoundedTables(db: BetterSqlite3.Database): void {
-  rebuildMessagingActivityLogWithoutAutoincrement(db);
-  rebuildComposerDraftJournalWithoutAutoincrement(db);
-  if (tableExists(db, "sqlite_sequence")) {
-    db.prepare(
-      "DELETE FROM sqlite_sequence WHERE name IN ('messaging_activity_log', 'composer_draft_journal')",
-    ).run();
-  }
-}
-
-function rebuildMessagingActivityLogWithoutAutoincrement(
-  db: BetterSqlite3.Database,
-): void {
-  if (!tableSqlContains(db, "messaging_activity_log", "AUTOINCREMENT")) {
-    return;
-  }
-
-  db.exec("DROP TABLE IF EXISTS messaging_activity_log_v23");
-  db.exec(`
-CREATE TABLE messaging_activity_log_v23 (
-  id                       INTEGER PRIMARY KEY,
-  platform                 TEXT NOT NULL,
-  kind                     TEXT NOT NULL,
-  thread_id                TEXT,
-  binding_id               TEXT,
-  conversation_id          TEXT,
-  conversation_title       TEXT,
-  actor_id                 TEXT,
-  actor_display_name       TEXT,
-  summary                  TEXT NOT NULL,
-  created_at               INTEGER NOT NULL,
-  payload                  TEXT NOT NULL
-)
-`);
-  db.exec(`
-INSERT INTO messaging_activity_log_v23 (
-  id,
-  platform,
-  kind,
-  thread_id,
-  binding_id,
-  conversation_id,
-  conversation_title,
-  actor_id,
-  actor_display_name,
-  summary,
-  created_at,
-  payload
-)
-SELECT
-  id,
-  platform,
-  kind,
-  thread_id,
-  binding_id,
-  conversation_id,
-  conversation_title,
-  actor_id,
-  actor_display_name,
-  summary,
-  created_at,
-  payload
-FROM messaging_activity_log
-ORDER BY id
-`);
-  db.exec("DROP TABLE messaging_activity_log");
-  db.exec("ALTER TABLE messaging_activity_log_v23 RENAME TO messaging_activity_log");
-  db.exec(`
-CREATE INDEX IF NOT EXISTS idx_messaging_activity_log_created
-  ON messaging_activity_log(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messaging_activity_log_platform_created
-  ON messaging_activity_log(platform, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messaging_activity_log_thread
-  ON messaging_activity_log(thread_id);
-`);
-}
-
-function rebuildComposerDraftJournalWithoutAutoincrement(
-  db: BetterSqlite3.Database,
-): void {
-  if (!tableSqlContains(db, "composer_draft_journal", "AUTOINCREMENT")) {
-    return;
-  }
-
-  db.exec("DROP TABLE IF EXISTS composer_draft_journal_v23");
-  db.exec(`
-CREATE TABLE composer_draft_journal_v23 (
-  id           INTEGER PRIMARY KEY,
-  scope_key    TEXT NOT NULL,
-  scope_kind   TEXT NOT NULL,
-  status       TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  char_count   INTEGER NOT NULL,
-  created_at   INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL,
-  payload      TEXT NOT NULL
-)
-`);
-  db.exec(`
-INSERT INTO composer_draft_journal_v23 (
-  id,
-  scope_key,
-  scope_kind,
-  status,
-  content_hash,
-  char_count,
-  created_at,
-  updated_at,
-  payload
-)
-SELECT
-  id,
-  scope_key,
-  scope_kind,
-  status,
-  content_hash,
-  char_count,
-  created_at,
-  updated_at,
-  payload
-FROM composer_draft_journal
-ORDER BY id
-`);
-  db.exec("DROP TABLE composer_draft_journal");
-  db.exec("ALTER TABLE composer_draft_journal_v23 RENAME TO composer_draft_journal");
-  db.exec(`
-CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_updated
-  ON composer_draft_journal(scope_key, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_updated
-  ON composer_draft_journal(updated_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_hash_status
-  ON composer_draft_journal(scope_key, content_hash, status);
-`);
-}
-
-function tableSqlContains(
-  db: BetterSqlite3.Database,
-  tableName: string,
-  needle: string,
-): boolean {
-  const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { sql: string | null } | undefined;
-  return Boolean(row?.sql?.toUpperCase().includes(needle.toUpperCase()));
 }
 
 function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {
