@@ -51,6 +51,13 @@ export type StartThreadResponse = {
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+};
+
+export type CodexEnvironmentStartupFailure = {
+  message: string;
+  phase: "setup" | "action";
+  worktreeCleanupAvailable: boolean;
 };
 
 export type ForkThreadRequest = {
@@ -81,6 +88,7 @@ export type ForkThreadResponse = {
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };
 
 export type ThreadMigrationOperation = "move" | "copy";
@@ -496,11 +504,7 @@ export type MaterializedDirectoryLaunchpadThread = {
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-  codexEnvironmentStartupFailure?: {
-    message: string;
-    phase: "setup" | "action";
-    worktreeCleanupAvailable: boolean;
-  };
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {
