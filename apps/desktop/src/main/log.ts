@@ -5,6 +5,7 @@ import type { ProfileBootDecision } from "./profile";
 let initialized = false;
 let stdioErrorHandlersInstalled = false;
 let debugCollectionEnabled = false;
+export const MAIN_LOG_MAX_SIZE_BYTES = 1024 * 1024;
 const MAX_COMPACT_STRING_LENGTH = 320;
 const MAX_COMPACT_FIELDS = 24;
 const MAX_COMPACT_DEPTH = 2;
@@ -20,6 +21,7 @@ const electronLogConsoleTransport = electronLog.transports?.console;
 if (process.env.VITEST === "true" && electronLogConsoleTransport) {
   electronLogConsoleTransport.level = false;
 }
+configureFileTransport();
 
 function isClosedStdioError(error: unknown): error is StdioError {
   if (typeof error !== "object" || error === null) {
@@ -81,6 +83,14 @@ function guardConsoleTransport(): void {
   };
 }
 
+function configureFileTransport(): void {
+  const transport = electronLog.transports?.file;
+  if (!transport) {
+    return;
+  }
+  transport.maxSize = MAIN_LOG_MAX_SIZE_BYTES;
+}
+
 export function initializeMainLogger(options?: { profileName?: string }): void {
   if (initialized) {
     return;
@@ -94,6 +104,7 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
       options.profileName,
     );
   }
+  configureFileTransport();
   electronLog.transports.file.level = debugCollectionEnabled ? "debug" : "info";
   electronLog.initialize();
   electronLog.scope.labelPadding = false;

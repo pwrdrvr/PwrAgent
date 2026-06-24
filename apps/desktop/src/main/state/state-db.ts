@@ -10,6 +10,8 @@ import {
 import { getNativeBinding } from "./native-binding.js";
 
 export const CURRENT_STATE_DB_USER_VERSION = 22;
+export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
+export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -649,6 +651,8 @@ export class StateDb {
 
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
+    db.pragma(`wal_autocheckpoint = ${STATE_DB_WAL_AUTOCHECKPOINT_PAGES}`);
+    db.pragma(`journal_size_limit = ${STATE_DB_JOURNAL_SIZE_LIMIT_BYTES}`);
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
 
