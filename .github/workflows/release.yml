@@ -208,7 +208,10 @@ jobs:
 
   windows-package:
     name: Package Windows installer (unsigned)
-    runs-on: windows-latest
+    # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
+    # not recognize Visual Studio 2026 on windows-latest/windows-2025.
+    # Keep installer packaging on VS 2022 until that toolchain catches up.
+    runs-on: windows-2022
     needs: prepare
     timeout-minutes: 45
     permissions:
