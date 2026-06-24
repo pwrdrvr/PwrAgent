@@ -6762,6 +6762,7 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -6772,6 +6773,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       workMode,
       branchName,
+      requiredWorkMode,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -6802,6 +6804,19 @@ export class DesktopBackendRegistry {
             })
           : buildLocalLinkedDirectory(cwd);
     }
+    if (requiredWorkMode && effectiveWorkMode !== requiredWorkMode) {
+      throw new Error(
+        `Requested ${requiredWorkMode} workspace, but workspace preparation resolved to ${effectiveWorkMode ?? "none"}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
+      );
+    }
+    const codexEnvironmentRuntime =
+      backend === "codex" && request.codexEnvironmentRuntime && workMode
+        ? await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            sourceRuntime: request.codexEnvironmentRuntime,
+            workMode: effectiveWorkMode ?? "local",
+          })
+        : request.codexEnvironmentRuntime;
 
     const acpAgent = isAcpBackendId(backend)
       ? this.acpBackend.getInstalledAgent(backend)
@@ -6890,7 +6905,7 @@ export class DesktopBackendRegistry {
           cwd,
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           sandbox: request.sandbox ?? modeSettings.sandbox,
-          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+          codexEnvironmentRuntime,
           ...(backend === "codex"
             ? {
                 defaultModeRequestUserInput:
@@ -6916,7 +6931,7 @@ export class DesktopBackendRegistry {
         executionMode: effectiveExecutionMode,
         ...modelSettings,
         acpRuntime,
-        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        codexEnvironmentRuntime,
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
@@ -6952,11 +6967,11 @@ export class DesktopBackendRegistry {
       });
       this.invalidateThreadListCache(backend);
     }
-    if (request.codexEnvironmentRuntime) {
+    if (codexEnvironmentRuntime) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend,
         threadId: result.threadId,
-        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        codexEnvironmentRuntime,
       });
     }
     if (
@@ -6976,7 +6991,7 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
-      codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+      codexEnvironmentRuntime,
     };
   }
 
@@ -7065,6 +7080,11 @@ export class DesktopBackendRegistry {
       worktreeBranchMode: request.worktreeBranchMode,
       workMode: request.workMode ?? "local",
     });
+    if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
+      throw new Error(
+        `Requested worktree workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
+      );
+    }
     request.onPreparedWorkspaceRollback?.(preparedWorkspace.rollback);
     const cwd = preparedWorkspace.cwd;
     const linkedDirectories =
@@ -14070,11 +14090,13 @@ export class DesktopBackendRegistry {
     const groupingMode: HandoffTaskGroupingMode =
       request.args.groupingMode ?? "none";
     const workspaceMode: HandoffTaskWorkspaceMode =
-      request.args.workspaceMode ?? "same";
-    if (workspaceMode === "same" && groupingMode !== "subthread") {
+      request.args.workspaceMode === "same"
+        ? "same_workspace"
+        : (request.args.workspaceMode ?? "new_worktree");
+    if (workspaceMode === "same_workspace" && groupingMode !== "subthread") {
       return threadOrchestrationFailure(
         "invalid_arguments",
-        'workspaceMode="same" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for an ungrouped delegated thread with an isolated worktree, or workspaceMode="none" for an unscoped local thread.',
+        'workspaceMode="same_workspace" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for a delegated thread with an isolated worktree, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.',
       );
     }
     const sourceThread = await this.findThreadForWorkspaceHandoff({
@@ -14095,7 +14117,7 @@ export class DesktopBackendRegistry {
     const sourceWorkspace = await this.buildThreadHandoffWorkspaceSummary({
       cwd: sourceCwd,
       linkedDirectory: sourceLinkedDirectory,
-      mode: "same",
+      mode: "same_workspace",
     });
 
     if (workspaceMode !== "none" && !sourceCwd?.trim()) {
@@ -14145,7 +14167,26 @@ export class DesktopBackendRegistry {
       instructions:
         "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
     };
-    const cwdForChild = workspaceMode === "none" ? undefined : sourceCwd;
+    const projectLocalCwd =
+      workspaceMode === "project_local"
+        ? await this.resolveProjectLocalHandoffCwd({
+            sourceCwd,
+            sourceLinkedDirectory,
+          })
+        : undefined;
+    if (workspaceMode === "project_local" && !projectLocalCwd?.trim()) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        "The source thread has no project checkout available for workspaceMode=project_local.",
+        { workspace: sourceWorkspace },
+      );
+    }
+    const cwdForChild =
+      workspaceMode === "none"
+        ? undefined
+        : workspaceMode === "project_local"
+          ? projectLocalCwd
+          : sourceCwd;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
@@ -14175,6 +14216,7 @@ export class DesktopBackendRegistry {
         });
         threadId = forked.threadId;
         createdLinkedDirectory = forked.linkedDirectory;
+        inheritedSettings.codexEnvironmentRuntime = forked.codexEnvironmentRuntime;
         createdWorkspaceMode =
           forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
         await this.overlayStore.setThreadAgent({
@@ -14189,6 +14231,7 @@ export class DesktopBackendRegistry {
           cwd: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
+          requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,
@@ -14199,6 +14242,7 @@ export class DesktopBackendRegistry {
           agent,
         });
         threadId = started.threadId;
+        inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
         if (groupingMode === "subthread") {
           await this.overlayStore.setThreadParent?.({
             backend,
@@ -14425,6 +14469,26 @@ export class DesktopBackendRegistry {
       candidates.find((directory) => directory.kind === "local") ??
       candidates[0]
     );
+  }
+
+  private async resolveProjectLocalHandoffCwd(params: {
+    sourceCwd?: string;
+    sourceLinkedDirectory?: LinkedDirectorySummary;
+  }): Promise<string | undefined> {
+    const linkedDirectory = params.sourceLinkedDirectory;
+    if (linkedDirectory?.kind === "local" && linkedDirectory.path?.trim()) {
+      return linkedDirectory.path.trim();
+    }
+    const primaryWorkspace = await this.gitDirectoryService
+      .resolvePrimaryWorkspacePath(params.sourceCwd)
+      .catch(() => undefined);
+    if (primaryWorkspace?.trim()) {
+      return primaryWorkspace.trim();
+    }
+    if (linkedDirectory?.kind === "worktree" && linkedDirectory.path?.trim()) {
+      return linkedDirectory.path.trim();
+    }
+    return params.sourceCwd?.trim();
   }
 
   private async buildThreadHandoffWorkspaceSummary(params: {

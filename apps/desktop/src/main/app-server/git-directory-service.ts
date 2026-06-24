@@ -652,7 +652,7 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    const [rawCurrentBranch, branchesOutput, remoteHead, worktreeList] =
+    const [rawCurrentBranch, branchesOutput, baseBranchesOutput, remoteHead, worktreeList] =
       await Promise.all([
         runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
           () => "",
@@ -662,6 +662,17 @@ export class GitDirectoryService {
           [
             "for-each-ref",
             "refs/heads",
+            "--sort=-committerdate",
+            "--format=%(refname:short)%09%(committerdate:unix)",
+          ],
+          gitEnv,
+        ).catch(() => ""),
+        runGit(
+          repoRoot,
+          [
+            "for-each-ref",
+            "refs/heads",
+            "refs/remotes",
             "--sort=-committerdate",
             "--format=%(refname:short)%09%(committerdate:unix)",
           ],
@@ -689,6 +700,9 @@ export class GitDirectoryService {
       gitEnv,
     ).catch(() => "");
     const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
+    const parsedBaseBranchDetailsAll = parseGitBranchDetails(baseBranchesOutput).filter(
+      (detail) => !detail.name.endsWith("/HEAD"),
+    );
     // Resolve the default branch against the FULL list so a rarely-committed
     // `main` is still found, then cap everything we hold/persist downstream.
     const defaultBranch = resolveDefaultBranch({
@@ -699,7 +713,12 @@ export class GitDirectoryService {
       keep: [currentBranch, defaultBranch],
       limit: MAX_TRACKED_BRANCHES,
     });
+    const parsedBaseBranchDetails = capRecentBranchDetails(parsedBaseBranchDetailsAll, {
+      keep: [currentBranch, defaultBranch, remoteHead.trim()],
+      limit: MAX_TRACKED_BRANCHES,
+    });
     const branches = parsedBranchDetails.map((detail) => detail.name);
+    const baseBranches = parsedBaseBranchDetails.map((detail) => detail.name);
     const worktreeBranchNames = new Set(
       parseGitWorktreeEntries(worktreeList)
         .map((entry) => entry.branch)
@@ -711,11 +730,19 @@ export class GitDirectoryService {
           ? { ...detail, inUse: true }
           : { ...detail },
       );
+    const buildBaseBranchDetails = (): NavigationGitBranchDetail[] =>
+      parsedBaseBranchDetails.map((detail) =>
+        detail.name !== currentBranch && worktreeBranchNames.has(detail.name)
+          ? { ...detail, inUse: true }
+          : { ...detail },
+      );
     if (!currentBranch) {
       return {
         defaultBranch,
         branches,
+        baseBranches,
         branchDetails: buildBranchDetails(),
+        baseBranchDetails: buildBaseBranchDetails(),
         handoffBranches: branches,
         syncState: "untracked",
       };
@@ -733,7 +760,9 @@ export class GitDirectoryService {
         currentBranch,
         defaultBranch,
         branches,
+        baseBranches,
         branchDetails: buildBranchDetails(),
+        baseBranchDetails: buildBaseBranchDetails(),
         handoffBranches,
         syncState: "untracked",
       };
@@ -765,7 +794,9 @@ export class GitDirectoryService {
       behind,
       defaultBranch,
       branches,
+      baseBranches,
       branchDetails: buildBranchDetails(),
+      baseBranchDetails: buildBaseBranchDetails(),
       handoffBranches,
       syncState,
     };
@@ -790,6 +821,25 @@ export class GitDirectoryService {
       cwd: toForwardSlashesOptional(prepared.cwd),
       repositoryPath: toForwardSlashesOptional(prepared.repositoryPath),
     };
+  }
+
+  async resolvePrimaryWorkspacePath(cwd: string | undefined): Promise<string | undefined> {
+    const directoryPath = cwd?.trim();
+    if (!directoryPath) {
+      return undefined;
+    }
+    const sourceRoot = await readGitRoot(
+      directoryPath,
+      this.runGitCommand,
+      this.gitEnv,
+    );
+    if (!sourceRoot) {
+      return undefined;
+    }
+    const primary =
+      (await readPrimaryWorktreePath(sourceRoot, this.runGitCommand, this.gitEnv)) ??
+      sourceRoot;
+    return toForwardSlashes(primary);
   }
 
   private async prepareLaunchpadWorkspaceInternal(

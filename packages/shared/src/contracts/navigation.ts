@@ -499,6 +499,9 @@ export type NavigationDirectoryGitStatus = {
   behind?: number;
   branches?: string[];
   branchDetails?: NavigationGitBranchDetail[];
+  /** Candidate refs for creating a new worktree base. Includes local branches and remote-tracking refs. */
+  baseBranches?: string[];
+  baseBranchDetails?: NavigationGitBranchDetail[];
   handoffBranches?: string[];
   syncState?:
     | "in-sync"

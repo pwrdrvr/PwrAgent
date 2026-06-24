@@ -268,6 +268,33 @@ describe("GitDirectoryService", () => {
     );
   });
 
+  it("reports remote-tracking refs as worktree base branch candidates", async () => {
+    const remoteDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-remote-"));
+    cleanupPaths.push(remoteDir);
+    execFileSync("git", ["init", "--bare", remoteDir], { stdio: "ignore" });
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["push", "-u", "origin", "main"]);
+    runGit(repoDir, ["checkout", "release"]);
+    runGit(repoDir, ["push", "-u", "origin", "release"]);
+    runGit(repoDir, ["checkout", "main"]);
+    runGit(repoDir, ["update-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    const service = new GitDirectoryService();
+
+    const status = await service.readDirectoryStatus({ path: repoDir });
+
+    expect(status?.branches).toEqual(expect.arrayContaining(["main", "release"]));
+    expect(status?.branches).not.toContain("origin/main");
+    expect(status?.baseBranches).toEqual(
+      expect.arrayContaining(["main", "release", "origin/main", "origin/release"]),
+    );
+    expect(status?.baseBranches).not.toContain("origin/HEAD");
+    expect(status?.baseBranchDetails?.map((detail) => detail.name)).toEqual(
+      status?.baseBranches,
+    );
+  });
+
   it("streams directory status lookups with bounded concurrency", async () => {
     const service = new GitDirectoryService({
       statusConcurrency: 2,
