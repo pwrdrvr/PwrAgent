@@ -838,6 +838,12 @@ function DesktopAppShell(props: {
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     platform: desktopApi?.platform,
+    ...(navigation.creatingThread?.pendingForkEnvironmentSetup
+      ? {
+          pendingForkEnvironmentSetup:
+            navigation.creatingThread.pendingForkEnvironmentSetup,
+        }
+      : {}),
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     selectedThread: navigation.selectedThread,

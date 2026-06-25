@@ -46,6 +46,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
+import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
@@ -739,6 +740,7 @@ export type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
   /**
@@ -1000,6 +1002,7 @@ export function ThreadView(props: ThreadViewProps) {
     setSetupFailureContinueError(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
+    props.pendingForkEnvironmentSetup?.directoryKey,
     props.selectedThread?.id,
     props.selectedThread?.source,
   ]);
@@ -1044,9 +1047,11 @@ export function ThreadView(props: ThreadViewProps) {
     [props.backends, selectedThread],
   );
   const selectedLaunchpad = props.selectedLaunchpad;
+  const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
 
   useEffect(() => {
-    const directoryKey = selectedLaunchpad?.directoryKey;
+    const directoryKey =
+      selectedLaunchpad?.directoryKey ?? pendingForkEnvironmentSetup?.directoryKey;
     if (!directoryKey || !props.desktopApi?.onCodexEnvironmentSetupProgress) {
       return;
     }
@@ -1060,7 +1065,11 @@ export function ThreadView(props: ThreadViewProps) {
         applyLaunchpadEnvironmentSetupProgress(current, event),
       );
     });
-  }, [props.desktopApi, selectedLaunchpad?.directoryKey]);
+  }, [
+    props.desktopApi,
+    pendingForkEnvironmentSetup?.directoryKey,
+    selectedLaunchpad?.directoryKey,
+  ]);
 
   const [branchDriftDialog, setBranchDriftDialog] =
     useState<BranchDriftDialogState>();
@@ -2066,6 +2075,56 @@ export function ThreadView(props: ThreadViewProps) {
     } finally {
       setPendingRequestBusy(false);
     }
+  }
+
+  if (pendingForkEnvironmentSetup) {
+    return (
+      <section className="thread-view thread-view--launchpad">
+        <header className="thread-header thread-header--launchpad">
+          <div className="thread-header__main thread-header__main--launchpad">
+            <div className="thread-header__eyebrow-row">
+              <p className="eyebrow">Forking thread</p>
+              <span className="chip chip--backend">
+                {formatBackendLabel(pendingForkEnvironmentSetup.backend, props.backends)}
+              </span>
+            </div>
+            <h2 className="thread-header__title">
+              {pendingForkEnvironmentSetup.directoryLabel}
+            </h2>
+          </div>
+
+          <div className="thread-header__launchpad-aside">
+            <div className="thread-header__stats">
+              <div>
+                <span className="thread-header__stat-label">Workspace</span>
+                <strong>New worktree</strong>
+              </div>
+              <div>
+                <span className="thread-header__stat-label">Environment</span>
+                <strong>{pendingForkEnvironmentSetup.environmentName}</strong>
+              </div>
+            </div>
+            <MessagingStatusBar
+              desktopApi={props.desktopApi}
+              onOpenActivity={props.onOpenMessagingActivity}
+            />
+          </div>
+        </header>
+
+        <div className="thread-view__launchpad-composer">
+          <LaunchpadEnvironmentSetupPending
+            command={launchpadSetupProgress?.command ?? pendingForkEnvironmentSetup.command}
+            cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
+            directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
+            environmentName={
+              launchpadSetupProgress?.environmentName ??
+              pendingForkEnvironmentSetup.environmentName
+            }
+            progress={launchpadSetupProgress}
+          />
+        </div>
+      </section>
+    );
   }
 
   if (!selectedThread && !selectedLaunchpad) {

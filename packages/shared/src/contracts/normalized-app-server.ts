@@ -187,7 +187,6 @@ export type CodexThreadEnvironmentRuntime = {
    * and then update this value.
    */
   cwd?: string;
-  setupEnabled?: boolean;
   setupStatus?: "skipped" | "completed" | "failed";
   setupCommand?: string;
   setupOutput?: string;

@@ -78,6 +78,11 @@ export type ForkThreadRequest = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /**
+   * Renderer-owned key used to correlate setup progress while a fork request is
+   * still preparing a new worktree and no destination thread id exists yet.
+   */
+  codexEnvironmentSetupProgressKey?: string;
 };
 
 export type ForkThreadResponse = {
@@ -87,6 +92,8 @@ export type ForkThreadResponse = {
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
+  gitBranch?: string;
+  observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };

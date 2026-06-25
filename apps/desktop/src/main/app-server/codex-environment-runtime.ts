@@ -103,7 +103,7 @@ export class CodexEnvironmentStartupError extends Error {
 export type CodexEnvironmentSelection = {
   environment: CodexEnvironmentOption;
   executionTarget: "local" | "remote";
-  setupEnabled: boolean;
+  runSetup: boolean;
   action?: CodexEnvironmentOption["actions"][number];
 };
 
@@ -247,8 +247,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       environmentName: selection.environment.name,
       executionTarget: selection.executionTarget,
       cwd,
-      setupEnabled: selection.setupEnabled,
-      setupStatus: selection.setupEnabled ? "skipped" : undefined,
+      setupStatus: selection.runSetup ? "skipped" : undefined,
       setupCommand: selection.environment.setupScript,
       actions: selection.environment.actions,
       selectedActionIdByEnvironmentId: selection.action
@@ -266,7 +265,6 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     environmentName: selection.environment.name,
     executionTarget: "local",
     cwd,
-    setupEnabled: selection.setupEnabled,
     setupCommand: selection.environment.setupScript,
     actions: selection.environment.actions,
     selectedActionIdByEnvironmentId: selection.action
@@ -282,7 +280,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       setupScript: selection.environment.setupScript,
     })?.shellEnvironment;
 
-  if (selection.setupEnabled && selection.environment.setupScript) {
+  if (selection.runSetup && selection.environment.setupScript) {
     const emitSetupProgress = (
       event: Omit<
         CodexEnvironmentSetupProgressEvent,
@@ -372,7 +370,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         runtime,
       );
     }
-  } else if (selection.setupEnabled) {
+  } else if (selection.runSetup) {
     runtime.setupStatus = "skipped";
   }
   if (!runtime.shellEnvironment && cachedShellEnvironment) {

@@ -4141,7 +4141,6 @@ script = "echo setup"
         environmentName: "Repo Environment",
         executionTarget: "local",
         cwd: worktreePath,
-        setupEnabled: true,
         setupStatus: "completed",
         setupCommand: "echo setup",
         setupOutput: "setup",
@@ -8144,7 +8143,6 @@ command = "pnpm dev:messaging"
           environmentName: "PwrAgnt",
           executionTarget: "local",
           cwd: root,
-          setupEnabled: false,
           setupCommand: "pnpm install",
           actions: [
             {
@@ -8228,7 +8226,6 @@ command = "pnpm test"
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: true,
             setupStatus: "completed",
             shellEnvironment: {
               PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
@@ -8328,7 +8325,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [],
           },
         },
@@ -8405,7 +8401,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: localPath,
-            setupEnabled: false,
             actions: [
               {
                 id: "capture-cwd",
@@ -8508,7 +8503,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: worktreePath,
-            setupEnabled: false,
             actions: [
               {
                 id: "capture-cwd",
@@ -8587,7 +8581,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: path.join(root, "missing"),
-            setupEnabled: false,
             actions: [
               {
                 id: "dev-messaging",
@@ -8655,7 +8648,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [
               {
                 id: "dev",
@@ -8771,7 +8763,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [
               {
                 // Print a marker to stdout so the captured output (which
@@ -8892,7 +8883,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -8918,7 +8908,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/y",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -9001,7 +8990,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -9066,7 +9054,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             // startedAt set well into the future so the cleanup is
             // guaranteed to see this run as "fresh this session" no
@@ -9486,7 +9473,6 @@ script = "printf setup-output"
       environmentName: "PwrAgent",
       executionTarget: "local",
       cwd: "/repo/app",
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "nvm use",
       shellEnvironment: {
@@ -9620,7 +9606,6 @@ command = "pnpm dev"
       environmentName: "PwrAgnt",
       executionTarget: "local",
       cwd: repoPath,
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "printf setup",
       shellEnvironment: {
@@ -9764,6 +9749,67 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  it("reports detached HEAD as the expected branch for new worktree forks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-branch-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(repoPath, { recursive: true });
+    await git(repoPath, ["init", "-b", "main"]);
+    await git(repoPath, ["config", "user.email", "test@example.com"]);
+    await git(repoPath, ["config", "user.name", "Test User"]);
+    await writeFile(path.join(repoPath, "README.md"), "hello\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, ["commit", "-m", "initial"]);
+    await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    try {
+      const response = await registry.forkThread({
+        backend: "codex",
+        sourceThreadId: "thread-parent",
+        parentThreadId: "thread-parent",
+        executionMode: "default",
+        directoryKind: "directory",
+        directoryLabel: "repo",
+        directoryPath: repoPath,
+        branchName: "main",
+        workMode: "worktree",
+      });
+
+      expect(response).toMatchObject({
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+      });
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-fork",
+        gitInfo: {
+          branch: "HEAD",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("rejects Codex forks when requested worktree preparation falls back to local", async () => {
@@ -13968,7 +14014,6 @@ command = "pnpm dev"
       environmentName: "GifGrabber",
       executionTarget: "local",
       cwd: repoPath,
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "printf setup",
       shellEnvironment: {
@@ -14167,7 +14212,6 @@ command = "pnpm dev"
       environmentName: "GifGrabber",
       executionTarget: "local",
       cwd: repoPath,
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "printf setup",
       selectedActionIdByEnvironmentId: {
