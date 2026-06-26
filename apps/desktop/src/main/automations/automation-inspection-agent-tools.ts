@@ -4,7 +4,7 @@ import type {
   AutomationInspectionRequest,
   AutomationInspectionResponse,
 } from "@pwragent/shared";
-import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
@@ -25,9 +25,11 @@ export type AutomationInspectionHandler = (
 
 export function buildAutomationInspectionToolRouter(
   handler: AutomationInspectionHandler | undefined,
-  options: { unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildAutomationInspectionToolDefinitions(handler), {
+  return new AgentToolRouter(buildAutomationInspectionToolDefinitions(handler, {
+    namespace: options.namespace,
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent automation tool.",
   });
@@ -35,9 +37,10 @@ export function buildAutomationInspectionToolRouter(
 
 export function buildAutomationInspectionToolDefinitions(
   handler: AutomationInspectionHandler | undefined,
+  options: { namespace?: string } = {},
 ): AgentToolDefinition<AutomationInspectionOperationName>[] {
   return buildAutomationInspectionToolCatalog().map((spec) => ({
-    namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+    namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: spec.name,
     description: spec.description,
     inputSchema: spec.inputSchema,

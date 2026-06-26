@@ -44,6 +44,7 @@ export default defineConfig({
           include: [
             "apps/desktop/scripts/**/*.test.mjs",
             "apps/desktop/src/main/__tests__/**/*.test.ts",
+            "apps/desktop/src/main/agent-tools/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
           // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without

@@ -5,7 +5,12 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getNativeBinding } from "../state/native-binding";
-import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import {
+  CURRENT_STATE_DB_USER_VERSION,
+  STATE_DB_JOURNAL_SIZE_LIMIT_BYTES,
+  STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
+  StateDb,
+} from "../state/state-db";
 
 let stateDb: StateDb;
 let tempDir: string;
@@ -86,6 +91,33 @@ describe("StateDb", () => {
       "thread_pricing_summaries",
       "thread_usage_lines",
       "thread_usage_turns",
+    ]);
+  });
+
+  it("sets explicit WAL checkpoint and journal size bounds", () => {
+    expect(stateDb.raw.pragma("journal_mode", { simple: true })).toBe("wal");
+    expect(stateDb.raw.pragma("wal_autocheckpoint", { simple: true })).toBe(
+      STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
+    );
+    expect(stateDb.raw.pragma("journal_size_limit", { simple: true })).toBe(
+      STATE_DB_JOURNAL_SIZE_LIMIT_BYTES,
+    );
+  });
+
+  it("keeps AUTOINCREMENT limited to existing bounded UI history tables", () => {
+    const rows = stateDb.raw
+      .prepare(
+        `SELECT name
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND upper(sql) LIKE '%AUTOINCREMENT%'
+         ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>;
+
+    expect(rows.map((row) => row.name)).toEqual([
+      "composer_draft_journal",
+      "messaging_activity_log",
     ]);
   });
 

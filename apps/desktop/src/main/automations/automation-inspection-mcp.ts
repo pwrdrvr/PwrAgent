@@ -21,8 +21,9 @@ export type AutomationInspectionMcpTool = AgentMcpTool & {
 export type AutomationInspectionMcpCallResponse = AgentMcpToolCallResponse;
 
 export function buildAutomationInspectionMcpTools(): AutomationInspectionMcpTool[] {
-  return buildAutomationInspectionToolRouter(undefined).buildMcpTools() as
-    AutomationInspectionMcpTool[];
+  return buildAutomationInspectionToolRouter(undefined, {
+    namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
+  }).buildMcpTools() as AutomationInspectionMcpTool[];
 }
 
 export function isAutomationInspectionMcpToolName(
@@ -44,6 +45,7 @@ export async function handleAutomationInspectionMcpToolCall(params: {
   handler: AutomationInspectionHandler | undefined;
 }): Promise<AutomationInspectionMcpCallResponse> {
   return await buildAutomationInspectionToolRouter(params.handler, {
+    namespace: AUTOMATION_INSPECTION_TOOL_NAMESPACE,
     unsupportedMessage: `Unsupported ${AUTOMATION_INSPECTION_TOOL_NAMESPACE} tool.`,
   }).handleMcpToolCall({
     backend: params.backend,

@@ -36,6 +36,7 @@ const pendingDownloadChannelsByVersion = new Map<
 >();
 
 type GitHubRelease = {
+  assets?: GitHubReleaseAsset[];
   draft?: boolean;
   html_url?: string;
   name?: string;
@@ -43,6 +44,13 @@ type GitHubRelease = {
   published_at?: string;
   tag_name?: string;
 };
+
+type GitHubReleaseAsset = {
+  name?: string;
+  state?: string;
+};
+
+const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
   if (nextStatus.status !== "downloaded") {
@@ -59,6 +67,10 @@ function setUpdateStatus(nextStatus: AppUpdateStatus): void {
 
 function downloadedVersion(): string | undefined {
   return updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+}
+
+export function readAppUpdateStatus(): AppUpdateStatus {
+  return updateStatus;
 }
 
 function currentUpdateChannel(): "latest" | "prerelease" {
@@ -80,6 +92,18 @@ function configureAutoUpdaterChannel(
     allowPrerelease: autoUpdater.allowPrerelease,
     updateChannel,
   });
+}
+
+function configureAutoUpdaterFeedForRelease(release: GitHubRelease): void {
+  const tag = release.tag_name;
+  if (!tag) {
+    return;
+  }
+  autoUpdater.setFeedURL({
+    provider: "generic",
+    url: `https://github.com/pwrdrvr/PwrAgent/releases/download/${encodeURIComponent(tag)}/`,
+  });
+  log.info("configured auto-update feed for GitHub release", { tag });
 }
 
 function productionUpdatesEnabled(): boolean {
@@ -186,9 +210,32 @@ export async function checkForAppUpdatesNow(
       }
       log.info("checking for app updates", { trigger });
       configureAutoUpdaterChannel(updateChannel);
+      const release = await readAppUpdateReleaseForChannel(updateChannel);
+      const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
+      if (!release?.tag_name) {
+        const result = { status: "no-update", version: currentVersion } as const;
+        setUpdateStatusUnlessDownloaded(result);
+        log.info("skipping app update check; no valid GitHub release found", {
+          trigger,
+          updateChannel,
+        });
+        return result;
+      }
+      const selectedVersion = release.tag_name.replace(/^v/i, "");
+      if (compareSemver(selectedVersion, currentVersion) <= 0) {
+        const result = { status: "no-update", version: currentVersion } as const;
+        setUpdateStatusUnlessDownloaded(result);
+        log.info("skipping app update check; selected release is not newer", {
+          currentVersion,
+          selectedRelease: release.tag_name,
+          trigger,
+          updateChannel,
+        });
+        return result;
+      }
+      configureAutoUpdaterFeedForRelease(release);
       updateCheckChannelInFlight = updateChannel;
       const result = await autoUpdater.checkForUpdates();
-      const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (result?.updateInfo?.version !== currentVersion) {
         recordPendingDownloadChannel(result?.updateInfo?.version, updateChannel);
       }
@@ -327,6 +374,35 @@ export function selectChannelReleases(
   return { latest, prerelease };
 }
 
+function hasUploadedReleaseAsset(
+  release: GitHubRelease,
+  predicate: (assetName: string) => boolean,
+): boolean {
+  return (
+    release.assets?.some((asset) => {
+      if (!asset.name || asset.state === "deleted") {
+        return false;
+      }
+      return predicate(asset.name);
+    }) ?? false
+  );
+}
+
+function hasMacUpdateAssets(release: GitHubRelease): boolean {
+  const hasChannelFile = hasUploadedReleaseAsset(
+    release,
+    (name) => name === MAC_UPDATE_CHANNEL_FILE,
+  );
+  const hasZip = hasUploadedReleaseAsset(release, (name) => name.endsWith(".zip"));
+  return hasChannelFile && hasZip;
+}
+
+export function selectAppUpdateReleases(
+  releases: GitHubRelease[],
+): { latest: GitHubRelease | undefined; prerelease: GitHubRelease | undefined } {
+  return selectChannelReleases(releases.filter(hasMacUpdateAssets));
+}
+
 function githubReleaseHeaders(): HeadersInit {
   const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
   return {
@@ -336,24 +412,42 @@ function githubReleaseHeaders(): HeadersInit {
   };
 }
 
+async function fetchGitHubReleases(signal?: AbortSignal): Promise<GitHubRelease[]> {
+  const response = await fetch(GITHUB_RELEASES_URL, {
+    headers: githubReleaseHeaders(),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub releases request failed with ${response.status}`);
+  }
+  const payload = await response.json();
+  return Array.isArray(payload)
+    ? payload.filter((release): release is GitHubRelease =>
+        typeof release === "object" && release !== null,
+      )
+    : [];
+}
+
+async function readAppUpdateReleaseForChannel(
+  updateChannel: "latest" | "prerelease",
+): Promise<GitHubRelease | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
+  try {
+    const releases = await fetchGitHubReleases(controller.signal);
+    const selected = selectAppUpdateReleases(releases);
+    return updateChannel === "prerelease" ? selected.prerelease : selected.latest;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(GITHUB_RELEASES_URL, {
-      headers: githubReleaseHeaders(),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub releases request failed with ${response.status}`);
-    }
-    const payload = await response.json();
-    const releases = Array.isArray(payload)
-      ? payload.filter((release): release is GitHubRelease =>
-          typeof release === "object" && release !== null,
-        )
-      : [];
-    const { latest, prerelease } = selectChannelReleases(releases);
+    const releases = await fetchGitHubReleases(controller.signal);
+    const { latest, prerelease } = selectAppUpdateReleases(releases);
     return {
       fetchedAt: Date.now(),
       latest: releaseInfoFromGitHubRelease(latest, "No stable release found."),
@@ -453,6 +547,41 @@ export function initAutoUpdater(): void {
   void checkForAppUpdatesNow("startup");
 }
 
+export async function installDownloadedAppUpdate(options?: {
+  requestQuit?: (performQuit: () => void) => Promise<boolean>;
+}): Promise<AppUpdateInstallResult> {
+  const version = downloadedVersion();
+  if (!version) {
+    return {
+      status: "error",
+      message: "No downloaded update is ready to install.",
+    };
+  }
+  try {
+    log.info("installing downloaded update", { version });
+    const performQuit = (): void => {
+      autoUpdater.quitAndInstall();
+    };
+    if (options?.requestQuit) {
+      const quitAccepted = await options.requestQuit(performQuit);
+      if (!quitAccepted) {
+        return {
+          status: "error",
+          message: "Update restart cancelled.",
+        };
+      }
+    } else {
+      performQuit();
+    }
+    return { status: "restarting" };
+  } catch (err) {
+    return {
+      status: "error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export function registerAppUpdateIpcHandlers(options?: {
   requestQuit?: (performQuit: () => void) => Promise<boolean>;
 }): void {
@@ -472,36 +601,7 @@ export function registerAppUpdateIpcHandlers(options?: {
   ipcMain.handle(
     APP_UPDATE_INSTALL_CHANNEL,
     async (): Promise<AppUpdateInstallResult> => {
-      const version = downloadedVersion();
-      if (!version) {
-        return {
-          status: "error",
-          message: "No downloaded update is ready to install.",
-        };
-      }
-      try {
-        log.info("installing downloaded update", { version });
-        const performQuit = (): void => {
-          autoUpdater.quitAndInstall();
-        };
-        if (options?.requestQuit) {
-          const quitAccepted = await options.requestQuit(performQuit);
-          if (!quitAccepted) {
-            return {
-              status: "error",
-              message: "Update restart cancelled.",
-            };
-          }
-        } else {
-          performQuit();
-        }
-        return { status: "restarting" };
-      } catch (err) {
-        return {
-          status: "error",
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
+      return await installDownloadedAppUpdate(options);
     },
   );
   ipcMain.handle(

@@ -6375,6 +6375,91 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows remote-tracking base refs for new-worktree sub-thread launchpads", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "GifGrabber",
+          path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "fix/upload-mp4-compression",
+            defaultBranch: "main",
+            branches: ["fix/upload-mp4-compression"],
+            branchDetails: [
+              {
+                name: "fix/upload-mp4-compression",
+                lastCommitAt: Math.floor(Date.now() / 1000) - 60,
+              },
+            ],
+            baseBranches: [
+              "fix/upload-mp4-compression",
+              "origin/main",
+              "origin/releases/4.3",
+            ],
+            baseBranchDetails: [
+              {
+                name: "fix/upload-mp4-compression",
+                lastCommitAt: Math.floor(Date.now() / 1000) - 60,
+              },
+              {
+                name: "origin/main",
+                lastCommitAt: Math.floor(Date.now() / 1000) - 3600,
+              },
+              {
+                name: "origin/releases/4.3",
+                lastCommitAt: Math.floor(Date.now() / 1000) - 7200,
+              },
+            ],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:new-worktree",
+          directoryKind: "directory",
+          directoryLabel: "GifGrabber",
+          directoryPath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "fix/upload-mp4-compression",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "Fix oversized GIPHY uploads",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+
+    expect(
+      screen.getByRole("option", { name: "fix/upload-mp4-compression" })
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "origin/main" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "origin/releases/4.3" })
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: "origin/main" }));
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "subthread:codex:thread-parent:new-worktree",
+        expect.objectContaining({ branchName: "origin/main" }),
+        { stickySettingsChanged: true }
+      );
+    });
+  });
+
   it("pins the selected, default, and current branches above the recency list", () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     render(

@@ -2750,7 +2750,6 @@ describe("useThreadNavigation", () => {
               environmentId: "environment",
               environmentName: "PwrAgent",
               executionTarget: "local" as const,
-              setupEnabled: true,
               setupStatus: "failed" as const,
             },
           },
@@ -4266,6 +4265,8 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread).toMatchObject({
       id: "thread-fork",
       parentThreadId: "thread-parent",
+      gitBranch: "HEAD",
+      observedGitBranch: "HEAD",
       linkedDirectories: [
         {
           kind: "worktree",
@@ -4281,6 +4282,101 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.messagingBindings).toBeUndefined();
     expect(result.current.selectedThread?.prs).toBeUndefined();
     expect(result.current.selectedThread?.reactions).toBeUndefined();
+  });
+
+  it("surfaces pending environment setup while forking into a new worktree", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Parent thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      codexEnvironmentRuntime: {
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        executionTarget: "local" as const,
+        cwd: "/repo/app",
+        setupCommand: "pnpm install",
+      },
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const forkDeferred = createDeferred<{
+      backend: "codex";
+      sourceThreadId: string;
+      threadId: string;
+      executionMode: "default";
+      workMode: "worktree";
+    }>();
+    const forkThread = vi.fn(() => forkDeferred.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      forkThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    let forkPromise: Promise<void> | undefined;
+    await act(async () => {
+      forkPromise = result.current.forkThread(parentThread, "new-worktree");
+    });
+
+    expect(result.current.creatingThread?.pendingForkEnvironmentSetup).toMatchObject({
+      backend: "codex",
+      command: "pnpm install",
+      directoryKey: "fork:codex:thread-parent:new-worktree",
+      directoryLabel: "app",
+      environmentId: "pwragent",
+      environmentName: "PwrAgent",
+    });
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codexEnvironmentSetupProgressKey: "fork:codex:thread-parent:new-worktree",
+        workMode: "worktree",
+      }),
+    );
+
+    await act(async () => {
+      forkDeferred.resolve({
+        backend: "codex",
+        sourceThreadId: "thread-parent",
+        threadId: "thread-fork",
+        executionMode: "default",
+        workMode: "worktree",
+      });
+      await forkPromise;
+    });
+
+    expect(result.current.creatingThread).toBeUndefined();
   });
 
   it("forks detached worktree parents from the parent worktree path", async () => {
@@ -5555,7 +5651,6 @@ describe("useThreadNavigation", () => {
                 environmentName: "Fixture Env",
                 executionTarget: "local",
                 cwd: "/repo/app",
-                setupEnabled: false,
                 setupCommand: "pnpm install",
                 actions: [
                   {

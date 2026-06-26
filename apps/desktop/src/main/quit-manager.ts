@@ -12,6 +12,7 @@ export const QUIT_CONFIRMATION_COUNTDOWN_SECONDS = 10;
 export type QuitRequestSource =
   | "before-quit"
   | "ipc"
+  | "agent-tool"
   | "main-window-closed"
   | "menu"
   | "signal"

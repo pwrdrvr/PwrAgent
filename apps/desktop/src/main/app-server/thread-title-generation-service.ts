@@ -66,6 +66,7 @@ export type ThreadTitleGenerationServiceOptions = {
 
 export type GrokThreadTitleGeneratorOptions = {
   apiKey?: string;
+  resolveApiKey?: () => string | undefined;
   baseUrl?: string;
   client?: XaiObjectClientLike;
   model?: string;
@@ -141,6 +142,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
     this.timeoutMs = options.timeoutMs;
     this.caller = new XaiEphemeralObjectCaller({
       apiKey: options.apiKey,
+      resolveApiKey: options.resolveApiKey,
       baseUrl: options.baseUrl,
       client: options.client,
       model: this.model,

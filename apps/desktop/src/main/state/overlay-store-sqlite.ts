@@ -179,11 +179,44 @@ function normalizeLaunchpadDefaults(
 ): NavigationLaunchpadDefaults {
   const next: NavigationLaunchpadDefaults =
     projectNavigationLaunchpadProviderSettings(defaults);
+  const providerSettings = next.providerSettings
+    ? { ...next.providerSettings }
+    : undefined;
+  const codexProviderSettings = providerSettings?.codex
+    ? { ...providerSettings.codex }
+    : undefined;
+
+  if (codexProviderSettings) {
+    if (
+      codexProviderSettings.serviceTier === "fast" ||
+      codexProviderSettings.serviceTier === "priority"
+    ) {
+      delete codexProviderSettings.serviceTier;
+    }
+    if (codexProviderSettings.fastMode === false) {
+      delete codexProviderSettings.fastMode;
+    }
+    if (Object.keys(codexProviderSettings).length > 0) {
+      providerSettings!.codex = codexProviderSettings;
+    } else {
+      delete providerSettings!.codex;
+    }
+  }
+
+  if (providerSettings && Object.keys(providerSettings).length > 0) {
+    next.providerSettings = providerSettings;
+  } else {
+    delete next.providerSettings;
+  }
+
   if (
     next.backend === "codex" &&
     (next.serviceTier === "fast" || next.serviceTier === "priority")
   ) {
     delete next.serviceTier;
+  }
+  if (next.backend === "codex" && next.fastMode === false) {
+    delete next.fastMode;
   }
   return next;
 }
@@ -254,6 +287,7 @@ export class SqliteOverlayStore {
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
           subAgents: current?.subAgents,
+          handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -905,6 +939,26 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setThreadHandoffOrigin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    handoffOrigin: ThreadOverlayState["handoffOrigin"] | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      handoffOrigin: params.handoffOrigin ?? undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -1809,10 +1863,7 @@ export class SqliteOverlayStore {
         : { backend: "codex", executionMode: "default" }
     ) as NavigationLaunchpadDefaults;
     const normalized = normalizeLaunchpadDefaults(parsed);
-    if (
-      parsed.backend === "codex" &&
-      (parsed.serviceTier === "fast" || parsed.serviceTier === "priority")
-    ) {
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
       this.writeLaunchpadDefaults(normalized);
     }
     return normalized;
@@ -2466,6 +2517,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setThreadHandoffOrigin"
   | "reorderThreadPins"
   | "updateSubthreadOrder"
   | "setSubthreadsCollapsed"

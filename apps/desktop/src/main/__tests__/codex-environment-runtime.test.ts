@@ -423,7 +423,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         }),
       ).resolves.toMatchObject({
@@ -496,7 +496,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         }),
       ).resolves.toMatchObject({
@@ -538,7 +538,7 @@ describe("codex environment runtime", () => {
             actions: [],
           },
           executionTarget: "local",
-          setupEnabled: true,
+          runSetup: true,
         },
       });
 
@@ -583,7 +583,7 @@ describe("codex environment runtime", () => {
             actions: [],
           },
           executionTarget: "local",
-          setupEnabled: true,
+          runSetup: true,
         },
       });
 
@@ -642,7 +642,7 @@ describe("codex environment runtime", () => {
             actions: [],
           },
           executionTarget: "local",
-          setupEnabled: true,
+          runSetup: true,
         },
       });
 
@@ -680,7 +680,7 @@ describe("codex environment runtime", () => {
             actions: [],
           },
           executionTarget: "local",
-          setupEnabled: true,
+          runSetup: true,
         },
       });
 
@@ -780,7 +780,7 @@ describe("codex environment runtime", () => {
             actions: [],
           },
           executionTarget: "local",
-          setupEnabled: false,
+          runSetup: false,
         },
       });
 
@@ -830,7 +830,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         }),
       ).rejects.toMatchObject({
@@ -877,7 +877,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         });
       } catch (caught) {
@@ -923,7 +923,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         });
       } catch (caught) {
@@ -981,7 +981,7 @@ describe("codex environment runtime", () => {
               actions: [],
             },
             executionTarget: "local",
-            setupEnabled: true,
+            runSetup: true,
           },
         });
       } catch (caught) {

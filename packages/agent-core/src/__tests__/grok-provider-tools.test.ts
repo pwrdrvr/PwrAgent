@@ -20,11 +20,19 @@ type StreamToolCall = {
   input: Record<string, unknown>;
 };
 
+type StreamStep = {
+  toolResults?: Array<{
+    output?: unknown;
+  }>;
+};
+
 function createStreamTextMock(params: {
   text?: string;
+  reasoningText?: string;
   responseId?: string;
   toolCalls?: StreamToolCall[];
   sources?: unknown[];
+  steps?: StreamStep[];
 }) {
   return vi.fn((options: any) => {
     const run = async () => {
@@ -44,9 +52,11 @@ function createStreamTextMock(params: {
     const text = run();
     return {
       text,
+      reasoningText: text.then(() => params.reasoningText),
       response: text.then(() => ({ id: params.responseId ?? "resp_123" })),
       sources: Promise.resolve(params.sources ?? []),
       providerMetadata: Promise.resolve(undefined),
+      steps: text.then(() => params.steps ?? []),
     };
   });
 }
@@ -236,6 +246,69 @@ describe("GrokProvider tool loop", () => {
         }),
       }),
     );
+  });
+
+  it("retries for final text when xAI returns reasoning-only output after tool use", async () => {
+    const streamTextImpl = createStreamTextMock({
+      text: "",
+      reasoningText: "Needle located.",
+      responseId: "resp_reasoning_final",
+      toolCalls: [{ id: "call_search", name: "search_code", input: { query: "needle" } }],
+      steps: [
+        {
+          toolResults: [
+            {
+              output: {
+                toolName: "search_code",
+                success: true,
+                output: "Found needle.",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
+      text: "Needle located.",
+      response: { id: "resp_retry_final" },
+      sources: [],
+      providerMetadata: undefined,
+    }));
+    const { executor } = createStubToolExecutor();
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      streamTextImpl,
+      generateTextImpl,
+    });
+
+    const activeTurn = provider.startTurn({
+      thread: {
+        threadId: "thread-123",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-reasoning",
+      },
+      input: [{ type: "text", text: "Find the needle." }],
+      tools: executor,
+    });
+
+    await expect(activeTurn.result).resolves.toEqual({
+      assistantText: "Needle located.",
+      providerResponseId: "resp_retry_final",
+      sources: [],
+      providerMetadata: undefined,
+    });
+    const retryParams = generateTextImpl.mock.calls[0]?.[0] as any;
+    expect(retryParams.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Find the needle." }],
+      },
+      {
+        role: "user",
+        content: expect.stringContaining("Found needle."),
+      },
+    ]);
+    expect(retryParams).not.toHaveProperty("tools");
   });
 
   it("includes thread history when starting a chat-model turn", async () => {

@@ -180,6 +180,10 @@ describe("Tangerine Terminal theme contract", () => {
       "thinking-scanner-beam-width",
       "thinking-scanner-delay",
       "thinking-scanner-travel",
+      // Sidebar rail/lane inset system — defined on `.sidebar`, not `:root`.
+      "sidebar-rail-inset",
+      "sidebar-lane-inset",
+      "sidebar-masthead-pull",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
@@ -887,6 +891,62 @@ describe("Tangerine Terminal theme contract", () => {
     }
     expect(css).not.toMatch(
       /\.(?:sidebar-list--dense|directory-groups)::-webkit-scrollbar/
+    );
+  });
+
+  it("aligns the sidebar masthead and lanes to one shared inset system", () => {
+    // Regression guard. The thread/directory lanes bleed to the rail walls
+    // and re-inset to `--sidebar-lane-inset`, while the masthead chrome
+    // (pills + lens switch) pulls out from the wider `--sidebar-rail-inset`
+    // to the same lane edge via the derived `--sidebar-masthead-pull`. The
+    // tabs/pills once sat at the rail inset while the cards sat narrower, so
+    // they read as misaligned; the Directories lane separately drifted to a
+    // 4px left gutter while the Recents lane was at 8px. Both classes of
+    // drift were silent because no test pinned the relationship — so pin it
+    // here by asserting every consumer reads the shared tokens, not a
+    // hand-tuned literal.
+    const sidebarBody = extractRuleBody(css, ".sidebar");
+    expect(sidebarBody).toMatch(/--sidebar-rail-inset:\s*16px;/);
+    expect(sidebarBody).toMatch(/--sidebar-lane-inset:\s*8px;/);
+    // The masthead pull is always derived from the two insets, never set
+    // by hand — that's what keeps the chrome glued to the lane edge.
+    expect(sidebarBody).toMatch(
+      /--sidebar-masthead-pull:\s*calc\(\s*var\(--sidebar-lane-inset\)\s*-\s*var\(--sidebar-rail-inset\)\s*\)/
+    );
+
+    // Both lanes inset to the same lane token (no recurrence of the
+    // 4px-left / 8px-left split between Directories and Recents). Each
+    // selector has more than one base rule (a layout rule plus the scroll
+    // rule), so collect every body and assert the inset lives in one of
+    // them — mirroring the scrollbar guard above.
+    for (const selector of [".sidebar-list--dense", ".directory-groups"]) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const bodies = [
+        ...css.matchAll(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g")),
+      ].map((match) => match[1]);
+      expect(
+        bodies.some((body) =>
+          /padding-inline:\s*var\(--sidebar-lane-inset\);/.test(body)
+        )
+      ).toBe(true);
+    }
+
+    // Both masthead rows pull out to the lane edge via the shared token.
+    for (const selector of [".runtime-identity", ".lens-switch"]) {
+      expect(extractRuleBody(css, selector)).toMatch(
+        /margin-inline:\s*var\(--sidebar-masthead-pull\)/
+      );
+    }
+    // The lens switch is an inline-grid that can't stretch, so it also
+    // grows its explicit width by twice the pull to reach both lane edges.
+    expect(extractRuleBody(css, ".lens-switch")).toMatch(
+      /width:\s*calc\(\s*100%\s*-\s*2\s*\*\s*var\(--sidebar-masthead-pull\)\s*\)/
+    );
+
+    // The scroll region cancels exactly the rail padding to bleed to the
+    // walls — kept in lockstep with the padding via the same token.
+    expect(extractRuleBody(css, ".sidebar__scroll-region")).toMatch(
+      /margin-inline:\s*calc\(\s*-1\s*\*\s*var\(--sidebar-rail-inset\)\s*\)/
     );
   });
 

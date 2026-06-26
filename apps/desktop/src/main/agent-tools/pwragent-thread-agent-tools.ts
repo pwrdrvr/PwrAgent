@@ -5,7 +5,7 @@ import type {
 } from "@pwragent/shared";
 import {
   PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES,
-  PWRAGENT_THREAD_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -26,9 +26,11 @@ export type PwrAgentThreadInspectionHandler = (
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
-  options: { unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler), {
+  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler, {
+    namespace: options.namespace,
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
   });
@@ -36,9 +38,10 @@ export function buildPwrAgentThreadToolRouter(
 
 export function buildPwrAgentThreadToolDefinitions(
   handler: PwrAgentThreadInspectionHandler | undefined,
+  options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentThreadInspectionOperationName>[] {
   return PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.map((operation) => ({
-    namespace: PWRAGENT_THREAD_TOOL_NAMESPACE,
+    namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
@@ -69,6 +72,8 @@ function descriptionForOperation(
   switch (operation) {
     case "search_threads":
       return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread.";
+    case "read_thread":
+      return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
       return "Read status and compact metadata for a known PwrAgent thread.";
     case "mutate_thread":
@@ -164,6 +169,52 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
+        },
+      };
+    case "read_thread":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: {
+            type: "string",
+          },
+          threadId: { type: "string" },
+          before: {
+            type: "string",
+            description:
+              "Optional pagination cursor returned by a previous read_thread response.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 20,
+            description:
+              "Maximum transcript entries to return. Defaults to 10.",
+          },
+          includeMessages: {
+            type: "boolean",
+            description:
+              "Whether to include normalized transcript messages. Defaults to true.",
+          },
+          includeEntries: {
+            type: "boolean",
+            description:
+              "Whether to include normalized timeline entries. Defaults to true.",
+          },
+          includeStatus: {
+            type: "boolean",
+            description:
+              "Whether to include current thread status when available. Defaults to true.",
+          },
+          maxCharsPerEntry: {
+            type: "integer",
+            minimum: 200,
+            maximum: 20000,
+            description:
+              "Maximum characters retained in each text-like transcript field. Defaults to 4000.",
+          },
         },
       };
     case "mutate_thread":

@@ -185,6 +185,10 @@ type CodexThreadResumePayload = CodexThreadResumeParams & {
   dynamicTools?: CodexDynamicToolSpec[] | null;
 };
 
+type CodexTurnStartPayload = CodexTurnStartParams & {
+  dynamicTools?: CodexDynamicToolSpec[] | null;
+};
+
 type SkillCatalogEntry = {
   commands?: AppServerAvailableCommandSummary[];
   cwd?: string;
@@ -5026,8 +5030,9 @@ function buildTurnStartPayload(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
-}): CodexTurnStartParams {
-  const base: CodexTurnStartParams = {
+  dynamicTools?: CodexDynamicToolSpec[];
+}): CodexTurnStartPayload {
+  const base: CodexTurnStartPayload = {
     threadId: params.threadId,
     input: params.input.map(toCodexUserInput),
   };
@@ -5057,6 +5062,9 @@ function buildTurnStartPayload(params: {
   }
   if (params.outputSchema) {
     base.outputSchema = params.outputSchema;
+  }
+  if (params.dynamicTools?.length) {
+    base.dynamicTools = params.dynamicTools;
   }
 
   const collaborationOverrides = buildCollaborationModeOverrides({
@@ -6161,6 +6169,7 @@ export class CodexAppServerClient {
             "reasoningEffort",
             "reasoning_effort"
           ),
+          dynamicTools: params.dynamicTools,
         }),
       ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,

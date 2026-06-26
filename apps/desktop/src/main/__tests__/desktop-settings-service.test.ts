@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
-import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import {
+  MemoryDesktopSecretStore,
+  type DesktopSecretStore,
+} from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 
 const tempRoots: string[] = [];
@@ -1270,6 +1273,79 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveGhCommandPreference()).toBe("/custom/bin/gh");
   });
 
+  it("reads secret metadata without decrypting stored values", async () => {
+    const getSecret = vi.fn(async () => {
+      throw new Error("secret values should not be decrypted for settings snapshots");
+    });
+    const getSecretSync = vi.fn(() => {
+      throw new Error("secret values should not be decrypted for settings snapshots");
+    });
+    const hasSecret = vi.fn(async (name) => name === "grokApiKey");
+    const secretStore: DesktopSecretStore = {
+      describe: () => ({
+        available: true,
+        backend: "safeStorage",
+        encrypted: true,
+      }),
+      hasSecret,
+      getSecret,
+      getSecretSync,
+      setSecret: vi.fn(),
+      deleteSecret: vi.fn(),
+    };
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore,
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.models.grok.apiKey).toMatchObject({
+      configured: true,
+      source: "keychain",
+      writable: true,
+    });
+    expect(hasSecret).toHaveBeenCalledWith("grokApiKey");
+    expect(getSecret).not.toHaveBeenCalled();
+    expect(getSecretSync).not.toHaveBeenCalled();
+  });
+
+  it("surfaces secret access errors on settings snapshots", async () => {
+    const secretStore: DesktopSecretStore = {
+      describe: () => ({
+        available: true,
+        backend: "safeStorage",
+        encrypted: true,
+      }),
+      getSecretAccessError: vi.fn(
+        (name) =>
+          name === "telegramBotToken"
+            ? "PwrAgent could not unlock secret storage."
+            : undefined,
+      ),
+      hasSecret: vi.fn(async () => false),
+      getSecret: vi.fn(),
+      getSecretSync: vi.fn(),
+      setSecret: vi.fn(),
+      deleteSecret: vi.fn(),
+    };
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore,
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.messaging.telegram.botToken).toMatchObject({
+      configured: false,
+      source: "unset",
+      writable: true,
+      unavailableReason: "PwrAgent could not unlock secret storage.",
+    });
+  });
+
   it("writes non-secret patches without writing plaintext secrets to TOML", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -1772,7 +1848,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults thread pricing summary to false and persists it", async () => {
+  it("defaults thread pricing summary to true and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -1783,7 +1859,7 @@ describe("DesktopSettingsService", () => {
 
     const initial = await service.readSettings();
     expect(initial.experimental.threadPricingSummary).toEqual({
-      value: false,
+      value: true,
       source: "default",
     });
     expect(initial.experimental.threadPricingDisplayUsd).toEqual({
@@ -1797,7 +1873,7 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatch({
       experimental: {
-        threadPricingSummary: true,
+        threadPricingSummary: false,
         threadPricingDisplayUsd: false,
         threadPricingDisplayCodexCredits: true,
       },
@@ -1805,7 +1881,7 @@ describe("DesktopSettingsService", () => {
 
     const updated = await service.readSettings();
     expect(updated.experimental.threadPricingSummary).toEqual({
-      value: true,
+      value: false,
       source: "config",
     });
     expect(updated.experimental.threadPricingDisplayUsd).toEqual({
@@ -1817,7 +1893,7 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "thread_pricing_summary = true",
+      "thread_pricing_summary = false",
     );
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_display_usd = false",

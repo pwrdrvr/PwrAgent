@@ -3108,9 +3108,9 @@ class DesktopAppServerService {
     this.automaticWorktreeWorkingStateRefreshesStarted = 0;
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
+    await disposeDesktopBackendRegistry();
     await this.threadMigrationService?.dispose();
     this.threadMigrationService = null;
-    await disposeDesktopBackendRegistry();
   }
 
   private getPrFetcher(): GithubPrFetcher {

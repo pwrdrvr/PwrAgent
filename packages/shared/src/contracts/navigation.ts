@@ -32,6 +32,7 @@ import type {
   TaskMonitorCompletionSource,
   TaskMonitorUsageSnapshot,
 } from "./task-monitor-tools";
+import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -141,6 +142,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * survive app restart exactly as reported by the monitor lifecycle.
    */
   subAgents?: ThreadSubAgentSummary[];
+  /** Durable origin metadata for threads created by an Agent handoff tool. */
+  handoffOrigin?: ThreadHandoffOrigin;
 };
 
 export type ThreadSubAgentStatus =
@@ -507,6 +510,9 @@ export type NavigationDirectoryGitStatus = {
   behind?: number;
   branches?: string[];
   branchDetails?: NavigationGitBranchDetail[];
+  /** Candidate refs for creating a new worktree base. Includes local branches and remote-tracking refs. */
+  baseBranches?: string[];
+  baseBranchDetails?: NavigationGitBranchDetail[];
   handoffBranches?: string[];
   syncState?:
     | "in-sync"
@@ -1067,6 +1073,8 @@ export type ThreadOverlayState = {
   immutableUsageActivities?: AppServerThreadActivityEntry[];
   /** Durable delegated sub-agent/task-monitor summaries for this thread. */
   subAgents?: ThreadSubAgentSummary[];
+  /** Durable origin metadata for threads created by an Agent handoff tool. */
+  handoffOrigin?: ThreadHandoffOrigin;
   /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize

@@ -48,7 +48,7 @@ const DEFAULT_AGENT_CORE_GROK = {
 };
 
 const DEFAULT_THREAD_PRICING_SUMMARY = {
-  value: false,
+  value: true,
   source: "default" as const,
 };
 
@@ -111,13 +111,13 @@ export function ExperimentalSettings(props: {
       <SettingsPanelHead
         eyebrow="Experimental"
         title="Experimental features"
-        help="Opt-in features that may change shape or be removed without notice."
+        help="Features that may change shape or be removed without notice."
       />
 
       <SettingsSection
         eyebrow="Experimental"
         title="Thread Pricing Summary"
-        description="Show list-price usage totals in the thread context rail. Disabled by default while pricing reconstruction and provider coverage are being validated."
+        description="Show list-price usage totals in the thread context rail. Enabled by default while pricing reconstruction and provider coverage continue to be validated."
         chip={threadPricingSummary.value ? "On" : "Off"}
         chipKind={threadPricingSummary.value ? "ok" : "default"}
       >

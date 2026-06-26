@@ -5,7 +5,12 @@ import type {
 } from "@pwragent/shared";
 import { useSubAgents } from "./useSubAgents";
 import { formatTimestamp } from "./context-rail-shared";
-import { subAgentStatusLabel, subAgentTone } from "./subagent-format";
+import {
+  formatSubAgentUsageSummary,
+  type PricingDisplayOptions,
+  subAgentStatusLabel,
+  subAgentTone,
+} from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 import {
@@ -14,6 +19,7 @@ import {
 } from "./subagent-kind";
 
 type SubAgentsPanelProps = {
+  pricingDisplayOptions?: PricingDisplayOptions;
   thread: NavigationThreadSummary;
 };
 
@@ -76,7 +82,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 {subAgent.monitorUsage?.summary ? (
                   <p className="rail-card__usage">
                     {subAgentUsageLabel(subAgent)} usage:{" "}
-                    {subAgent.monitorUsage.summary}
+                    {formatSubAgentUsageSummary({
+                      displayOptions: props.pricingDisplayOptions,
+                      model: subAgent.preferredModel,
+                      usage: subAgent.monitorUsage,
+                    })}
                   </p>
                 ) : null}
                 <button
@@ -98,6 +108,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       )}
       {detailsFor ? (
         <SubAgentDetailsModal
+          pricingDisplayOptions={props.pricingDisplayOptions}
           subAgent={detailsFor}
           onClose={() => setDetailsFor(null)}
         />

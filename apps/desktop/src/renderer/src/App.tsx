@@ -821,7 +821,7 @@ function DesktopAppShell(props: {
     contextWindow: session.contextWindow,
     pricing: session.response?.pricing,
     threadPricingSummaryEnabled:
-      settings.snapshot?.experimental.threadPricingSummary?.value ?? false,
+      settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {
       codexCredits:
         settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??
@@ -838,6 +838,12 @@ function DesktopAppShell(props: {
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     platform: desktopApi?.platform,
+    ...(navigation.creatingThread?.pendingForkEnvironmentSetup
+      ? {
+          pendingForkEnvironmentSetup:
+            navigation.creatingThread.pendingForkEnvironmentSetup,
+        }
+      : {}),
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     selectedThread: navigation.selectedThread,

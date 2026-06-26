@@ -6,6 +6,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
+  CodexThreadEnvironmentRuntime,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   NavigationBrowseMode,
@@ -55,6 +56,22 @@ export type ArchiveThreadNotice = {
 
 export type ArchiveThreadOptions = {
   includeSubthreads?: boolean;
+};
+
+export type PendingForkEnvironmentSetup = {
+  backend: AppServerBackendKind;
+  command: string;
+  cwd?: string;
+  directoryKey: string;
+  directoryLabel: string;
+  environmentId: string;
+  environmentName: string;
+};
+
+export type CreatingThreadState = {
+  backend: AppServerBackendKind;
+  executionMode: ThreadExecutionMode;
+  pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
 };
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
@@ -1934,6 +1951,33 @@ function buildOptimisticUserMessage(
   };
 }
 
+function buildPendingForkEnvironmentSetup(params: {
+  directoryLabel: string;
+  directoryPath?: string | undefined;
+  mode: ThreadWorkspaceMode;
+  parent: NavigationThreadSummary;
+  runtime?: CodexThreadEnvironmentRuntime | undefined;
+}): PendingForkEnvironmentSetup | undefined {
+  const { mode, runtime } = params;
+  if (
+    mode !== "new-worktree" ||
+    runtime?.executionTarget !== "local" ||
+    !runtime.setupCommand
+  ) {
+    return undefined;
+  }
+
+  return {
+    backend: params.parent.source,
+    command: runtime.setupCommand,
+    directoryKey: `fork:${params.parent.source}:${params.parent.id}:${mode}`,
+    directoryLabel: params.directoryLabel,
+    environmentId: runtime.environmentId,
+    environmentName: runtime.environmentName,
+    ...(params.directoryPath ? { cwd: params.directoryPath } : {}),
+  };
+}
+
 function reviewDisplayTextFromTarget(
   target: AppServerReviewTarget | undefined
 ): string | undefined {
@@ -1981,10 +2025,7 @@ export function useThreadNavigation(
     mode: ThreadWorkspaceMode,
   ) => Promise<void>;
   createThreadError?: string;
-  creatingThread?: {
-    backend: AppServerBackendKind;
-    executionMode: ThreadExecutionMode;
-  };
+  creatingThread?: CreatingThreadState;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads: NavigationThreadSummary[];
@@ -2146,10 +2187,7 @@ export function useThreadNavigation(
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
   const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
-  const [creatingThread, setCreatingThread] = useState<{
-    backend: AppServerBackendKind;
-    executionMode: ThreadExecutionMode;
-  }>();
+  const [creatingThread, setCreatingThread] = useState<CreatingThreadState>();
   const [localLaunchpads, setLocalLaunchpads] = useState<
     Record<string, NavigationLaunchpadDraft>
   >({});
@@ -3763,9 +3801,17 @@ export function useThreadNavigation(
       const directory = selectThreadWorkspace(parent, mode);
       const groupRoot = resolveGroupRoot(parent);
       const executionMode = parent.executionMode ?? "default";
+      const pendingForkEnvironmentSetup = buildPendingForkEnvironmentSetup({
+        directoryLabel: directory.directoryLabel,
+        directoryPath: directory.directoryPath,
+        mode,
+        parent,
+        runtime: parent.codexEnvironmentRuntime,
+      });
       setCreatingThread({
         backend: parent.source,
         executionMode,
+        ...(pendingForkEnvironmentSetup ? { pendingForkEnvironmentSetup } : {}),
       });
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
@@ -3787,6 +3833,12 @@ export function useThreadNavigation(
           reasoningEffort: parent.reasoningEffort,
           serviceTier: parent.serviceTier,
           fastMode: parent.fastMode,
+          ...(pendingForkEnvironmentSetup
+            ? {
+                codexEnvironmentSetupProgressKey:
+                  pendingForkEnvironmentSetup.directoryKey,
+              }
+            : {}),
         });
         const now = Date.now();
         const linkedDirectories = response.linkedDirectory
@@ -3813,8 +3865,12 @@ export function useThreadNavigation(
           reasoningEffort: parent.reasoningEffort,
           serviceTier: parent.serviceTier,
           fastMode: parent.fastMode,
-          gitBranch: parent.gitBranch,
-          observedGitBranch: parent.observedGitBranch,
+          gitBranch:
+            response.gitBranch ??
+            (response.workMode === "worktree" ? "HEAD" : parent.gitBranch),
+          observedGitBranch:
+            response.observedGitBranch ??
+            (response.workMode === "worktree" ? "HEAD" : parent.observedGitBranch),
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
           parentThreadId: groupRoot.id,

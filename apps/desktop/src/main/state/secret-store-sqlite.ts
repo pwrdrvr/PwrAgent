@@ -15,7 +15,15 @@ type SafeStorageLike = {
   getSelectedStorageBackend?: () => string;
 };
 
+const KEYCHAIN_ACCESS_ERROR =
+  "PwrAgent could not unlock secret storage. Choose Allow in the macOS Keychain prompt to read or save secrets.";
+
 export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
+  private readonly secretAccessErrors = new Map<
+    DesktopSettingsSecretName,
+    string
+  >();
+
   constructor(
     private readonly safeStorage: SafeStorageLike,
     private readonly stateDb: StateDb,
@@ -64,15 +72,32 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
     };
   }
 
+  getSecretAccessError(name: DesktopSettingsSecretName): string | undefined {
+    return this.secretAccessErrors.get(name);
+  }
+
+  async hasSecret(name: DesktopSettingsSecretName): Promise<boolean> {
+    if (this.secretAccessErrors.has(name)) {
+      return false;
+    }
+    return Boolean(this.stateDb.getSecret(name));
+  }
+
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     const ciphertext = this.stateDb.getSecret(name);
-    if (!ciphertext) return undefined;
+    if (!ciphertext) {
+      this.secretAccessErrors.delete(name);
+      return undefined;
+    }
     try {
-      return this.safeStorage.decryptString(ciphertext);
+      const value = this.safeStorage.decryptString(ciphertext);
+      this.secretAccessErrors.delete(name);
+      return value;
     } catch {
       // Decryption fails when the ciphertext was encrypted under a different
       // signing identity (e.g. dev build vs signed release). Return undefined
       // so callers treat it as "secret not set" and prompt re-entry.
+      this.secretAccessErrors.set(name, KEYCHAIN_ACCESS_ERROR);
       return undefined;
     }
   }
@@ -96,12 +121,20 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
       return;
     }
     this.assertWritable();
-    const ciphertext = this.safeStorage.encryptString(value);
+    let ciphertext: Buffer;
+    try {
+      ciphertext = this.safeStorage.encryptString(value);
+    } catch (error) {
+      this.secretAccessErrors.set(name, KEYCHAIN_ACCESS_ERROR);
+      throw new Error(KEYCHAIN_ACCESS_ERROR, { cause: error });
+    }
     this.stateDb.setSecret(name, ciphertext);
+    this.secretAccessErrors.delete(name);
   }
 
   async deleteSecret(name: DesktopSettingsSecretName): Promise<void> {
     this.stateDb.deleteSecret(name);
+    this.secretAccessErrors.delete(name);
   }
 
   private assertWritable(): void {

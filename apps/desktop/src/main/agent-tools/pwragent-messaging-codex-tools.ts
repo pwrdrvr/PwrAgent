@@ -5,6 +5,7 @@ import type {
 import {
   PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_TOOL_NAMESPACE,
+  PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
   DynamicToolCallParams,
@@ -22,11 +23,14 @@ import {
 export function isPwrAgentMessagingDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof PWRAGENT_MESSAGING_TOOL_NAMESPACE;
+  namespace:
+    | typeof PWRAGENT_MESSAGING_TOOL_NAMESPACE
+    | typeof PWRAGENT_TOOL_NAMESPACE;
   tool: PwrAgentMessagingOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE &&
+    (call.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE ||
+      call.namespace === PWRAGENT_TOOL_NAMESPACE) &&
     PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.includes(
       call.tool as PwrAgentMessagingOperationName,
     )
@@ -38,9 +42,12 @@ export async function handlePwrAgentMessagingDynamicToolCall(params: {
   call: DynamicToolCallParams;
   handler: PwrAgentMessagingHandler | undefined;
 }): Promise<DynamicToolCallResponse> {
+  const call = isPwrAgentMessagingDynamicToolCall(params.call)
+    ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
+    : params.call;
   return await buildPwrAgentMessagingToolRouter(params.handler).handleDynamicToolCall({
     backend: params.backend,
-    call: params.call,
+    call,
   });
 }
 

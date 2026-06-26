@@ -10,6 +10,8 @@ import {
 import { getNativeBinding } from "./native-binding.js";
 
 export const CURRENT_STATE_DB_USER_VERSION = 23;
+export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
+export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -621,6 +623,10 @@ CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
 );
 `;
 
+// federation_session_audit uses a plain INTEGER PRIMARY KEY rather than
+// AUTOINCREMENT: audit rows are append-only and GC'd from the front, so the
+// rowid still climbs monotonically, and this keeps the table off the
+// AUTOINCREMENT allowlist that #887 (bound sqlite/log churn) locks down.
 export const FEDERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS federation_peers (
   peer_id       TEXT PRIMARY KEY,
@@ -652,7 +658,7 @@ CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_peer
   ON federation_enrollment_tokens(peer_id);
 
 CREATE TABLE IF NOT EXISTS federation_session_audit (
-  event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    INTEGER PRIMARY KEY,
   peer_id     TEXT,
   session_id  TEXT,
   kind        TEXT NOT NULL,
@@ -693,6 +699,8 @@ export class StateDb {
 
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
+    db.pragma(`wal_autocheckpoint = ${STATE_DB_WAL_AUTOCHECKPOINT_PAGES}`);
+    db.pragma(`journal_size_limit = ${STATE_DB_JOURNAL_SIZE_LIMIT_BYTES}`);
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
 

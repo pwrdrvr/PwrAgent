@@ -1,7 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE } from "@pwragent/shared";
+import {
+  AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+  type ThreadHandoffOrigin,
+} from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -107,5 +110,41 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
         },
       }),
     ).rejects.toThrow("Agent thread name is required.");
+  });
+
+  it("persists handoff origin metadata across sqlite handles", async () => {
+    const handoffOrigin: ThreadHandoffOrigin = {
+      sourceBackend: "codex",
+      sourceThreadId: "parent-thread",
+      sourceTurnId: "turn-1",
+      seedMode: "clean",
+      groupingMode: "none",
+      createdAt: 1_773_000_000_000,
+      workspace: {
+        mode: "same",
+        cwd: "/tmp/project",
+        git: {
+          kind: "git_local",
+          worktreeCreationAvailable: true,
+        },
+      },
+    };
+
+    await store.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "child-thread",
+      handoffOrigin,
+    });
+    stateDb.close();
+
+    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedStore = new SqliteOverlayStore(reopenedDb);
+    await expect(
+      reopenedStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "child-thread",
+      }),
+    ).resolves.toMatchObject({ handoffOrigin });
+    reopenedDb.close();
   });
 });

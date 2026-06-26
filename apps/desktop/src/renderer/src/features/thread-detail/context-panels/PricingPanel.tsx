@@ -11,6 +11,7 @@ import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
 type PricingPanelProps = {
+  activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
@@ -133,6 +134,7 @@ export function PricingPanel(props: PricingPanelProps) {
               lineTotals,
             });
             const contextReplayLines = formatContextReplayEstimate({
+              activeTurnId: props.activeTurnId,
               displayOptions,
               line,
             });
@@ -629,20 +631,33 @@ function formatUsageLineRunningTotal(params: {
 }
 
 function formatContextReplayEstimate(params: {
+  activeTurnId?: string;
   displayOptions: PricingDisplayOptions;
   line: PricingUsageLine;
 }): string[] {
-  if (isEstimatedUsageGap(params.line) || isHistoricalUsageSummary(params.line)) {
+  if (
+    !isActiveLiveTurnUsageLine({
+      activeTurnId: params.activeTurnId,
+      line: params.line,
+    }) ||
+    isEstimatedUsageGap(params.line) ||
+    isHistoricalUsageSummary(params.line)
+  ) {
     return [];
   }
 
-  const coldContextReplays = estimateContextReplayBucket(
+  const unboundedColdContextReplays = estimateContextReplayBucket(
     params.line.uncachedInputTokens,
   );
   const hotContextReplays = estimateContextReplayBucket(
     params.line.cachedInputTokens,
-    coldContextReplays?.averageTokens,
+    unboundedColdContextReplays?.averageTokens,
   );
+  const coldContextReplays = refineColdContextReplayBucket({
+    bucket: unboundedColdContextReplays,
+    hotBucket: hotContextReplays,
+    line: params.line,
+  });
   const lines: string[] = [];
   if (coldContextReplays) {
     lines.push(
@@ -694,6 +709,53 @@ function estimateContextReplayBucket(
   };
 }
 
+function refineColdContextReplayBucket(params: {
+  bucket: EstimatedContextReplayBucket | undefined;
+  hotBucket: EstimatedContextReplayBucket | undefined;
+  line: PricingUsageLine;
+}): EstimatedContextReplayBucket | undefined {
+  if (!params.bucket) {
+    return undefined;
+  }
+  if (
+    !isCumulativeLiveTurnUsageLine(params.line) ||
+    !params.hotBucket ||
+    params.bucket.count !== 1
+  ) {
+    return params.bucket;
+  }
+
+  const replayTokens = Math.min(
+    params.bucket.totalTokens,
+    params.hotBucket.averageTokens,
+  );
+  return {
+    averageTokens: replayTokens,
+    count: 1,
+    totalTokens: replayTokens,
+  };
+}
+
+function isCumulativeLiveTurnUsageLine(line: PricingUsageLine): boolean {
+  return (
+    line.scope === "turn" &&
+    line.source === "live" &&
+    hasCumulativeTokenBreakdown(line)
+  );
+}
+
+function isActiveLiveTurnUsageLine(params: {
+  activeTurnId?: string;
+  line: PricingUsageLine;
+}): boolean {
+  return (
+    params.line.scope === "turn" &&
+    params.line.source === "live" &&
+    Boolean(params.activeTurnId) &&
+    params.line.turnId === params.activeTurnId
+  );
+}
+
 function formatContextReplayBucketLine(params: {
   bucket: EstimatedContextReplayBucket;
   displayOptions: PricingDisplayOptions;
@@ -720,10 +782,7 @@ function formatReplayCostEstimates(params: {
 }): string {
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
-    const valueMicros =
-      params.tokenKind === "cached"
-        ? params.line.cachedInputCostMicros
-        : params.line.uncachedInputCostMicros;
+    const valueMicros = estimateReplayCostMicros(params);
     if (valueMicros > 0) {
       estimates.push(formatMoney(valueMicros, params.line.currency));
     }
@@ -742,6 +801,25 @@ function formatReplayCostEstimates(params: {
     return "";
   }
   return ` · ${estimates.join(" · ")}`;
+}
+
+function estimateReplayCostMicros(params: {
+  bucket: EstimatedContextReplayBucket;
+  line: PricingUsageLine;
+  tokenKind: "cached" | "uncached";
+}): number {
+  const totalTokens =
+    params.tokenKind === "cached"
+      ? params.line.cachedInputTokens
+      : params.line.uncachedInputTokens;
+  const totalMicros =
+    params.tokenKind === "cached"
+      ? params.line.cachedInputCostMicros
+      : params.line.uncachedInputCostMicros;
+  if (totalTokens <= 0 || params.bucket.totalTokens >= totalTokens) {
+    return totalMicros;
+  }
+  return Math.round((totalMicros * params.bucket.totalTokens) / totalTokens);
 }
 
 function estimateContextReplayCodexCredits(params: {

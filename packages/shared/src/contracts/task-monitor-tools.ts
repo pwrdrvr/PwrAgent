@@ -1,5 +1,6 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-server";
 
+/** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const TASK_MONITOR_TOOL_NAMESPACE = "pwragent_task_monitors";
 
 export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.4-mini";
@@ -53,7 +54,9 @@ export type TaskMonitorUsageSnapshot = {
     model: string;
     totalUsd: number;
   };
+  fastMode?: boolean;
   model?: string;
+  serviceTier?: string;
   summary: string;
   tokenUsage: {
     cachedInputTokens?: number;

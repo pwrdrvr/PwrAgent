@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.0.0-beta.38 - 2026-06-26
+
+- Worktree Handoffs - Fixed new-worktree handoffs so requested worktree isolation is enforced, setup failures are surfaced, and agent-created threads cannot silently fall back to the caller's workspace.
+- Worktree Forks - Improved fork-into-new-worktree flow with immediate environment setup progress, streamed setup output, and corrected branch metadata for detached destination worktrees.
+- Branch Context - Added base-branch metadata to thread rows, branch tooltips, and agent-facing thread status so release-branch work can show base branch and ahead/behind-base state.
+- Updates - Fixed update checks to ignore tag-only or assetless failed releases instead of 404ing on a missing latest-mac.yml.
+- Release Packaging - Pinned Windows packaging to the Visual Studio 2022 runner path and locked that expectation in release:check so native rebuilds do not fail on VS 2026 runner images.
+- Reliability - Bounded SQLite WAL/log churn and added guardrails against future append-heavy autoincrement tables.
+
+## v1.0.0-beta.37 - 2026-06-24
+
+- Thread Pricing - Enabled the Pricing tab by default and kept sub-agent rows aligned with the selected USD and Codex Credits display units.
+- Agent Handoffs - Fixed agent-created handoffs so ungrouped delegated threads can no longer silently reuse the caller's worktree outside grouped subthreads.
+- Shutdown Reliability - Quieted branch-drift and app-server close races so late Codex responses and shutdown refreshes do not produce noisy errors during app close.
+- Security and Dependencies - Updated production and test dependencies, refreshed third-party licenses, and forced transitive Undici versions to patched releases.
+- Minor Fixes - Fixed reasoning-only and empty tool-response handling in the legacy direct-xAI Grok backend. This does not apply to Grok Build via ACP.
+
+## v1.0.0-beta.36 - 2026-06-21
+
+- Agent Handoff Tools - Added PwrAgent app, thread, messaging, and task handoff tools so agents can inspect and coordinate work across PwrAgent surfaces.
+- Codex Subagents - Added native Codex subagent visibility in the context rail, including clearer subagent kinds and details.
+- Integrated Terminal - Added a per-thread terminal from the thread header so command-line work can stay attached to the active thread and workspace.
+- Worktree Edits - Added non-turn file changes to the context rail and sidebar chips, while filtering noisy untracked directories and deduping active-turn edits.
+- Pricing - Added a persistent thread pricing ledger with running totals, context replay estimates, and corrected GPT-5.5 historical pricing.
+- Messaging Attachments - Added Markdown artifact previews and file attachments so messaging surfaces can share generated docs and inspect attachments from agent tools.
+- Messaging Questionnaires - Added support for Codex skill questionnaires, durable pending prompts, and direct final-answer submission from messaging flows.
+- Worktree Launchpad - Added a searchable branch picker and unified project/branch picker popovers for repos with many branches.
+- Composer - Improved complex Markdown pastes, including blockquoted lists, mixed blockquote content, nested rich lists, and prefixed initial code blocks.
+- Approvals - Improved approval prompts with backend-provided choices and clearer file-change approval context.
+- Thread List - Fixed input-needed threads, delayed unread clearing, PR chip check refreshes, overflowing sidebar chips, and masthead/sidebar alignment.
+- Thread UI - Improved env action cards, settings toggles, tooltip dismissal, image lightbox close behavior, terminal resize blending, and sidebar resize CPU usage.
+- Security and Privacy - Avoided unnecessary keychain prompts and redacted Codex environment success logs.
+- Minor - Refreshed PwrAgent v2 design prototypes, resolved Dependabot npm alerts, stabilized test flakes, improved CI ripgrep installation, and updated release-note guidance.
+
 ## v1.0.0-beta.35 - 2026-06-15
 
 - Improved composer paste handling so rich clipboard content reconstructs lists, preserves inline code styling, and handles nested fenced code blocks consistently.

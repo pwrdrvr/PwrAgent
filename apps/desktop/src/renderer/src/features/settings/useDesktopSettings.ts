@@ -73,6 +73,14 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
+        try {
+          const response = await desktopApi.readSettings?.({});
+          if (response) {
+            setSnapshot(response.snapshot);
+          }
+        } catch {
+          // Keep the original write error visible.
+        }
         return false;
       } finally {
         setSaving(false);

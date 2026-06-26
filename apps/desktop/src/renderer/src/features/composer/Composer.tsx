@@ -6689,7 +6689,10 @@ function buildLaunchpadBranchPickerOptions(
   launchpad: NavigationLaunchpadDraft,
   directory?: NavigationDirectorySummary,
 ): LaunchpadBranchOption[] {
-  const details = directory?.gitStatus?.branchDetails ?? [];
+  const details =
+    directory?.gitStatus?.baseBranchDetails ??
+    directory?.gitStatus?.branchDetails ??
+    [];
   const detailByName = new Map(details.map((detail) => [detail.name, detail]));
   const currentBranch = normalizeSelectableLaunchpadBranch(
     directory?.gitStatus?.currentBranch,
@@ -6719,7 +6722,7 @@ function buildLaunchpadBranchPickerOptions(
   const orderedNames =
     details.length > 0
       ? details.map((detail) => detail.name)
-      : (directory?.gitStatus?.branches ?? []);
+      : (directory?.gitStatus?.baseBranches ?? directory?.gitStatus?.branches ?? []);
   for (const name of orderedNames) {
     push(name);
   }
