@@ -462,6 +462,108 @@ describe("MessagingController", () => {
     );
   });
 
+  it("preserves an unbound source surface for default Agent control tools", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({
+      id: "thread-2",
+      title: "Escalated task",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      ],
+      inbox: {
+        inInbox: false,
+      },
+      updatedAt: 1000,
+    });
+    const harness = await createHarness({ navigation });
+    const event = buildTopicCommandEvent("/agent attach it here", "200");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:topic-200",
+      backend: "codex",
+      channel: event.channel,
+      channelKind: "telegram",
+      createdAt: 950,
+      scopeKind: "conversation",
+      threadId: "agent-thread",
+      updatedAt: 950,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    const surfaceResponse = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "get_current_messaging_surface",
+      context: {
+        backend: "codex",
+        threadId: "agent-thread",
+        turnId: "turn-1",
+      },
+      args: {},
+    });
+    expect(surfaceResponse).toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          channel: "telegram",
+          conversation: {
+            id: "200",
+            kind: "topic",
+            parentId: "-1001",
+            parentTitle: "Ops",
+          },
+        },
+      },
+    });
+    if (!surfaceResponse.ok) {
+      throw new Error("Expected current messaging surface response");
+    }
+    expect(surfaceResponse.data.location).not.toHaveProperty("binding");
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "agent-thread",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        binding: {
+          backend: "codex",
+          targetKind: "thread",
+          threadId: "thread-2",
+        },
+        conversation: {
+          id: "200",
+          kind: "topic",
+        },
+        placement: "current_conversation",
+      },
+    });
+    await expect(harness.store.findActiveBindingForChannel(event.channel)).resolves
+      .toMatchObject({
+        backend: "codex",
+        targetKind: "thread",
+        threadId: "thread-2",
+      });
+  });
+
   it("returns default Agent control pending requests only to the requesting surface", async () => {
     const harness = await createHarness();
     const event = buildCommandEvent("/agent ask the operator");

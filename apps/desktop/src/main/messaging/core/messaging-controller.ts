@@ -317,7 +317,7 @@ type AutomationTurnMessagingContext = {
 };
 
 type ActiveAgentMessagingOrigin = {
-  binding: MessagingBindingRecord;
+  binding?: MessagingBindingRecord;
   controlBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
 };
@@ -2154,7 +2154,7 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
-    originBinding?: MessagingBindingRecord;
+    originBinding?: MessagingBindingRecord | null;
     preview: string;
     queueOnConcurrentStart?: boolean;
     renderStatus?: boolean;
@@ -2350,7 +2350,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
-    originBinding?: MessagingBindingRecord;
+    originBinding?: MessagingBindingRecord | null;
     preview: string;
     renderStatus?: boolean;
     threadKey: string;
@@ -4038,7 +4038,7 @@ export class MessagingController {
         binding,
         event: controlEvent,
         input,
-        originBinding: originBinding ?? binding,
+        originBinding: originBinding ?? null,
         preview: prepared.preview,
         renderStatus: false,
         threadKey,
@@ -4050,7 +4050,7 @@ export class MessagingController {
       binding,
       event: controlEvent,
       input,
-      originBinding: originBinding ?? binding,
+      originBinding: originBinding ?? null,
       preview: prepared.preview,
       renderStatus: false,
       threadKey,
@@ -11137,7 +11137,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
-    originBinding?: MessagingBindingRecord;
+    originBinding?: MessagingBindingRecord | null;
     turnId: string;
   }): void {
     if (
@@ -11153,8 +11153,10 @@ export class MessagingController {
         params.turnId,
       ),
       {
-        binding: params.originBinding ?? params.binding,
-        controlBinding: params.originBinding ? params.binding : undefined,
+        binding: params.originBinding === undefined
+          ? params.binding
+          : params.originBinding ?? undefined,
+        controlBinding: params.originBinding !== undefined ? params.binding : undefined,
         event: params.event,
       },
     );
@@ -11163,7 +11165,7 @@ export class MessagingController {
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    originBinding?: MessagingBindingRecord;
+    originBinding?: MessagingBindingRecord | null;
     queueEntryId: string;
   }): void {
     if (!params.event || params.binding.targetKind !== "agent_thread") {
@@ -11176,8 +11178,10 @@ export class MessagingController {
         params.queueEntryId,
       ),
       {
-        binding: params.originBinding ?? params.binding,
-        controlBinding: params.originBinding ? params.binding : undefined,
+        binding: params.originBinding === undefined
+          ? params.binding
+          : params.originBinding ?? undefined,
+        controlBinding: params.originBinding !== undefined ? params.binding : undefined,
         event: params.event,
       },
     );
@@ -12334,11 +12338,17 @@ export class MessagingController {
       return { ok: true, placement: "new_child" };
     }
 
-    if (
-      params.origin.binding.targetKind !== "agent_thread" &&
-      (params.origin.event.channel.conversation.kind === "thread" ||
-        params.origin.event.channel.conversation.kind === "topic")
-    ) {
+    const sourceConversationKind = params.origin.event.channel.conversation.kind;
+    const canAttachToCurrentUnboundConversation =
+      !params.origin.binding &&
+      (sourceConversationKind === "dm" ||
+        sourceConversationKind === "thread" ||
+        sourceConversationKind === "topic");
+    const canReplaceCurrentThreadOrTopicBinding =
+      Boolean(params.origin.binding) &&
+      params.origin.binding?.targetKind !== "agent_thread" &&
+      (sourceConversationKind === "thread" || sourceConversationKind === "topic");
+    if (canAttachToCurrentUnboundConversation || canReplaceCurrentThreadOrTopicBinding) {
       return { ok: true, placement: "current_conversation" };
     }
 
@@ -12361,7 +12371,10 @@ export class MessagingController {
       const origin = this.activeAgentMessagingOriginsByTurnKey.get(
         agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
       );
-      if (!origin || !this.isChannelInScope(origin.binding.channel)) {
+      if (
+        !origin ||
+        !this.isChannelInScope(origin.binding?.channel ?? origin.event.channel)
+      ) {
         return {
           ok: false,
           error: {
@@ -12427,13 +12440,17 @@ export class MessagingController {
   ): Promise<PwrAgentMessagingLocationSummary> {
     return {
       actor: summarizeMessagingActor(origin.event.actor),
-      binding: summarizeMessagingBinding(
-        origin.binding,
-        await this.resolveBoundThreadSummary(
-          origin.binding,
-          options.navigation,
-        ),
-      ),
+      ...(origin.binding
+        ? {
+            binding: summarizeMessagingBinding(
+              origin.binding,
+              await this.resolveBoundThreadSummary(
+                origin.binding,
+                options.navigation,
+              ),
+            ),
+          }
+        : {}),
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
       managedConversation: await this.resolveManagedConversationSummary(origin),
