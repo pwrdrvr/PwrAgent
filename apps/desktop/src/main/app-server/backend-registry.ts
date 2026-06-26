@@ -541,6 +541,9 @@ type BackendClient = {
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+  onCodexEnvironmentSetupProgress?: (
+    event: CodexEnvironmentSetupProgressEvent,
+  ) => void;
   sourceThreadPath?: string;
 };
 
@@ -3365,7 +3368,7 @@ function resolveCodexEnvironmentSelection(
   return {
     environment,
     executionTarget: launchpad.codexEnvironmentExecutionTarget ?? "local",
-    setupEnabled: Boolean(environment.setupScript),
+    runSetup: Boolean(environment.setupScript),
   };
 }
 
@@ -3409,7 +3412,7 @@ async function resetLaunchpadAfterMaterialize(params: {
 function buildCodexEnvironmentSetupActivity(
   runtime: CodexThreadEnvironmentRuntime | undefined,
 ): AppServerThreadReplay["entries"][number] | undefined {
-  if (!runtime?.setupEnabled || !runtime.setupCommand) {
+  if (!runtime?.setupStatus || !runtime.setupCommand) {
     return undefined;
   }
 
@@ -7059,10 +7062,13 @@ export class DesktopBackendRegistry {
 
   private async buildForkedCodexEnvironmentRuntime(params: {
     cwd?: string;
+    onSetupProgress?: (
+      event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
+    ) => void;
     sourceRuntime?: CodexThreadEnvironmentRuntime;
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
-    const { cwd, sourceRuntime, workMode } = params;
+    const { cwd, onSetupProgress, sourceRuntime, workMode } = params;
     if (!sourceRuntime) {
       return undefined;
     }
@@ -7095,10 +7101,11 @@ export class DesktopBackendRegistry {
       cwd,
       env: this.codexEnvironmentCommandEnv,
       hydrationStore: this.codexEnvironmentHydrationStore,
+      onSetupProgress,
       selection: {
         environment,
         executionTarget: "local",
-        setupEnabled: Boolean(environment.setupScript),
+        runSetup: Boolean(environment.setupScript),
       },
     });
     if (!runtime) {
@@ -7179,6 +7186,16 @@ export class DesktopBackendRegistry {
       try {
         forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
           cwd,
+          onSetupProgress: request.onCodexEnvironmentSetupProgress
+            ? (event) => {
+                request.onCodexEnvironmentSetupProgress?.({
+                  directoryKey:
+                    request.codexEnvironmentSetupProgressKey ??
+                    `fork:${backend}:${request.sourceThreadId}`,
+                  ...event,
+                });
+              }
+            : undefined,
           sourceRuntime: sourceOverlay?.codexEnvironmentRuntime,
           workMode: preparedWorkspace.workMode,
         });
@@ -7209,9 +7226,10 @@ export class DesktopBackendRegistry {
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
     }
+    let gitBranch: string | undefined;
     try {
       const forkedAt = Date.now();
-      const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+      gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
       this.pendingStartedThreads.set(buildThreadIdentityKey(backend, result.threadId), {
         id: result.threadId,
         source: backend,
@@ -7298,6 +7316,7 @@ export class DesktopBackendRegistry {
       executionMode,
       linkedDirectory: linkedDirectories[0],
       workMode: preparedWorkspace.workMode,
+      ...(gitBranch ? { gitBranch, observedGitBranch: gitBranch } : {}),
       codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     };
@@ -9681,7 +9700,6 @@ export class DesktopBackendRegistry {
       environmentName: environment.name,
       executionTarget: existingRuntime?.executionTarget ?? "local",
       cwd,
-      setupEnabled: existingRuntime?.setupEnabled ?? false,
       setupCommand: environment.setupScript,
       actions: environment.actions,
       selectedActionIdByEnvironmentId:

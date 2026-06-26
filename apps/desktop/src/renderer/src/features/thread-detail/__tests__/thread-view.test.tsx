@@ -12,6 +12,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 
@@ -693,6 +694,67 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
     expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
+  });
+
+  it("shows pending environment setup while a forked worktree is preparing", async () => {
+    let setupProgress: Parameters<
+      NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>
+    >[0] = () => undefined;
+    const desktopApi = {
+      onCodexEnvironmentSetupProgress: (callback: typeof setupProgress) => {
+        setupProgress = callback;
+        return () => undefined;
+      },
+    };
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={desktopApi}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        pendingForkEnvironmentSetup={{
+          backend: "codex",
+          command: "pnpm install",
+          directoryKey: "fork:codex:thread-parent:new-worktree",
+          directoryLabel: "PwrAgent",
+          environmentId: "pwragent",
+          environmentName: "PwrAgent",
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Running environment setup" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByText("New worktree")).toBeInTheDocument();
+
+    act(() => {
+      setupProgress({
+        at: Date.now(),
+        command: "pnpm install",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        directoryKey: "fork:codex:thread-parent:new-worktree",
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        phase: "stdout",
+        chunk: "installing dependencies\n",
+      });
+    });
+
+    expect(screen.getByText("/repo/app/.worktrees/thread-fork/app")).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup output")).toHaveTextContent(
+      "installing dependencies",
+    );
   });
 
   it("keeps launch failures closable from the pending setup screen", async () => {
@@ -4138,7 +4200,6 @@ describe("ThreadView", () => {
             environmentId: "environment",
             environmentName: "PwrAgent",
             executionTarget: "local",
-            setupEnabled: true,
             setupStatus: "failed",
           },
           linkedDirectories: [
@@ -4212,7 +4273,6 @@ describe("ThreadView", () => {
             environmentId: "environment",
             environmentName: "PwrAgent",
             executionTarget: "local",
-            setupEnabled: true,
             setupStatus: "failed",
           },
           linkedDirectories: [

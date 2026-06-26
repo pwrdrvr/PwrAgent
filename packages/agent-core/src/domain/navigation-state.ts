@@ -345,7 +345,6 @@ export function buildNavigationSnapshotHash(params: {
             selectedActionIdByEnvironmentId:
               thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId ?? null,
             cwd: thread.codexEnvironmentRuntime.cwd ?? null,
-            setupEnabled: thread.codexEnvironmentRuntime.setupEnabled ?? null,
             setupStatus: thread.codexEnvironmentRuntime.setupStatus ?? null,
             setupCommand: thread.codexEnvironmentRuntime.setupCommand ?? null,
             setupOutput: thread.codexEnvironmentRuntime.setupOutput ?? null,
