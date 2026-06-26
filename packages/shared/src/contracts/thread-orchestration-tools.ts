@@ -5,6 +5,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
+import type { CodexEnvironmentStartupFailure } from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
@@ -43,9 +44,16 @@ export const HANDOFF_TASK_SEED_MODES = ["clean", "fork"] as const;
 export type HandoffTaskGroupingMode = "none" | "subthread";
 export const HANDOFF_TASK_GROUPING_MODES = ["none", "subthread"] as const;
 
-export type HandoffTaskWorkspaceMode = "same" | "new_worktree" | "none";
+export type HandoffTaskWorkspaceMode =
+  | "same"
+  | "same_workspace"
+  | "project_local"
+  | "new_worktree"
+  | "none";
 export const HANDOFF_TASK_WORKSPACE_MODES = [
   "same",
+  "same_workspace",
+  "project_local",
   "new_worktree",
   "none",
 ] as const;
@@ -78,6 +86,10 @@ export type HandoffTaskToolArgs = {
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
+  /**
+   * Existing base branch/ref used when workspaceMode is "new_worktree".
+   * This is not the delegated thread's new feature branch name.
+   */
   branchName?: string;
 };
 
@@ -175,6 +187,7 @@ export type HandoffTaskResult = {
   origin: ThreadHandoffOrigin;
   workspace: ThreadHandoffOriginWorkspace;
   messagingAttachment: HandoffTaskMessagingAttachment;
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
   turnStartFailure?: {
     message: string;
     phase: "turn";

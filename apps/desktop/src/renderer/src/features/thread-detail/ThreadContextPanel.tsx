@@ -169,13 +169,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const revealIntentRef = useRef(0);
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
+  const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
 
   const activeTab =
-    props.activeTab === "pricing" && !props.threadPricingSummaryEnabled
+    props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
       : props.activeTab;
   const visibleTabs = CONTEXT_TABS.filter(
-    (tab) => tab.id !== "pricing" || props.threadPricingSummaryEnabled,
+    (tab) => tab.id !== "pricing" || threadPricingSummaryEnabled,
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
   const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
@@ -688,7 +689,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "subagents":
-        return <SubAgentsPanel thread={props.thread} />;
+        return (
+          <SubAgentsPanel
+            pricingDisplayOptions={props.pricingDisplayOptions}
+            thread={props.thread}
+          />
+        );
       case "automations":
         return (
           <ThreadAutomationsPanel

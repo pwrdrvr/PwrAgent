@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { subscribersForChannel } from "../window-channels";
 import {
   sanitizeRendererPayload,
@@ -324,10 +324,15 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.handle(
     AGENT_FORK_THREAD_CHANNEL,
     async (
-      _event,
+      event: IpcMainInvokeEvent,
       request: ForkThreadRequest,
     ): Promise<ForkThreadResponse> => {
-      return await registry.forkThread(request);
+      return await registry.forkThread({
+        ...request,
+        onCodexEnvironmentSetupProgress: (progress) => {
+          event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+        },
+      });
     },
   );
 

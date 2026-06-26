@@ -10,6 +10,21 @@ export type GrokProviderOptions = XaiAiSdkRuntimeOptions & {
 };
 
 const DEFAULT_MAX_TOOL_ROUNDS = 12;
+const MAX_RETRY_TOOL_OUTPUT_CHARS = 8_000;
+
+type AiSdkStreamTextResult = {
+  text: PromiseLike<string>;
+  response: PromiseLike<{ id?: string }>;
+  sources?: PromiseLike<unknown[]>;
+  providerMetadata?: PromiseLike<unknown>;
+  steps?: PromiseLike<AiSdkStep[]>;
+};
+
+type AiSdkStep = {
+  toolResults?: Array<{
+    output?: unknown;
+  }>;
+};
 
 export class GrokProvider implements AppServerProvider {
   private readonly runtime: XaiAiSdkRuntime;
@@ -97,24 +112,146 @@ async function runAiSdkTurn(params: {
       reasoningEffort: params.params.thread.reasoningEffort,
       previousResponseId: params.params.previousResponseId,
     }),
-  }) as {
-    text: PromiseLike<string>;
-    response: PromiseLike<{ id?: string }>;
-    sources?: PromiseLike<unknown[]>;
-    providerMetadata?: PromiseLike<unknown>;
-  };
+  }) as AiSdkStreamTextResult;
 
-  const [assistantText, response, sources, providerMetadata] = await Promise.all([
+  const [assistantText, response, sources, providerMetadata, steps] = await Promise.all([
     result.text,
     result.response,
     result.sources ?? Promise.resolve([]),
     result.providerMetadata ?? Promise.resolve(undefined),
+    result.steps ?? Promise.resolve([]),
   ]);
+  const finalResult = assistantText.trim()
+    ? { assistantText, response, sources, providerMetadata }
+    : await retryFinalText({
+        runtime: params.runtime,
+        params: params.params,
+        signal: params.signal,
+        messages,
+        toolOutputs: collectToolOutputs(steps),
+      });
 
   return {
-    assistantText,
-    providerResponseId: response.id,
-    sources: normalizeAiSdkSources(sources),
-    providerMetadata: normalizeProviderMetadata(providerMetadata),
+    assistantText: finalResult.assistantText,
+    providerResponseId: finalResult.response.id,
+    sources: normalizeAiSdkSources(finalResult.sources),
+    providerMetadata: normalizeProviderMetadata(finalResult.providerMetadata),
   };
+}
+
+async function retryFinalText(params: {
+  runtime: XaiAiSdkRuntime;
+  params: ProviderTurnParams;
+  signal: AbortSignal;
+  messages: unknown[];
+  toolOutputs: string[];
+}): Promise<{
+  assistantText: string;
+  response: { id?: string };
+  sources: unknown[];
+  providerMetadata: unknown;
+}> {
+  const result = await params.runtime.generateText({
+    model: params.runtime.model({ model: params.params.thread.model }),
+    messages: [
+      ...params.messages,
+      {
+        role: "user",
+        content: buildRetryPrompt(params.toolOutputs),
+      },
+    ],
+    abortSignal: params.signal,
+    providerOptions: buildXaiProviderOptions({
+      model: params.params.thread.model,
+      reasoningEffort: params.params.thread.reasoningEffort,
+      previousResponseId: params.params.previousResponseId,
+    }),
+  });
+
+  return {
+    assistantText: readTextResult(result),
+    response: readResponseResult(result),
+    sources: readArrayResult(result, "sources"),
+    providerMetadata: readRecordResult(result, "providerMetadata"),
+  };
+}
+
+function buildRetryPrompt(toolOutputs: string[]): string {
+  if (toolOutputs.length === 0) {
+    return [
+      "The previous response did not include user-visible assistant text.",
+      "Produce the final answer requested by the user.",
+      "Do not include reasoning or hidden deliberation.",
+    ].join(" ");
+  }
+
+  return [
+    "The previous tool call completed, but no user-visible assistant text was emitted.",
+    "Produce the final answer requested by the user using only the tool results below.",
+    "Do not include reasoning or hidden deliberation.",
+    "",
+    "Tool results:",
+    toolOutputs.map((output, index) => `Result ${index + 1}:\n${output}`).join("\n\n"),
+  ].join("\n");
+}
+
+function collectToolOutputs(steps: AiSdkStep[]): string[] {
+  return steps
+    .flatMap((step) => step.toolResults ?? [])
+    .map((result) => formatToolOutput(result.output))
+    .filter((output): output is string => Boolean(output?.trim()))
+    .map((output) => truncate(output, MAX_RETRY_TOOL_OUTPUT_CHARS));
+}
+
+function formatToolOutput(output: unknown): string | undefined {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (output && typeof output === "object" && "output" in output) {
+    const nested = (output as { output?: unknown }).output;
+    if (typeof nested === "string") {
+      return nested;
+    }
+  }
+  if (!output) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(output);
+  } catch {
+    return String(output);
+  }
+}
+
+function truncate(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}\n[truncated]`;
+}
+
+function readTextResult(value: unknown): string {
+  return value && typeof value === "object" && "text" in value
+    ? String((value as { text?: unknown }).text ?? "")
+    : "";
+}
+
+function readResponseResult(value: unknown): { id?: string } {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const response = (value as { response?: unknown }).response;
+  return response && typeof response === "object" ? (response as { id?: string }) : {};
+}
+
+function readArrayResult(value: unknown, key: string): unknown[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const array = (value as Record<string, unknown>)[key];
+  return Array.isArray(array) ? array : [];
+}
+
+function readRecordResult(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
 }

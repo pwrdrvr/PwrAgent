@@ -49,6 +49,7 @@ import {
   type BackendCapabilities,
   type CodexEnvironmentActionRun,
   type CodexEnvironmentOption,
+  type CodexEnvironmentStartupFailure,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type BackendLaunchpadOptions,
@@ -540,6 +541,9 @@ type BackendClient = {
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+  onCodexEnvironmentSetupProgress?: (
+    event: CodexEnvironmentSetupProgressEvent,
+  ) => void;
   sourceThreadPath?: string;
 };
 
@@ -2345,7 +2349,9 @@ function buildTaskMonitorUsageSnapshot(params: {
 
   return {
     ...(cost ? { cost } : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
     summary,
     tokenUsage: {
       cachedInputTokens,
@@ -3362,7 +3368,7 @@ function resolveCodexEnvironmentSelection(
   return {
     environment,
     executionTarget: launchpad.codexEnvironmentExecutionTarget ?? "local",
-    setupEnabled: Boolean(environment.setupScript),
+    runSetup: Boolean(environment.setupScript),
   };
 }
 
@@ -3406,7 +3412,7 @@ async function resetLaunchpadAfterMaterialize(params: {
 function buildCodexEnvironmentSetupActivity(
   runtime: CodexThreadEnvironmentRuntime | undefined,
 ): AppServerThreadReplay["entries"][number] | undefined {
-  if (!runtime?.setupEnabled || !runtime.setupCommand) {
+  if (!runtime?.setupStatus || !runtime.setupCommand) {
     return undefined;
   }
 
@@ -4123,6 +4129,7 @@ function buildHandoffTaskPrompt(params: {
   };
   inheritedSettings: HandoffTaskInheritedSettings;
   workspace: ThreadHandoffOriginWorkspace;
+  codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 }): string {
   const lines = [
     "You are a PwrAgent handoff thread created by another Agent thread.",
@@ -4178,6 +4185,20 @@ function buildHandoffTaskPrompt(params: {
     `- New worktree supported: ${
       params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
     }`,
+    ...(params.codexEnvironmentStartupFailure
+      ? [
+          "",
+          "Codex environment startup:",
+          `- Status: failed`,
+          `- Phase: ${params.codexEnvironmentStartupFailure.phase}`,
+          `- Message: ${params.codexEnvironmentStartupFailure.message}`,
+          `- Worktree cleanup available: ${
+            params.codexEnvironmentStartupFailure.worktreeCleanupAvailable
+              ? "yes"
+              : "no"
+          }`,
+        ]
+      : []),
     "",
     "Parent context reference:",
     "The thread that spawned this handoff is the source thread above. Use that reference if a future tool or UI surface can fetch more context from the parent.",
@@ -4198,6 +4219,7 @@ export class DesktopBackendRegistry {
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpBackend: AcpBackendAdapter;
+  private closed = false;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
   // (e.g. Grok) worktree threads group under the same directory row as their
   // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
@@ -6759,6 +6781,7 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -6769,6 +6792,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       workMode,
       branchName,
+      requiredWorkMode,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -6778,6 +6802,7 @@ export class DesktopBackendRegistry {
         : request.cwd;
     let resolvedLinkedDirectories = linkedDirectories;
     let effectiveWorkMode = workMode;
+    let preparedWorkspaceRollback: (() => Promise<void>) | undefined;
     if (workMode === "worktree" && request.cwd?.trim()) {
       const preparedWorkspace =
         await this.gitDirectoryService.prepareLaunchpadWorkspace({
@@ -6788,6 +6813,7 @@ export class DesktopBackendRegistry {
           directoryPath: request.cwd,
           workMode: "worktree",
         });
+      preparedWorkspaceRollback = preparedWorkspace.rollback;
       cwd = preparedWorkspace.cwd;
       effectiveWorkMode = preparedWorkspace.workMode;
       resolvedLinkedDirectories =
@@ -6798,6 +6824,48 @@ export class DesktopBackendRegistry {
               worktreePath: preparedWorkspace.cwd,
             })
           : buildLocalLinkedDirectory(cwd);
+    }
+    if (requiredWorkMode && effectiveWorkMode !== requiredWorkMode) {
+      await preparedWorkspaceRollback?.().catch((error) => {
+        backendRegistryLog.warn("startThread workspace rollback failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      throw new Error(
+        `Requested ${requiredWorkMode} workspace, but workspace preparation resolved to ${effectiveWorkMode ?? "none"}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
+      );
+    }
+    let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
+    let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
+    if (backend === "codex" && request.codexEnvironmentRuntime && workMode) {
+      try {
+        codexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            sourceRuntime: request.codexEnvironmentRuntime,
+            workMode: effectiveWorkMode ?? "local",
+          });
+      } catch (error) {
+        if (error instanceof CodexEnvironmentStartupError) {
+          codexEnvironmentRuntime = error.runtime;
+          codexEnvironmentStartupFailure = {
+            message: error.message,
+            phase: error.phase,
+            worktreeCleanupAvailable: effectiveWorkMode === "worktree",
+          };
+        } else {
+          await preparedWorkspaceRollback?.().catch((rollbackError) => {
+            backendRegistryLog.warn("startThread workspace rollback failed", {
+              backend,
+              error:
+                rollbackError instanceof Error
+                  ? rollbackError.message
+                  : String(rollbackError),
+            });
+          });
+          throw error;
+        }
+      }
     }
 
     const acpAgent = isAcpBackendId(backend)
@@ -6874,28 +6942,42 @@ export class DesktopBackendRegistry {
       fastMode: modelSettings.fastMode ?? null,
     });
 
-    const result = isAcpBackendId(backend)
-      ? await this.startAcpSession({
+    let result: { threadId: string };
+    try {
+      result = isAcpBackendId(backend)
+        ? await this.startAcpSession({
+            backend,
+            cwd,
+            executionMode: effectiveExecutionMode,
+            acpRuntime,
+          })
+        : await this.getClient(backend, effectiveExecutionMode).startThread({
+            ...request,
+            ...modelSettings,
+            cwd,
+            approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+            sandbox: request.sandbox ?? modeSettings.sandbox,
+            codexEnvironmentRuntime,
+            ...(backend === "codex"
+              ? {
+                  defaultModeRequestUserInput:
+                    this.resolveCodexDefaultModeRequestUserInputFn(),
+                }
+              : {}),
+            dynamicTools,
+          });
+    } catch (error) {
+      await preparedWorkspaceRollback?.().catch((rollbackError) => {
+        backendRegistryLog.warn("startThread workspace rollback failed", {
           backend,
-          cwd,
-          executionMode: effectiveExecutionMode,
-          acpRuntime,
-        })
-      : await this.getClient(backend, effectiveExecutionMode).startThread({
-          ...request,
-          ...modelSettings,
-          cwd,
-          approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-          sandbox: request.sandbox ?? modeSettings.sandbox,
-          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
-          ...(backend === "codex"
-            ? {
-                defaultModeRequestUserInput:
-                  this.resolveCodexDefaultModeRequestUserInputFn(),
-              }
-            : {}),
-          dynamicTools,
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
         });
+      });
+      throw error;
+    }
     const startedAt = Date.now();
     const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
     const agentName = request.agent?.name?.trim();
@@ -6913,7 +6995,7 @@ export class DesktopBackendRegistry {
         executionMode: effectiveExecutionMode,
         ...modelSettings,
         acpRuntime,
-        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        codexEnvironmentRuntime,
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
@@ -6949,11 +7031,11 @@ export class DesktopBackendRegistry {
       });
       this.invalidateThreadListCache(backend);
     }
-    if (request.codexEnvironmentRuntime) {
+    if (codexEnvironmentRuntime) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend,
         threadId: result.threadId,
-        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        codexEnvironmentRuntime,
       });
     }
     if (
@@ -6973,16 +7055,20 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
-      codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+      codexEnvironmentRuntime,
+      codexEnvironmentStartupFailure,
     };
   }
 
   private async buildForkedCodexEnvironmentRuntime(params: {
     cwd?: string;
+    onSetupProgress?: (
+      event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
+    ) => void;
     sourceRuntime?: CodexThreadEnvironmentRuntime;
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
-    const { cwd, sourceRuntime, workMode } = params;
+    const { cwd, onSetupProgress, sourceRuntime, workMode } = params;
     if (!sourceRuntime) {
       return undefined;
     }
@@ -6997,8 +7083,16 @@ export class DesktopBackendRegistry {
     const environment = (await listCodexEnvironmentOptions(cwd))
       .find((candidate) => candidate.id === sourceRuntime.environmentId);
     if (!environment) {
-      throw new Error(
-        `Selected Codex environment '${sourceRuntime.environmentName}' is not available in the forked worktree.`,
+      const message = `Selected Codex environment '${sourceRuntime.environmentName}' is not available in the forked worktree.`;
+      const runtime = {
+        ...cloneCodexEnvironmentRuntimeForFork(sourceRuntime, cwd),
+        setupStatus: "failed",
+        setupOutput: message,
+      } satisfies CodexThreadEnvironmentRuntime;
+      throw new CodexEnvironmentStartupError(
+        message,
+        "setup",
+        runtime,
       );
     }
 
@@ -7007,10 +7101,11 @@ export class DesktopBackendRegistry {
       cwd,
       env: this.codexEnvironmentCommandEnv,
       hydrationStore: this.codexEnvironmentHydrationStore,
+      onSetupProgress,
       selection: {
         environment,
         executionTarget: "local",
-        setupEnabled: Boolean(environment.setupScript),
+        runSetup: Boolean(environment.setupScript),
       },
     });
     if (!runtime) {
@@ -7062,6 +7157,11 @@ export class DesktopBackendRegistry {
       worktreeBranchMode: request.worktreeBranchMode,
       workMode: request.workMode ?? "local",
     });
+    if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
+      throw new Error(
+        `Requested worktree workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
+      );
+    }
     request.onPreparedWorkspaceRollback?.(preparedWorkspace.rollback);
     const cwd = preparedWorkspace.cwd;
     const linkedDirectories =
@@ -7081,12 +7181,35 @@ export class DesktopBackendRegistry {
 
     let result: { threadId: string };
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     try {
-      forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
-        cwd,
-        sourceRuntime: sourceOverlay?.codexEnvironmentRuntime,
-        workMode: preparedWorkspace.workMode,
-      });
+      try {
+        forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+          cwd,
+          onSetupProgress: request.onCodexEnvironmentSetupProgress
+            ? (event) => {
+                request.onCodexEnvironmentSetupProgress?.({
+                  directoryKey:
+                    request.codexEnvironmentSetupProgressKey ??
+                    `fork:${backend}:${request.sourceThreadId}`,
+                  ...event,
+                });
+              }
+            : undefined,
+          sourceRuntime: sourceOverlay?.codexEnvironmentRuntime,
+          workMode: preparedWorkspace.workMode,
+        });
+      } catch (error) {
+        if (!(error instanceof CodexEnvironmentStartupError)) {
+          throw error;
+        }
+        forkedCodexEnvironmentRuntime = error.runtime;
+        codexEnvironmentStartupFailure = {
+          message: error.message,
+          phase: error.phase,
+          worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
+        };
+      }
       result = await client.forkThread({
         threadId: request.sourceThreadId,
         ...(request.sourceThreadPath?.trim()
@@ -7103,9 +7226,10 @@ export class DesktopBackendRegistry {
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
     }
+    let gitBranch: string | undefined;
     try {
       const forkedAt = Date.now();
-      const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
+      gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
       this.pendingStartedThreads.set(buildThreadIdentityKey(backend, result.threadId), {
         id: result.threadId,
         source: backend,
@@ -7192,7 +7316,9 @@ export class DesktopBackendRegistry {
       executionMode,
       linkedDirectory: linkedDirectories[0],
       workMode: preparedWorkspace.workMode,
+      ...(gitBranch ? { gitBranch, observedGitBranch: gitBranch } : {}),
       codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+      codexEnvironmentStartupFailure,
     };
   }
 
@@ -8827,10 +8953,26 @@ export class DesktopBackendRegistry {
   async checkThreadBranchDrift(
     params: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse> {
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        drifted: false,
+        checkedAt: Date.now(),
+      };
+    }
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
     });
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        drifted: false,
+        checkedAt: Date.now(),
+      };
+    }
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
       callerReason: "branch-drift",
@@ -8855,6 +8997,17 @@ export class DesktopBackendRegistry {
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
     const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
+
+    if (this.closed) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        expectedBranch,
+        observedBranch: normalizedObservedBranch,
+        drifted,
+        checkedAt: Date.now(),
+      };
+    }
 
     await this.overlayStore.setThreadObservedBranch({
       backend: params.backend,
@@ -9547,7 +9700,6 @@ export class DesktopBackendRegistry {
       environmentName: environment.name,
       executionTarget: existingRuntime?.executionTarget ?? "local",
       cwd,
-      setupEnabled: existingRuntime?.setupEnabled ?? false,
       setupCommand: environment.setupScript,
       actions: environment.actions,
       selectedActionIdByEnvironmentId:
@@ -10028,6 +10180,7 @@ export class DesktopBackendRegistry {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
@@ -14039,7 +14192,15 @@ export class DesktopBackendRegistry {
     const groupingMode: HandoffTaskGroupingMode =
       request.args.groupingMode ?? "none";
     const workspaceMode: HandoffTaskWorkspaceMode =
-      request.args.workspaceMode ?? "same";
+      request.args.workspaceMode === "same"
+        ? "same_workspace"
+        : (request.args.workspaceMode ?? "new_worktree");
+    if (workspaceMode === "same_workspace" && groupingMode !== "subthread") {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        'workspaceMode="same_workspace" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for a delegated thread with an isolated worktree, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.',
+      );
+    }
     const sourceThread = await this.findThreadForWorkspaceHandoff({
       backend: sourceBackend,
       callerReason: "agent-handoff",
@@ -14058,7 +14219,7 @@ export class DesktopBackendRegistry {
     const sourceWorkspace = await this.buildThreadHandoffWorkspaceSummary({
       cwd: sourceCwd,
       linkedDirectory: sourceLinkedDirectory,
-      mode: "same",
+      mode: "same_workspace",
     });
 
     if (workspaceMode !== "none" && !sourceCwd?.trim()) {
@@ -14108,11 +14269,33 @@ export class DesktopBackendRegistry {
       instructions:
         "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
     };
-    const cwdForChild = workspaceMode === "none" ? undefined : sourceCwd;
+    const projectLocalCwd =
+      workspaceMode === "project_local"
+        ? await this.resolveProjectLocalHandoffCwd({
+            sourceCwd,
+            sourceLinkedDirectory,
+          })
+        : undefined;
+    if (workspaceMode === "project_local" && !projectLocalCwd?.trim()) {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        "The source thread has no project checkout available for workspaceMode=project_local.",
+        { workspace: sourceWorkspace },
+      );
+    }
+    const cwdForChild =
+      workspaceMode === "none"
+        ? undefined
+        : workspaceMode === "project_local"
+          ? projectLocalCwd
+          : sourceCwd;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
     let createdWorkspaceMode = workspaceMode;
+    let codexEnvironmentStartupFailure:
+      | HandoffTaskResult["codexEnvironmentStartupFailure"]
+      | undefined;
     try {
       if (seedMode === "fork") {
         const forked = await this.forkThread({
@@ -14138,6 +14321,8 @@ export class DesktopBackendRegistry {
         });
         threadId = forked.threadId;
         createdLinkedDirectory = forked.linkedDirectory;
+        inheritedSettings.codexEnvironmentRuntime = forked.codexEnvironmentRuntime;
+        codexEnvironmentStartupFailure = forked.codexEnvironmentStartupFailure;
         createdWorkspaceMode =
           forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
         await this.overlayStore.setThreadAgent({
@@ -14152,6 +14337,7 @@ export class DesktopBackendRegistry {
           cwd: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
+          requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,
@@ -14162,6 +14348,8 @@ export class DesktopBackendRegistry {
           agent,
         });
         threadId = started.threadId;
+        inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
+        codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
         if (groupingMode === "subthread") {
           await this.overlayStore.setThreadParent?.({
             backend,
@@ -14229,6 +14417,7 @@ export class DesktopBackendRegistry {
       origin,
       inheritedSettings,
       workspace,
+      codexEnvironmentStartupFailure,
     });
     let turnId: string | undefined;
     let turnStartFailure: HandoffTaskResult["turnStartFailure"];
@@ -14283,6 +14472,9 @@ export class DesktopBackendRegistry {
         origin,
         workspace,
         messagingAttachment,
+        ...(codexEnvironmentStartupFailure
+          ? { codexEnvironmentStartupFailure }
+          : {}),
         ...(turnStartFailure ? { turnStartFailure } : {}),
       },
     };
@@ -14388,6 +14580,26 @@ export class DesktopBackendRegistry {
       candidates.find((directory) => directory.kind === "local") ??
       candidates[0]
     );
+  }
+
+  private async resolveProjectLocalHandoffCwd(params: {
+    sourceCwd?: string;
+    sourceLinkedDirectory?: LinkedDirectorySummary;
+  }): Promise<string | undefined> {
+    const linkedDirectory = params.sourceLinkedDirectory;
+    if (linkedDirectory?.kind === "local" && linkedDirectory.path?.trim()) {
+      return linkedDirectory.path.trim();
+    }
+    const primaryWorkspace = await this.gitDirectoryService
+      .resolvePrimaryWorkspacePath(params.sourceCwd)
+      .catch(() => undefined);
+    if (primaryWorkspace?.trim()) {
+      return primaryWorkspace.trim();
+    }
+    if (linkedDirectory?.kind === "worktree" && linkedDirectory.path?.trim()) {
+      return linkedDirectory.path.trim();
+    }
+    return params.sourceCwd?.trim();
   }
 
   private async buildThreadHandoffWorkspaceSummary(params: {
@@ -15821,7 +16033,19 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        return toThreadInspectionSummary(thread, overlay, messagingBindings);
+        const worktreePath = thread.projectKey?.trim();
+        const gitWorkingState =
+          thread.gitWorkingState ??
+          (worktreePath
+            ? await this.gitWorkingStateService.readWorkingState(worktreePath).catch(
+                () => undefined,
+              )
+            : undefined);
+        return toThreadInspectionSummary(
+          gitWorkingState ? { ...thread, gitWorkingState } : thread,
+          overlay,
+          messagingBindings,
+        );
       }),
     );
   }
@@ -16932,6 +17156,7 @@ function toThreadInspectionSummary(
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,
     fastMode: thread.fastMode,
+    gitWorkingState: thread.gitWorkingState,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     linkedDirectories: thread.linkedDirectories,
   };

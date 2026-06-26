@@ -2468,6 +2468,63 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows base branch and behind-base metadata in the branch tooltip", async () => {
+    const threadWithBase = {
+      ...sharedThread,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 0,
+        baseBranch: "releases/4.3",
+        baseCommit: "1111111111111111111111111111111111111111",
+        baseTipCommit: "2222222222222222222222222222222222222222",
+        baseBehindCommitCount: 2,
+        baseAheadCommitCount: 5,
+        isBehindBase: true,
+      },
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[threadWithBase]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[threadWithBase]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const branchChip = screen.getByRole("button", {
+      name: "Copy branch codex/thread-centric-ui",
+    });
+    fireEvent.mouseEnter(branchChip);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip").textContent).toBe(
+        [
+          "codex/thread-centric-ui",
+          "Base: releases/4.3",
+          "Base commit: 111111111111",
+          "Base tip: 222222222222",
+          "Behind base: 2 commits",
+          "Ahead of base: 5 commits",
+          "Click to copy to clipboard",
+        ].join("\n"),
+      );
+    });
+  });
+
   it("copies a pull request URL from the PR chip context menu", async () => {
     const copyText = vi.fn(async () => undefined);
     const onSelectThread = vi.fn();

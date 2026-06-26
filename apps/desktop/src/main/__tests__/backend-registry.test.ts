@@ -44,6 +44,7 @@ import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
+import { GitDirectoryService } from "../app-server/git-directory-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -995,6 +996,7 @@ class MockBackendClient {
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
       listThreadsError?: Error;
+      listThreadsDelay?: Promise<unknown>;
       archivedThreads?: AppServerThreadSummary[];
       startThreadResult?: { threadId: string };
       startTurnError?: Error;
@@ -1035,6 +1037,9 @@ class MockBackendClient {
     this.listThreadsCalls.push({ diagnostics, params });
     if (this.options.listThreadsError) {
       throw this.options.listThreadsError;
+    }
+    if (this.options.listThreadsDelay) {
+      await this.options.listThreadsDelay;
     }
     if (params?.archived === true && this.options.archivedThreads) {
       return this.options.archivedThreads;
@@ -4136,7 +4141,6 @@ script = "echo setup"
         environmentName: "Repo Environment",
         executionTarget: "local",
         cwd: worktreePath,
-        setupEnabled: true,
         setupStatus: "completed",
         setupCommand: "echo setup",
         setupOutput: "setup",
@@ -8139,7 +8143,6 @@ command = "pnpm dev:messaging"
           environmentName: "PwrAgnt",
           executionTarget: "local",
           cwd: root,
-          setupEnabled: false,
           setupCommand: "pnpm install",
           actions: [
             {
@@ -8223,7 +8226,6 @@ command = "pnpm test"
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: true,
             setupStatus: "completed",
             shellEnvironment: {
               PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
@@ -8323,7 +8325,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [],
           },
         },
@@ -8400,7 +8401,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: localPath,
-            setupEnabled: false,
             actions: [
               {
                 id: "capture-cwd",
@@ -8503,7 +8503,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: worktreePath,
-            setupEnabled: false,
             actions: [
               {
                 id: "capture-cwd",
@@ -8582,7 +8581,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: path.join(root, "missing"),
-            setupEnabled: false,
             actions: [
               {
                 id: "dev-messaging",
@@ -8650,7 +8648,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [
               {
                 id: "dev",
@@ -8766,7 +8763,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: root,
-            setupEnabled: false,
             actions: [
               {
                 // Print a marker to stdout so the captured output (which
@@ -8887,7 +8883,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -8913,7 +8908,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/y",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -8996,7 +8990,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             actionRuns: [
               {
@@ -9061,7 +9054,6 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
             environmentName: "PwrAgnt",
             executionTarget: "local",
             cwd: "/tmp/x",
-            setupEnabled: false,
             actions: [],
             // startedAt set well into the future so the cleanup is
             // guaranteed to see this run as "fresh this session" no
@@ -9481,7 +9473,6 @@ script = "printf setup-output"
       environmentName: "PwrAgent",
       executionTarget: "local",
       cwd: "/repo/app",
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "nvm use",
       shellEnvironment: {
@@ -9615,7 +9606,6 @@ command = "pnpm dev"
       environmentName: "PwrAgnt",
       executionTarget: "local",
       cwd: repoPath,
-      setupEnabled: true,
       setupStatus: "completed",
       setupCommand: "printf setup",
       shellEnvironment: {
@@ -9757,6 +9747,104 @@ command = "pnpm dev"
       path: expectedDir("/repo/app"),
       worktreePath: expectedDir("/repo/app/.worktrees/thread-fork/app"),
     });
+
+    await registry.close();
+  });
+
+  it("reports detached HEAD as the expected branch for new worktree forks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-branch-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(repoPath, { recursive: true });
+    await git(repoPath, ["init", "-b", "main"]);
+    await git(repoPath, ["config", "user.email", "test@example.com"]);
+    await git(repoPath, ["config", "user.name", "Test User"]);
+    await writeFile(path.join(repoPath, "README.md"), "hello\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, ["commit", "-m", "initial"]);
+    await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    try {
+      const response = await registry.forkThread({
+        backend: "codex",
+        sourceThreadId: "thread-parent",
+        parentThreadId: "thread-parent",
+        executionMode: "default",
+        directoryKind: "directory",
+        directoryLabel: "repo",
+        directoryPath: repoPath,
+        branchName: "main",
+        workMode: "worktree",
+      });
+
+      expect(response).toMatchObject({
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+      });
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-fork",
+        gitInfo: {
+          branch: "HEAD",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("rejects Codex forks when requested worktree preparation falls back to local", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await expect(
+      registry.forkThread({
+        backend: "codex",
+        sourceThreadId: "thread-parent",
+        parentThreadId: "thread-parent",
+        executionMode: "default",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        workMode: "worktree",
+        branchName: "missing-base-ref",
+      }),
+    ).rejects.toThrow("Requested worktree workspace");
+    expect(codexClient.lastForkThreadParams).toBeUndefined();
 
     await registry.close();
   });
@@ -11693,6 +11781,15 @@ command = "pnpm dev"
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
       startReviewResult: {
         threadId: "thread-1",
         reviewThreadId: "thread-1",
@@ -11739,10 +11836,12 @@ command = "pnpm dev"
         model: "gpt-5.5",
         tokenUsage: {
           total: {
+            fastMode: true,
             inputTokens: 1_000,
             cachedInputTokens: 200,
             outputTokens: 50,
             reasoningOutputTokens: 10,
+            serviceTier: "priority",
           },
         },
       },
@@ -11757,6 +11856,8 @@ command = "pnpm dev"
         return overlay?.subAgents?.[0]?.monitorUsage;
       })
       .toMatchObject({
+        fastMode: true,
+        serviceTier: "priority",
         summary: expect.stringContaining(
           "800 uncached in · 200 cached · 50 out (10 reasoning)"
         ),
@@ -11775,10 +11876,12 @@ command = "pnpm dev"
     });
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
+      fastMode: true,
       model: "gpt-5.5",
       parentThreadId: "thread-1",
       priceStatus: "priced",
       scope: "monitor",
+      serviceTier: "priority",
       threadId: "thread-1",
       turnId: "turn-review-1",
     });
@@ -13650,6 +13753,9 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      gitDirectoryService: new GitDirectoryService({
+        resolveWorktreeStorage: () => "in-repo",
+      }),
       overlayStore,
       threadTitleGenerationService: null,
     });
@@ -13733,6 +13839,7 @@ command = "pnpm dev"
           task: "Investigate issue XYZ and report back.",
           title: "Investigate issue XYZ",
           context: "Parent already checked the latest CI run.",
+          workspaceMode: "new_worktree",
           messagingAttachment: "new_child",
         },
       },
@@ -13742,7 +13849,6 @@ command = "pnpm dev"
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
-    const normalizedRoot = expectedDir(root);
     expect(payload).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -13761,11 +13867,11 @@ command = "pnpm dev"
         sandbox: "danger-full-access",
       },
       workspace: {
-        mode: "same",
-        cwd: normalizedRoot,
-        branch: "main",
+        mode: "new_worktree",
+        cwd: expect.stringContaining("handoff"),
+        branch: "HEAD",
         git: {
-          kind: "git_local",
+          kind: "git_worktree",
           worktreeCreationAvailable: true,
         },
       },
@@ -13803,7 +13909,7 @@ command = "pnpm dev"
       },
     ]);
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      cwd: normalizedRoot,
+      cwd: expect.stringContaining("handoff"),
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -13817,7 +13923,7 @@ command = "pnpm dev"
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
-      cwd: normalizedRoot,
+      cwd: expect.stringContaining("handoff"),
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -13832,7 +13938,7 @@ command = "pnpm dev"
     expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
     expect(prompt).toContain("- Thread ID: ordinary-thread");
     expect(prompt).toContain("- Turn ID: turn-1");
-    expect(prompt).toContain(`- CWD: ${normalizedRoot}`);
+    expect(prompt).toContain("- CWD: ");
     expect(prompt).toContain("Additional context from parent:");
     expect(prompt).toContain("Parent already checked the latest CI run.");
     await expect(
@@ -13853,12 +13959,695 @@ command = "pnpm dev"
         seedMode: "clean",
         groupingMode: "none",
         workspace: {
-          mode: "same",
-          cwd: normalizedRoot,
-          branch: "main",
+          mode: "new_worktree",
+          cwd: expect.stringContaining("handoff"),
+          branch: "HEAD",
         },
       },
     });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("rehydrates inherited Codex environment runtime for clean new-worktree handoffs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-env-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(worktreePath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "GifGrabber"
+
+[setup]
+script = "printf setup"
+
+[[actions]]
+name = "Dev"
+command = "pnpm dev"
+`,
+      "utf8",
+    );
+
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      executionTarget: "local",
+      cwd: repoPath,
+      setupStatus: "completed",
+      setupCommand: "printf setup",
+      shellEnvironment: {
+        PATH: `${repoPath}/.venv/bin:/usr/bin`,
+        VIRTUAL_ENV: `${repoPath}/.venv`,
+      },
+      selectedActionIdByEnvironmentId: {
+        environment: "dev",
+      },
+      actions: [
+        {
+          id: "dev",
+          name: "Dev",
+          command: "pnpm dev",
+        },
+      ],
+    };
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      workMode: "worktree" as const,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
+      expect(params).toMatchObject({
+        cwd: worktreePath,
+        command: "printf setup",
+        mode: "wait",
+        captureShellEnvironment: true,
+      });
+      return {
+        durationMs: 5,
+        exitCode: 0,
+        output: "setup",
+        shellEnvironment: {
+          PATH: `${worktreePath}/.venv/bin:/usr/bin`,
+          VIRTUAL_ENV: `${worktreePath}/.venv`,
+        },
+      };
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread,
+      } as never,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Implement the export failure alert on master.",
+          title: "Swift export alert",
+          workspaceMode: "new_worktree",
+          branchName: "origin/master",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      branchName: "origin/master",
+      directoryKind: "directory",
+      directoryLabel: "repo",
+      directoryPath: expectedDir(repoPath),
+      workMode: "worktree",
+    });
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      cwd: worktreePath,
+      setupStatus: "completed",
+      shellEnvironment: {
+        PATH: `${worktreePath}/.venv/bin:/usr/bin`,
+        VIRTUAL_ENV: `${worktreePath}/.venv`,
+      },
+      selectedActionIdByEnvironmentId: {
+        environment: "dev",
+      },
+    });
+    expect(
+      codexClient.lastStartThreadParams?.codexEnvironmentRuntime?.shellEnvironment
+        ?.VIRTUAL_ENV,
+    ).not.toBe(`${repoPath}/.venv`);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.inheritedSettings.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      cwd: worktreePath,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        cwd: worktreePath,
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("creates new-worktree handoff threads when inherited environment setup is unavailable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-env-missing-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await mkdir(worktreePath, { recursive: true });
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      executionTarget: "local",
+      cwd: repoPath,
+      setupStatus: "completed",
+      setupCommand: "printf setup",
+      selectedActionIdByEnvironmentId: {
+        environment: "dev",
+      },
+      actions: [
+        {
+          id: "dev",
+          name: "Dev",
+          command: "pnpm dev",
+        },
+      ],
+    };
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      workMode: "worktree" as const,
+      rollback: vi.fn(async () => {}),
+    }));
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async () => {
+      throw new Error("setup should not run without an environment file");
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Backport the fix from master.",
+          title: "Backport fix",
+          workspaceMode: "new_worktree",
+          branchName: "origin/master",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(commandRunner).not.toHaveBeenCalled();
+    expect(codexClient.lastStartThreadParams?.cwd).toBe(worktreePath);
+    expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      cwd: worktreePath,
+      setupStatus: "failed",
+      setupOutput: expect.stringContaining("is not available in the forked worktree"),
+    });
+    expect(codexClient.lastStartTurnParams?.threadId).toBe("thread-1");
+    const prompt =
+      (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
+        ?.text ?? "";
+    expect(prompt).toContain("Codex environment startup:");
+    expect(prompt).toContain("- Status: failed");
+    expect(prompt).toContain("is not available in the forked worktree");
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.codexEnvironmentStartupFailure).toMatchObject({
+      phase: "setup",
+      worktreeCleanupAvailable: true,
+      message: expect.stringContaining("is not available in the forked worktree"),
+    });
+    expect(payload.inheritedSettings.codexEnvironmentRuntime).toMatchObject({
+      environmentId: "environment",
+      cwd: worktreePath,
+      setupStatus: "failed",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        cwd: worktreePath,
+        setupStatus: "failed",
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects ungrouped same-workspace thread handoff dynamic tool calls", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ and report back.",
+          workspaceMode: "same_workspace",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                'workspaceMode="same_workspace" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for a delegated thread with an isolated worktree, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.',
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("starts project-local handoffs in the primary repo checkout instead of the caller worktree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-project-local-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
+
+    const linkedDirectory = {
+      id: expectedDir(repoPath),
+      kind: "worktree" as const,
+      label: "repo",
+      path: expectedDir(repoPath),
+      worktreePath: expectedDir(worktreePath),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: new GitDirectoryService({
+        resolveWorktreeStorage: () => "in-repo",
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            extraLinkedDirectories: [linkedDirectory],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ from the project checkout.",
+          title: "Project local handoff",
+          workspaceMode: "project_local",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const realRepoPath = expectedDir(await realpath(repoPath));
+    const realWorktreePath = expectedDir(await realpath(worktreePath));
+    expect(codexClient.lastStartThreadParams?.cwd).toBe(realRepoPath);
+    expect(codexClient.lastStartThreadParams?.cwd).not.toBe(realWorktreePath);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.workspace).toMatchObject({
+      mode: "project_local",
+      cwd: realRepoPath,
+      branch: "main",
+      git: {
+        kind: "git_local",
+        worktreeCreationAvailable: true,
+      },
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects new-worktree handoffs when workspace preparation falls back to the source cwd", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-fallback-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+    } catch {
+      await git(root, ["init"]);
+      await git(root, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(root, "README.md"), "handoff\n", "utf8");
+    await git(root, ["add", "README.md"]);
+    await git(root, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(root),
+              kind: "local",
+              label: "handoff",
+              path: expectedDir(root),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: new GitDirectoryService({
+        resolveWorktreeStorage: () => "in-repo",
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: expectedDir(root),
+                kind: "local",
+                label: "handoff",
+                path: expectedDir(root),
+              },
+            ],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate issue XYZ and report back.",
+          title: "Investigate issue XYZ",
+          workspaceMode: "new_worktree",
+          branchName: "codex/agent-intended-child-branch",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining("unsupported_workspace"),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
@@ -19087,6 +19876,65 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  it("does not persist branch drift after registry shutdown starts", async () => {
+    let releaseListThreads!: () => void;
+    const listThreadsDelay = new Promise<void>((resolve) => {
+      releaseListThreads = resolve;
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Moved thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      gitBranch: "fix/steering-composer-navigation",
+      observedGitBranch: "fix/steering-composer-navigation",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "full-access",
+          observedGitBranch: "fix/queued-composer-navigation",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const setThreadObservedBranch = vi.spyOn(overlayStore, "setThreadObservedBranch");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+        listThreadsDelay,
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const responsePromise = registry.checkThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "fix/queued-composer-navigation",
+      threadId: "thread-1",
+    });
+    await Promise.resolve();
+
+    const closePromise = registry.close();
+    releaseListThreads();
+
+    await expect(responsePromise).resolves.toMatchObject({
+      expectedBranch: "fix/queued-composer-navigation",
+      observedBranch: "fix/steering-composer-navigation",
+      drifted: true,
+    });
+    expect(setThreadObservedBranch).not.toHaveBeenCalled();
+
+    await closePromise;
   });
 
   it("adopts a named branch change from an active turn before notifying listeners", async () => {

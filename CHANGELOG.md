@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.0.0-beta.38 - 2026-06-26
+
+- Worktree Handoffs - Fixed new-worktree handoffs so requested worktree isolation is enforced, setup failures are surfaced, and agent-created threads cannot silently fall back to the caller's workspace.
+- Worktree Forks - Improved fork-into-new-worktree flow with immediate environment setup progress, streamed setup output, and corrected branch metadata for detached destination worktrees.
+- Branch Context - Added base-branch metadata to thread rows, branch tooltips, and agent-facing thread status so release-branch work can show base branch and ahead/behind-base state.
+- Updates - Fixed update checks to ignore tag-only or assetless failed releases instead of 404ing on a missing latest-mac.yml.
+- Release Packaging - Pinned Windows packaging to the Visual Studio 2022 runner path and locked that expectation in release:check so native rebuilds do not fail on VS 2026 runner images.
+- Reliability - Bounded SQLite WAL/log churn and added guardrails against future append-heavy autoincrement tables.
+
+## v1.0.0-beta.37 - 2026-06-24
+
+- Thread Pricing - Enabled the Pricing tab by default and kept sub-agent rows aligned with the selected USD and Codex Credits display units.
+- Agent Handoffs - Fixed agent-created handoffs so ungrouped delegated threads can no longer silently reuse the caller's worktree outside grouped subthreads.
+- Shutdown Reliability - Quieted branch-drift and app-server close races so late Codex responses and shutdown refreshes do not produce noisy errors during app close.
+- Security and Dependencies - Updated production and test dependencies, refreshed third-party licenses, and forced transitive Undici versions to patched releases.
+- Minor Fixes - Fixed reasoning-only and empty tool-response handling in the legacy direct-xAI Grok backend. This does not apply to Grok Build via ACP.
+
 ## v1.0.0-beta.36 - 2026-06-21
 
 - Agent Handoff Tools - Added PwrAgent app, thread, messaging, and task handoff tools so agents can inspect and coordinate work across PwrAgent surfaces.

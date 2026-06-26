@@ -3,6 +3,7 @@ import electronLog from "electron-log/main.js";
 import {
   compactStructuredLogData,
   isMainLogDebugCollectionEnabled,
+  MAIN_LOG_MAX_SIZE_BYTES,
   resolveMainLogFileNameForProfile,
   resolveMainLogProfileName,
   setMainLogDebugCollectionEnabled,
@@ -25,6 +26,11 @@ describe("main logger compact formatting", () => {
     expect(electronLog.transports.file.level).toBe("debug");
 
     setMainLogDebugCollectionEnabled(false);
+  });
+
+  it("keeps persistent main logs bounded to 1 MiB rotation", () => {
+    expect(MAIN_LOG_MAX_SIZE_BYTES).toBe(1024 * 1024);
+    expect(electronLog.transports.file.maxSize).toBe(MAIN_LOG_MAX_SIZE_BYTES);
   });
 
   it("omits undefined object fields from compact log output", () => {

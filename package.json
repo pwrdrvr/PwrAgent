@@ -48,10 +48,14 @@
       "axios": "^1.16.0",
       "esbuild": "0.28.1",
       "form-data": "4.0.6",
+      "prosemirror-model": "1.25.9",
+      "prosemirror-view": "1.41.9",
       "protobufjs": "7.6.3",
       "qs": "6.15.2",
       "rollup": "4.61.1",
       "tmp": "0.2.7",
+      "undici@6": "6.27.0",
+      "undici@7": "7.28.0",
       "ws": "8.21.0"
     }
   }

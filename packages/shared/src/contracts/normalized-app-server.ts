@@ -187,7 +187,6 @@ export type CodexThreadEnvironmentRuntime = {
    * and then update this value.
    */
   cwd?: string;
-  setupEnabled?: boolean;
   setupStatus?: "skipped" | "completed" | "failed";
   setupCommand?: string;
   setupOutput?: string;
@@ -271,6 +270,18 @@ export type ThreadGitWorkingState = {
   untrackedFiles: number;
   /** Local commits not present on any remote ref (0 when no remotes). */
   unpushedCommits: number;
+  /** Best-effort git-derived branch this work appears to be based on. */
+  baseBranch?: string;
+  /** Merge-base commit between HEAD and `baseBranch`. */
+  baseCommit?: string;
+  /** Current tip commit of `baseBranch` when probed. */
+  baseTipCommit?: string;
+  /** Commits on `baseBranch` after `baseCommit`; > 0 means this work is behind its base. */
+  baseBehindCommitCount?: number;
+  /** Commits on HEAD after `baseCommit`. */
+  baseAheadCommitCount?: number;
+  /** True when `baseBranch` has commits after `baseCommit`. */
+  isBehindBase?: boolean;
 };
 
 export type AppServerThreadSummary = {

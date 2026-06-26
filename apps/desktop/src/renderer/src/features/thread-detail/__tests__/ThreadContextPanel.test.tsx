@@ -306,6 +306,68 @@ describe("ThreadContextPanel", () => {
     expect(detailsButtons[0]).toHaveFocus();
   });
 
+  it("honors Credits-only pricing display options for sub-agent usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      pricingDisplayOptions: {
+        codexCredits: true,
+        usd: false,
+      },
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "monitor-credits",
+            task: "Watch PR #274 CI after pushed review-fix commit",
+            status: "success",
+            createdAt: 2000,
+            updatedAt: 2500,
+            completedAt: 2600,
+            preferredModel: "gpt-5.5",
+            monitorUsage: {
+              fastMode: true,
+              model: "gpt-5.5",
+              serviceTier: "priority",
+              summary:
+                "1,500 uncached in · 500 cached · 300 out (120 reasoning) · $0.024 list price",
+              tokenUsage: {
+                inputTokens: 2000,
+                cachedInputTokens: 500,
+                uncachedInputTokens: 1500,
+                outputTokens: 300,
+                reasoningOutputTokens: 120,
+                totalTokens: 2420,
+              },
+              cost: {
+                model: "gpt-5.5",
+                totalUsd: 0.02375,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      screen.getByText(
+        "Monitor usage: 1,500 uncached in · 500 cached · 300 out (120 reasoning) · 1.3 Codex Credits",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const modal = within(screen.getByRole("dialog"));
+    expect(modal.getByText("Cost")).toBeInTheDocument();
+    expect(modal.getByText("1.3 Codex Credits")).toBeInTheDocument();
+    expect(
+      modal.getByText(
+        "1,500 uncached in · 500 cached · 300 out (120 reasoning) · 1.3 Codex Credits",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
+  });
+
   it("labels review sub-agent usage separately from monitor usage", () => {
     renderPanel({
       activeTab: "subagents",
@@ -438,14 +500,29 @@ describe("ThreadContextPanel", () => {
     );
   });
 
-  it("hides the Pricing tab by default while the experimental flag is off", () => {
+  it("shows the Pricing tab by default", () => {
     renderPanel({
       activeTab: "pricing",
       pinned: true,
     });
 
+    expect(screen.getByRole("tab", { name: "Pricing" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Pricing" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the Pricing tab while the experimental flag is off", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      threadPricingSummaryEnabled: false,
+    });
+
     expect(screen.queryByRole("tab", { name: "Pricing" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Pricing" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 

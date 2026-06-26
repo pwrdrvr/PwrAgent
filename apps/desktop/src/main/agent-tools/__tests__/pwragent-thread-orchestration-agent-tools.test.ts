@@ -13,6 +13,7 @@ describe("pwragent thread orchestration agent tools", () => {
       expect.objectContaining({
         namespace: "pwragent",
         name: "handoff_task",
+        description: expect.stringContaining("backports"),
         deferLoading: false,
         inputSchema: expect.objectContaining({
           required: ["task"],
@@ -24,7 +25,10 @@ describe("pwragent thread orchestration agent tools", () => {
               enum: ["none", "subthread"],
             }),
             workspaceMode: expect.objectContaining({
-              enum: ["same", "new_worktree", "none"],
+              enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
+            }),
+            branchName: expect.objectContaining({
+              description: expect.stringContaining("existing base branch/ref"),
             }),
           }),
         }),
@@ -171,7 +175,7 @@ describe("pwragent thread orchestration agent tools", () => {
           task: "  Ship it  ",
           seedMode: "fork",
           groupingMode: "subthread",
-          workspaceMode: "same",
+          workspaceMode: "same_workspace",
           messagingAttachment: "auto",
         },
       },
@@ -188,7 +192,7 @@ describe("pwragent thread orchestration agent tools", () => {
         task: "Ship it",
         seedMode: "fork",
         groupingMode: "subthread",
-        workspaceMode: "same",
+        workspaceMode: "same_workspace",
         messagingAttachment: "auto",
       },
     });

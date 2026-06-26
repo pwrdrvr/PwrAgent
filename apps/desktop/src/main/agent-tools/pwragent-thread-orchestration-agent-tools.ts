@@ -94,7 +94,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread, and groupingMode=subthread only when the user asks for a sub-thread.";
+      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree.";
     case "send_message_to_thread":
       return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead.";
   }
@@ -141,7 +141,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_WORKSPACE_MODES,
             description:
-              "`same` inherits the current workspace and is the default. `new_worktree` requests an isolated Git worktree. `none` allows a no-workspace thread.",
+              "`new_worktree` requests an isolated Git worktree and is the default for workspace-backed handoffs; set branchName to an existing base ref such as `origin/master` when the user asks for a specific source branch. `same_workspace` shares the caller's exact cwd and is valid only with groupingMode=subthread. `project_local` uses the project's primary/local checkout. `none` allows a no-workspace thread. `same` is a legacy alias for `same_workspace`.",
           },
           messagingAttachment: {
             type: "string",
@@ -160,7 +160,7 @@ function inputSchemaForOperation(
           branchName: {
             type: "string",
             description:
-              "Optional branch name for an explicit new-worktree handoff.",
+              "Optional existing base branch/ref for workspaceMode=new_worktree, for example `origin/master`. This is not the new feature branch name; tell the delegated thread to create or switch to its work branch in the task text.",
           },
         },
       };

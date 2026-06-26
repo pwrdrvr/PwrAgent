@@ -303,6 +303,48 @@ function parseGitBranchDetails(
 }
 
 /**
+ * Parses `for-each-ref refs/heads refs/remotes` output formatted as
+ * `<full-refname>\t<short-name>\t<committerdate:unix>\t<symref>`.
+ *
+ * Remote HEAD aliases must be filtered before callers see the shortened name:
+ * Git can shorten `refs/remotes/origin/HEAD` to `origin`, which otherwise
+ * looks like a selectable branch.
+ */
+function parseGitBaseBranchDetails(
+  output: string,
+): { name: string; lastCommitAt?: number }[] {
+  const details: { name: string; lastCommitAt?: number }[] = [];
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line.trim()) {
+      continue;
+    }
+    const [refname = "", shortName = "", unixRaw = "", symref = ""] =
+      line.split("\t");
+    const fullRefname = refname.trim();
+    if (
+      fullRefname.startsWith("refs/remotes/") &&
+      fullRefname.endsWith("/HEAD")
+    ) {
+      continue;
+    }
+    if (symref.trim()) {
+      continue;
+    }
+    const name = shortName.trim();
+    if (!name) {
+      continue;
+    }
+    const unixValue = Number.parseInt(unixRaw.trim(), 10);
+    details.push({
+      name,
+      lastCommitAt: Number.isFinite(unixValue) ? unixValue : undefined,
+    });
+  }
+  return details;
+}
+
+/**
  * Upper bound on how many branches we enrich, hold in the navigation
  * snapshot, and persist to the directory git-status cache. Repos can have
  * thousands of branches; the picker (and the messaging / PR-status surfaces
@@ -652,7 +694,7 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    const [rawCurrentBranch, branchesOutput, remoteHead, worktreeList] =
+    const [rawCurrentBranch, branchesOutput, baseBranchesOutput, remoteHead, worktreeList] =
       await Promise.all([
         runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
           () => "",
@@ -664,6 +706,17 @@ export class GitDirectoryService {
             "refs/heads",
             "--sort=-committerdate",
             "--format=%(refname:short)%09%(committerdate:unix)",
+          ],
+          gitEnv,
+        ).catch(() => ""),
+        runGit(
+          repoRoot,
+          [
+            "for-each-ref",
+            "refs/heads",
+            "refs/remotes",
+            "--sort=-committerdate",
+            "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
           ],
           gitEnv,
         ).catch(() => ""),
@@ -689,6 +742,7 @@ export class GitDirectoryService {
       gitEnv,
     ).catch(() => "");
     const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
+    const parsedBaseBranchDetailsAll = parseGitBaseBranchDetails(baseBranchesOutput);
     // Resolve the default branch against the FULL list so a rarely-committed
     // `main` is still found, then cap everything we hold/persist downstream.
     const defaultBranch = resolveDefaultBranch({
@@ -699,7 +753,12 @@ export class GitDirectoryService {
       keep: [currentBranch, defaultBranch],
       limit: MAX_TRACKED_BRANCHES,
     });
+    const parsedBaseBranchDetails = capRecentBranchDetails(parsedBaseBranchDetailsAll, {
+      keep: [currentBranch, defaultBranch, remoteHead.trim()],
+      limit: MAX_TRACKED_BRANCHES,
+    });
     const branches = parsedBranchDetails.map((detail) => detail.name);
+    const baseBranches = parsedBaseBranchDetails.map((detail) => detail.name);
     const worktreeBranchNames = new Set(
       parseGitWorktreeEntries(worktreeList)
         .map((entry) => entry.branch)
@@ -711,11 +770,19 @@ export class GitDirectoryService {
           ? { ...detail, inUse: true }
           : { ...detail },
       );
+    const buildBaseBranchDetails = (): NavigationGitBranchDetail[] =>
+      parsedBaseBranchDetails.map((detail) =>
+        detail.name !== currentBranch && worktreeBranchNames.has(detail.name)
+          ? { ...detail, inUse: true }
+          : { ...detail },
+      );
     if (!currentBranch) {
       return {
         defaultBranch,
         branches,
+        baseBranches,
         branchDetails: buildBranchDetails(),
+        baseBranchDetails: buildBaseBranchDetails(),
         handoffBranches: branches,
         syncState: "untracked",
       };
@@ -733,7 +800,9 @@ export class GitDirectoryService {
         currentBranch,
         defaultBranch,
         branches,
+        baseBranches,
         branchDetails: buildBranchDetails(),
+        baseBranchDetails: buildBaseBranchDetails(),
         handoffBranches,
         syncState: "untracked",
       };
@@ -765,7 +834,9 @@ export class GitDirectoryService {
       behind,
       defaultBranch,
       branches,
+      baseBranches,
       branchDetails: buildBranchDetails(),
+      baseBranchDetails: buildBaseBranchDetails(),
       handoffBranches,
       syncState,
     };
@@ -790,6 +861,25 @@ export class GitDirectoryService {
       cwd: toForwardSlashesOptional(prepared.cwd),
       repositoryPath: toForwardSlashesOptional(prepared.repositoryPath),
     };
+  }
+
+  async resolvePrimaryWorkspacePath(cwd: string | undefined): Promise<string | undefined> {
+    const directoryPath = cwd?.trim();
+    if (!directoryPath) {
+      return undefined;
+    }
+    const sourceRoot = await readGitRoot(
+      directoryPath,
+      this.runGitCommand,
+      this.gitEnv,
+    );
+    if (!sourceRoot) {
+      return undefined;
+    }
+    const primary =
+      (await readPrimaryWorktreePath(sourceRoot, this.runGitCommand, this.gitEnv)) ??
+      sourceRoot;
+    return toForwardSlashes(primary);
   }
 
   private async prepareLaunchpadWorkspaceInternal(
