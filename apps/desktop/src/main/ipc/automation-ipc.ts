@@ -5,6 +5,7 @@ import type {
   GetAutomationRunArtifactResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  ListAutomationLoadIssuesResponse,
   AutomationMutationResponse,
   CreateAutomationRequest,
   ListAutomationRunsRequest,
@@ -21,6 +22,7 @@ import {
   AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
+  AUTOMATIONS_LOAD_ISSUES_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
   AUTOMATIONS_RUN_NOW_CHANNEL,
@@ -39,6 +41,14 @@ export function registerAutomationIpcHandlers(): void {
     AUTOMATIONS_LIST_CHANNEL,
     (_event, request?: ListAutomationsRequest): ListAutomationsResponse =>
       getDesktopAutomationService().list(request),
+  );
+
+  ipcMain.removeHandler(AUTOMATIONS_LOAD_ISSUES_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+    (): ListAutomationLoadIssuesResponse => ({
+      issues: getDesktopAutomationService().getLoadIssues(),
+    }),
   );
 
   ipcMain.removeHandler(AUTOMATIONS_CREATE_CHANNEL);
@@ -128,6 +138,7 @@ export function registerAutomationIpcHandlers(): void {
 
 export function disposeAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_LIST_CHANNEL);
+  ipcMain.removeHandler(AUTOMATIONS_LOAD_ISSUES_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_CREATE_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_UPDATE_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_DELETE_CHANNEL);

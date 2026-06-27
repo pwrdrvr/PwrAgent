@@ -19,6 +19,7 @@ import type {
   InterruptTurnResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  ListAutomationLoadIssuesResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -263,6 +264,7 @@ import {
   AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
+  AUTOMATIONS_LOAD_ISSUES_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
   AUTOMATIONS_RUN_NOW_CHANNEL,
@@ -302,6 +304,7 @@ import {
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
   PATH_OPEN_CHANNEL,
+  PATH_REVEAL_CHANNEL,
   BACKEND_LIST_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
@@ -604,6 +607,8 @@ const desktopApi = Object.freeze({
     request: GetAutomationRunArtifactRequest,
   ): Promise<GetAutomationRunArtifactResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
+  listAutomationLoadIssues: async (): Promise<ListAutomationLoadIssuesResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_LOAD_ISSUES_CHANNEL),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (
@@ -750,6 +755,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
   openPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
+  revealPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
+    await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
@@ -1406,6 +1413,25 @@ function readBootstrapHomeDir(): string {
 }
 const bootstrapHomeDir = readBootstrapHomeDir();
 
+// Decode the active main-process log file path passed from main via
+// `webPreferences.additionalArguments` (Logs window only). The renderer uses
+// `window.__pwragentLogFilePath` as a fallback so the path + reveal button stay
+// available even when the live log-snapshot IPC read fails.
+const LOG_FILE_PATH_ARG_PREFIX = "--pwragent-log-file-path=";
+function readBootstrapLogFilePath(): string {
+  for (const arg of process.argv) {
+    if (!arg.startsWith(LOG_FILE_PATH_ARG_PREFIX)) continue;
+    try {
+      const raw = JSON.parse(arg.slice(LOG_FILE_PATH_ARG_PREFIX.length));
+      return typeof raw === "string" ? raw : "";
+    } catch {
+      break;
+    }
+  }
+  return "";
+}
+const bootstrapLogFilePath = readBootstrapLogFilePath();
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragent", desktopApi);
   contextBridge.exposeInMainWorld("__pwragentAppearance", bootstrapAppearance);
@@ -1419,6 +1445,10 @@ if (process.contextIsolated) {
     bootstrapNavigationPreferences,
   );
   contextBridge.exposeInMainWorld("__pwragentHomeDir", bootstrapHomeDir);
+  contextBridge.exposeInMainWorld(
+    "__pwragentLogFilePath",
+    bootstrapLogFilePath,
+  );
   recordPreloadLog("info", "exposed context bridge", {
     keyCount: Object.keys(desktopApi).length
   });

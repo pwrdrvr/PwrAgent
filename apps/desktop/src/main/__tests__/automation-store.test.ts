@@ -441,4 +441,84 @@ describe("AutomationStore", () => {
         .get(),
     ).toEqual({ count: 1 });
   });
+
+  function insertRawAutomationRow(params: {
+    id: string;
+    name: string;
+    status?: string;
+    payload: string;
+  }): void {
+    stateDb.raw
+      .prepare(
+        `INSERT INTO automations (
+          automation_id, backend, thread_id, name, status, backlog_policy,
+          next_run_at, last_run_at, created_at, updated_at, deleted_at, payload
+        ) VALUES (?, 'codex', 'thread-1', ?, ?, 'coalesce', NULL, NULL, 1000, 1000, NULL, ?)`,
+      )
+      .run(params.id, params.name, params.status ?? "enabled", params.payload);
+  }
+
+  it("skips automations it can't load without mutating or running them", () => {
+    // A trigger-only automation written by a newer build: enabled, but its
+    // payload has no schedule this version understands.
+    insertRawAutomationRow({
+      id: "automation-future",
+      name: "Slack trigger",
+      payload: JSON.stringify({
+        taskPrompt: "do the thing",
+        triggers: [{ kind: "inbound_message" }],
+        scheduleSummary: "inbound",
+      }),
+    });
+    // A corrupt payload.
+    insertRawAutomationRow({
+      id: "automation-corrupt",
+      name: "Corrupt one",
+      payload: "{not valid json",
+    });
+    // A normal, loadable automation alongside them.
+    store.createAutomation({
+      id: "automation-ok",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Healthy",
+      taskPrompt: "ok",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 1_000,
+    });
+
+    // Only the healthy automation is returned; the unloadable ones are skipped.
+    expect(store.listAutomations().map((automation) => automation.id)).toEqual([
+      "automation-ok",
+    ]);
+
+    // The skipped rows are reported, not silently dropped.
+    const issues = store.getAutomationLoadIssues();
+    expect(issues.map((issue) => issue.id).sort()).toEqual([
+      "automation-corrupt",
+      "automation-future",
+    ]);
+    expect(issues.find((issue) => issue.id === "automation-future")?.name).toBe(
+      "Slack trigger",
+    );
+
+    // The underlying rows are untouched — not paused, not deleted.
+    const rows = stateDb.raw
+      .prepare(
+        "SELECT status FROM automations WHERE automation_id IN ('automation-future', 'automation-corrupt') ORDER BY automation_id",
+      )
+      .all() as Array<{ status: string }>;
+    expect(rows).toEqual([{ status: "enabled" }, { status: "enabled" }]);
+  });
+
+  it("does not report skipped issues for soft-deleted unloadable rows", () => {
+    insertRawAutomationRow({
+      id: "automation-deleted",
+      name: "Deleted future automation",
+      status: "deleted",
+      payload: JSON.stringify({ taskPrompt: "x", triggers: [] }),
+    });
+    expect(store.listAutomations()).toEqual([]);
+    expect(store.getAutomationLoadIssues()).toEqual([]);
+  });
 });

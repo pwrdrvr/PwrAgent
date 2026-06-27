@@ -80,6 +80,21 @@ export type AutomationScheduleDefinition =
   | AutomationWeeklyScheduleDefinition
   | AutomationWeekdaysScheduleDefinition;
 
+/**
+ * Every schedule discriminant this build understands. Used by the desktop
+ * automation store to recognize — and safely skip — automation rows whose
+ * persisted schedule shape this version can't parse (e.g. a row written by a
+ * newer build that introduced a new schedule/trigger kind). Keep this in sync
+ * with the `AutomationScheduleDefinition` union and the
+ * `computeNextAutomationRunAt` switch.
+ */
+export const AUTOMATION_SCHEDULE_KINDS = [
+  "interval",
+  "weekly",
+  "weekdays",
+] as const;
+export type AutomationScheduleKind = (typeof AUTOMATION_SCHEDULE_KINDS)[number];
+
 export type AutomationScheduleValidationResult =
   | {
       ok: true;
@@ -260,6 +275,23 @@ export type ListAutomationsRequest = {
 
 export type ListAutomationsResponse = {
   automations: AutomationDetail[];
+};
+
+/**
+ * One automation row the running build could not load (malformed payload, or a
+ * schedule/trigger shape this version doesn't understand). The row is left
+ * untouched in storage and excluded from results for this process lifetime —
+ * not paused, not deleted — so an older build silently skips data a newer
+ * build wrote instead of crashing on it.
+ */
+export type AutomationLoadIssue = {
+  id: string;
+  name: string;
+  reason: string;
+};
+
+export type ListAutomationLoadIssuesResponse = {
+  issues: AutomationLoadIssue[];
 };
 
 export type AutomationMutationResponse = {

@@ -7,6 +7,7 @@ import type {
   AutomationInspectionErrorCode,
   AutomationInspectionResponse,
   AutomationIdRequest,
+  AutomationLoadIssue,
   AutomationMutationResponse,
   AutomationRunSummary,
   AutomationRunStatus,
@@ -150,6 +151,15 @@ export class DesktopAutomationService {
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
     this.options.registry.setAutomationInspectionHandler?.(null);
+  }
+
+  /**
+   * Automations the store couldn't load this process lifetime (corrupt payload,
+   * or a schedule/trigger shape this build predates). Surfaced to the renderer
+   * so the user sees a warning instead of silently missing automations.
+   */
+  getLoadIssues(): AutomationLoadIssue[] {
+    return this.options.store.getAutomationLoadIssues();
   }
 
   list(request: ListAutomationsRequest = {}): ListAutomationsResponse {
@@ -678,7 +688,11 @@ export class DesktopAutomationService {
     const nextRunAtByAutomationId = Object.fromEntries(
       this.options.store
         .listAutomations()
-        .filter((automation) => automation.status === "enabled")
+        // `listAutomations` already skips rows whose schedule this build can't
+        // load; the explicit `schedule` guard is belt-and-suspenders so a
+        // schedule-less record can never reach computeNextAutomationRunAt and
+        // abort the whole startup reconcile.
+        .filter((automation) => automation.status === "enabled" && automation.schedule)
         .map((automation) => [
           automation.id,
           computeNextAutomationRunAt(automation.schedule, now),
