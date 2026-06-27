@@ -127,6 +127,7 @@ export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
 export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
+export const AUTOMATIONS_LOAD_ISSUES_CHANNEL = "automations:load-issues";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate
@@ -271,6 +272,7 @@ export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
+export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

@@ -379,6 +379,15 @@ describe("bootstrapApp", () => {
         return process;
       },
     );
+    // installBootErrorHandlers attaches an unhandledRejection listener via
+    // process.on. The module re-imports per test, so without this spy the real
+    // process accumulates a listener each time (MaxListenersExceededWarning).
+    vi.spyOn(process, "on").mockImplementation(
+      (event: string | symbol, handler: (...args: unknown[]) => void) => {
+        processEventHandlers.set(String(event), handler);
+        return process;
+      },
+    );
     mainWindowHandlers.clear();
     createMainWindowMock.mockReset();
     // createMainWindow returns the BrowserWindow; index.ts wraps each call in
@@ -388,6 +397,10 @@ describe("bootstrapApp", () => {
       on: (event: string, handler: (...args: unknown[]) => void) => {
         mainWindowHandlers.set(event, handler);
       },
+      once: (event: string, handler: (...args: unknown[]) => void) => {
+        mainWindowHandlers.set(event, handler);
+      },
+      isVisible: () => false,
     }));
     registerAppServerIpcHandlersMock.mockReset();
     disposeAppServerIpcHandlersMock.mockReset();

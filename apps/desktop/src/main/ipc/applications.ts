@@ -6,7 +6,11 @@ import type {
   OpenPathRequest,
   OpenPathResponse,
 } from "@pwragent/shared";
-import { APPLICATION_OPEN_CHANNEL, PATH_OPEN_CHANNEL } from "../../shared/ipc";
+import {
+  APPLICATION_OPEN_CHANNEL,
+  PATH_OPEN_CHANNEL,
+  PATH_REVEAL_CHANNEL,
+} from "../../shared/ipc";
 import { openDesktopApplication } from "../settings/application-discovery";
 
 /**
@@ -31,6 +35,27 @@ async function openPathWithOsDefault(
   return error ? { opened: false, error } : { opened: true };
 }
 
+/**
+ * Reveal a filesystem path in the OS file manager (Finder on macOS),
+ * highlighting the item. Used by the Logs window's "Reveal" button so the user
+ * can grab the log file off disk even while it's open in the viewer.
+ */
+async function revealPathInFolder(
+  request: OpenPathRequest,
+): Promise<OpenPathResponse> {
+  const target = request.path?.trim();
+  if (!target) {
+    return { opened: false, error: "No file path was provided." };
+  }
+  try {
+    await access(target);
+  } catch {
+    return { opened: false, error: `Path does not exist: ${target}` };
+  }
+  shell.showItemInFolder(target);
+  return { opened: true };
+}
+
 export function registerApplicationIpcHandlers(): void {
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.handle(
@@ -47,9 +72,17 @@ export function registerApplicationIpcHandlers(): void {
     async (_event, request: OpenPathRequest): Promise<OpenPathResponse> =>
       openPathWithOsDefault(request),
   );
+
+  ipcMain.removeHandler(PATH_REVEAL_CHANNEL);
+  ipcMain.handle(
+    PATH_REVEAL_CHANNEL,
+    async (_event, request: OpenPathRequest): Promise<OpenPathResponse> =>
+      revealPathInFolder(request),
+  );
 }
 
 export function disposeApplicationIpcHandlers(): void {
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);
+  ipcMain.removeHandler(PATH_REVEAL_CHANNEL);
 }

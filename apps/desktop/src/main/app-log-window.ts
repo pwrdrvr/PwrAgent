@@ -1,5 +1,5 @@
 import { BrowserWindow } from "electron";
-import { getMainLogger } from "./log";
+import { getMainLogFilePath, getMainLogger } from "./log";
 import {
   applyWindowSecurityHardening,
   getPreloadPath,
@@ -62,7 +62,13 @@ export function showAppLogWindow(source: WindowPlacementSource = {}): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      additionalArguments: themedWindowAdditionalArguments(appearance),
+      additionalArguments: [
+        ...themedWindowAdditionalArguments(appearance),
+        // Hand the log file's on-disk path to the renderer up front so the
+        // Logs window can show + reveal it even if the snapshot IPC read later
+        // fails — that failure is exactly when finding the log matters most.
+        `--pwragent-log-file-path=${JSON.stringify(getMainLogFilePath() ?? "")}`,
+      ],
     },
   });
   registerAuxiliaryWindowTitle(window, LOGS_WINDOW_TITLE);

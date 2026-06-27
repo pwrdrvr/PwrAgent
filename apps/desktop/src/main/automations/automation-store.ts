@@ -4,6 +4,7 @@ import type {
   AutomationBacklogPolicy,
   AutomationGateConfig,
   AutomationListItemSummary,
+  AutomationLoadIssue,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
   AutomationRunStatus,
@@ -17,13 +18,33 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared";
 import {
+  AUTOMATION_SCHEDULE_KINDS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log.js";
 import type { StateDb } from "../state/state-db.js";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
+
+const automationStoreLog = getMainLogger("pwragent:automations");
+
+const UNDERSTOOD_SCHEDULE_KINDS = new Set<string>(AUTOMATION_SCHEDULE_KINDS);
+
+/**
+ * True only when `schedule` is a shape this build can actually run. Anything
+ * else — missing schedule (e.g. a trigger-only automation written by a newer
+ * build), a non-object, or an unrecognized `kind` — is something we must skip
+ * rather than dereference. Never throws; safe to call on untrusted JSON.
+ */
+function isUnderstoodSchedule(
+  schedule: unknown,
+): schedule is AutomationScheduleDefinition {
+  if (!schedule || typeof schedule !== "object") return false;
+  const kind = (schedule as { kind?: unknown }).kind;
+  return typeof kind === "string" && UNDERSTOOD_SCHEDULE_KINDS.has(kind);
+}
 
 export type AutomationRecord = {
   id: string;
@@ -164,10 +185,43 @@ type AutomationRunArtifactPayload = {
 };
 
 export class AutomationStore {
+  /**
+   * Automations that couldn't be loaded this process lifetime, keyed by id.
+   * Populated as a side effect of `recordFromRow` whenever a row's payload is
+   * unparseable. Surfaced (read-only) via `getAutomationLoadIssues` so the UI
+   * can warn the user; the underlying rows are never mutated.
+   */
+  private readonly loadIssues = new Map<string, { name: string; reason: string }>();
+
   constructor(
     private readonly stateDb: StateDb,
     private readonly options: { runHistoryLimit?: number } = {},
   ) {}
+
+  /** Snapshot of automation rows skipped because this build can't load them. */
+  getAutomationLoadIssues(): AutomationLoadIssue[] {
+    return [...this.loadIssues.entries()].map(([id, value]) => ({
+      id,
+      name: value.name,
+      reason: value.reason,
+    }));
+  }
+
+  private noteAutomationLoadIssue(row: AutomationRow, reason: string): void {
+    // Don't warn about soft-deleted rows — they never run and aren't shown.
+    if (row.deleted_at != null || row.status === "deleted") {
+      this.loadIssues.delete(row.automation_id);
+      return;
+    }
+    if (this.loadIssues.get(row.automation_id)?.reason !== reason) {
+      automationStoreLog.warn("skipping automation that could not be loaded", {
+        automationId: row.automation_id,
+        name: row.name,
+        reason,
+      });
+    }
+    this.loadIssues.set(row.automation_id, { name: row.name, reason });
+  }
 
   createAutomation(input: CreateAutomationInput): AutomationRecord {
     const now = input.now ?? Date.now();
@@ -911,7 +965,22 @@ export class AutomationStore {
 
   private recordFromRow(row: AutomationRow): AutomationRecord | undefined {
     const payload = parseJson<AutomationPayload>(row.payload);
-    if (!payload) return undefined;
+    if (!payload) {
+      this.noteAutomationLoadIssue(row, "The automation's stored data is corrupt.");
+      return undefined;
+    }
+    if (!isUnderstoodSchedule(payload.schedule)) {
+      // A trigger-only automation, or one using a schedule kind a newer build
+      // introduced. We can't run it safely, so skip it for this process
+      // lifetime rather than dereference a shape we don't understand — and
+      // never throw out of a startup/list pass over an unrelated bad row.
+      this.noteAutomationLoadIssue(
+        row,
+        "This automation was created by a newer version of PwrAgent.",
+      );
+      return undefined;
+    }
+    this.loadIssues.delete(row.automation_id);
     return {
       id: row.automation_id,
       backend: row.backend,

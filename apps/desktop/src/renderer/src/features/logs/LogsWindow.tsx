@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
-import { CopyIcon } from "../../icons";
+import { CopyIcon, FolderIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 
@@ -51,6 +51,16 @@ type LogLinePartTone =
   | "level-warn"
   | "scope";
 
+// The log file path is also injected at window-creation time via the preload
+// (`window.__pwragentLogFilePath`). The snapshot IPC normally supplies it, but
+// if that read fails — exactly when the user most needs to find the log on
+// disk — this bootstrap value keeps the path + reveal button available.
+function readBootstrapLogFilePath(): string | undefined {
+  const value = (window as unknown as { __pwragentLogFilePath?: unknown })
+    .__pwragentLogFilePath;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 export function LogsWindow() {
   const desktopApi = useDesktopApi();
   const logViewportRef = useRef<HTMLDivElement | null>(null);
@@ -64,7 +74,9 @@ export function LogsWindow() {
   const copyResetTimerRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
-  const [logFilePath, setLogFilePath] = useState<string | undefined>();
+  const [logFilePath, setLogFilePath] = useState<string | undefined>(
+    readBootstrapLogFilePath,
+  );
   const [copiedLogFilePath, setCopiedLogFilePath] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
@@ -84,7 +96,7 @@ export function LogsWindow() {
   const applySnapshot = useCallback((value: AppLogSnapshot) => {
     entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
     setRenderVersion((version) => version + 1);
-    setLogFilePath(value.logFilePath);
+    setLogFilePath(value.logFilePath ?? readBootstrapLogFilePath());
     confirmedDebugCollectionRef.current = value.debugCollectionEnabled;
     setDebugCollectionEnabled(value.debugCollectionEnabled);
     setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
@@ -326,6 +338,16 @@ export function LogsWindow() {
       });
   }, [desktopApi, logFilePath]);
 
+  const handleRevealLogFile = useCallback(() => {
+    if (!logFilePath) {
+      return;
+    }
+    const reveal = desktopApi?.revealPath ?? desktopApi?.openPath;
+    void reveal?.({ path: logFilePath }).catch((revealError: unknown) => {
+      console.error("Failed to reveal log file", revealError);
+    });
+  }, [desktopApi, logFilePath]);
+
   const activeMatchLabel =
     rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
 
@@ -431,6 +453,16 @@ export function LogsWindow() {
               >
                 <CopyIcon size={13} aria-hidden="true" />
                 <span>{copiedLogFilePath ? "Copied" : "Copy"}</span>
+              </button>
+              <button
+                className="log-window__file-copy"
+                type="button"
+                aria-label="Reveal log file in file manager"
+                title="Reveal log file in file manager"
+                onClick={handleRevealLogFile}
+              >
+                <FolderIcon size={13} aria-hidden="true" />
+                <span>Reveal</span>
               </button>
             </div>
           ) : null}

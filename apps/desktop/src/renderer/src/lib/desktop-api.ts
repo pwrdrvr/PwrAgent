@@ -58,6 +58,7 @@ import type {
   LatestCodexConfigWarningResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  ListAutomationLoadIssuesResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -300,6 +301,7 @@ export type DesktopApi = {
   getAutomationRunArtifact?: (
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;
+  listAutomationLoadIssues?: () => Promise<ListAutomationLoadIssuesResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
@@ -513,6 +515,7 @@ export type DesktopApi = {
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
+  revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

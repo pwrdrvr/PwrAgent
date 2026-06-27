@@ -258,6 +258,13 @@ function DesktopAppShell(props: {
   // mid-outage failure can't slip past unnoticed.
   const [backendErrorNotice, setBackendErrorNotice] =
     useState<AppNoticeToastNotice>();
+  // One-shot warning surfaced when the main process skipped automations it
+  // couldn't load (corrupt data, or a schedule/trigger shape written by a
+  // newer build). The skipped automations are left untouched in storage — this
+  // is the only signal the user gets that they were quietly not run, so it
+  // stays until dismissed.
+  const [automationLoadNotice, setAutomationLoadNotice] =
+    useState<AppNoticeToastNotice>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -294,6 +301,44 @@ function DesktopAppShell(props: {
         ].join(""),
       });
     });
+  }, [desktopApi]);
+
+  // On startup, ask the main process whether it skipped any automations it
+  // couldn't load. Startup reconciliation runs before this window exists, so a
+  // pushed event would be missed — we pull the result once the renderer is up.
+  useEffect(() => {
+    if (!desktopApi?.listAutomationLoadIssues) {
+      return;
+    }
+    let cancelled = false;
+    void desktopApi
+      .listAutomationLoadIssues()
+      .then((response) => {
+        if (cancelled || response.issues.length === 0) {
+          return;
+        }
+        const issues = response.issues;
+        const names = issues.map((issue) => issue.name).filter(Boolean);
+        const namesSummary =
+          names.length > 0 ? names.slice(0, 5).join(", ") : undefined;
+        setAutomationLoadNotice({
+          autoDismiss: false,
+          id: `automation-load-issues:${issues.map((issue) => issue.id).join(",")}`,
+          title:
+            issues.length === 1
+              ? "1 automation was skipped"
+              : `${issues.length} automations were skipped`,
+          message:
+            "PwrAgent couldn't load some automations, so they did not run this session. They were left unchanged — open them in a newer version, or remove them.",
+          detail: namesSummary,
+        });
+      })
+      .catch(() => {
+        // Best-effort warning; never let it interfere with startup.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [desktopApi]);
 
   // Surface backend turn failures + system errors as a durable toast. The
@@ -1356,6 +1401,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={backendErrorNotice}
             onDismiss={() => setBackendErrorNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={automationLoadNotice}
+            onDismiss={() => setAutomationLoadNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>
