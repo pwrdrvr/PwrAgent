@@ -272,6 +272,7 @@ export type DesktopSettingsSecretName =
   | "lineChannelAccessToken"
   | "lineChannelSecret"
   | "federationInstancePrivateKey"
+  | "federationNoiseStaticPrivateKey"
   | "federationCloudflareClientCertificate"
   | "federationCloudflareClientPrivateKey"
   | "federationCloudflareAccessClientId"
@@ -311,6 +312,7 @@ export function isMessagingRuntimeSecret(
       return true;
     case "grokApiKey":
     case "federationInstancePrivateKey":
+    case "federationNoiseStaticPrivateKey":
     case "federationCloudflareClientCertificate":
     case "federationCloudflareClientPrivateKey":
     case "federationCloudflareAccessClientId":

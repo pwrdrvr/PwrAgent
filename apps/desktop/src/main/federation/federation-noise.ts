@@ -116,6 +116,29 @@ export function rawPrivateKey(key: KeyObject): Buffer {
   );
 }
 
+export type FederationNoiseStaticKeyPair = {
+  /** Raw 32-byte X25519 private seed, base64. Persisted in the secret store. */
+  privateKeyBase64: string;
+  /** Raw 32-byte X25519 public key, base64. Pinned by peers. */
+  publicKeyBase64: string;
+};
+
+export function generateFederationNoiseStaticKeyPair(): FederationNoiseStaticKeyPair {
+  const keyPair = generateNoiseStaticKeyPair();
+  return {
+    privateKeyBase64: rawPrivateKey(keyPair.privateKey).toString("base64"),
+    publicKeyBase64: keyPair.publicKeyRaw.toString("base64"),
+  };
+}
+
+export function noisePublicKeyBase64FromPrivateBase64(
+  privateKeyBase64: string,
+): string {
+  return noiseKeyPairFromRawPrivate(
+    Buffer.from(privateKeyBase64, "base64"),
+  ).publicKeyRaw.toString("base64");
+}
+
 function dh(localPrivate: KeyObject, remoteRaw: Buffer): Buffer {
   return diffieHellman({
     privateKey: localPrivate,

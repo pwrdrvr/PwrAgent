@@ -30,6 +30,7 @@ export type FederationInvitePayload = {
   token: string;
   gatewayInstanceId: FederationInstanceId;
   gatewayPublicKeyPem: string;
+  gatewayNoisePublicKey: string;
   gatewayUrl: string;
   expiresAt: number;
 };
@@ -87,6 +88,7 @@ export function decodeFederationInvite(
     typeof parsed.token !== "string" ||
     typeof parsed.gatewayInstanceId !== "string" ||
     typeof parsed.gatewayPublicKeyPem !== "string" ||
+    typeof parsed.gatewayNoisePublicKey !== "string" ||
     typeof parsed.gatewayUrl !== "string" ||
     typeof parsed.expiresAt !== "number"
   ) {

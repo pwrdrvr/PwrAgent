@@ -111,11 +111,13 @@ import {
   type FederationClientWebSocketClient,
   type FederationGatewayConnection,
 } from "./federation-transport";
+import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 
 const log = getMainLogger("pwragent:federation-runtime");
 const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
+const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
@@ -306,6 +308,8 @@ export class DesktopFederationRuntime {
     const expiresAt = now + Math.max(60_000, Math.min(request.ttlMs ?? 3_600_000, 86_400_000));
     const gatewayIdentity = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
+    const noise =
+      await getDesktopSettingsService().getOrCreateFederationNoiseStaticKeyPair();
     const entry = createFederationEnrollmentInvite({
       store: this.store(),
       token: randomBytes(24).toString("base64url"),
@@ -323,6 +327,7 @@ export class DesktopFederationRuntime {
         gatewayInstanceId: this.ensureLocalInstanceId(),
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         gatewayUrl,
+        gatewayNoisePublicKey: noise.publicKeyBase64,
         expiresAt,
       }),
       expiresAt,
@@ -338,6 +343,10 @@ export class DesktopFederationRuntime {
     const stateDb = getAppStateDb();
     stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, payload.gatewayInstanceId);
     stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, payload.gatewayPublicKeyPem);
+    stateDb.setMeta(
+      GATEWAY_NOISE_PUBLIC_KEY_META_KEY,
+      payload.gatewayNoisePublicKey,
+    );
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
@@ -455,6 +464,12 @@ export class DesktopFederationRuntime {
     this.router = router;
     this.subscribeLocalBackendEvents();
 
+    const noise =
+      await getDesktopSettingsService().getOrCreateFederationNoiseStaticKeyPair();
+    const noiseStatic = noiseKeyPairFromRawPrivate(
+      Buffer.from(noise.privateKeyBase64, "base64"),
+    );
+
     if (mode === "gateway" || mode === "dual") {
       const gatewayIdentity = await getDesktopSettingsService()
         .getOrCreateFederationIdentityKeyPair();
@@ -465,6 +480,7 @@ export class DesktopFederationRuntime {
         host: settings.federation.listenHost.value,
         port: settings.federation.listenPort.value,
         store: this.store(),
+        noiseStatic,
         onConnection: (connection) => this.registerGatewayConnection(connection),
         onDisconnect: (connection) => this.unregisterGatewayConnection(connection),
         onEnvelope: (envelope, connection) =>
@@ -509,6 +525,14 @@ export class DesktopFederationRuntime {
       throw new Error("Federation client mode is missing its pinned gateway key.");
     }
     this.gatewayInstanceId = gatewayInstanceId;
+    const gatewayNoisePublicKeyBase64 = getAppStateDb().getMeta(
+      GATEWAY_NOISE_PUBLIC_KEY_META_KEY,
+    );
+    if (!gatewayNoisePublicKeyBase64) {
+      throw new Error(
+        "Federation client mode is missing its pinned gateway encryption key. Re-import the federation invite.",
+      );
+    }
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
@@ -538,6 +562,8 @@ export class DesktopFederationRuntime {
         "Cloudflare Access service auth is enabled but its credentials are missing.",
       );
     }
+    const noise =
+      await settingsService.getOrCreateFederationNoiseStaticKeyPair();
     this.gatewayUrl = gatewayUrl;
     const connectionGeneration = ++this.connectionGeneration;
     const client = await connectFederationClient({
@@ -565,6 +591,13 @@ export class DesktopFederationRuntime {
       clientPrivateKey: cloudflareMtlsEnabled
         ? cloudflareCredentials.clientPrivateKey
         : undefined,
+      noiseStatic: noiseKeyPairFromRawPrivate(
+        Buffer.from(noise.privateKeyBase64, "base64"),
+      ),
+      gatewayNoisePublicKey: Buffer.from(
+        gatewayNoisePublicKeyBase64,
+        "base64",
+      ),
       onClose: () => {
         if (
           this.stopping ||
