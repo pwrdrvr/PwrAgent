@@ -14184,6 +14184,233 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("exposes in-progress handoffs before the child thread exists", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-pending-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(worktreePath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "GifGrabber"
+
+[setup]
+script = "printf setup"
+`,
+      "utf8",
+    );
+
+    const setupStarted = createDeferred<void>();
+    const setupRelease = createDeferred<void>();
+    const sourceRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "environment",
+      environmentName: "GifGrabber",
+      executionTarget: "local",
+      cwd: repoPath,
+      setupStatus: "completed",
+      setupCommand: "printf setup",
+    };
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async () => {
+      setupStarted.resolve();
+      await setupRelease.promise;
+      return {
+        durationMs: 5,
+        exitCode: 0,
+        output: "setup",
+      };
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "thread/read", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+          updatedAt: 1000,
+        },
+      ],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "active",
+      },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          codexEnvironmentRuntime: sourceRuntime,
+          extraLinkedDirectories: [
+            {
+              id: expectedDir(repoPath),
+              kind: "local",
+              label: "repo",
+              path: expectedDir(repoPath),
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const handoffPromise = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "handoff-call-1",
+        requestId: "handoff-call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Make the Swift crash guard on origin/master.",
+          title: "Swift crash guard",
+          groupingMode: "subthread",
+          workspaceMode: "new_worktree",
+          branchName: "origin/master",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    try {
+      await setupStarted.promise;
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+      const searchResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "search-call-1",
+          requestId: "search-call-1",
+          namespace: "pwragent",
+          tool: "search_threads",
+          arguments: {
+            query: "Swift crash guard",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+      const searchPayload = JSON.parse(
+        (searchResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(searchPayload.pendingHandoffs).toEqual([
+        expect.objectContaining({
+          handoffId: "handoff:codex:ordinary-thread:turn-1:handoff-call-1",
+          status: "starting",
+          phase: "starting_thread",
+          sourceThreadId: "ordinary-thread",
+          title: "Swift crash guard",
+          branchName: "origin/master",
+          message: expect.stringContaining("Do not retry"),
+        }),
+      ]);
+      expect(searchPayload.pendingHandoffs[0]).not.toHaveProperty("threadId");
+
+      const statusResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "status-call-1",
+          requestId: "status-call-1",
+          namespace: "pwragent",
+          tool: "get_thread_status",
+          arguments: {
+            backend: "codex",
+            threadId: "ordinary-thread",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+      const statusPayload = JSON.parse(
+        (statusResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(statusPayload.thread.pendingHandoffs).toEqual([
+        expect.objectContaining({
+          handoffId: "handoff:codex:ordinary-thread:turn-1:handoff-call-1",
+          status: "starting",
+          phase: "starting_thread",
+        }),
+      ]);
+    } finally {
+      setupRelease.resolve();
+    }
+
+    const handoffResponse = await handoffPromise;
+    expect(handoffResponse).toMatchObject({ success: true });
+    const handoffPayload = JSON.parse(
+      (handoffResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(handoffPayload).toMatchObject({
+      handoffId: "handoff:codex:ordinary-thread:turn-1:handoff-call-1",
+      threadId: "thread-1",
+      groupedUnderThreadId: "ordinary-thread",
+    });
+
+    await registry.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("creates new-worktree handoff threads when inherited environment setup is unavailable", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-env-missing-"));
     const repoPath = path.join(root, "repo");

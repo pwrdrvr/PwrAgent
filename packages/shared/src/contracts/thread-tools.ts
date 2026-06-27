@@ -14,7 +14,13 @@ import type {
   MessagingThreadBindingSummary,
   ThreadAgentMetadata,
 } from "./navigation";
-import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
+import type {
+  HandoffTaskGroupingMode,
+  HandoffTaskSeedMode,
+  HandoffTaskWorkspaceMode,
+  ThreadHandoffOrigin,
+  ThreadHandoffOriginWorkspace,
+} from "./thread-orchestration-tools";
 import type {
   ThreadSearchContentMode,
   ThreadSearchConfidenceBand,
@@ -181,6 +187,41 @@ export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
   status?: AppServerThreadStatus;
   queuedExecutionMode?: ThreadExecutionMode;
   queuedExecutionModeAt?: number;
+  pendingHandoffs?: PendingThreadHandoffSummary[];
+};
+
+export type PendingThreadHandoffStatus = "starting" | "completed" | "failed";
+
+export type PendingThreadHandoffPhase =
+  | "resolving_source"
+  | "preparing_workspace"
+  | "starting_thread"
+  | "starting_turn"
+  | "attaching_messaging"
+  | "completed"
+  | "failed";
+
+export type PendingThreadHandoffSummary = {
+  handoffId: string;
+  status: PendingThreadHandoffStatus;
+  phase: PendingThreadHandoffPhase;
+  sourceBackend: AppServerBackendKind;
+  sourceThreadId: ThreadIdentifier;
+  sourceTurnId?: ThreadIdentifier;
+  backend: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  turnId?: ThreadIdentifier;
+  title: string;
+  taskPreview: string;
+  seedMode: HandoffTaskSeedMode;
+  groupingMode: HandoffTaskGroupingMode;
+  workspaceMode: HandoffTaskWorkspaceMode;
+  branchName?: string;
+  workspace?: ThreadHandoffOriginWorkspace;
+  createdAt: number;
+  updatedAt: number;
+  message?: string;
+  error?: string;
 };
 
 export type ThreadReadMessageSummary = Pick<
@@ -296,6 +337,7 @@ export type PwrAgentThreadInspectionResponse =
             totalCount: number;
             limit: number;
             truncated: boolean;
+            pendingHandoffs?: PendingThreadHandoffSummary[];
             query?: string;
             searchedScopes?: ThreadSearchScopeName[];
             unavailableScopes?: ThreadSearchUnavailableScope[];

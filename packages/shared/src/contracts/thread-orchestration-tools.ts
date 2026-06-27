@@ -34,6 +34,7 @@ export type PwrAgentThreadOrchestrationErrorCode =
 export type PwrAgentThreadOrchestrationContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  callId?: string;
   turnId?: string;
   now?: number;
 };
@@ -177,6 +178,7 @@ export type HandoffTaskMessagingAttachment =
 
 export type HandoffTaskResult = {
   backend: AppServerBackendKind;
+  handoffId?: string;
   threadId: ThreadIdentifier;
   turnId?: string;
   title?: string;

@@ -114,6 +114,8 @@ import {
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
   type MutateThreadToolArgs,
+  type PendingThreadHandoffPhase,
+  type PendingThreadHandoffSummary,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -4250,6 +4252,7 @@ export class DesktopBackendRegistry {
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
+  private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -14044,6 +14047,86 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private startPendingThreadHandoff(
+    handoff: PendingThreadHandoffSummary,
+  ): PendingThreadHandoffSummary {
+    this.prunePendingThreadHandoffs(handoff.createdAt);
+    this.pendingThreadHandoffs.set(handoff.handoffId, handoff);
+    return handoff;
+  }
+
+  private updatePendingThreadHandoff(
+    handoffId: string | undefined,
+    patch: Partial<
+      Omit<PendingThreadHandoffSummary, "handoffId" | "createdAt">
+    > & {
+      phase?: PendingThreadHandoffPhase;
+    },
+  ): void {
+    if (!handoffId) {
+      return;
+    }
+    const current = this.pendingThreadHandoffs.get(handoffId);
+    if (!current) {
+      return;
+    }
+    const updatedAt = patch.updatedAt ?? Date.now();
+    this.pendingThreadHandoffs.set(handoffId, {
+      ...current,
+      ...patch,
+      updatedAt,
+    });
+  }
+
+  private failPendingThreadHandoff(
+    handoffId: string | undefined,
+    error: unknown,
+  ): void {
+    this.updatePendingThreadHandoff(handoffId, {
+      status: "failed",
+      phase: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      message: "Handoff creation failed. Do not retry unless the failure is understood.",
+    });
+  }
+
+  private getPendingThreadHandoffsForInspection(params: {
+    backend?: AppServerBackendKind | "all";
+    query?: string;
+    sourceThreadId?: string;
+    limit?: number;
+  } = {}): PendingThreadHandoffSummary[] {
+    this.prunePendingThreadHandoffs();
+    const clauses = parseThreadInspectionQuery(params.query);
+    const backend = params.backend;
+    return [...this.pendingThreadHandoffs.values()]
+      .filter((handoff) => {
+        if (
+          backend &&
+          backend !== "all" &&
+          handoff.backend !== backend &&
+          handoff.sourceBackend !== backend
+        ) {
+          return false;
+        }
+        if (params.sourceThreadId && handoff.sourceThreadId !== params.sourceThreadId) {
+          return false;
+        }
+        return pendingThreadHandoffMatchesQuery(handoff, clauses);
+      })
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, params.limit ?? 10);
+  }
+
+  private prunePendingThreadHandoffs(now = Date.now()): void {
+    const maxAgeMs = 60 * 60 * 1000;
+    for (const [handoffId, handoff] of this.pendingThreadHandoffs) {
+      if (now - handoff.updatedAt > maxAgeMs) {
+        this.pendingThreadHandoffs.delete(handoffId);
+      }
+    }
+  }
+
   private async sendMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -14201,6 +14284,37 @@ export class DesktopBackendRegistry {
         'workspaceMode="same_workspace" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for a delegated thread with an isolated worktree, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.',
       );
     }
+    const title =
+      request.args.title?.trim() ||
+      shortenDerivedThreadTitle(task) ||
+      "Delegated task";
+    const handoffStartedAt = request.context.now ?? Date.now();
+    const handoffId = [
+      "handoff",
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      request.context.callId?.trim() || randomUUID(),
+    ].join(":");
+    this.startPendingThreadHandoff({
+      handoffId,
+      status: "starting",
+      phase: "resolving_source",
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      backend,
+      title,
+      taskPreview: truncateThreadInspectionText(task, 240),
+      seedMode,
+      groupingMode,
+      workspaceMode,
+      ...(request.args.branchName ? { branchName: request.args.branchName } : {}),
+      createdAt: handoffStartedAt,
+      updatedAt: handoffStartedAt,
+      message:
+        "Handoff creation has started. Do not retry this request while it is still starting; inspect pendingHandoffs or wait for the child threadId.",
+    });
     const sourceThread = await this.findThreadForWorkspaceHandoff({
       backend: sourceBackend,
       callerReason: "agent-handoff",
@@ -14223,6 +14337,12 @@ export class DesktopBackendRegistry {
     });
 
     if (workspaceMode !== "none" && !sourceCwd?.trim()) {
+      this.failPendingThreadHandoff(
+        handoffId,
+        new Error(
+          "The source thread has no current workspace. Ask for workspaceMode=none to create an unscoped handoff thread.",
+        ),
+      );
       return threadOrchestrationFailure(
         "unsupported_workspace",
         "The source thread has no current workspace. Ask for workspaceMode=none to create an unscoped handoff thread.",
@@ -14232,6 +14352,13 @@ export class DesktopBackendRegistry {
       workspaceMode === "new_worktree" &&
       !sourceWorkspace.git.worktreeCreationAvailable
     ) {
+      this.failPendingThreadHandoff(
+        handoffId,
+        new Error(
+          sourceWorkspace.git.unavailableReason ??
+            "The source workspace cannot create a new Git worktree.",
+        ),
+      );
       return threadOrchestrationFailure(
         "unsupported_workspace",
         sourceWorkspace.git.unavailableReason ??
@@ -14260,10 +14387,6 @@ export class DesktopBackendRegistry {
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
       codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime,
     };
-    const title =
-      request.args.title?.trim() ||
-      shortenDerivedThreadTitle(task) ||
-      "Delegated task";
     const agent = {
       name: title,
       instructions:
@@ -14277,6 +14400,12 @@ export class DesktopBackendRegistry {
           })
         : undefined;
     if (workspaceMode === "project_local" && !projectLocalCwd?.trim()) {
+      this.failPendingThreadHandoff(
+        handoffId,
+        new Error(
+          "The source thread has no project checkout available for workspaceMode=project_local.",
+        ),
+      );
       return threadOrchestrationFailure(
         "unsupported_workspace",
         "The source thread has no project checkout available for workspaceMode=project_local.",
@@ -14297,7 +14426,17 @@ export class DesktopBackendRegistry {
       | HandoffTaskResult["codexEnvironmentStartupFailure"]
       | undefined;
     try {
+      this.updatePendingThreadHandoff(handoffId, {
+        phase: "preparing_workspace",
+        message:
+          "Preparing the handoff workspace. Environment setup can take several minutes; do not retry while this is starting.",
+      });
       if (seedMode === "fork") {
+        this.updatePendingThreadHandoff(handoffId, {
+          phase: "starting_thread",
+          message:
+            "Forking the child thread and preparing its runtime. Do not retry this handoff.",
+        });
         const forked = await this.forkThread({
           backend,
           sourceThreadId,
@@ -14320,6 +14459,7 @@ export class DesktopBackendRegistry {
           sandbox: inheritedSettings.sandbox,
         });
         threadId = forked.threadId;
+        this.updatePendingThreadHandoff(handoffId, { threadId });
         createdLinkedDirectory = forked.linkedDirectory;
         inheritedSettings.codexEnvironmentRuntime = forked.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = forked.codexEnvironmentStartupFailure;
@@ -14331,6 +14471,11 @@ export class DesktopBackendRegistry {
           agent,
         });
       } else {
+        this.updatePendingThreadHandoff(handoffId, {
+          phase: "starting_thread",
+          message:
+            "Starting the child thread and preparing its runtime. Do not retry this handoff.",
+        });
         const started = await this.startThread({
           backend,
           executionMode,
@@ -14348,6 +14493,7 @@ export class DesktopBackendRegistry {
           agent,
         });
         threadId = started.threadId;
+        this.updatePendingThreadHandoff(handoffId, { threadId });
         inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
         if (groupingMode === "subthread") {
@@ -14368,6 +14514,7 @@ export class DesktopBackendRegistry {
         },
       );
     } catch (error) {
+      this.failPendingThreadHandoff(handoffId, error);
       return threadOrchestrationFailure(
         workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
         error instanceof Error ? error.message : String(error),
@@ -14392,6 +14539,7 @@ export class DesktopBackendRegistry {
       linkedDirectory: childLinkedDirectory,
       mode: createdWorkspaceMode,
     });
+    this.updatePendingThreadHandoff(handoffId, { workspace });
     const createdAt = request.context.now ?? Date.now();
     const origin = {
       sourceBackend,
@@ -14422,6 +14570,11 @@ export class DesktopBackendRegistry {
     let turnId: string | undefined;
     let turnStartFailure: HandoffTaskResult["turnStartFailure"];
     try {
+      this.updatePendingThreadHandoff(handoffId, {
+        phase: "starting_turn",
+        message:
+          "Child thread exists; starting the delegated turn. Do not create a replacement handoff.",
+      });
       const turn = await this.startTurn({
         backend,
         threadId,
@@ -14435,6 +14588,7 @@ export class DesktopBackendRegistry {
         sandbox: inheritedSettings.sandbox,
       });
       turnId = turn.turnId;
+      this.updatePendingThreadHandoff(handoffId, { turnId });
     } catch (error) {
       turnStartFailure = {
         phase: "turn",
@@ -14447,6 +14601,11 @@ export class DesktopBackendRegistry {
       });
     }
 
+    this.updatePendingThreadHandoff(handoffId, {
+      phase: "attaching_messaging",
+      message:
+        "Child thread exists; finalizing optional messaging attachment. Do not create a replacement handoff.",
+    });
     const messagingAttachment = await this.attachHandoffThreadToMessaging({
       mode: request.args.messagingAttachment,
       sourceBackend,
@@ -14456,12 +14615,21 @@ export class DesktopBackendRegistry {
       threadId,
       title,
     });
+    this.updatePendingThreadHandoff(handoffId, {
+      status: turnStartFailure ? "failed" : "completed",
+      phase: turnStartFailure ? "failed" : "completed",
+      ...(turnStartFailure ? { error: turnStartFailure.message } : {}),
+      message: turnStartFailure
+        ? "The child thread was created, but its initial turn failed. Use the returned threadId instead of retrying the handoff."
+        : "Handoff creation completed. Use the returned threadId for follow-up status checks.",
+    });
     return {
       ok: true,
       data: {
         backend,
         threadId,
         turnId,
+        handoffId,
         title,
         seedMode,
         groupingMode,
@@ -15558,6 +15726,12 @@ export class DesktopBackendRegistry {
           : DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
         MAX_THREAD_INSPECTION_SEARCH_LIMIT,
       );
+      const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
+        backend,
+        query: request.args.query,
+        sourceThreadId: request.context.threadId,
+        limit,
+      });
       const searchService = this.getThreadInspectionSearchService();
       if (searchService) {
         const projectKeys = nonEmptyStringArray(request.args.projectKeys);
@@ -15604,6 +15778,7 @@ export class DesktopBackendRegistry {
             totalCount: filtered.length,
             limit,
             truncated: response.truncated === true || filtered.length > limit,
+            ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
             query: response.query,
             searchedScopes: response.searchedScopes,
             unavailableScopes: response.unavailableScopes,
@@ -15641,6 +15816,7 @@ export class DesktopBackendRegistry {
           totalCount: filtered.length,
           limit,
           truncated: filtered.length > limit,
+          ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
         },
       };
     }
@@ -15700,6 +15876,10 @@ export class DesktopBackendRegistry {
         .catch((): AppServerThreadStatus | undefined => undefined);
       const queueKey = buildThreadIdentityKey(request.args.backend, threadId);
       const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
+      const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
+        backend: request.args.backend,
+        sourceThreadId: threadId,
+      });
       return {
         ok: true,
         data: {
@@ -15708,6 +15888,7 @@ export class DesktopBackendRegistry {
             status,
             queuedExecutionMode: queued?.mode,
             queuedExecutionModeAt: queued?.queuedAt,
+            ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
           },
         },
       };
@@ -17218,6 +17399,41 @@ function parseThreadInspectionQuery(query: string | undefined): string[][] {
         .filter(Boolean),
     )
     .filter((tokens) => tokens.length > 0);
+}
+
+function pendingThreadHandoffMatchesQuery(
+  handoff: PendingThreadHandoffSummary,
+  clauses: string[][],
+): boolean {
+  if (clauses.length === 0) {
+    return true;
+  }
+  const haystack = [
+    handoff.handoffId,
+    handoff.sourceBackend,
+    handoff.sourceThreadId,
+    handoff.sourceTurnId,
+    handoff.backend,
+    handoff.threadId,
+    handoff.turnId,
+    handoff.title,
+    handoff.taskPreview,
+    handoff.seedMode,
+    handoff.groupingMode,
+    handoff.workspaceMode,
+    handoff.branchName,
+    handoff.workspace?.cwd,
+    handoff.workspace?.branch,
+    handoff.workspace?.linkedDirectory?.label,
+    handoff.workspace?.linkedDirectory?.path,
+    handoff.workspace?.linkedDirectory?.worktreePath,
+    handoff.message,
+    handoff.error,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+  return clauses.some((tokens) => tokens.every((token) => haystack.includes(token)));
 }
 
 function scoreThreadInspectionSummary(

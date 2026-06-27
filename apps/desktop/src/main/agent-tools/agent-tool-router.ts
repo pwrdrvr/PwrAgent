@@ -94,6 +94,7 @@ export class AgentToolRouter {
     const context: AgentToolCallContext = {
       backend: params.backend,
       threadId: params.call.threadId,
+      callId: params.call.callId,
       turnId: params.call.turnId,
       transport: "codex_dynamic_tool",
     };

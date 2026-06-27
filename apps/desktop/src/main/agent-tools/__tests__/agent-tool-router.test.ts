@@ -64,6 +64,7 @@ describe("AgentToolRouter", () => {
       { limit: 2 },
       {
         backend: "codex",
+        callId: "call-1",
         threadId: "thread-1",
         turnId: "turn-1",
         transport: "codex_dynamic_tool",
