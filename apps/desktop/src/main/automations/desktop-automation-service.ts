@@ -1060,25 +1060,12 @@ function automationTranscriptEventFromBackendEvent(params: {
   now: number;
 }): AutomationRunTranscriptEvent | undefined {
   const notification = params.event.notification;
+  // Streaming agent-message deltas are intentionally NOT persisted to the run
+  // transcript: each is a partial chunk of the same content captured in full by
+  // item/completed (assistant_final), and recording them rendered fragment
+  // "lifecycle" lines (e.g. "]}") in the run-detail view.
   if (notification.method === "item/agentMessage/delta") {
-    const deltaParams = notification.params as {
-      delta?: unknown;
-      itemId?: unknown;
-      phase?: unknown;
-    };
-    const delta = typeof deltaParams.delta === "string" ? deltaParams.delta.trim() : "";
-    if (!delta) return undefined;
-    return {
-      id: `${params.run.id}:delta:${String(deltaParams.itemId ?? "message")}`,
-      at: params.now,
-      kind: "lifecycle",
-      text: delta,
-      metadata: {
-        phase: deltaParams.phase,
-        source: "item/agentMessage/delta",
-        turnId: params.turnId,
-      },
-    };
+    return undefined;
   }
 
   if (notification.method === "item/completed") {

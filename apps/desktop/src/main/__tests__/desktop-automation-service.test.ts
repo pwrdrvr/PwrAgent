@@ -501,6 +501,24 @@ describe("DesktopAutomationService", () => {
         } as AgentEvent),
       ),
     );
+    // Streaming deltas must not be persisted as transcript events (they showed
+    // up as fragment "lifecycle" lines like "]}").
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-1",
+              itemId: "assistant-final-1",
+              delta: "DELTA_FRAGMENT_]}",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
     await Promise.all(
       registryListeners.map((listener) =>
         listener({
@@ -552,6 +570,13 @@ describe("DesktopAutomationService", () => {
         expect.objectContaining({ kind: "lifecycle" }),
       ]),
     });
+    expect(
+      store
+        .getRunArtifact(runNow.run.id)
+        ?.transcriptEvents.some((entry) =>
+          entry.text?.includes("DELTA_FRAGMENT"),
+        ),
+    ).toBe(false);
     expect(
       service.listCards({
         backend: "codex",
