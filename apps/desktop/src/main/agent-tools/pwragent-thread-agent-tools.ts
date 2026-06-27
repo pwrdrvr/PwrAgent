@@ -71,11 +71,11 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "search_threads":
-      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread.";
+      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread. The response may include pendingHandoffs for handoff_task calls from this thread that are still creating a child thread; do not retry those handoffs while they are starting.";
     case "read_thread":
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
-      return "Read status and compact metadata for a known PwrAgent thread.";
+      return "Read status and compact metadata for a known PwrAgent thread, including pendingHandoffs when this thread has child handoffs that are still being created.";
     case "mutate_thread":
       return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }

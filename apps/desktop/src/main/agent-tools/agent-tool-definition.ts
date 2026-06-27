@@ -6,6 +6,7 @@ export type AgentToolTransport = "codex_dynamic_tool" | "acp_mcp";
 export type AgentToolCallContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  callId?: string;
   turnId?: string;
   transport: AgentToolTransport;
 };

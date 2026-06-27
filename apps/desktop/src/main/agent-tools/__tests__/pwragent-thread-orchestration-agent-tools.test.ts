@@ -186,6 +186,7 @@ describe("pwragent thread orchestration agent tools", () => {
       context: {
         backend: "codex",
         threadId: "thread-1",
+        callId: "call-1",
         turnId: "turn-1",
       },
       args: {
@@ -237,6 +238,7 @@ describe("pwragent thread orchestration agent tools", () => {
       context: {
         backend: "codex",
         threadId: "thread-1",
+        callId: "call-1",
         turnId: "turn-1",
       },
       args: {
