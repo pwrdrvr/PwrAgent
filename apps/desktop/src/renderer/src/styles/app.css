@@ -11940,7 +11940,15 @@ textarea,
   line-height: 1.4;
 }
 
+.automation-capture__code-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .automation-capture__code {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   padding: 8px;
   border-radius: 6px;
@@ -11950,6 +11958,16 @@ textarea,
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+  /* Override the app-root user-select:none so the code can be selected. */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.automation-capture__copy {
+  align-self: stretch;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .automation-capture__actions {

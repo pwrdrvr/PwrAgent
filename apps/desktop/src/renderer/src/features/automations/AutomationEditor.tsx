@@ -28,6 +28,7 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 
 type AutomationEditorMode =
@@ -389,7 +390,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [captureError, setCaptureError] = useState<string>();
   const [capturedName, setCapturedName] = useState<string>();
   const [capturedGroupTitle, setCapturedGroupTitle] = useState<string>();
+  const [captureCopied, setCaptureCopied] = useState(false);
   const canCaptureByCode = Boolean(props.desktopApi?.generateMessagingPairingToken);
+
+  const copyCaptureCode = async (): Promise<void> => {
+    if (!captureMessage) return;
+    try {
+      await copyText(captureMessage, props.desktopApi);
+      setCaptureCopied(true);
+      window.setTimeout(() => setCaptureCopied(false), 2_000);
+    } catch {
+      // The code stays selectable as a fallback.
+    }
+  };
 
   const applyObservedChat = (chat: {
     bucketId?: string;
@@ -1287,7 +1300,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 <label className="automation-field">
                   <span>Group ID</span>
                   <input
-                    placeholder="-1001234567890"
+                    placeholder="e.g. -1001234567890"
                     value={inboundGroupId}
                     onChange={(event) => {
                       setInboundGroupId(event.currentTarget.value);
@@ -1342,7 +1355,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     details.
                   </p>
                   {captureMessage ? (
-                    <pre className="automation-capture__code">{captureMessage}</pre>
+                    <div className="automation-capture__code-row">
+                      <pre className="automation-capture__code">
+                        {captureMessage}
+                      </pre>
+                      <button
+                        className="button button--ghost automation-capture__copy"
+                        type="button"
+                        onClick={() => void copyCaptureCode()}
+                      >
+                        {captureCopied ? "Copied" : "Copy"}
+                      </button>
+                    </div>
                   ) : null}
                   <div className="automation-capture__actions">
                     <span className="automation-capture__waiting">
@@ -1433,7 +1457,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       <label className="automation-field">
                         <span>Topic ID</span>
                         <input
-                          placeholder="42"
+                          placeholder="e.g. 42"
                           value={inboundTopicId}
                           onChange={(event) => {
                             setInboundTopicId(event.currentTarget.value);
@@ -1472,7 +1496,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
             <label className="automation-field">
               <span>Sender ID (optional)</span>
               <input
-                placeholder={inboundProvider === "telegram" ? "123456" : "U0123 / B0123"}
+                placeholder={inboundProvider === "telegram" ? "e.g. 123456" : "e.g. U0123 / B0123"}
                 value={inboundSenderId}
                 onChange={(event) => {
                   setInboundSenderId(event.currentTarget.value);
@@ -1645,7 +1669,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   <label className="automation-field">
                     <span>Destination group ID</span>
                     <input
-                      placeholder="-1001234567890"
+                      placeholder="e.g. -1001234567890"
                       value={destGroupId}
                       onChange={(event) => {
                         setDestGroupId(event.currentTarget.value);
@@ -1671,7 +1695,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 <label className="automation-field">
                   <span>Destination topic ID (optional)</span>
                   <input
-                    placeholder="42"
+                    placeholder="e.g. 42"
                     value={destTopicId}
                     onChange={(event) => {
                       setDestTopicId(event.currentTarget.value);
@@ -2365,9 +2389,9 @@ function conversationLabel(provider: MessagingChannelKind): string {
 }
 
 function conversationPlaceholder(provider: MessagingChannelKind): string {
-  if (provider === "slack") return "C0123ABCD";
-  if (provider === "discord") return "123456789012345678";
-  return "";
+  if (provider === "slack") return "e.g. C0123ABCD";
+  if (provider === "discord") return "e.g. 123456789012345678";
+  return "e.g. a conversation ID";
 }
 
 function conversationHint(provider: MessagingChannelKind): string {
