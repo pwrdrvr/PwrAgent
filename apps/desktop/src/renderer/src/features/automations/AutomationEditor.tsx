@@ -1768,18 +1768,43 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             }`}
                           >
                             <span className="automation-preview__sender">
-                              {message.actor.displayName ??
-                                message.actor.platformUserId}
-                              {message.actor.isBot ? " (bot)" : ""}
+                              <span className="automation-preview__sender-name">
+                                {message.actor.displayName ??
+                                  message.actor.platformUserId}
+                                {message.actor.isBot ? " (bot)" : ""}
+                              </span>
+                              {message.actor.displayName ? (
+                                <span className="automation-preview__sender-id">
+                                  {message.actor.platformUserId}
+                                </span>
+                              ) : null}
                             </span>
                             <span className="automation-preview__text">
                               {message.text || "(no text)"}
                             </span>
-                            {matched ? (
-                              <span className="automation-preview__badge">
-                                matches
-                              </span>
-                            ) : null}
+                            <span className="automation-preview__row-actions">
+                              {matched ? (
+                                <span className="automation-preview__badge">
+                                  matches
+                                </span>
+                              ) : null}
+                              <button
+                                className="automation-preview__use-sender"
+                                title="Filter to this sender"
+                                type="button"
+                                onClick={() => {
+                                  setInboundSenderId(
+                                    message.actor.platformUserId,
+                                  );
+                                  setInboundSenderScope(
+                                    message.actor.isBot ? "true" : "false",
+                                  );
+                                  setValidationError(undefined);
+                                }}
+                              >
+                                Use sender
+                              </button>
+                            </span>
                           </li>
                         );
                       })}

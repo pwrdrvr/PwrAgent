@@ -12025,13 +12025,16 @@ textarea,
   max-height: 220px;
   overflow-y: auto;
   list-style: none;
+  /* Override the app-root user-select:none so senders/IDs/text can be copied. */
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .automation-preview__item {
   display: grid;
-  grid-template-columns: minmax(80px, 0.3fr) 1fr auto;
+  grid-template-columns: minmax(96px, 0.32fr) 1fr auto;
   gap: 8px;
-  align-items: baseline;
+  align-items: start;
   padding: 6px 8px;
   border-radius: 6px;
   background: var(--bg-panel-elevated);
@@ -12045,8 +12048,25 @@ textarea,
 }
 
 .automation-preview__sender {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
   color: var(--text-secondary);
+}
+
+.automation-preview__sender-name {
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-preview__sender-id {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12057,10 +12077,35 @@ textarea,
   word-break: break-word;
 }
 
+.automation-preview__row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .automation-preview__badge {
   color: var(--accent);
   font-size: 11px;
   font-weight: 600;
+}
+
+.automation-preview__use-sender {
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+  /* The button is interactive; keep its label out of text selection. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.automation-preview__use-sender:hover {
+  background: var(--bg-app);
 }
 
 .automation-prompt-field__label-row {

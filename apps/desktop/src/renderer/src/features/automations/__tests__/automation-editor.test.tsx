@@ -522,10 +522,20 @@ describe("AutomationEditor", () => {
 
     const matching = await screen.findByText("ERROR api latency");
     const nonMatching = screen.getByText("good morning");
-    expect(matching.closest(".automation-preview__item")).toHaveClass("is-match");
+    const matchRow = matching.closest(".automation-preview__item");
+    expect(matchRow).toHaveClass("is-match");
     expect(
       nonMatching.closest(".automation-preview__item"),
     ).not.toHaveClass("is-match");
+
+    // The sender ID is visible (not just the display name) and copyable, and
+    // "Use sender" drops it straight into the filter.
+    expect(matchRow).toHaveTextContent("B1");
+    fireEvent.click(
+      matchRow!.querySelector(".automation-preview__use-sender") as Element,
+    );
+    expect(screen.getByLabelText("Sender ID (optional)")).toHaveValue("B1");
+    expect(screen.getByLabelText("Sender type")).toHaveValue("true");
   });
 
   it("offers a topic picker from known topics and submits its name", async () => {
