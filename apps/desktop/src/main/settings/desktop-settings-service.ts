@@ -44,6 +44,11 @@ import {
   publicKeyPemFromPrivateKey,
   type FederationIdentityKeyPair,
 } from "../federation/federation-identity";
+import {
+  generateFederationNoiseStaticKeyPair,
+  noisePublicKeyBase64FromPrivateBase64,
+  type FederationNoiseStaticKeyPair,
+} from "../federation/federation-noise";
 
 import {
   applyDesktopSettingsPatch,
@@ -1221,6 +1226,24 @@ export class DesktopSettingsService {
     await this.options.secretStore.setSecret(
       "federationInstancePrivateKey",
       keyPair.privateKeyPem,
+    );
+    return keyPair;
+  }
+
+  async getOrCreateFederationNoiseStaticKeyPair(): Promise<FederationNoiseStaticKeyPair> {
+    const existing = await this.options.secretStore.getSecret(
+      "federationNoiseStaticPrivateKey",
+    );
+    if (existing) {
+      return {
+        privateKeyBase64: existing,
+        publicKeyBase64: noisePublicKeyBase64FromPrivateBase64(existing),
+      };
+    }
+    const keyPair = generateFederationNoiseStaticKeyPair();
+    await this.options.secretStore.setSecret(
+      "federationNoiseStaticPrivateKey",
+      keyPair.privateKeyBase64,
     );
     return keyPair;
   }
