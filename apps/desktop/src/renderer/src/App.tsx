@@ -329,7 +329,7 @@ function DesktopAppShell(props: {
               ? "1 automation was skipped"
               : `${issues.length} automations were skipped`,
           message:
-            "PwrAgent couldn't load some automations, so they did not run this session. They were left unchanged — open them in a newer version, or remove them.",
+            "PwrAgent couldn't load some automations, so they did not run this session. They were left unchanged — open them in the newer version of PwrAgent that created them.",
           detail: namesSummary,
         });
       })
