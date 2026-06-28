@@ -53,6 +53,9 @@ Read these files before changing release metadata:
   build, then replace the generated/empty release notes with the changelog
   entry.
 - Do not use GitHub generated release notes as the final notes.
+- A release is not complete when the workflow reaches the `apple-signing`
+  approval gate. After approval, continue monitoring until CI finishes, replace
+  the GitHub Release notes, and verify the release body is non-empty.
 - Do not force-push the default branch or rewrite an existing release tag
   without explicit user approval.
 - Keep MIT licensing intact: do not change first-party license metadata or
@@ -265,6 +268,10 @@ approval. Treat that pause as expected. Before approving, verify the workflow
 run is for the intended tag, the tag points at the intended default-branch
 commit, and the version/changelog metadata match the tag.
 
+If monitoring is delegated and the monitor stops at the approval gate, resume
+monitoring after approval. Do not end the release turn as "done" at the
+approval gate; the post-success release-note edit is still required.
+
 On failure, inspect logs yourself:
 
 ```bash
@@ -299,6 +306,9 @@ do not mark it as `Pre-release`. GitHub excludes pre-release entries from
 `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg` and
 the default Electron updater feed.
 
+This step is required, not cosmetic. Electron-builder may leave the body empty
+or duplicate the tag name, so always run it after assets are published:
+
 ```bash
 gh release edit v<version> \
   --title "v<version> - <short release theme>" \
@@ -307,6 +317,16 @@ gh release edit v<version> \
 
 Only add `--prerelease` when the user explicitly wants a release hidden from
 normal update checks and latest download links.
+
+Verify the final release body before calling the release complete:
+
+```bash
+gh release view v<version> --json name,body,isPrerelease \
+  --jq '{name, isPrerelease, bodyLength: (.body | length)}'
+```
+
+The `bodyLength` must be greater than zero and the title/body must match the
+approved changelog entry.
 
 ## Local Fallback
 

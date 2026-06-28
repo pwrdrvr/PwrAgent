@@ -170,6 +170,10 @@ before the build succeeds. A manually created release appears before
 signing/notarization finishes. The current flow lets electron-builder create or
 update the release from the successful CI build; afterward, edit the release to
 replace the generated/empty notes with the matching `CHANGELOG.md` content.
+The release is not complete at the `apple-signing` approval gate: after
+approval, continue watching the run, then edit the GitHub Release notes and
+verify the body is non-empty. If a monitor or handoff stops at the approval
+gate, resume after approval rather than treating the release as done.
 For beta releases that should be offered by normal update checks and stable
 landing-page download links, leave GitHub's release label as `None` so the
 release can become Latest. Mark a release as `Pre-release` only when it should
