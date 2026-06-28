@@ -431,7 +431,10 @@ function parseHtmlParagraphContent(element: HTMLElement): JSONContent | undefine
       ? []
       : parseHtmlInlineContent(child),
   );
-  if (content.length === 0) {
+  const hasTextContent = content.some(
+    (node) => node.type !== "hardBreak" && (node.text ?? "").trim().length > 0,
+  );
+  if (!hasTextContent) {
     return undefined;
   }
   return {
@@ -1205,16 +1208,10 @@ function pastePlainTextIntoActiveBlock(
   }
 
   if (selectionIsInsideNode(editor, "blockquote")) {
-    if (clipboardHtmlHasStructuredBlocks(event)) {
-      const structuredHtmlContent = parseClipboardHtmlStructuredContent(event);
-      if (structuredHtmlContent.length > 0) {
-        event.preventDefault();
-        return editor.commands.insertContent(structuredHtmlContent, {
-          updateSelection: true,
-        });
-      }
+    const structuredHtmlContent = parseClipboardHtmlStructuredContent(event);
+    if (structuredHtmlContent.length > 0) {
       event.preventDefault();
-      return editor.commands.insertContent(splitTextContent(text), {
+      return editor.commands.insertContent(structuredHtmlContent, {
         updateSelection: true,
       });
     }

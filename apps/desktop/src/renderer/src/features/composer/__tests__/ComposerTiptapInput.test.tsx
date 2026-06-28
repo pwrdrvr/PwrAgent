@@ -367,18 +367,78 @@ describe("ComposerTiptapInput", () => {
     await waitFor(() => {
       expect(onChange).toHaveBeenLastCalledWith(
         [
-          ...pastedSearchSql
-            .replace(
-              "SELECT a.api_key",
-              "Query:SELECT a.api_key",
-            )
-            .split("\n")
-            .map((line) => `> ${line}`),
+          "> Query:",
+          "> ",
+          ...pastedSearchSql.split("\n").map((line) => `> ${line}`),
         ].join("\n"),
         [],
         expect.any(Object),
       );
     });
+  });
+
+  it("preserves paragraph-only rich HTML pasted inside a blockquote", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Source:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Source:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Source:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return [
+              "<p><strong>Note</strong></p>",
+              "<p>Follow-up paragraph</p>",
+            ].join("");
+          }
+          return type === "text/plain" ? "Note\n\nFollow-up paragraph" : "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Source:",
+          "> ",
+          "> **Note**",
+          "> ",
+          "> Follow-up paragraph",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+    expect(container.querySelector("blockquote strong")).toHaveTextContent("Note");
+    expect(container.querySelectorAll("blockquote > p")).toHaveLength(3);
   });
 
   it("preserves rich web-page lists when pasting inside a blockquote", async () => {
