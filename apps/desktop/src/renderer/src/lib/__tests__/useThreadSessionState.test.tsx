@@ -7620,6 +7620,127 @@ describe("useThreadSessionState", () => {
     expect(result.current.threadBusy).toBe(false);
   });
 
+  it("keeps a review turn active when idle hydration contains its in-progress review entry", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const readThread = vi.fn(async ({ backend, threadId }) => ({
+      backend: backend ?? "codex",
+      fetchedAt: Date.now(),
+      threadId,
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [
+          {
+            type: "review" as const,
+            id: "review-entered",
+            review: "Review changes against main",
+            displayText: "Review changes against main",
+            createdAt: 2_000,
+            turn: {
+              id: "turn-review",
+              status: "in_progress" as const,
+              startedAt: 1_500,
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          optimisticActiveTurn: {
+            id: "turn-review",
+            statusText: "Reviewing",
+            startedAt: 1_500,
+            reviewDisplayText: "Review changes against main",
+          },
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.pendingStatusText).toBe("Reviewing");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-sibling",
+            turn: {
+              id: "turn-sibling",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-exited",
+              type: "exitedReviewMode",
+              review: "No findings.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+  });
+
   it("seeds launchpad active turns alongside optimistic user messages", async () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,

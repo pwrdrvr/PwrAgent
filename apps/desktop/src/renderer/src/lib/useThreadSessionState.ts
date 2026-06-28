@@ -1365,6 +1365,19 @@ function readResponseThreadStatus(
   return response.threadStatus ?? response.replay.threadStatus;
 }
 
+function responseHasInProgressTurn(
+  response: AppServerReadThreadResponse,
+  turnId: string | undefined
+): boolean {
+  if (!turnId) {
+    return false;
+  }
+
+  return response.replay.entries.some(
+    (entry) => entry.turn?.id === turnId && entry.turn.status === "in_progress"
+  );
+}
+
 function normalizeNotificationTimestamp(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -3094,7 +3107,8 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             readResponseThreadStatus(response) === "idle" &&
             thinkingReasons.length > 0 &&
-            !hasPendingInteraction(current);
+            !hasPendingInteraction(current) &&
+            !responseHasInProgressTurn(responseWithLoadedHistory, current.activeTurnId);
 
           if (shouldClearStaleThinking) {
             if (targetThread.optimisticActiveTurn) {
