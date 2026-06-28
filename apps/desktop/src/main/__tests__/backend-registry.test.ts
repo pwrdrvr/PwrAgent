@@ -536,15 +536,11 @@ function createOverlayStoreMock(params?: {
         previousObservedBranch !== nextObservedBranch
           ? previousObservedBranch
           : undefined;
-      const requestedExpectedBranch =
-        expectedBranch?.trim() && expectedBranch.trim() !== nextObservedBranch
-          ? expectedBranch.trim()
-          : undefined;
+      const requestedExpectedBranch = expectedBranch?.trim() || undefined;
       const next = {
         ...current,
-        gitBranch: current.gitBranch?.trim()
-          ? current.gitBranch
-          : requestedExpectedBranch ?? fallbackExpectedBranch,
+        gitBranch: requestedExpectedBranch
+          ?? (current.gitBranch?.trim() ? current.gitBranch : fallbackExpectedBranch),
         observedGitBranch: branch,
       } as ThreadOverlayState;
       overlays.set(key, next);
@@ -19987,6 +19983,188 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it("records a detached local handoff with the current destination branch when available", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-handoff-branch-"));
+    const repoPath = path.join(root, "PwrAgnt");
+
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+
+      const thread: AppServerThreadSummary = {
+        id: "thread-1",
+        title: "Detached handoff",
+        titleSource: "explicit",
+        linkedDirectories: [
+          {
+            id: "pwragent-handoff:codex:thread-1",
+            label: "PwrAgnt",
+            path: repoPath,
+            worktreePath: path.join(root, ".codex", "worktrees", "old", "PwrAgnt"),
+            kind: "worktree",
+          },
+        ],
+        source: "codex",
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        updatedAt: 2,
+      };
+      const overlayStore = createOverlayStoreMock();
+      const handoff = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        direction: "worktree-to-local" as const,
+        strategy: "detached-changes" as const,
+        workMode: "local" as const,
+        baseSha: "abc123",
+        repositoryPath: repoPath,
+        targetPath: repoPath,
+        linkedDirectory: {
+          id: "pwragent-handoff:codex:thread-1",
+          label: "PwrAgnt",
+          path: repoPath,
+          kind: "local" as const,
+        },
+        warnings: [],
+        completedAt: 1000,
+      }));
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore,
+        gitWorkspaceHandoffService: {
+          handoff,
+        } as never,
+      });
+
+      await registry.handoffThreadWorkspace({
+        backend: "codex",
+        threadId: "thread-1",
+        direction: "worktree-to-local",
+      });
+
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-1",
+        gitInfo: {
+          branch: "main",
+        },
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+      ).resolves.toMatchObject({
+        gitBranch: "main",
+        observedGitBranch: "main",
+        extraLinkedDirectories: [
+          expect.objectContaining({
+            id: "pwragent-handoff:codex:thread-1",
+            kind: "local",
+          }),
+        ],
+      });
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("repairs stale detached branch state from the current local handoff workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-drift-local-"));
+    const repoPath = path.join(root, "PwrAgnt");
+
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+
+      const staleWorktreePath = path.join(root, ".codex", "worktrees", "old", "PwrAgnt");
+      const thread: AppServerThreadSummary = {
+        id: "thread-1",
+        title: "Moved thread",
+        titleSource: "explicit",
+        linkedDirectories: [
+          {
+            id: "directory:stale-worktree",
+            label: "PwrAgnt",
+            path: repoPath,
+            worktreePath: staleWorktreePath,
+            kind: "worktree",
+          },
+        ],
+        source: "codex",
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        updatedAt: 2,
+      };
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "full-access",
+            gitBranch: "HEAD",
+            observedGitBranch: "HEAD",
+            extraLinkedDirectories: [
+              {
+                id: "pwragent-handoff:codex:thread-1",
+                kind: "local",
+                label: "PwrAgnt",
+                path: repoPath,
+              },
+            ],
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["thread/list"] },
+          threads: [thread],
+        }),
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore,
+      });
+
+      const response = await registry.checkThreadBranchDrift({
+        backend: "codex",
+        expectedBranch: "HEAD",
+        threadId: "thread-1",
+      });
+
+      expect(response).toMatchObject({
+        expectedBranch: "main",
+        observedBranch: "main",
+        drifted: false,
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+      ).resolves.toMatchObject({
+        gitBranch: "main",
+        observedGitBranch: "main",
+      });
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("uses an observed handoff branch as expected when legacy overlay state has no gitBranch", async () => {

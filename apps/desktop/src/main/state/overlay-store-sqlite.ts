@@ -1535,16 +1535,11 @@ export class SqliteOverlayStore {
       previousObservedBranch !== nextObservedBranch
         ? previousObservedBranch
         : undefined;
-    const requestedExpectedBranch =
-      params.expectedBranch?.trim() &&
-      params.expectedBranch.trim() !== nextObservedBranch
-        ? params.expectedBranch.trim()
-        : undefined;
+    const requestedExpectedBranch = params.expectedBranch?.trim() || undefined;
     const nextState: ThreadOverlayState = {
       ...current,
-      gitBranch: current.gitBranch?.trim()
-        ? current.gitBranch
-        : requestedExpectedBranch ?? fallbackExpectedBranch,
+      gitBranch: requestedExpectedBranch
+        ?? (current.gitBranch?.trim() ? current.gitBranch : fallbackExpectedBranch),
       observedGitBranch: params.branch,
     };
     this.putThread(threadKey, nextState);
