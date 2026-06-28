@@ -136,6 +136,10 @@ release jobs:
    GitHub Release exists, combines both Linux architecture artifacts, generates
    `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
    release.
+5. `Publish release notes`, which waits for successful macOS and Linux release
+   asset publishing, extracts the matching `CHANGELOG.md` section, updates the
+   GitHub Release body, and fails the workflow if the body still reads back as
+   empty.
 
 The no-secret prepare job:
 
@@ -168,17 +172,35 @@ Do not approve the `apple-signing` environment unless the tag, commit, and
 metadata are the intended release. Do not create the GitHub Release manually
 before the build succeeds. A manually created release appears before
 signing/notarization finishes. The current flow lets electron-builder create or
-update the release from the successful CI build; afterward, edit the release to
-replace the generated/empty notes with the matching `CHANGELOG.md` content.
-The release is not complete at the `apple-signing` approval gate: after
-approval, continue watching the run, then edit the GitHub Release notes and
-verify the body is non-empty. If a monitor or handoff stops at the approval
-gate, resume after approval rather than treating the release as done.
+update the release from the successful CI build, then the workflow replaces the
+generated/empty notes with the matching `CHANGELOG.md` content after release
+assets are published. The release is not complete at the `apple-signing`
+approval gate: after approval, continue watching the run through `Publish
+release notes`, then verify the final GitHub Release body is non-empty. If a
+monitor or handoff stops at the approval gate, resume after approval rather than
+treating the release as done.
 For beta releases that should be offered by normal update checks and stable
 landing-page download links, leave GitHub's release label as `None` so the
 release can become Latest. Mark a release as `Pre-release` only when it should
 be hidden from `/releases/latest`, `PwrAgent.dmg`, and the default Electron
 updater feed.
+
+If the automated release-notes job fails or GitHub temporarily rejects the
+release edit, use this manual fallback after confirming the notes file contains
+the approved `CHANGELOG.md` entry:
+
+```bash
+RELEASE_TAG=v1.0.0-beta.21
+mkdir -p .local/release/"$RELEASE_TAG"
+node scripts/extract-release-notes.mjs \
+  --tag "$RELEASE_TAG" \
+  --out .local/release/"$RELEASE_TAG"/RELEASE_NOTES.md
+gh release edit "$RELEASE_TAG" \
+  --repo pwrdrvr/PwrAgent \
+  --notes-file .local/release/"$RELEASE_TAG"/RELEASE_NOTES.md
+gh release view "$RELEASE_TAG" --repo pwrdrvr/PwrAgent --json body \
+  --jq '.body | length'
+```
 
 If direct push to the release branch is rejected, use the repo-local release
 skill fallback: open a short-lived release PR against the release branch, wait

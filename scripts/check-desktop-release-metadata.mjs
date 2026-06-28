@@ -168,6 +168,10 @@ for (const expected of [
   "ubuntu-24.04-arm",
   "Package Linux DEB",
   "Publish Linux DEB artifacts",
+  "Publish release notes",
+  "scripts/extract-release-notes.mjs",
+  "--notes-file",
+  ".body | length",
   "PWRAGENT_LINUX_ARCH",
   "SHA256SUMS",
 ]) {
