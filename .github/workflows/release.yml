@@ -296,3 +296,49 @@ jobs:
             linux-dist/*.deb
             linux-dist/SHA256SUMS
           retention-days: 30
+
+  publish-release-notes:
+    name: Publish release notes
+    runs-on: ubuntu-24.04
+    needs:
+      - sign
+      - linux-publish
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Publish changelog notes to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${RELEASE_TAG:?}"
+          VERSION="${RELEASE_TAG#v}"
+          notes="$RUNNER_TEMP/RELEASE_NOTES.md"
+
+          node scripts/extract-release-notes.mjs \
+            --tag "$RELEASE_TAG" \
+            --out "$notes"
+
+          if [ ! -s "$notes" ]; then
+            echo "::error::No CHANGELOG.md notes found for $RELEASE_TAG ($VERSION)" >&2
+            exit 1
+          fi
+
+          gh release edit "$RELEASE_TAG" \
+            --repo pwrdrvr/PwrAgent \
+            --notes-file "$notes"
+
+          body_length="$(gh release view "$RELEASE_TAG" --repo pwrdrvr/PwrAgent --json body --jq '.body | length')"
+          if [ "$body_length" -le 0 ]; then
+            echo "::error::Release $RELEASE_TAG still has an empty body" >&2
+            exit 1
+          fi

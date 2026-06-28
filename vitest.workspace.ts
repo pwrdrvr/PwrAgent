@@ -42,6 +42,7 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
           include: [
+            "scripts/**/*.test.mjs",
             "apps/desktop/scripts/**/*.test.mjs",
             "apps/desktop/src/main/__tests__/**/*.test.ts",
             "apps/desktop/src/main/agent-tools/__tests__/**/*.test.ts",

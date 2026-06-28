@@ -50,12 +50,12 @@ Read these files before changing release metadata:
   and present on the intended release branch.
 - Do not create the GitHub Release by hand before the build succeeds. Let
   electron-builder create or update the release from the signed/notarized CI
-  build, then replace the generated/empty release notes with the changelog
-  entry.
+  build; the workflow publishes the matching changelog entry to the GitHub
+  Release body after release assets are uploaded.
 - Do not use GitHub generated release notes as the final notes.
 - A release is not complete when the workflow reaches the `apple-signing`
-  approval gate. After approval, continue monitoring until CI finishes, replace
-  the GitHub Release notes, and verify the release body is non-empty.
+  approval gate. After approval, continue monitoring through the release-notes
+  publishing job, and verify the release body is non-empty.
 - Do not force-push the default branch or rewrite an existing release tag
   without explicit user approval.
 - Keep MIT licensing intact: do not change first-party license metadata or
@@ -270,7 +270,8 @@ commit, and the version/changelog metadata match the tag.
 
 If monitoring is delegated and the monitor stops at the approval gate, resume
 monitoring after approval. Do not end the release turn as "done" at the
-approval gate; the post-success release-note edit is still required.
+approval gate; the workflow still has to publish and verify release notes after
+assets are uploaded.
 
 On failure, inspect logs yourself:
 
@@ -298,20 +299,26 @@ The stable `PwrAgent.dmg` alias is intentionally unversioned so the website can
 link to the latest release without knowing the current version. Do not remove
 or replace it with an arch-suffixed DMG.
 
-Then replace electron-builder's empty/default release notes. For beta releases
-that should be offered by the normal updater and stable landing-page download
-URLs, leave GitHub's release label as `None` so the release can become Latest;
-do not mark it as `Pre-release`. GitHub excludes pre-release entries from
-`/releases/latest`, which also breaks
+The workflow replaces electron-builder's empty/default release notes after
+release assets are published. For beta releases that should be offered by the
+normal updater and stable landing-page download URLs, leave GitHub's release
+label as `None` so the release can become Latest; do not mark it as
+`Pre-release`. GitHub excludes pre-release entries from `/releases/latest`,
+which also breaks
 `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg` and
 the default Electron updater feed.
 
-This step is required, not cosmetic. Electron-builder may leave the body empty
-or duplicate the tag name, so always run it after assets are published:
+This release-note publication is required, not cosmetic. Electron-builder may
+leave the body empty or duplicate the tag name. If the workflow release-notes
+job fails or GitHub temporarily rejects the edit, run the manual fallback after
+confirming the extracted notes match the approved changelog entry:
 
 ```bash
+node scripts/extract-release-notes.mjs \
+  --tag v<version> \
+  --out .local/release/v<version>/RELEASE_NOTES.md
 gh release edit v<version> \
-  --title "v<version> - <short release theme>" \
+  --repo pwrdrvr/PwrAgent \
   --notes-file .local/release/v<version>/RELEASE_NOTES.md
 ```
 
