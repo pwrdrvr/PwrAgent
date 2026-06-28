@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.39 - 2026-06-28
+
+- Workspace Handoffs - Improved handoff creation visibility so pending child-thread setup is surfaced before slow worktree or environment setup completes, reducing duplicate handoffs.
+- Workspace Branch State - Fixed local handoff branch metadata so branch chips and drift checks recover from stale `HEAD` data and use the current linked checkout.
+- Integrated Terminal - Fixed terminal launches to open in the thread's current handoff workspace instead of falling back to stale project metadata or the home directory.
+- Startup Recovery - Skips unloadable automation rows created by newer builds without mutating them, reports skipped automations at startup, and shows a native error dialog with log access for early boot failures.
+- Release Notes - Automated GitHub Release note publishing from `CHANGELOG.md` after release assets upload, with extraction tests and non-empty body verification.
+- Minor - Refreshed TipTap/ProseMirror dependencies and third-party license metadata.
+
 ## v1.0.0-beta.38 - 2026-06-26
 
 - Worktree Handoffs - Fixed new-worktree handoffs so requested worktree isolation is enforced, setup failures are surfaced, and agent-created threads cannot silently fall back to the caller's workspace.
