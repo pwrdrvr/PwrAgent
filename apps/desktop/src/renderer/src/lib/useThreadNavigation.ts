@@ -72,8 +72,15 @@ export type CreatingThreadState = {
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
+const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
 const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
+const NAVIGATION_ACTIVITY_EVENTS = [
+  "input",
+  "keydown",
+  "paste",
+  "pointerdown",
+] as const;
 
 function normalizeBrowseMode(value: unknown): BrowseMode {
   return value === "inbox" || value === "recents" || value === "directories"
@@ -2238,6 +2245,8 @@ export function useThreadNavigation(
   const focusRefreshInFlightRef = useRef(false);
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
+  const lastNavigationActivityAtRef = useRef(Date.now());
+  const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
   const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
@@ -2565,6 +2574,37 @@ export function useThreadNavigation(
     scheduledFocusRefreshTimerRef.current = setTimeout(runRefresh, delayMs);
   }, [refresh]);
 
+  const markNavigationActivity = useCallback(
+    (options: { refreshOnIdleResume?: boolean } = {}): void => {
+      const wasIdle = backgroundRefreshIdleRef.current;
+      lastNavigationActivityAtRef.current = Date.now();
+      backgroundRefreshIdleRef.current = false;
+
+      if (!wasIdle || options.refreshOnIdleResume === false) {
+        return;
+      }
+
+      if (
+        !enabled ||
+        !desktopApi?.getNavigationSnapshot ||
+        (lightweightNavigationRefresh && !isRendererViewForeground())
+      ) {
+        return;
+      }
+
+      scheduleRefresh(undefined, undefined, false, {
+        forceRefresh: true,
+        refreshMode: lightweightNavigationRefresh ? "active-recent" : undefined,
+      });
+    },
+    [
+      desktopApi?.getNavigationSnapshot,
+      enabled,
+      lightweightNavigationRefresh,
+      scheduleRefresh,
+    ]
+  );
+
   useEffect(() => {
     return () => {
       if (scheduledRefreshTimerRef.current !== undefined) {
@@ -2598,6 +2638,28 @@ export function useThreadNavigation(
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleNavigationActivity = () => {
+      markNavigationActivity();
+    };
+
+    for (const eventName of NAVIGATION_ACTIVITY_EVENTS) {
+      window.addEventListener(eventName, handleNavigationActivity, { capture: true });
+    }
+
+    return () => {
+      for (const eventName of NAVIGATION_ACTIVITY_EVENTS) {
+        window.removeEventListener(eventName, handleNavigationActivity, {
+          capture: true,
+        });
+      }
+    };
+  }, [markNavigationActivity]);
+
+  useEffect(() => {
     if (!enabled) {
       prChipLocationIndexRef.current = undefined;
       setState({
@@ -2622,6 +2684,12 @@ export function useThreadNavigation(
     }
 
     const timer = setInterval(() => {
+      const idleMs = Date.now() - lastNavigationActivityAtRef.current;
+      if (idleMs >= NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS) {
+        backgroundRefreshIdleRef.current = true;
+        return;
+      }
+
       scheduleRefresh(undefined, undefined, false, {
         forceRefresh: true,
         refreshMode: lightweightNavigationRefresh ? "active-recent" : undefined,
@@ -2645,6 +2713,7 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onWindowFocus(() => {
+      markNavigationActivity({ refreshOnIdleResume: false });
       if (lightweightNavigationRefresh) {
         scheduleFocusRefresh();
         return;
@@ -2655,6 +2724,7 @@ export function useThreadNavigation(
     desktopApi,
     enabled,
     lightweightNavigationRefresh,
+    markNavigationActivity,
     scheduleFocusRefresh,
     scheduleRefresh,
   ]);
@@ -2665,6 +2735,7 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onAgentEvent((event) => {
+      markNavigationActivity({ refreshOnIdleResume: false });
       const method = event.notification.method as string;
       if (method === "navigation/directoryGitStatus/updated") {
         const params = event.notification
@@ -3174,7 +3245,7 @@ export function useThreadNavigation(
         scheduleRefresh();
       }
     });
-  }, [desktopApi, enabled, scheduleRefresh, state.response]);
+  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.response]);
 
   // Bindings live in the navigation snapshot but are mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
@@ -3186,9 +3257,10 @@ export function useThreadNavigation(
       return;
     }
     return desktopApi.onMessagingBindingsChanged(() => {
+      markNavigationActivity({ refreshOnIdleResume: false });
       scheduleRefresh();
     });
-  }, [desktopApi, enabled, scheduleRefresh]);
+  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh]);
 
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];

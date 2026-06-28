@@ -1045,6 +1045,83 @@ describe("useThreadNavigation", () => {
     unmount();
   });
 
+  it("pauses opt-in foreground background polling while navigation is idle", async () => {
+    let intervalHandler: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
+      if (timeout !== 5 * 60_000) {
+        return originalSetInterval(handler, timeout, ...args);
+      }
+      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy.mockReturnValue(1_000_000);
+
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+    };
+
+    const { result, unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(intervalHandler).toBeDefined();
+
+    dateNowSpy.mockReturnValue(1_000_000 + 31 * 60_000);
+    act(() => {
+      intervalHandler?.();
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    dateNowSpy.mockReturnValue(1_000_000 + 31 * 60_000 + 1_000);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      });
+    });
+
+    unmount();
+  });
+
   it("uses the ordinary scheduled refresh on focus by default", async () => {
     let focusListener: (() => void) | undefined;
     const getNavigationSnapshot = vi.fn(async () => ({

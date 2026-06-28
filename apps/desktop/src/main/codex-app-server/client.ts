@@ -283,7 +283,7 @@ function logCodexClientDebug(event: string, payload: Record<string, unknown>): v
     return;
   }
 
-  codexClientLog.info(event, payload);
+  codexClientLog.debug(event, payload);
 }
 
 function isApprovalLikeMethod(method: string): boolean {
