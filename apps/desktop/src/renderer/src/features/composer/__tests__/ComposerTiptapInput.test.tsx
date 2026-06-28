@@ -138,6 +138,24 @@ const canonicalHandoffPrefixWithCodeBlock = [
   "```",
 ].join("\n");
 
+const pastedSearchSql = [
+  "SELECT a.api_key, m.company, endpoint, SUM(count) AS _count",
+  "",
+  "FROM \"spectrumdb\".\"api_aggregates_by_endpoint\" a",
+  "",
+  "  LEFT JOIN api_key_metadata m",
+  "",
+  "    ON a.api_key = m.api_key",
+  "",
+  "WHERE endpoint LIKE '%search%'",
+  "",
+  "  AND date(dt) = date '2024-08-05'",
+  "",
+  "GROUP BY a.api_key, endpoint, m.company",
+  "",
+  "ORDER BY 4 DESC",
+].join("\n");
+
 describe("ComposerTiptapInput", () => {
   it("keeps Alt+Enter inside the editor instead of routing it to the composer", async () => {
     const onKeyDown = vi.fn();
@@ -258,6 +276,109 @@ describe("ComposerTiptapInput", () => {
         paragraph.textContent?.startsWith("1. Creates several ready recordings.")
       ),
     ).toBe(false);
+  });
+
+  it("keeps HTML-only double-blank-line SQL paste inside an active code block", async () => {
+    const { container, onChange } = renderTiptapInput({ value: "```\n```" });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "```\n".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return pastedSearchSql
+              .split("\n")
+              .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
+              .join("");
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        `\`\`\`\n${pastedSearchSql}\n\`\`\``,
+        [],
+      );
+    });
+    expect(container.querySelectorAll(".composer-tiptap-input__editor > pre"))
+      .toHaveLength(1);
+    expect(
+      [...container.querySelectorAll(".composer-tiptap-input__editor > p")]
+        .filter((paragraph) => /SELECT|FROM|WHERE|ORDER BY/.test(
+          paragraph.textContent ?? "",
+        )),
+    )
+      .toHaveLength(0);
+  });
+
+  it("keeps HTML-only double-blank-line SQL paste inside an active blockquote", async () => {
+    const onChange = vi.fn();
+    render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Query:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Query:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Query:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return pastedSearchSql
+              .split("\n")
+              .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
+              .join("");
+          }
+          return "";
+        },
+        items: [],
+        types: ["text/html"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          ...pastedSearchSql
+            .replace(
+              "SELECT a.api_key",
+              "Query:SELECT a.api_key",
+            )
+            .split("\n")
+            .map((line) => `> ${line}`),
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
   });
 
   it("preserves rich web-page lists when pasting inside a blockquote", async () => {
