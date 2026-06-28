@@ -1373,9 +1373,14 @@ function responseHasInProgressTurn(
     return false;
   }
 
-  return response.replay.entries.some(
-    (entry) => entry.turn?.id === turnId && entry.turn.status === "in_progress"
+  const turnEntries = response.replay.entries.filter(
+    (entry) => entry.turn?.id === turnId
   );
+  if (turnEntries.some((entry) => isCompletedTurnMetadata(entry.turn))) {
+    return false;
+  }
+
+  return turnEntries.some((entry) => entry.turn?.status === "in_progress");
 }
 
 function normalizeNotificationTimestamp(value: unknown): number | undefined {
