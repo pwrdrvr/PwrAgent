@@ -1083,7 +1083,7 @@ export function ThreadView(props: ThreadViewProps) {
     ? terminalOpenByThread[selectedThreadKey] === true
     : false;
   const selectedThreadTerminalCwd = selectedThread
-    ? threadDirectoryPaths(selectedThread)[0]
+    ? resolveThreadTerminalCwd(selectedThread)
     : undefined;
   const selectedThreadTerminalHeight = selectedThreadKey
     ? terminalHeightByThread[selectedThreadKey] ?? 260
@@ -2912,4 +2912,15 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
     return paths;
   });
   return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
+}
+
+function resolveThreadTerminalCwd(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const directory =
+    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
+    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
+    thread.linkedDirectories[0];
+
+  return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
 }
