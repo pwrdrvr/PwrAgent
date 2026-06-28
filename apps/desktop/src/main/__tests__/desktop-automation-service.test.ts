@@ -181,6 +181,41 @@ describe("DesktopAutomationService", () => {
       }),
     );
     expect(registry.submitTurn).not.toHaveBeenCalled();
+    // Agent-context-only automations keep the legacy binding broadcast.
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: false }),
+    );
+  });
+
+  it("suppresses the binding broadcast for automations that reply to their source", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Incident triage",
+      taskPrompt: "Summarize the incident",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "reply-source",
+          kind: "source_message",
+          destination: "source_channel",
+        },
+      ],
+    });
+
+    await service.runNow({ automationId: created.automation.id });
+
+    // The source_message action delivers to the source conversation directly,
+    // so the messaging controller must skip the legacy broadcast to avoid a
+    // double-post on bindings that are also the source.
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: true }),
+    );
   });
 
   it("forwards automation execution profile overrides to headless starts", async () => {
@@ -300,12 +335,55 @@ describe("DesktopAutomationService", () => {
     expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         automationName: "Datadog alert triage",
+        suppressBindingBroadcast: true,
         input: expect.arrayContaining([
           expect.objectContaining({
             text: expect.stringContaining("Inbound source message:"),
           }),
         ]),
       }),
+    );
+  });
+
+  it("suppresses the binding broadcast for agent-only inbound automations", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Silent inbound triage",
+      taskPrompt: "Just note it.",
+      triggers: [
+        {
+          id: "silent-error",
+          kind: "inbound_message",
+          name: "Silent ERROR",
+          conversation: { channel: "slack", conversationId: "C999" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      // agent_only: no source_message/messaging_target action. Inbound
+      // automations are still governed by the editor's destination choice, so
+      // the legacy broadcast must be suppressed to honor "no message back".
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+
+    await expect(
+      service.handleMessagingInboundEvent({
+        id: "slack-text:silent",
+        kind: "text",
+        actor: { platformUserId: "U999", isBot: false },
+        channel: {
+          channel: "slack",
+          conversation: { id: "C999", kind: "channel", title: "alerts" },
+        },
+        receivedAt: 2_000,
+        routingState: { opaque: { channelId: "C999", ts: "1712023099.000001" } },
+        text: "ERROR something happened",
+      }),
+    ).resolves.toBe(true);
+
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: true }),
     );
   });
 

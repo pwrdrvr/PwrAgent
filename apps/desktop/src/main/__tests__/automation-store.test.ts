@@ -228,6 +228,63 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("collapses duplicate assistant_final transcript events with the same text", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 1_000,
+    });
+    store.createRun({
+      id: "run-1",
+      automationId: "automation-1",
+      trigger: "manual",
+      now: 2_000,
+    });
+    store.markRunTerminal({
+      runId: "run-1",
+      status: "completed",
+      completedAt: 3_000,
+      now: 3_000,
+    });
+
+    // The run-artifact builder records the final under one id.
+    store.upsertRunArtifact({
+      runId: "run-1",
+      status: "completed",
+      finalText: "Harold sent the message.",
+      transcriptEvents: [
+        {
+          id: "run-1:assistant-final",
+          at: 3_000,
+          kind: "assistant_final",
+          text: "Harold sent the message.",
+        },
+      ],
+      now: 3_000,
+    });
+    // The streamed item/completed event records the same text under a different
+    // id. Without dedup this would surface as two identical assistant rows.
+    store.appendRunTranscriptEvent({
+      runId: "run-1",
+      event: {
+        id: "run-1:assistant:item-9",
+        at: 3_010,
+        kind: "assistant_final",
+        text: "Harold sent the message.",
+      },
+      now: 3_010,
+    });
+
+    const transcript = store.getRunArtifact("run-1")?.transcriptEvents ?? [];
+    expect(
+      transcript.filter((event) => event.kind === "assistant_final"),
+    ).toHaveLength(1);
+  });
+
   it("defaults legacy scheduled automations and persists inbound trigger metadata", () => {
     const legacy = store.createAutomation({
       id: "automation-legacy",

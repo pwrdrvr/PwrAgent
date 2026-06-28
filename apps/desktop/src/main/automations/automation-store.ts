@@ -1303,7 +1303,19 @@ function mergeTranscriptEvents(
   for (const event of incoming) {
     byId.set(event.id, event);
   }
-  return [...byId.values()].sort((left, right) => left.at - right.at);
+  // The agent's final answer is recorded under two ids (streamed item/completed
+  // and the run-artifact builder); collapse assistant_final events with the
+  // same trimmed text so the run detail does not show the response twice.
+  const sorted = [...byId.values()].sort((left, right) => left.at - right.at);
+  const seenFinalText = new Set<string>();
+  return sorted.filter((event) => {
+    if (event.kind !== "assistant_final") return true;
+    const key = event.text?.trim();
+    if (!key) return true;
+    if (seenFinalText.has(key)) return false;
+    seenFinalText.add(key);
+    return true;
+  });
 }
 
 function minDefined(left: number | undefined, right: number | undefined): number | undefined {

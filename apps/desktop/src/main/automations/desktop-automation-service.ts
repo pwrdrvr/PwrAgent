@@ -27,7 +27,10 @@ import type {
   UpdateAutomationRequest,
 } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
-import { validateAutomationScheduleDefinition } from "@pwragent/shared";
+import {
+  automationSuppressesBindingBroadcast,
+  validateAutomationScheduleDefinition,
+} from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -666,6 +669,9 @@ export class DesktopAutomationService {
           outputDecision: artifact?.outputDecision,
           runId: params.runId,
           status: run.status,
+          suppressBindingBroadcast: automation
+            ? automationSuppressesBindingBroadcast(automation)
+            : false,
         },
       },
     });
@@ -1204,7 +1210,31 @@ function mergeTranscriptEvents(
   for (const event of incoming) {
     byId.set(event.id, event);
   }
-  return [...byId.values()].sort((left, right) => left.at - right.at);
+  return dedupeAssistantFinalEvents(
+    [...byId.values()].sort((left, right) => left.at - right.at),
+  );
+}
+
+/**
+ * The agent's final answer is recorded from two sources under different ids —
+ * the streamed `item/completed` event (`<run>:assistant:<item>`) and the
+ * run-artifact builder (`<run>:assistant-final`). Both carry identical text, so
+ * id-keyed merging keeps both and the run detail shows the response twice.
+ * Collapse `assistant_final` events that share the same trimmed text, keeping
+ * the earliest occurrence.
+ */
+function dedupeAssistantFinalEvents(
+  events: AutomationRunTranscriptEvent[],
+): AutomationRunTranscriptEvent[] {
+  const seenFinalText = new Set<string>();
+  return events.filter((event) => {
+    if (event.kind !== "assistant_final") return true;
+    const key = event.text?.trim();
+    if (!key) return true;
+    if (seenFinalText.has(key)) return false;
+    seenFinalText.add(key);
+    return true;
+  });
 }
 
 function buildAutomationTimelineCard(params: {

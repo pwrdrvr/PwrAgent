@@ -1,5 +1,6 @@
 import type { AutomationRunSummary, ThreadExecutionMode } from "@pwragent/shared";
 import type { AutomationGateRunResult } from "@pwragent/shared";
+import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
 import type {
   ThreadTurnQueueEntry,
   ThreadTurnQueueSubmissionResult,
@@ -52,6 +53,12 @@ export type HeadlessAutomationLauncher = {
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    /**
+     * When true, the run delivers via explicit messaging actions, so the
+     * messaging controller must NOT broadcast the result/start notice to the
+     * Agent thread's bindings (which would double-post the source conversation).
+     */
+    suppressBindingBroadcast?: boolean;
   }): Promise<{
     headlessThreadId?: string;
     queueEntryId: string;
@@ -92,6 +99,9 @@ export class HeadlessAutomationRunner implements AutomationRunner {
       model: params.automation.executionProfile?.model,
       reasoningEffort: params.automation.executionProfile?.reasoningEffort,
       serviceTier: params.automation.executionProfile?.serviceTier,
+      suppressBindingBroadcast: automationSuppressesBindingBroadcast(
+        params.automation,
+      ),
     });
     automationRunnerLog.info("headless automation run accepted", {
       automationId: params.automation.id,

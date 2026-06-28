@@ -1010,6 +1010,7 @@ export class MessagingController {
         finalText: automationRunUpdate.finalText,
         outputDecision: automationRunUpdate.outputDecision,
         status: automationRunUpdate.status,
+        suppressBindingBroadcast: automationRunUpdate.suppressBindingBroadcast,
       });
       return;
     }
@@ -1027,6 +1028,7 @@ export class MessagingController {
           bindings,
           threadId,
           turnId: turnQueueUpdate.turnId,
+          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
         });
       }
       if (
@@ -1042,6 +1044,7 @@ export class MessagingController {
           finalText: turnQueueUpdate.finalText,
           threadId,
           turnId: turnQueueUpdate.turnId,
+          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
         });
       }
       return;
@@ -10377,7 +10380,12 @@ export class MessagingController {
     bindings: MessagingBindingRecord[];
     threadId: ThreadIdentifier;
     turnId: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
+    // Always remember the turn so its streaming/lifecycle events are recognized
+    // as an automation turn and NOT delivered to bindings as ordinary assistant
+    // output (see `isAutomationTurnEvent`). Only the visible "started" notice is
+    // suppressed when the automation delivers via explicit messaging actions.
     this.rememberAutomationTurn({
       automationName: params.automationName,
       automationRunId: params.automationRunId,
@@ -10385,6 +10393,10 @@ export class MessagingController {
       threadId: params.threadId,
       turnId: params.turnId,
     });
+
+    if (params.suppressBindingBroadcast) {
+      return;
+    }
 
     for (const binding of params.bindings) {
       await this.deliverAutomationStartedMessage(binding, {
@@ -10403,18 +10415,24 @@ export class MessagingController {
     finalText?: string;
     threadId: ThreadIdentifier;
     turnId: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
-    for (const binding of params.bindings) {
-      await this.deliverAutomationFinalMessageOnce({
-        binding,
-        event: params.event,
-        finalText: params.finalText,
-        keyParts: [
-          binding.id,
-          params.automationRunId ?? params.threadId,
-          params.automationRunId ? "automation-run" : params.turnId,
-        ],
-      });
+    // Suppress the legacy broadcast for automations that deliver via explicit
+    // messaging actions, but still forget the tracked turn so the map does not
+    // leak.
+    if (!params.suppressBindingBroadcast) {
+      for (const binding of params.bindings) {
+        await this.deliverAutomationFinalMessageOnce({
+          binding,
+          event: params.event,
+          finalText: params.finalText,
+          keyParts: [
+            binding.id,
+            params.automationRunId ?? params.threadId,
+            params.automationRunId ? "automation-run" : params.turnId,
+          ],
+        });
+      }
     }
     this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
   }
@@ -10426,7 +10444,14 @@ export class MessagingController {
     outputDecision?: AutomationRunOutputDecision;
     runId: string;
     status: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
+    // Automations that deliver via explicit messaging actions own their
+    // delivery; the legacy "broadcast to every binding" path would double-post
+    // the source conversation, so skip it entirely here.
+    if (params.suppressBindingBroadcast) {
+      return;
+    }
     if (
       params.status !== "completed" &&
       params.status !== "failed" &&
@@ -13359,6 +13384,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   finalText?: string;
   origin?: string;
   status?: string;
+  suppressBindingBroadcast?: boolean;
   turnId?: string;
 } | undefined {
   if (event.notification.method !== "thread/turnQueue/updated") {
@@ -13370,6 +13396,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     finalText?: unknown;
     origin?: unknown;
     status?: unknown;
+    suppressBindingBroadcast?: unknown;
     turnId?: unknown;
   };
   return {
@@ -13380,6 +13407,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     origin: typeof params.origin === "string" ? params.origin : undefined,
     status: typeof params.status === "string" ? params.status : undefined,
+    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
     turnId: typeof params.turnId === "string" ? params.turnId : undefined,
   };
 }
@@ -13389,6 +13417,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
   outputDecision?: AutomationRunOutputDecision;
   runId: string;
   status: string;
+  suppressBindingBroadcast?: boolean;
 } | undefined {
   if (event.notification.method !== "automation/run/updated") {
     return undefined;
@@ -13398,6 +13427,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
     outputDecision?: unknown;
     runId?: unknown;
     status?: unknown;
+    suppressBindingBroadcast?: unknown;
   };
   if (typeof params.runId !== "string" || typeof params.status !== "string") {
     return undefined;
@@ -13409,6 +13439,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
       : undefined,
     runId: params.runId,
     status: params.status,
+    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
   };
 }
 

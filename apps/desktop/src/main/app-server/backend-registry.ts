@@ -4882,6 +4882,7 @@ export class DesktopBackendRegistry {
       automationRunId: string;
       executionMode: ThreadExecutionMode;
       queueEntryId: string;
+      suppressBindingBroadcast?: boolean;
     }
   >();
   /**
@@ -5410,6 +5411,7 @@ export class DesktopBackendRegistry {
     model?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<{
     backend: AppServerBackendKind;
     headlessThreadId: string;
@@ -5510,6 +5512,7 @@ export class DesktopBackendRegistry {
         automationRunId: params.automationRunId,
         executionMode,
         queueEntryId,
+        suppressBindingBroadcast: params.suppressBindingBroadcast,
       },
     );
     await this.emit({
@@ -5525,6 +5528,7 @@ export class DesktopBackendRegistry {
           status: "started",
           backendThreadId: turn.threadId,
           turnId: turn.turnId,
+          suppressBindingBroadcast: params.suppressBindingBroadcast,
         },
       },
     });
@@ -11398,6 +11402,7 @@ export class DesktopBackendRegistry {
           errorMessage: errorMessageFromTerminalNotification(notification),
           finalText: finalTextFromTerminalNotification(notification),
           terminalStatus: notification.method,
+          suppressBindingBroadcast: run.suppressBindingBroadcast,
         },
       },
     });

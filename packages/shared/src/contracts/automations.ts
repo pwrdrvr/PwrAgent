@@ -254,6 +254,53 @@ export type AutomationOutputActionResult = {
   errorMessage?: string;
 };
 
+/**
+ * True when an automation delivers its result through an explicit messaging
+ * output action (`source_message` or `messaging_target`). Such automations own
+ * their messaging delivery deliberately, so the legacy "broadcast the result to
+ * every binding of the attached Agent thread" path must be suppressed for them
+ * — otherwise the source conversation (which is often also a binding) receives
+ * the result twice. `agent_context`-only automations keep the legacy broadcast.
+ */
+export function automationDeliversViaMessagingActions(
+  outputActions: AutomationOutputActionDefinition[] | undefined,
+): boolean {
+  if (!Array.isArray(outputActions)) {
+    return false;
+  }
+  return outputActions.some(
+    (action) =>
+      action.enabled !== false &&
+      (action.kind === "source_message" || action.kind === "messaging_target"),
+  );
+}
+
+/**
+ * True when an automation's messaging delivery is governed entirely by its
+ * configured output actions, so the legacy "broadcast the result to every
+ * binding of the attached Agent thread" path must be suppressed. This holds
+ * for:
+ *   - inbound-triggered automations, whose result destination is always chosen
+ *     in the editor (reply to source / a different conversation / agent only),
+ *     and
+ *   - any automation with an explicit messaging-delivery action.
+ *
+ * Legacy schedule-only automations that default to `agent_context` keep the
+ * broadcast so they continue to surface in their bound conversations.
+ */
+export function automationSuppressesBindingBroadcast(automation: {
+  outputActions?: AutomationOutputActionDefinition[];
+  triggers?: AutomationTriggerDefinition[];
+}): boolean {
+  if (
+    Array.isArray(automation.triggers) &&
+    automation.triggers.some((trigger) => trigger.kind === "inbound_message")
+  ) {
+    return true;
+  }
+  return automationDeliversViaMessagingActions(automation.outputActions);
+}
+
 export type AutomationScheduleValidationResult =
   | {
       ok: true;
