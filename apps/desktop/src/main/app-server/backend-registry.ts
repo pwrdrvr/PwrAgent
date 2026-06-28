@@ -370,7 +370,7 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
     return;
   }
 
-  backendRegistryLog.info(event, payload);
+  backendRegistryLog.debug(event, payload);
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

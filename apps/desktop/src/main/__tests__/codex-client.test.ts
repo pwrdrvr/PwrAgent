@@ -6,11 +6,13 @@ import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 
 const codexClientLogError = vi.hoisted(() => vi.fn());
+const codexClientLogDebug = vi.hoisted(() => vi.fn());
 const codexClientLogInfo = vi.hoisted(() => vi.fn());
 const codexClientLogWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => ({
+    debug: codexClientLogDebug,
     error: codexClientLogError,
     info: codexClientLogInfo,
     warn: codexClientLogWarn,
