@@ -447,6 +447,101 @@ describe("ThreadView", () => {
     });
   });
 
+  it("opens the integrated terminal in the local handoff directory when projectKey is stale", async () => {
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-local-handoff",
+      title: "Local handoff",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/.codex/worktrees/stale/app",
+      linkedDirectories: [
+        {
+          id: "pwragent-handoff:codex:thread-local-handoff",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      inbox: {
+        inInbox: true,
+      },
+    };
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+
+    expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
+      "data-cwd",
+      "/repo/app",
+    );
+  });
+
+  it("opens the integrated terminal in the linked worktree path instead of projectKey", async () => {
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-worktree-handoff",
+      title: "Worktree handoff",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/app",
+      linkedDirectories: [
+        {
+          id: "pwragent-handoff:codex:thread-worktree-handoff",
+          kind: "worktree",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/app/.worktrees/app-feature",
+        },
+      ],
+      inbox: {
+        inInbox: true,
+      },
+    };
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+
+    expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
+      "data-cwd",
+      "/repo/app/.worktrees/app-feature",
+    );
+  });
+
   it("hides the integrated terminal when the pty exits without closing it again", async () => {
     const selectedThread: NavigationThreadSummary = {
       id: "thread-a",
