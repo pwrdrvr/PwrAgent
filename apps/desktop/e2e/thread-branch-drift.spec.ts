@@ -119,7 +119,7 @@ test("updates the expected branch when the user accepts the current branch", asy
   }
 });
 
-test("does not reopen a HEAD drift warning after accepting the current branch", async () => {
+test("repairs a stale HEAD drift without opening a warning", async () => {
   const fixture = await createBranchDriftFixture({ expectedBranch: "HEAD" });
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -129,20 +129,16 @@ test("does not reopen a HEAD drift warning after accepting the current branch", 
   });
 
   try {
-    await app.window
-      .getByRole("button", {
-        name: "Accept current branch as correct. Continue working on codex/current-branch without further warnings",
-      })
-      .click();
-
     const dialog = app.window.getByRole("dialog", {
       name: "Thread branch changed",
     });
     await expect(dialog).toBeHidden();
-    expect(readThreadPayload(fixture.homeDir)).toMatchObject({
-      gitBranch: "codex/current-branch",
-      observedGitBranch: "codex/current-branch",
-    });
+    await expect
+      .poll(() => readThreadPayload(fixture.homeDir))
+      .toMatchObject({
+        gitBranch: "codex/current-branch",
+        observedGitBranch: "codex/current-branch",
+      });
 
     const staleRendererCheck = await app.window.evaluate(async () =>
       await (window as any).pwragent.checkThreadBranchDrift({

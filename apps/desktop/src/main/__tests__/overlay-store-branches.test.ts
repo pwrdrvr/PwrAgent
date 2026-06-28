@@ -64,4 +64,26 @@ describe("SqliteOverlayStore branch metadata", () => {
       observedGitBranch: "feature/current",
     });
   });
+
+  it("replaces a stale expected branch when the caller supplies a repair", async () => {
+    await store.setThreadExpectedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "HEAD",
+    });
+
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "main",
+      expectedBranch: "main",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "main",
+      observedGitBranch: "main",
+    });
+  });
 });

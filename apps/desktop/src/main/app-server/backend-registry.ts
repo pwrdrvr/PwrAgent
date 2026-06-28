@@ -574,6 +574,11 @@ function resolveThreadWorkspaceCwd(
 function resolveLinkedDirectoryWorkspaceCwd(
   linkedDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
+  const handoffDirectory = linkedDirectories.find(isHandoffDirectory);
+  if (handoffDirectory) {
+    return handoffDirectory.worktreePath ?? handoffDirectory.path;
+  }
+
   const directory =
     linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
     linkedDirectories.find((candidate) => candidate.kind === "local") ??
@@ -876,6 +881,90 @@ function resolveExpectedThreadBranch(params: {
   }
 
   return params.thread?.gitBranch?.trim() || undefined;
+}
+
+function shouldUseObservedBranchForDetachedHandoff(params: {
+  branch?: string;
+  observedBranch?: string;
+  overlay?: ThreadOverlayState;
+}): boolean {
+  const branch = params.branch?.trim();
+  const observedBranch = params.observedBranch?.trim();
+  return Boolean(
+    branch === "HEAD" &&
+      observedBranch &&
+      observedBranch !== "HEAD" &&
+      hasHandoffWorkspace(params.overlay?.extraLinkedDirectories),
+  );
+}
+
+function resolveBranchDriftExpectedBranch(params: {
+  observedBranch?: string;
+  overlay?: ThreadOverlayState;
+  requestedExpectedBranch?: string;
+  thread?: Pick<AppServerThreadSummary, "gitBranch">;
+}): { expectedBranch?: string; repairedDetachedHandoffBranch: boolean } {
+  const overlayBranch = params.overlay?.gitBranch?.trim();
+  if (
+    shouldUseObservedBranchForDetachedHandoff({
+      branch: overlayBranch,
+      observedBranch: params.observedBranch,
+      overlay: params.overlay,
+    })
+  ) {
+    return {
+      expectedBranch: params.observedBranch,
+      repairedDetachedHandoffBranch: true,
+    };
+  }
+  if (overlayBranch) {
+    return {
+      expectedBranch: overlayBranch,
+      repairedDetachedHandoffBranch: false,
+    };
+  }
+
+  const requestedBranch = params.requestedExpectedBranch?.trim();
+  if (
+    shouldUseObservedBranchForDetachedHandoff({
+      branch: requestedBranch,
+      observedBranch: params.observedBranch,
+      overlay: params.overlay,
+    })
+  ) {
+    return {
+      expectedBranch: params.observedBranch,
+      repairedDetachedHandoffBranch: true,
+    };
+  }
+  if (requestedBranch) {
+    return {
+      expectedBranch: requestedBranch,
+      repairedDetachedHandoffBranch: false,
+    };
+  }
+
+  const fallbackBranch = resolveExpectedThreadBranch({
+    overlay: params.overlay,
+    thread: params.thread,
+  });
+  if (
+    shouldUseObservedBranchForDetachedHandoff({
+      branch: fallbackBranch,
+      observedBranch: params.observedBranch,
+      overlay: params.overlay,
+    })
+  ) {
+    return {
+      expectedBranch: params.observedBranch,
+      repairedDetachedHandoffBranch: true,
+    };
+  }
+
+  return {
+    expectedBranch: fallbackBranch,
+    repairedDetachedHandoffBranch: false,
+  };
 }
 
 async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
@@ -6460,7 +6549,12 @@ export class DesktopBackendRegistry {
       sourcePath: request.sourcePath ?? candidate.sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
     });
-    const resultBranch = result.strategy === "detached-changes" ? "HEAD" : result.branch;
+    const resultBranch =
+      result.strategy === "detached-changes"
+        ? (result.workMode === "local"
+            ? await readCurrentGitBranch(result.targetPath).catch(() => undefined)
+            : undefined) ?? "HEAD"
+        : result.branch;
 
     await this.overlayStore.replaceWorkspaceLinkedDirectory({
       backend: request.backend,
@@ -8981,15 +9075,6 @@ export class DesktopBackendRegistry {
       callerReason: "branch-drift",
       threadId: params.threadId,
     });
-    const overlayExpectedBranch = overlay?.gitBranch?.trim();
-    const requestedExpectedBranch = params.expectedBranch?.trim();
-    const expectedBranch =
-      overlayExpectedBranch ||
-      requestedExpectedBranch ||
-      resolveExpectedThreadBranch({
-        overlay,
-        thread,
-      });
     const workspaceCwd = resolveThreadWorkspaceCwd(
       thread,
       overlay?.extraLinkedDirectories ?? [],
@@ -8998,6 +9083,13 @@ export class DesktopBackendRegistry {
       ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
+    const expectedBranchResolution = resolveBranchDriftExpectedBranch({
+      observedBranch: normalizedObservedBranch,
+      overlay,
+      requestedExpectedBranch: params.expectedBranch,
+      thread,
+    });
+    const expectedBranch = expectedBranchResolution.expectedBranch;
 
     const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
 
@@ -9016,8 +9108,29 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       branch: normalizedObservedBranch,
-      expectedBranch: drifted ? expectedBranch : undefined,
+      expectedBranch:
+        drifted || expectedBranchResolution.repairedDetachedHandoffBranch
+          ? expectedBranch
+          : undefined,
     });
+
+    if (expectedBranchResolution.repairedDetachedHandoffBranch && expectedBranch) {
+      await this.updateThreadGitBranchMetadata({
+        backend: params.backend,
+        threadId: params.threadId,
+        branch: expectedBranch,
+      });
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/branch/updated",
+          params: {
+            threadId: params.threadId,
+            branch: expectedBranch,
+          },
+        },
+      } as unknown as AgentEvent);
+    }
 
     if (drifted) {
       backendRegistryLog.debug("checked thread branch drift", {
