@@ -20167,6 +20167,101 @@ script = "printf setup"
     }
   });
 
+  it("notifies listeners when branch drift repair updates only the expected branch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-drift-repair-"));
+    const repoPath = path.join(root, "PwrAgnt");
+
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+
+      const thread: AppServerThreadSummary = {
+        id: "thread-1",
+        title: "Moved thread",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+        gitBranch: "HEAD",
+        observedGitBranch: "main",
+        updatedAt: 2,
+      };
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "full-access",
+            gitBranch: "HEAD",
+            observedGitBranch: "main",
+            extraLinkedDirectories: [
+              {
+                id: "pwragent-handoff:codex:thread-1",
+                kind: "local",
+                label: "PwrAgnt",
+                path: repoPath,
+              },
+            ],
+          },
+        },
+      });
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/metadata/update"] },
+        threads: [thread],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore,
+      });
+      const events: AgentEvent[] = [];
+      const unsubscribe = registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      try {
+        const response = await registry.checkThreadBranchDrift({
+          backend: "codex",
+          expectedBranch: "HEAD",
+          threadId: "thread-1",
+        });
+
+        expect(response).toMatchObject({
+          expectedBranch: "main",
+          observedBranch: "main",
+          drifted: false,
+        });
+        await expect(
+          overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+        ).resolves.toMatchObject({
+          gitBranch: "main",
+          observedGitBranch: "main",
+        });
+        expect(events).toContainEqual({
+          backend: "codex",
+          notification: {
+            method: "thread/branch/updated",
+            params: {
+              threadId: "thread-1",
+              branch: "main",
+            },
+          },
+        });
+      } finally {
+        unsubscribe();
+        await registry.close();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("uses an observed handoff branch as expected when legacy overlay state has no gitBranch", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

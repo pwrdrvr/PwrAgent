@@ -9114,6 +9114,24 @@ export class DesktopBackendRegistry {
           : undefined,
     });
 
+    if (expectedBranchResolution.repairedDetachedHandoffBranch && expectedBranch) {
+      await this.updateThreadGitBranchMetadata({
+        backend: params.backend,
+        threadId: params.threadId,
+        branch: expectedBranch,
+      });
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/branch/updated",
+          params: {
+            threadId: params.threadId,
+            branch: expectedBranch,
+          },
+        },
+      } as unknown as AgentEvent);
+    }
+
     if (drifted) {
       backendRegistryLog.debug("checked thread branch drift", {
         backend: params.backend,
