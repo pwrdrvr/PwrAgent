@@ -29,6 +29,33 @@ export const DEFAULT_AUTOMATION_BACKLOG_POLICY: AutomationBacklogPolicy =
  */
 export const DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS = 60_000;
 
+/**
+ * Default cap on how many inbound-triggered runs an automation may START per
+ * hour. Enforced as a per-automation token bucket (an idle automation may burst
+ * up to the rate, then settles to the steady rate). This is a cost backstop
+ * against a misconfigured trigger on a busy channel kicking off a flood of
+ * ephemeral agent runs. `undefined` inherits this default; `null` is unlimited.
+ */
+export const DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR = 20;
+
+/** Operator-selectable inbound run-rate options surfaced in the editor. */
+export const AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS = [5, 20, 45, 60] as const;
+
+/**
+ * Resolve the effective inbound run-rate for an automation: the number of run
+ * starts allowed per hour, or `null` for unlimited. `undefined` (field absent /
+ * legacy row) falls back to the default; non-positive or non-finite values are
+ * treated as unlimited.
+ */
+export function resolveAutomationRunsPerHour(
+  maxRunsPerHour: number | null | undefined,
+): number | null {
+  if (maxRunsPerHour === null) return null;
+  if (maxRunsPerHour === undefined) return DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR;
+  if (!Number.isFinite(maxRunsPerHour) || maxRunsPerHour <= 0) return null;
+  return Math.floor(maxRunsPerHour);
+}
+
 export const AUTOMATION_STATUSES = ["enabled", "paused", "deleted"] as const;
 
 export type AutomationStatus = (typeof AUTOMATION_STATUSES)[number];
@@ -373,6 +400,11 @@ export type AutomationDetail = AutomationListItemSummary & {
    * per matching message). Undefined inherits the default.
    */
   inboundCoalesceWindowMs?: number;
+  /**
+   * Cap on inbound-triggered run starts per hour. Undefined inherits the
+   * default; null is unlimited. See {@link resolveAutomationRunsPerHour}.
+   */
+  maxRunsPerHour?: number | null;
   createdAt: number;
   deletedAt?: number;
 };
@@ -475,6 +507,7 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   enabled?: boolean;
   nextRunAt?: number;
 };
@@ -492,6 +525,7 @@ export type UpdateAutomationRequest = {
   executionProfile?: AutomationExecutionProfile | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   enabled?: boolean;
   nextRunAt?: number | null;
 };

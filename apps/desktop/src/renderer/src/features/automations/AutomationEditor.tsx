@@ -21,7 +21,9 @@ import type {
   UpdateAutomationRequest,
 } from "@pwragent/shared";
 import {
+  AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS,
   AUTOMATION_WEEKDAYS,
+  DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
   parseThreadIdentityKey,
@@ -248,6 +250,20 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ? String(Math.round(initialAutomation.inboundCoalesceWindowMs / 1000))
       : "60",
   );
+  const [maxRunsPerHour, setMaxRunsPerHour] = useState(
+    initialAutomation?.maxRunsPerHour === null
+      ? "unlimited"
+      : initialAutomation?.maxRunsPerHour !== undefined
+        ? String(initialAutomation.maxRunsPerHour)
+        : String(DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR),
+  );
+  const runRateOptions = useMemo(() => {
+    const options = AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS.map(String);
+    if (maxRunsPerHour !== "unlimited" && !options.includes(maxRunsPerHour)) {
+      options.unshift(maxRunsPerHour);
+    }
+    return options;
+  }, [maxRunsPerHour]);
   const initialTarget = initialAutomation?.outputActions.find(
     (action) => action.kind === "messaging_target",
   );
@@ -792,6 +808,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 inboundCoalesceWindowMs: parseCoalesceWindowMs(
                   coalesceWindowSeconds,
                 ),
+                maxRunsPerHour: parseMaxRunsPerHour(maxRunsPerHour),
               }
             : {}),
           name: trimmedName,
@@ -826,6 +843,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
               inboundCoalesceWindowMs: parseCoalesceWindowMs(
                 coalesceWindowSeconds,
               ),
+              maxRunsPerHour: parseMaxRunsPerHour(maxRunsPerHour),
             }
           : {}),
         name: trimmedName,
@@ -1731,6 +1749,31 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </p>
           </div>
 
+          <div className="automation-field-group">
+            <label className="automation-field">
+              <span>Max runs per hour</span>
+              <select
+                value={maxRunsPerHour}
+                onChange={(event) => {
+                  setMaxRunsPerHour(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              >
+                {runRateOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}/hr
+                  </option>
+                ))}
+                <option value="unlimited">Unlimited</option>
+              </select>
+            </label>
+            <p className="automation-field__hint">
+              Hard cap on how many runs this automation can start each hour, even
+              if coalescing is off. A safety backstop against runaway agent runs
+              (and token spend) from a busy channel or a message loop.
+            </p>
+          </div>
+
           {canPreview ? (
             <div className="automation-preview">
               <button
@@ -2239,6 +2282,12 @@ function parseCoalesceWindowMs(value: string): number | undefined {
   const seconds = Number(value.trim());
   if (!Number.isFinite(seconds) || seconds < 0) return undefined;
   return Math.floor(seconds) * 1000;
+}
+
+function parseMaxRunsPerHour(value: string): number | null {
+  if (value === "unlimited") return null;
+  const rate = Number(value.trim());
+  return Number.isFinite(rate) && rate > 0 ? Math.floor(rate) : null;
 }
 
 function parseAllowlist(value: string): string[] {

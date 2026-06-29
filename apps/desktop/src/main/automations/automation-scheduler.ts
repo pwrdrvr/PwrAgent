@@ -5,7 +5,10 @@ import type {
   AutomationRunStatus,
   AutomationRunWindow,
 } from "@pwragent/shared";
-import { DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS } from "@pwragent/shared";
+import {
+  DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
+  resolveAutomationRunsPerHour,
+} from "@pwragent/shared";
 import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
@@ -32,15 +35,25 @@ type InboundCoalesceWindow = {
   totalChars: number;
 };
 
+/**
+ * Per-automation token bucket gating inbound run STARTS. `tokens` refills
+ * continuously toward the configured hourly rate; capacity equals the rate, so
+ * an idle automation can burst up to one hour's allowance and then settles to
+ * the steady rate.
+ */
+type RunStartTokenBucket = { tokens: number; lastRefillAt: number };
+
 const MAX_COALESCED_EVENTS = 100;
 const COALESCE_TOTAL_CHAR_BUDGET = 16_000;
 const COALESCE_SUMMARY_CHARS = 500;
+const HOUR_MS = 60 * 60 * 1000;
 
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
+  private readonly runStartTokenBuckets = new Map<string, RunStartTokenBucket>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -137,6 +150,19 @@ export class AutomationScheduler {
       this.openCoalesceWindow(params.automation, windowMs);
     }
 
+    // Rate-gate the run start (leading edge, or — when coalescing is disabled —
+    // the direct dispatch). If throttled and a window is open, fold the source
+    // into it so it is preserved and flushes (also rate-gated) later; with no
+    // window the over-rate message is dropped.
+    if (!this.tryConsumeRunStartToken(params.automation, now)) {
+      const open = this.coalesceWindows.get(params.automation.id);
+      if (open) {
+        appendCoalesceSource(open, params.source);
+      }
+      this.noteThrottledInboundRun(params.automation);
+      return undefined;
+    }
+
     return await this.dispatchInboundRun({
       automation: params.automation,
       source: params.source,
@@ -221,6 +247,12 @@ export class AutomationScheduler {
     if (!open || open.sources.length === 0) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation || automation.status !== "enabled") return;
+    if (!this.tryConsumeRunStartToken(automation, this.now())) {
+      // Over rate: drop the coalesced batch. The messages were already merged,
+      // so this drops a single run rather than one per message.
+      this.noteThrottledInboundRun(automation);
+      return;
+    }
     const [primary, ...rest] = open.sources;
     if (!primary) return;
     const source: AutomationRunSourceMetadata =
@@ -228,6 +260,50 @@ export class AutomationScheduler {
         ? { ...primary, batchedEvents: rest.map(toBatchedEntry) }
         : primary;
     await this.dispatchInboundRun({ automation, source, now: this.now() });
+  }
+
+  /**
+   * Consume one token from the automation's inbound run-start bucket. Returns
+   * false (and starts no run) when the bucket is empty. Unlimited automations
+   * always succeed. The bucket is in-memory: a process restart resets it to
+   * full, which is acceptable for a cost backstop (not a security boundary).
+   */
+  private tryConsumeRunStartToken(
+    automation: AutomationRecord,
+    now: number,
+  ): boolean {
+    const ratePerHour = resolveAutomationRunsPerHour(automation.maxRunsPerHour);
+    if (ratePerHour === null) {
+      return true;
+    }
+    const capacity = ratePerHour;
+    const existing = this.runStartTokenBuckets.get(automation.id);
+    const bucket: RunStartTokenBucket = existing ?? {
+      tokens: capacity,
+      lastRefillAt: now,
+    };
+    if (existing) {
+      const elapsed = Math.max(0, now - existing.lastRefillAt);
+      bucket.tokens = Math.min(
+        capacity,
+        existing.tokens + (elapsed / HOUR_MS) * ratePerHour,
+      );
+      bucket.lastRefillAt = now;
+    }
+    this.runStartTokenBuckets.set(automation.id, bucket);
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  private noteThrottledInboundRun(automation: AutomationRecord): void {
+    automationSchedulerLog.info("inbound automation run throttled by rate limit", {
+      automationId: automation.id,
+      automationName: automation.name,
+      maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
+    });
   }
 
   async handleTurnQueueUpdate(params: {

@@ -28,6 +28,7 @@ import {
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
+  resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
 import type { StateDb } from "../state/state-db.js";
@@ -68,6 +69,7 @@ export type AutomationRecord = {
   executionProfile?: AutomationExecutionProfile;
   outputActions: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
@@ -89,6 +91,7 @@ export type CreateAutomationInput = {
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number;
   now?: number;
@@ -106,6 +109,7 @@ export type UpdateAutomationInput = {
   executionProfile?: AutomationExecutionProfile | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number | null;
   now?: number;
@@ -193,6 +197,7 @@ type AutomationPayload = {
   executionProfile?: AutomationExecutionProfile;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   lastRunStatus?: AutomationRunStatus;
 };
 
@@ -273,6 +278,7 @@ export class AutomationStore {
       backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
       executionProfile: input.executionProfile,
       outputActions: normalizeAutomationOutputActions(input.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(input.maxRunsPerHour),
       inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
         input.inboundCoalesceWindowMs,
       ),
@@ -317,6 +323,10 @@ export class AutomationStore {
           ? undefined
           : input.executionProfile ?? current.executionProfile,
       outputActions: input.outputActions ?? current.outputActions,
+      maxRunsPerHour:
+        input.maxRunsPerHour === undefined
+          ? current.maxRunsPerHour
+          : resolveAutomationRunsPerHour(input.maxRunsPerHour),
       inboundCoalesceWindowMs:
         input.inboundCoalesceWindowMs === undefined
           ? current.inboundCoalesceWindowMs
@@ -910,6 +920,7 @@ export class AutomationStore {
       executionProfile: record.executionProfile,
       outputActions: record.outputActions,
       inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
+      maxRunsPerHour: record.maxRunsPerHour,
       lastRunStatus: record.lastRunStatus,
     };
     this.stateDb.raw
@@ -1106,6 +1117,7 @@ export class AutomationStore {
       backlogPolicy: row.backlog_policy,
       executionProfile: payload.executionProfile,
       outputActions: normalizeAutomationOutputActions(payload.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(payload.maxRunsPerHour),
       inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
         payload.inboundCoalesceWindowMs,
       ),

@@ -278,6 +278,7 @@ export class DesktopAutomationService {
       executionProfile: request.executionProfile,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
+      maxRunsPerHour: request.maxRunsPerHour,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
@@ -341,6 +342,7 @@ export class DesktopAutomationService {
       executionProfile: request.executionProfile,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
+      maxRunsPerHour: request.maxRunsPerHour,
       status:
         request.enabled === undefined
           ? undefined
@@ -934,6 +936,7 @@ function toAutomationDetail(
     executionProfile: record.executionProfile,
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
+    maxRunsPerHour: record.maxRunsPerHour,
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,

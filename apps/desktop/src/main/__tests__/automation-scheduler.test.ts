@@ -621,6 +621,86 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
+  it("caps inbound run starts at the per-hour token bucket", async () => {
+    const automation = store.createAutomation({
+      id: "automation-rl",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 5,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    // 10 distinct messages at the same instant; capacity == rate == 5.
+    now = 1_000;
+    for (let i = 0; i < 10; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+    }
+    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(5);
+
+    // Bucket refills 1 token after 1/5 hour (12 min); one more run starts.
+    now = 1_000 + 12 * 60 * 1000;
+    await scheduler.runFromInboundEvent({ automation, source: src("k-refill"), now });
+    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(6);
+  });
+
+  it("does not rate-limit inbound runs when the limit is unlimited", async () => {
+    const automation = store.createAutomation({
+      id: "automation-unlimited",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Unlimited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: null,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    for (let i = 0; i < 30; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+    }
+    expect(store.listRunsForAutomation("automation-unlimited")).toHaveLength(30);
+  });
+
   it("includes successful gate output in the automation run prompt", async () => {
     createIntervalAutomation({
       backend: "codex",

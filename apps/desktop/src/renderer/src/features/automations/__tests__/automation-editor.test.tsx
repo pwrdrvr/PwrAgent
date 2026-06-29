@@ -138,6 +138,9 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Reasoning"), {
       target: { value: "high" },
     });
+    fireEvent.change(screen.getByLabelText("Max runs per hour"), {
+      target: { value: "5" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -145,6 +148,7 @@ describe("AutomationEditor", () => {
       kind: "create",
       request: expect.objectContaining({
         backend: "codex",
+        maxRunsPerHour: 5,
         executionProfile: {
           executionMode: "full-access",
           model: "gpt-5",
