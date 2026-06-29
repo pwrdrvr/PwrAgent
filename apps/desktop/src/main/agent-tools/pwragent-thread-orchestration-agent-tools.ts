@@ -4,6 +4,7 @@ import type {
   HandoffTaskSeedMode,
   HandoffTaskToolArgs,
   HandoffTaskWorkspaceMode,
+  MoveThreadWorkspaceToolArgs,
   PwrAgentThreadOrchestrationOperationName,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
@@ -29,6 +30,17 @@ import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE =
   "PwrAgent thread handoff tools are not available.";
+
+const MOVE_THREAD_WORKSPACE_DIRECTIONS = [
+  "local-to-worktree",
+  "worktree-to-local",
+] as const;
+
+const MOVE_THREAD_WORKSPACE_STRATEGIES = [
+  "move-branch",
+  "detached-changes",
+  "new-branch",
+] as const;
 
 export type PwrAgentThreadOrchestrationHandler = (
   request: PwrAgentThreadOrchestrationRequest,
@@ -96,6 +108,8 @@ function descriptionForOperation(
   switch (operation) {
     case "handoff_task":
       return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Handoff startup can take several minutes while a worktree or Codex environment is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed.";
+    case "move_thread_workspace":
+      return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
       return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead.";
   }
@@ -165,6 +179,51 @@ function inputSchemaForOperation(
           },
         },
       };
+    case "move_thread_workspace":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          backend: {
+            type: "string",
+            description:
+              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports Codex self-move only.",
+          },
+          direction: {
+            type: "string",
+            enum: MOVE_THREAD_WORKSPACE_DIRECTIONS,
+            description:
+              "`local-to-worktree` is the default and first supported direction. `worktree-to-local` is reserved for compatible backends and may be rejected until implemented.",
+          },
+          strategy: {
+            type: "string",
+            enum: MOVE_THREAD_WORKSPACE_STRATEGIES,
+            description:
+              "Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary.",
+          },
+          repositoryPath: {
+            type: "string",
+            description:
+              "Repository/local checkout path that owns the worktree relationship.",
+          },
+          sourcePath: {
+            type: "string",
+            description:
+              "Current workspace path to move. Provide this when the thread has multiple linked directories or the intended source path is not obvious.",
+          },
+          sourceBranch: { type: "string" },
+          leaveLocalBranch: {
+            type: "string",
+            description:
+              "Branch/ref to leave checked out in the local checkout when moving the current branch to a worktree.",
+          },
+          newBranchName: {
+            type: "string",
+            description:
+              "Optional new branch name for the workspace handoff when strategy=new-branch.",
+          },
+        },
+      };
     case "send_message_to_thread":
       return {
         type: "object",
@@ -199,10 +258,16 @@ function inputSchemaForOperation(
 function normalizeArgsForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
   args: Record<string, unknown>,
-): HandoffTaskToolArgs | SendMessageToThreadToolArgs | undefined {
+):
+  | HandoffTaskToolArgs
+  | MoveThreadWorkspaceToolArgs
+  | SendMessageToThreadToolArgs
+  | undefined {
   switch (operation) {
     case "handoff_task":
       return normalizeHandoffTaskArgs(args);
+    case "move_thread_workspace":
+      return normalizeMoveThreadWorkspaceArgs(args);
     case "send_message_to_thread":
       return normalizeSendMessageToThreadArgs(args);
   }
@@ -214,6 +279,8 @@ function invalidArgumentsMessageForOperation(
   switch (operation) {
     case "handoff_task":
       return "handoff_task requires a non-empty task string.";
+    case "move_thread_workspace":
+      return "move_thread_workspace accepts only known direction/strategy values and non-empty string fields.";
     case "send_message_to_thread":
       return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
   }
@@ -336,6 +403,66 @@ function normalizeSendMessageToThreadArgs(
       : {}),
     ...(readTrimmedString(args.sandbox)
       ? { sandbox: readTrimmedString(args.sandbox) }
+      : {}),
+  };
+}
+
+function normalizeMoveThreadWorkspaceArgs(
+  args: Record<string, unknown>,
+): MoveThreadWorkspaceToolArgs | undefined {
+  const direction =
+    args.direction === undefined
+      ? "local-to-worktree"
+      : readChoice(args.direction, MOVE_THREAD_WORKSPACE_DIRECTIONS);
+  if (!direction) {
+    return undefined;
+  }
+  const strategy =
+    args.strategy === undefined
+      ? undefined
+      : readChoice(args.strategy, MOVE_THREAD_WORKSPACE_STRATEGIES);
+  if (args.strategy !== undefined && !strategy) {
+    return undefined;
+  }
+
+  const optionalStringFields = [
+    "backend",
+    "repositoryPath",
+    "sourcePath",
+    "sourceBranch",
+    "leaveLocalBranch",
+    "newBranchName",
+  ] as const;
+  for (const field of optionalStringFields) {
+    if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
+      return undefined;
+    }
+  }
+
+  return {
+    direction,
+    ...(strategy ? { strategy } : {}),
+    ...(readTrimmedString(args.backend)
+      ? {
+          backend: readTrimmedString(
+            args.backend,
+          ) as MoveThreadWorkspaceToolArgs["backend"],
+        }
+      : {}),
+    ...(readTrimmedString(args.repositoryPath)
+      ? { repositoryPath: readTrimmedString(args.repositoryPath) }
+      : {}),
+    ...(readTrimmedString(args.sourcePath)
+      ? { sourcePath: readTrimmedString(args.sourcePath) }
+      : {}),
+    ...(readTrimmedString(args.sourceBranch)
+      ? { sourceBranch: readTrimmedString(args.sourceBranch) }
+      : {}),
+    ...(readTrimmedString(args.leaveLocalBranch)
+      ? { leaveLocalBranch: readTrimmedString(args.leaveLocalBranch) }
+      : {}),
+    ...(readTrimmedString(args.newBranchName)
+      ? { newBranchName: readTrimmedString(args.newBranchName) }
       : {}),
   };
 }

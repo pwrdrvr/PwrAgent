@@ -113,9 +113,12 @@ import {
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
+  type MoveThreadWorkspacePhase,
+  type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
+  type PendingThreadWorkspaceMoveSummary,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -4301,6 +4304,46 @@ function buildHandoffTaskPrompt(params: {
   return lines.join("\n");
 }
 
+function buildWorkspaceMoveSuccessPrompt(params: {
+  move: PendingThreadWorkspaceMoveSummary;
+  result: HandoffThreadWorkspaceResponse;
+}): string {
+  return [
+    "PwrAgent workspace move completed for this thread.",
+    "",
+    "Workspace result:",
+    `- Source path: ${params.move.sourcePath ?? "unknown"}`,
+    `- Repository path: ${params.result.repositoryPath}`,
+    `- New runtime cwd: ${
+      params.result.linkedDirectory.worktreePath ?? params.result.targetPath
+    }`,
+    `- Target path: ${params.result.targetPath}`,
+    ...(params.result.branch ? [`- Branch: ${params.result.branch}`] : []),
+    ...(params.result.warnings.length
+      ? ["", "Warnings:", ...params.result.warnings.map((warning) => `- ${warning}`)]
+      : []),
+    "",
+    "Continue the user's task from the new runtime workspace. Do not repeat the workspace move.",
+  ].join("\n");
+}
+
+function buildWorkspaceMoveFailurePrompt(params: {
+  error: unknown;
+  move: PendingThreadWorkspaceMoveSummary;
+}): string {
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  return [
+    "PwrAgent workspace move failed for this thread.",
+    "",
+    "Workspace result:",
+    `- Source path: ${params.move.sourcePath ?? "unknown"}`,
+    `- Repository path: ${params.move.repositoryPath ?? "unknown"}`,
+    `- Error: ${message}`,
+    "",
+    "The original runtime workspace remains authoritative. Continue only after deciding whether to retry the move, choose another source path, or proceed in the original workspace.",
+  ].join("\n");
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -4342,6 +4385,10 @@ export class DesktopBackendRegistry {
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
+  private readonly pendingThreadWorkspaceMoves = new Map<
+    string,
+    PendingThreadWorkspaceMoveSummary
+  >();
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -14151,6 +14198,9 @@ export class DesktopBackendRegistry {
     if (request.operation === "handoff_task") {
       return await this.handoffTaskToThread(request);
     }
+    if (request.operation === "move_thread_workspace") {
+      return await this.moveThreadWorkspace(request);
+    }
     if (request.operation === "send_message_to_thread") {
       return await this.sendMessageToThread(request);
     }
@@ -14238,6 +14288,475 @@ export class DesktopBackendRegistry {
         this.pendingThreadHandoffs.delete(handoffId);
       }
     }
+  }
+
+  private startPendingThreadWorkspaceMove(
+    move: PendingThreadWorkspaceMoveSummary,
+  ): PendingThreadWorkspaceMoveSummary {
+    this.prunePendingThreadWorkspaceMoves(move.createdAt);
+    this.pendingThreadWorkspaceMoves.set(move.workspaceMoveId, move);
+    return move;
+  }
+
+  private updatePendingThreadWorkspaceMove(
+    workspaceMoveId: string | undefined,
+    patch: Partial<
+      Omit<PendingThreadWorkspaceMoveSummary, "workspaceMoveId" | "createdAt">
+    > & {
+      phase?: MoveThreadWorkspacePhase;
+    },
+  ): void {
+    if (!workspaceMoveId) {
+      return;
+    }
+    const current = this.pendingThreadWorkspaceMoves.get(workspaceMoveId);
+    if (!current) {
+      return;
+    }
+    const updatedAt = patch.updatedAt ?? Date.now();
+    this.pendingThreadWorkspaceMoves.set(workspaceMoveId, {
+      ...current,
+      ...patch,
+      updatedAt,
+    });
+  }
+
+  private failPendingThreadWorkspaceMove(
+    workspaceMoveId: string | undefined,
+    error: unknown,
+    patch: Partial<PendingThreadWorkspaceMoveSummary> = {},
+  ): void {
+    this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
+      ...patch,
+      status: "failed",
+      phase: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      message:
+        "Workspace move failed. The original runtime workspace remains authoritative.",
+    });
+  }
+
+  private getPendingThreadWorkspaceMovesForInspection(params: {
+    backend?: AppServerBackendKind | "all";
+    query?: string;
+    sourceThreadId?: string;
+    limit?: number;
+  } = {}): PendingThreadWorkspaceMoveSummary[] {
+    this.prunePendingThreadWorkspaceMoves();
+    const clauses = parseThreadInspectionQuery(params.query);
+    const backend = params.backend;
+    return [...this.pendingThreadWorkspaceMoves.values()]
+      .filter((move) => {
+        if (
+          backend &&
+          backend !== "all" &&
+          move.backend !== backend &&
+          move.sourceBackend !== backend
+        ) {
+          return false;
+        }
+        if (params.sourceThreadId && move.sourceThreadId !== params.sourceThreadId) {
+          return false;
+        }
+        return pendingThreadWorkspaceMoveMatchesQuery(move, clauses);
+      })
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, params.limit ?? 10);
+  }
+
+  private prunePendingThreadWorkspaceMoves(now = Date.now()): void {
+    const maxAgeMs = 60 * 60 * 1000;
+    for (const [workspaceMoveId, move] of this.pendingThreadWorkspaceMoves) {
+      if (now - move.updatedAt > maxAgeMs) {
+        this.pendingThreadWorkspaceMoves.delete(workspaceMoveId);
+      }
+    }
+  }
+
+  private pendingThreadWorkspaceMoveToResult(
+    move: PendingThreadWorkspaceMoveSummary,
+  ): MoveThreadWorkspaceResult {
+    return {
+      backend: move.backend,
+      threadId: move.threadId,
+      workspaceMoveId: move.workspaceMoveId,
+      status: move.status,
+      phase: move.phase,
+      direction: move.direction,
+      ...(move.strategy ? { strategy: move.strategy } : {}),
+      ...(move.repositoryPath ? { repositoryPath: move.repositoryPath } : {}),
+      ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
+      ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
+      ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
+      ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      ...(move.targetPath ? { targetPath: move.targetPath } : {}),
+      ...(move.branch ? { branch: move.branch } : {}),
+      ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
+      ...(move.warnings ? { warnings: move.warnings } : {}),
+      ...(move.continuationTurnId
+        ? { continuationTurnId: move.continuationTurnId }
+        : {}),
+      createdAt: move.createdAt,
+      updatedAt: move.updatedAt,
+      message: move.message ?? "Workspace move is pending.",
+      ...(move.error ? { error: move.error } : {}),
+    };
+  }
+
+  private async moveThreadWorkspace(
+    request: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread workspace move tools must be invoked from a live turn.",
+      );
+    }
+    if (sourceBackend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread workspace move tools are currently available only from Codex threads.",
+      );
+    }
+
+    const backend = request.args.backend ?? sourceBackend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    if (backend !== sourceBackend || backend !== "codex") {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Thread workspace move currently supports only same-thread Codex workspace moves.",
+      );
+    }
+
+    const direction = request.args.direction ?? "local-to-worktree";
+    if (direction !== "local-to-worktree") {
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        'move_thread_workspace currently supports direction="local-to-worktree" only.',
+      );
+    }
+
+    const workspaceMoveId = [
+      "workspace-move",
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      request.context.callId?.trim() || randomUUID(),
+    ].join(":");
+    const existing = this.pendingThreadWorkspaceMoves.get(workspaceMoveId);
+    if (existing) {
+      return {
+        ok: true,
+        data: this.pendingThreadWorkspaceMoveToResult(existing),
+      };
+    }
+
+    const sourceThread = await this.findThreadForWorkspaceHandoff({
+      backend: sourceBackend,
+      callerReason: "agent-workspace-move",
+      threadId: sourceThreadId,
+    });
+    const sourceOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: sourceBackend,
+      threadId: sourceThreadId,
+    });
+
+    let candidate: {
+      repositoryPath?: string;
+      sourceBranch?: string;
+      sourcePath?: string;
+    };
+    try {
+      candidate = this.resolveThreadWorkspaceMoveCandidate({
+        ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
+        request,
+        ...(sourceThread ? { thread: sourceThread } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return threadOrchestrationFailure(
+        /ambiguous/i.test(message) ? "ambiguous_workspace" : "unsupported_workspace",
+        message,
+      );
+    }
+
+    const now = request.context.now ?? Date.now();
+    const move = this.startPendingThreadWorkspaceMove({
+      workspaceMoveId,
+      status: "queued",
+      phase: "waiting_for_turn_boundary",
+      sourceBackend,
+      sourceThreadId,
+      sourceTurnId,
+      backend,
+      threadId: sourceThreadId,
+      direction,
+      ...(request.args.strategy ? { strategy: request.args.strategy } : {}),
+      ...(candidate.repositoryPath ? { repositoryPath: candidate.repositoryPath } : {}),
+      ...(candidate.sourcePath ? { sourcePath: candidate.sourcePath } : {}),
+      ...(candidate.sourceBranch ? { sourceBranch: candidate.sourceBranch } : {}),
+      ...(request.args.leaveLocalBranch
+        ? { leaveLocalBranch: request.args.leaveLocalBranch }
+        : {}),
+      ...(request.args.newBranchName
+        ? { newBranchName: request.args.newBranchName }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+      message:
+        "Workspace move queued. Stop this turn and wait for the same-thread continuation before editing from the moved workspace.",
+    });
+    return {
+      ok: true,
+      data: this.pendingThreadWorkspaceMoveToResult(move),
+    };
+  }
+
+  private resolveThreadWorkspaceMoveCandidate(params: {
+    overlay?: ThreadOverlayState;
+    request: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">;
+    thread?: AppServerThreadSummary;
+  }): {
+    repositoryPath?: string;
+    sourceBranch?: string;
+    sourcePath?: string;
+  } {
+    const args = params.request.args;
+    if (args.repositoryPath && args.sourcePath) {
+      return {
+        repositoryPath: args.repositoryPath,
+        ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
+        sourcePath: args.sourcePath,
+      };
+    }
+
+    const linkedDirectories = [
+      ...(params.overlay?.extraLinkedDirectories ?? []),
+      ...(params.thread?.linkedDirectories ?? []),
+    ];
+    const sourcePath = args.sourcePath?.trim();
+    if (sourcePath) {
+      const resolvedSourcePath = path.resolve(sourcePath);
+      const directory = linkedDirectories.find((candidate) => {
+        const candidatePaths = [
+          candidate.path,
+          candidate.worktreePath,
+        ].filter((value): value is string => Boolean(value?.trim()));
+        return candidatePaths.some(
+          (candidatePath) => path.resolve(candidatePath) === resolvedSourcePath,
+        );
+      });
+      return {
+        repositoryPath: args.repositoryPath ?? directory?.path ?? sourcePath,
+        ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
+        sourcePath,
+      };
+    }
+
+    const localDirectories = linkedDirectories.filter(
+      (directory) => directory.kind === "local" && directory.path?.trim(),
+    );
+    const uniqueRepositoryPaths = [
+      ...new Map(
+        localDirectories.map((directory) => [
+          path.resolve(directory.path),
+          directory,
+        ]),
+      ).values(),
+    ];
+    if (uniqueRepositoryPaths.length > 1) {
+      throw new Error(
+        "Thread has multiple eligible workspaces for workspace move. Pass sourcePath to choose one.",
+      );
+    }
+    const inferredThread = params.thread
+      ? {
+          ...params.thread,
+          linkedDirectories:
+            linkedDirectories.length > 0
+              ? linkedDirectories
+              : params.thread.linkedDirectories,
+        }
+      : undefined;
+    const candidate = this.resolveHandoffWorkspaceCandidate(inferredThread, {
+      backend: params.request.context.backend,
+      threadId: params.request.context.threadId,
+      direction: args.direction ?? "local-to-worktree",
+      ...(args.repositoryPath ? { repositoryPath: args.repositoryPath } : {}),
+      ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
+      ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
+    });
+    if (!candidate.sourcePath) {
+      throw new Error("Thread does not have an eligible Git workspace for handoff.");
+    }
+    const sourceBranch = args.sourceBranch ?? candidate.sourceBranch;
+    const repositoryPath = args.repositoryPath ?? candidate.repositoryPath;
+    return {
+      ...(repositoryPath ? { repositoryPath } : {}),
+      ...(sourceBranch ? { sourceBranch } : {}),
+      sourcePath: candidate.sourcePath,
+    };
+  }
+
+  private drainPendingThreadWorkspaceMovesForTerminalTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+  }): void {
+    if (!params.turnId) {
+      return;
+    }
+    const moves = [...this.pendingThreadWorkspaceMoves.values()].filter(
+      (move) =>
+        move.status === "queued" &&
+        move.sourceBackend === params.backend &&
+        move.sourceThreadId === params.threadId &&
+        move.sourceTurnId === params.turnId,
+    );
+    for (const move of moves) {
+      void this.runPendingThreadWorkspaceMove(move.workspaceMoveId);
+    }
+  }
+
+  private async runPendingThreadWorkspaceMove(
+    workspaceMoveId: string,
+  ): Promise<void> {
+    const move = this.pendingThreadWorkspaceMoves.get(workspaceMoveId);
+    if (!move || move.status !== "queued") {
+      return;
+    }
+    this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
+      status: "running",
+      phase: "preparing_workspace",
+      message: "Workspace move is preparing the managed worktree.",
+    });
+
+    let handoffResult: HandoffThreadWorkspaceResponse;
+    try {
+      handoffResult = await this.handoffThreadWorkspace({
+        backend: move.backend,
+        threadId: move.threadId,
+        direction: move.direction,
+        ...(move.strategy ? { strategy: move.strategy } : {}),
+        ...(move.repositoryPath ? { repositoryPath: move.repositoryPath } : {}),
+        ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
+        ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
+        ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
+        ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
+      });
+      this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
+        phase: "updating_metadata",
+        repositoryPath: handoffResult.repositoryPath,
+        ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
+        targetPath: handoffResult.targetPath,
+        ...(handoffResult.branch ? { branch: handoffResult.branch } : {}),
+        linkedDirectory: handoffResult.linkedDirectory,
+        warnings: handoffResult.warnings,
+        message:
+          "Workspace move updated runtime workspace metadata and is waking the same thread.",
+      });
+    } catch (error) {
+      this.failPendingThreadWorkspaceMove(workspaceMoveId, error);
+      await this.startWorkspaceMoveContinuation({
+        error,
+        kind: "failure",
+        moveId: workspaceMoveId,
+      }).catch((continuationError) => {
+        backendRegistryLog.warn("workspace move failure continuation failed", {
+          error:
+            continuationError instanceof Error
+              ? continuationError.message
+              : String(continuationError),
+          workspaceMoveId,
+        });
+      });
+      return;
+    }
+
+    try {
+      await this.startWorkspaceMoveContinuation({
+        kind: "success",
+        moveId: workspaceMoveId,
+        result: handoffResult,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
+        status: "completed",
+        phase: "completed",
+        error: message,
+        message:
+          "Workspace move completed, but starting the same-thread continuation failed. Inspect the move result before retrying.",
+      });
+      backendRegistryLog.warn("workspace move success continuation failed", {
+        error: message,
+        workspaceMoveId,
+      });
+    }
+  }
+
+  private async startWorkspaceMoveContinuation(params:
+    | {
+        kind: "success";
+        moveId: string;
+        result: HandoffThreadWorkspaceResponse;
+      }
+    | {
+        kind: "failure";
+        moveId: string;
+        error: unknown;
+      },
+  ): Promise<void> {
+    const move = this.pendingThreadWorkspaceMoves.get(params.moveId);
+    if (!move) {
+      return;
+    }
+    this.updatePendingThreadWorkspaceMove(params.moveId, {
+      phase: "starting_continuation",
+      message:
+        params.kind === "success"
+          ? "Workspace move completed; starting the same-thread continuation."
+          : "Workspace move failed; starting the same-thread failure continuation.",
+    });
+
+    const prompt =
+      params.kind === "success"
+        ? buildWorkspaceMoveSuccessPrompt({
+            move,
+            result: params.result,
+          })
+        : buildWorkspaceMoveFailurePrompt({
+            error: params.error,
+            move,
+          });
+    const turn = await this.startTurn({
+      backend: move.backend,
+      threadId: move.threadId,
+      input: [{ type: "text", text: prompt }],
+    });
+    this.updatePendingThreadWorkspaceMove(params.moveId, {
+      status: params.kind === "success" ? "completed" : "failed",
+      phase: params.kind === "success" ? "completed" : "failed",
+      continuationTurnId: turn.turnId,
+      message:
+        params.kind === "success"
+          ? "Workspace move completed and same-thread continuation started."
+          : "Workspace move failed and same-thread continuation started from the original workspace.",
+    });
   }
 
   private async sendMessageToThread(
@@ -15845,6 +16364,13 @@ export class DesktopBackendRegistry {
         sourceThreadId: request.context.threadId,
         limit,
       });
+      const pendingWorkspaceMoves =
+        this.getPendingThreadWorkspaceMovesForInspection({
+          backend,
+          query: request.args.query,
+          sourceThreadId: request.context.threadId,
+          limit,
+        });
       const searchService = this.getThreadInspectionSearchService();
       if (searchService) {
         const projectKeys = nonEmptyStringArray(request.args.projectKeys);
@@ -15892,6 +16418,7 @@ export class DesktopBackendRegistry {
             limit,
             truncated: response.truncated === true || filtered.length > limit,
             ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+            ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
             query: response.query,
             searchedScopes: response.searchedScopes,
             unavailableScopes: response.unavailableScopes,
@@ -15930,6 +16457,7 @@ export class DesktopBackendRegistry {
           limit,
           truncated: filtered.length > limit,
           ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+          ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
         },
       };
     }
@@ -15993,6 +16521,11 @@ export class DesktopBackendRegistry {
         backend: request.args.backend,
         sourceThreadId: threadId,
       });
+      const pendingWorkspaceMoves =
+        this.getPendingThreadWorkspaceMovesForInspection({
+          backend: request.args.backend,
+          sourceThreadId: threadId,
+        });
       return {
         ok: true,
         data: {
@@ -16002,6 +16535,7 @@ export class DesktopBackendRegistry {
             queuedExecutionMode: queued?.mode,
             queuedExecutionModeAt: queued?.queuedAt,
             ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+            ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
           },
         },
       };
@@ -16982,6 +17516,11 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
       }
+      this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId,
+      });
     }
     if (
       event.notification.method === "turn/failed" &&
@@ -17542,6 +18081,43 @@ function pendingThreadHandoffMatchesQuery(
     handoff.workspace?.linkedDirectory?.worktreePath,
     handoff.message,
     handoff.error,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+  return clauses.some((tokens) => tokens.every((token) => haystack.includes(token)));
+}
+
+function pendingThreadWorkspaceMoveMatchesQuery(
+  move: PendingThreadWorkspaceMoveSummary,
+  clauses: string[][],
+): boolean {
+  if (clauses.length === 0) {
+    return true;
+  }
+  const haystack = [
+    move.workspaceMoveId,
+    move.sourceBackend,
+    move.sourceThreadId,
+    move.sourceTurnId,
+    move.backend,
+    move.threadId,
+    move.status,
+    move.phase,
+    move.direction,
+    move.strategy,
+    move.repositoryPath,
+    move.sourcePath,
+    move.sourceBranch,
+    move.leaveLocalBranch,
+    move.newBranchName,
+    move.targetPath,
+    move.branch,
+    move.linkedDirectory?.label,
+    move.linkedDirectory?.path,
+    move.linkedDirectory?.worktreePath,
+    move.message,
+    move.error,
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ")

@@ -8,6 +8,8 @@ import type {
   AppServerThreadStatus,
   ThreadExecutionMode,
   ThreadIdentifier,
+  ThreadWorkspaceHandoffDirection,
+  ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
@@ -18,6 +20,8 @@ import type {
   HandoffTaskGroupingMode,
   HandoffTaskSeedMode,
   HandoffTaskWorkspaceMode,
+  MoveThreadWorkspacePhase,
+  MoveThreadWorkspaceStatus,
   ThreadHandoffOrigin,
   ThreadHandoffOriginWorkspace,
 } from "./thread-orchestration-tools";
@@ -188,6 +192,7 @@ export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
   queuedExecutionMode?: ThreadExecutionMode;
   queuedExecutionModeAt?: number;
   pendingHandoffs?: PendingThreadHandoffSummary[];
+  pendingWorkspaceMoves?: PendingThreadWorkspaceMoveSummary[];
 };
 
 export type PendingThreadHandoffStatus = "starting" | "completed" | "failed";
@@ -218,6 +223,33 @@ export type PendingThreadHandoffSummary = {
   workspaceMode: HandoffTaskWorkspaceMode;
   branchName?: string;
   workspace?: ThreadHandoffOriginWorkspace;
+  createdAt: number;
+  updatedAt: number;
+  message?: string;
+  error?: string;
+};
+
+export type PendingThreadWorkspaceMoveSummary = {
+  workspaceMoveId: string;
+  status: MoveThreadWorkspaceStatus;
+  phase: MoveThreadWorkspacePhase;
+  sourceBackend: AppServerBackendKind;
+  sourceThreadId: ThreadIdentifier;
+  sourceTurnId?: ThreadIdentifier;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  direction: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
+  repositoryPath?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
+  leaveLocalBranch?: string;
+  newBranchName?: string;
+  targetPath?: string;
+  branch?: string;
+  linkedDirectory?: LinkedDirectorySummary;
+  warnings?: string[];
+  continuationTurnId?: string;
   createdAt: number;
   updatedAt: number;
   message?: string;
@@ -338,6 +370,7 @@ export type PwrAgentThreadInspectionResponse =
             limit: number;
             truncated: boolean;
             pendingHandoffs?: PendingThreadHandoffSummary[];
+            pendingWorkspaceMoves?: PendingThreadWorkspaceMoveSummary[];
             query?: string;
             searchedScopes?: ThreadSearchScopeName[];
             unavailableScopes?: ThreadSearchUnavailableScope[];
