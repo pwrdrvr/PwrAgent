@@ -4766,7 +4766,10 @@ export class DesktopBackendRegistry {
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
-        backend === "codex" ? this.threadHasActiveTurn(threadId) : false,
+        backend === "codex"
+          ? this.threadHasActiveTurn(threadId) ||
+            this.threadHasBlockingWorkspaceMove({ backend, threadId })
+          : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
     this.taskMonitorWatchdogTimer = setInterval(() => {
@@ -14465,22 +14468,17 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const needsWorkspaceInference = !(
-      request.args.repositoryPath?.trim() && request.args.sourcePath?.trim()
-    );
-    const [sourceThread, sourceOverlay] = needsWorkspaceInference
-      ? await Promise.all([
-          this.findThreadForWorkspaceHandoff({
-            backend: sourceBackend,
-            callerReason: "agent-workspace-move",
-            threadId: sourceThreadId,
-          }),
-          this.overlayStore.getThreadOverlayState({
-            backend: sourceBackend,
-            threadId: sourceThreadId,
-          }),
-        ])
-      : [undefined, undefined];
+    const [sourceThread, sourceOverlay] = await Promise.all([
+      this.findThreadForWorkspaceHandoff({
+        backend: sourceBackend,
+        callerReason: "agent-workspace-move",
+        threadId: sourceThreadId,
+      }),
+      this.overlayStore.getThreadOverlayState({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+      }),
+    ]);
 
     let candidate: {
       repositoryPath?: string;
@@ -14571,14 +14569,6 @@ export class DesktopBackendRegistry {
     sourcePath?: string;
   } {
     const args = params.request.args;
-    if (args.repositoryPath && args.sourcePath) {
-      return {
-        repositoryPath: args.repositoryPath,
-        ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
-        sourcePath: args.sourcePath,
-      };
-    }
-
     const linkedDirectories = [
       ...(params.overlay?.extraLinkedDirectories ?? []),
       ...(params.thread?.linkedDirectories ?? []),
@@ -14595,8 +14585,23 @@ export class DesktopBackendRegistry {
           (candidatePath) => path.resolve(candidatePath) === resolvedSourcePath,
         );
       });
+      if (!directory) {
+        throw new Error(
+          "Workspace move sourcePath must match a linked directory for this thread.",
+        );
+      }
+      const repositoryPath = args.repositoryPath?.trim() ?? directory.path ?? sourcePath;
+      if (
+        args.repositoryPath?.trim() &&
+        directory.path?.trim() &&
+        path.resolve(args.repositoryPath) !== path.resolve(directory.path)
+      ) {
+        throw new Error(
+          "Workspace move repositoryPath must match the linked directory repository path for this thread.",
+        );
+      }
       return {
-        repositoryPath: args.repositoryPath ?? directory?.path ?? sourcePath,
+        repositoryPath,
         ...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
         sourcePath,
       };
@@ -14681,6 +14686,18 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private threadHasBlockingWorkspaceMove(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): boolean {
+    return [...this.pendingThreadWorkspaceMoves.values()].some(
+      (move) =>
+        move.backend === params.backend &&
+        move.threadId === params.threadId &&
+        (move.status === "queued" || move.status === "running"),
+    );
+  }
+
   private async runPendingThreadWorkspaceMove(
     workspaceMoveId: string,
   ): Promise<void> {
@@ -14719,6 +14736,7 @@ export class DesktopBackendRegistry {
           "Workspace move updated runtime workspace metadata and is waking the same thread.",
       });
     } catch (error) {
+      const handoffError = error instanceof Error ? error.message : String(error);
       this.failPendingThreadWorkspaceMove(workspaceMoveId, error);
       await this.startWorkspaceMoveContinuation({
         error,
@@ -14732,7 +14750,7 @@ export class DesktopBackendRegistry {
         this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
           status: "failed",
           phase: "failed",
-          error: message,
+          error: `Workspace handoff failed: ${handoffError}; failure continuation failed: ${message}`,
           message:
             "Workspace move failed, and starting the same-thread failure continuation also failed. The original runtime workspace remains authoritative.",
         });
@@ -17545,11 +17563,10 @@ export class DesktopBackendRegistry {
           });
         }
       }
-      void this.threadTurnQueue.releaseThread({
+      this.drainPendingThreadWorkspaceMovesForTerminalTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
         turnId,
-        status: event.notification.method,
       });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
@@ -17573,10 +17590,11 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
       }
-      this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+      void this.threadTurnQueue.releaseThread({
         backend: event.backend,
         threadId: notification.params.threadId,
         turnId,
+        status: event.notification.method,
       });
     }
     if (
