@@ -3783,7 +3783,7 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--modal-scrim);
+  background: var(--scrim-strong);
 }
 
 .pr-detach-warning-dialog {
