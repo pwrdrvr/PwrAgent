@@ -113,6 +113,7 @@ import {
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
+  DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   type MoveThreadWorkspacePhase,
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
@@ -152,6 +153,7 @@ import {
   type ThreadIdentifier,
   type ThreadOverlayState,
   type ThreadPricingSummary,
+  type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadUsageLineRecord,
   type WorktreeSnapshotSummary,
@@ -7538,6 +7540,11 @@ export class DesktopBackendRegistry {
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
       threadKeys.add(formatQuitThreadKey(entry.backend, entry.threadId));
     }
+    for (const move of this.pendingThreadWorkspaceMoves.values()) {
+      if (move.status === "queued" || move.status === "running") {
+        threadKeys.add(formatQuitThreadKey(move.backend, move.threadId));
+      }
+    }
     const threadIds = [...threadKeys].sort();
     return {
       count: threadIds.length,
@@ -14452,6 +14459,7 @@ export class DesktopBackendRegistry {
         'move_thread_workspace currently supports direction="local-to-worktree" only.',
       );
     }
+    const strategy = this.resolveMoveThreadWorkspaceStrategy(request.args);
 
     const workspaceMoveId = [
       "workspace-move",
@@ -14511,6 +14519,11 @@ export class DesktopBackendRegistry {
     if (duplicateMove) {
       const sameSource =
         duplicateMove.direction === direction &&
+        duplicateMove.strategy === strategy &&
+        (duplicateMove.leaveLocalBranch ?? "") ===
+          (request.args.leaveLocalBranch ?? "") &&
+        (duplicateMove.newBranchName ?? "") ===
+          (request.args.newBranchName ?? "") &&
         path.resolve(duplicateMove.sourcePath ?? "") ===
           path.resolve(candidate.sourcePath ?? "") &&
         path.resolve(duplicateMove.repositoryPath ?? "") ===
@@ -14538,7 +14551,7 @@ export class DesktopBackendRegistry {
       backend,
       threadId: sourceThreadId,
       direction,
-      ...(request.args.strategy ? { strategy: request.args.strategy } : {}),
+      strategy,
       ...(candidate.repositoryPath ? { repositoryPath: candidate.repositoryPath } : {}),
       ...(candidate.sourcePath ? { sourcePath: candidate.sourcePath } : {}),
       ...(candidate.sourceBranch ? { sourceBranch: candidate.sourceBranch } : {}),
@@ -14557,6 +14570,21 @@ export class DesktopBackendRegistry {
       ok: true,
       data: this.pendingThreadWorkspaceMoveToResult(move),
     };
+  }
+
+  private resolveMoveThreadWorkspaceStrategy(
+    args: PwrAgentThreadOrchestrationRequest<"move_thread_workspace">["args"],
+  ): ThreadWorkspaceHandoffStrategy {
+    if (args.strategy) {
+      return args.strategy;
+    }
+    if (args.newBranchName) {
+      return "new-branch";
+    }
+    if (args.leaveLocalBranch) {
+      return "move-branch";
+    }
+    return DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY;
   }
 
   private resolveThreadWorkspaceMoveCandidate(params: {
@@ -14738,11 +14766,13 @@ export class DesktopBackendRegistry {
     } catch (error) {
       const handoffError = error instanceof Error ? error.message : String(error);
       this.failPendingThreadWorkspaceMove(workspaceMoveId, error);
-      await this.startWorkspaceMoveContinuation({
-        error,
-        kind: "failure",
-        moveId: workspaceMoveId,
-      }).catch((continuationError) => {
+      try {
+        await this.startWorkspaceMoveContinuation({
+          error,
+          kind: "failure",
+          moveId: workspaceMoveId,
+        });
+      } catch (continuationError) {
         const message =
           continuationError instanceof Error
             ? continuationError.message
@@ -14758,7 +14788,8 @@ export class DesktopBackendRegistry {
           error: message,
           workspaceMoveId,
         });
-      });
+        await this.releaseThreadQueueAfterWorkspaceMoveContinuationFailure(move);
+      }
       return;
     }
 
@@ -14781,7 +14812,18 @@ export class DesktopBackendRegistry {
         error: message,
         workspaceMoveId,
       });
+      await this.releaseThreadQueueAfterWorkspaceMoveContinuationFailure(move);
     }
+  }
+
+  private async releaseThreadQueueAfterWorkspaceMoveContinuationFailure(
+    move: PendingThreadWorkspaceMoveSummary,
+  ): Promise<void> {
+    await this.threadTurnQueue.releaseThread({
+      backend: move.backend,
+      threadId: move.threadId,
+      status: "workspace_move_continuation_failed",
+    });
   }
 
   private async startWorkspaceMoveContinuation(params:

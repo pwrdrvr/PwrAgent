@@ -34,6 +34,9 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
 export type PwrAgentThreadOrchestrationErrorCode =
   (typeof PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES)[number];
 
+export const DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY =
+  "detached-changes" satisfies ThreadWorkspaceHandoffStrategy;
+
 export type PwrAgentThreadOrchestrationContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

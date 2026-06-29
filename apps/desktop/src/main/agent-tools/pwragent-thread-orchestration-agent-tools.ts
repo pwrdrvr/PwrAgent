@@ -11,6 +11,7 @@ import type {
   SendMessageToThreadToolArgs,
 } from "@pwragent/shared";
 import {
+  DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   HANDOFF_TASK_GROUPING_MODES,
   HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES,
   HANDOFF_TASK_SEED_MODES,
@@ -190,7 +191,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: THREAD_WORKSPACE_HANDOFF_STRATEGIES,
             description:
-              "Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary.",
+              `Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary. Defaults to ${DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY} unless leaveLocalBranch or newBranchName implies a branch strategy.`,
           },
           repositoryPath: {
             type: "string",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES,
   PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES,
   type HandoffTaskResult,
@@ -97,6 +98,8 @@ describe("thread orchestration tool contracts", () => {
   });
 
   it("models pending same-thread workspace moves separately from task handoffs", () => {
+    expect(DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY).toBe("detached-changes");
+
     const args = {
       direction: "local-to-worktree",
       repositoryPath: "/repo/app",
