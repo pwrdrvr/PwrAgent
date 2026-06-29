@@ -443,6 +443,10 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
+function toLinkedDirectoryPathId(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
+
 function getPullRequestLookupKey(
   request: Pick<
     RefreshThreadPullRequestsRequest,
@@ -1920,7 +1924,7 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
-    const knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
     if (trigger === "user") {
       logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
         backend,
@@ -1938,7 +1942,7 @@ class DesktopAppServerService {
       }));
     }
     if (lookupEntry && lookupEntry.fetchedAt > 0) {
-      await this.persistPullRequestLookupHit({
+      knownPrs = await this.persistPullRequestLookupHit({
         backend,
         request,
         requestKey,
@@ -2286,20 +2290,21 @@ class DesktopAppServerService {
     await Promise.all(
       [...subscribers.values()].map(async (subscriber) => {
         const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
-        await this.getOverlayStore().setThreadPullRequests({
+        const updated = await this.getOverlayStore().setThreadPullRequests({
           backend: subscriber.backend,
           threadId: subscriber.threadId,
           prs: nextPrs,
           fetchedAt: params.fetchedAt,
           refreshKey: subscriber.requestKey,
         });
+        const persistedPrs = updated.prs ?? [];
 
-        if (!prSummariesEqual(subscriber.previousPrs, nextPrs)) {
+        if (!prSummariesEqual(subscriber.previousPrs, persistedPrs)) {
           changedThreadCount += 1;
           await this.publishThreadPullRequestsUpdated({
             backend: subscriber.backend,
             threadId: subscriber.threadId,
-            prs: nextPrs,
+            prs: persistedPrs,
           });
         }
       }),
@@ -2315,30 +2320,32 @@ class DesktopAppServerService {
     persistedRefreshKey?: string;
     prs: PrSummary[];
     fetchedAt: number;
-  }): Promise<void> {
+  }): Promise<PrSummary[]> {
     const nextPrs = this.mergePrHistory(params.persistedPrs, params.prs);
     if (
       params.persistedRefreshKey === params.requestKey
       && prSummariesEqual(params.persistedPrs, nextPrs)
     ) {
-      return;
+      return params.persistedPrs;
     }
 
-    await this.getOverlayStore().setThreadPullRequests({
+    const updated = await this.getOverlayStore().setThreadPullRequests({
       backend: params.backend,
       threadId: params.request.threadId,
       prs: nextPrs,
       fetchedAt: params.fetchedAt,
       refreshKey: params.requestKey,
     });
+    const persistedPrs = updated.prs ?? [];
 
-    if (!prSummariesEqual(params.persistedPrs, nextPrs)) {
+    if (!prSummariesEqual(params.persistedPrs, persistedPrs)) {
       await this.publishThreadPullRequestsUpdated({
         backend: params.backend,
         threadId: params.request.threadId,
-        prs: nextPrs,
+        prs: persistedPrs,
       });
     }
+    return persistedPrs;
   }
 
   private claimPullRequestLookupRefreshKey(
@@ -3014,11 +3021,12 @@ class DesktopAppServerService {
       };
     }
 
+    const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
     const directory: LinkedDirectorySummary = {
-      id: registered.directoryKey,
+      id: directoryPathId,
       kind: "local",
       label: registered.directoryLabel,
-      path: registered.directoryPath,
+      path: directoryPathId,
     };
     await this.getOverlayStore().addLinkedDirectory({
       backend,

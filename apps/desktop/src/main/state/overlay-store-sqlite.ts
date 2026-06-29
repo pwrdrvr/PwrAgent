@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AppServerBackendScope,
   AppServerThreadSummary,
@@ -439,7 +440,7 @@ export class SqliteOverlayStore {
       ...current,
       extraLinkedDirectories: [
         ...current.extraLinkedDirectories.filter(
-          (d) => d.id !== params.directory.id,
+          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
         ),
         params.directory,
       ],
@@ -2130,6 +2131,30 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
   );
+}
+
+function linkedDirectoriesEquivalent(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (normalizeLinkedDirectoryPath(left.path) !== normalizeLinkedDirectoryPath(right.path)) {
+    return false;
+  }
+  return (
+    normalizeLinkedDirectoryPath(left.worktreePath) ===
+    normalizeLinkedDirectoryPath(right.worktreePath)
+  );
+}
+
+function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? path.resolve(normalized) : undefined;
 }
 
 function normalizeThreadAgent(

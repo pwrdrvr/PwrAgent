@@ -277,8 +277,45 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenAt: request.seenAt ?? 2000,
   seenUpdatedAt: request.seenUpdatedAt,
 }));
+const registerDirectoryFromDiskService = vi.fn(async (request: { path: string }) => {
+  const directoryPath = path.resolve(request.path);
+  return {
+    ok: true as const,
+    directoryKey: `directory:${directoryPath}`,
+    directoryPath,
+    directoryLabel: path.basename(directoryPath) || directoryPath,
+    currentBranch: "main",
+    launchpad: {
+      directoryKey: `directory:${directoryPath}`,
+      directoryKind: "directory" as const,
+      directoryLabel: path.basename(directoryPath) || directoryPath,
+      directoryPath,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      branchName: "main",
+      workMode: "local" as const,
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+    defaults: {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    },
+  };
+});
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
+const addLinkedDirectory = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  directory: unknown;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [request.directory],
+}));
 const setThreadPullRequests = vi.fn(async (request: {
   backend: "codex" | "grok";
   threadId: string;
@@ -403,6 +440,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
+    addLinkedDirectory,
     setThreadPullRequests,
     readPrStatusCache,
     writePrStatusCacheEntries,
@@ -413,6 +451,10 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     readThreadGitWorkingStateCache,
     writeThreadGitWorkingStateCacheEntry,
   }),
+}));
+
+vi.mock("../app-server/directory-registration-service", () => ({
+  registerDirectoryFromDisk: registerDirectoryFromDiskService,
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -481,6 +523,8 @@ describe("app server ipc", () => {
     publishLocalEvent.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
+    registerDirectoryFromDiskService.mockClear();
+    addLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
     getThreadOverlayStates.mockReset();
@@ -1983,6 +2027,186 @@ describe("app server ipc", () => {
         params: {
           threadId: "thread-1",
           prs: [previousPr, discoveredPr],
+        },
+      },
+    });
+  });
+
+  it("publishes the store-filtered PR list after background refreshes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "feat/detached-pr",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/detached-pr",
+      directoryPaths: ["/repo"],
+    });
+    const previousPr = githubPr({
+      number: 910,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/910",
+    });
+    const detachedPr = githubPr({
+      number: 911,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/911",
+    });
+    const discoveredPr = githubPr({
+      number: 912,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/912",
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      detachedPrKeys: ["github.com/pwrdrvr/pwragent#911"],
+      prs: [previousPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([detachedPr, discoveredPr]);
+    setThreadPullRequests.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [previousPr, discoveredPr],
+      prsFetchedAt: Date.now(),
+      prsRefreshKey: requestKey,
+    });
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [previousPr, detachedPr, discoveredPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: [previousPr, discoveredPr],
+        },
+      },
+    });
+  });
+
+  it("returns and publishes the store-filtered PR list for lookup-cache hits", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "feat/cached-detached-pr",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/cached-detached-pr",
+      directoryPaths: ["/repo"],
+    });
+    const lookupKey = buildPrLookupKey({
+      branch: "feat/cached-detached-pr",
+      directoryPaths: ["/repo"],
+    });
+    const previousPr = githubPr({
+      number: 920,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/920",
+    });
+    const detachedPr = githubPr({
+      number: 921,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/921",
+    });
+    const cachedPr = githubPr({
+      number: 922,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/922",
+    });
+    readPrLookupCache.mockResolvedValueOnce({
+      [lookupKey]: {
+        lookupKey,
+        provider: "github.com",
+        branch: "feat/cached-detached-pr",
+        directoryPaths: ["/repo"],
+        fetchedAt: Date.now(),
+        prs: [detachedPr, cachedPr],
+      },
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      detachedPrKeys: ["github.com/pwrdrvr/pwragent#921"],
+      prs: [previousPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: "old-refresh-key",
+    });
+    setThreadPullRequests.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [previousPr, cachedPr],
+      prsFetchedAt: Date.now(),
+      prsRefreshKey: requestKey,
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      provider: "github.com",
+      ghAvailable: true,
+      prs: [previousPr, cachedPr],
+    });
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId: "thread-1",
+          prs: [previousPr, cachedPr],
         },
       },
     });
@@ -3506,5 +3730,45 @@ describe("app server ipc", () => {
         gitStatus: expect.objectContaining({ currentBranch: "fresh-branch" }),
       }),
     );
+  });
+
+  it("attaches directories with path-shaped linked directory ids", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const directoryPath = path.resolve("/repo/app");
+    const directoryPathId = directoryPath.replace(/\\/g, "/");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        path: "/repo/app",
+      },
+    );
+
+    expect(addLinkedDirectory).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: directoryPathId,
+        kind: "local",
+        label: path.basename(directoryPath),
+        path: directoryPathId,
+      },
+    });
+    expect(response).toEqual({
+      ok: true,
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: directoryPathId,
+        kind: "local",
+        label: path.basename(directoryPath),
+        path: directoryPathId,
+      },
+    });
   });
 });
