@@ -431,7 +431,10 @@ function parseHtmlParagraphContent(element: HTMLElement): JSONContent | undefine
       ? []
       : parseHtmlInlineContent(child),
   );
-  if (content.length === 0) {
+  const hasTextContent = content.some(
+    (node) => node.type !== "hardBreak" && (node.text ?? "").trim().length > 0,
+  );
+  if (!hasTextContent) {
     return undefined;
   }
   return {
@@ -1113,6 +1116,57 @@ function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
   return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
 }
 
+function normalizeClipboardText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
+}
+
+function htmlNodeToPlainText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? "";
+  }
+
+  if (!(node instanceof HTMLElement)) {
+    return "";
+  }
+
+  const tagName = node.tagName.toLowerCase();
+  if (tagName === "br") {
+    return "\n";
+  }
+  if (tagName === "pre") {
+    return node.textContent ?? "";
+  }
+
+  const text = Array.from(node.childNodes)
+    .map((child) => htmlNodeToPlainText(child))
+    .join("");
+  if (isHtmlStructuredBlockElement(node)) {
+    return `${text.replace(/\n$/, "")}\n`;
+  }
+  return text;
+}
+
+function getTextFromPasteForActiveBlock(
+  event: ClipboardEvent<HTMLDivElement>,
+): string {
+  const plainText = event.clipboardData?.getData("text/plain") ?? "";
+  if (plainText) {
+    return normalizeClipboardText(plainText);
+  }
+
+  const html = event.clipboardData?.getData("text/html") ?? "";
+  if (!html.trim()) {
+    return "";
+  }
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return normalizeClipboardText(
+    Array.from(doc.body.childNodes)
+      .map((node) => htmlNodeToPlainText(node))
+      .join("")
+      .replace(/\n$/, ""),
+  );
+}
+
 function clipboardHtmlHasStructuredBlocks(
   event: ClipboardEvent<HTMLDivElement>,
 ): boolean {
@@ -1138,7 +1192,7 @@ function pastePlainTextIntoActiveBlock(
   editor: TiptapEditor,
   event: ClipboardEvent<HTMLDivElement>,
 ): boolean {
-  const text = getPlainTextFromPaste(event);
+  const text = getTextFromPasteForActiveBlock(event);
   if (!text) {
     return false;
   }
