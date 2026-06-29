@@ -565,14 +565,22 @@ export type ArchiveWorktreeResponse = {
   snapshot: WorktreeSnapshotSummary;
 };
 
+export const THREAD_WORKSPACE_HANDOFF_DIRECTIONS = [
+  "local-to-worktree",
+  "worktree-to-local",
+] as const;
+
 export type ThreadWorkspaceHandoffDirection =
-  | "local-to-worktree"
-  | "worktree-to-local";
+  (typeof THREAD_WORKSPACE_HANDOFF_DIRECTIONS)[number];
+
+export const THREAD_WORKSPACE_HANDOFF_STRATEGIES = [
+  "move-branch",
+  "detached-changes",
+  "new-branch",
+] as const;
 
 export type ThreadWorkspaceHandoffStrategy =
-  | "move-branch"
-  | "detached-changes"
-  | "new-branch";
+  (typeof THREAD_WORKSPACE_HANDOFF_STRATEGIES)[number];
 
 export type ThreadWorkspaceHandoffStashSummary = {
   ref?: string;

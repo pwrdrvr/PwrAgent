@@ -4,12 +4,15 @@ import type {
   LinkedDirectorySummary,
   ThreadExecutionMode,
   ThreadIdentifier,
+  ThreadWorkspaceHandoffDirection,
+  ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
 import type { CodexEnvironmentStartupFailure } from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "handoff_task",
+  "move_thread_workspace",
   "send_message_to_thread",
 ] as const;
 
@@ -30,6 +33,9 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
 
 export type PwrAgentThreadOrchestrationErrorCode =
   (typeof PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES)[number];
+
+export const DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY =
+  "detached-changes" satisfies ThreadWorkspaceHandoffStrategy;
 
 export type PwrAgentThreadOrchestrationContext = {
   backend: AppServerBackendKind;
@@ -105,6 +111,61 @@ export type SendMessageToThreadToolArgs = {
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
+};
+
+export type MoveThreadWorkspaceToolArgs = {
+  /**
+   * Optional backend override. Omitted defaults to the invoking thread backend.
+   * The first implementation supports Codex self-move only.
+   */
+  backend?: AppServerBackendKind;
+  direction?: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
+  /** Repository/local checkout path that owns the worktree relationship. */
+  repositoryPath?: string;
+  /** Current workspace path before handoff. */
+  sourcePath?: string;
+  sourceBranch?: string;
+  leaveLocalBranch?: string;
+  newBranchName?: string;
+};
+
+export type MoveThreadWorkspaceStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type MoveThreadWorkspacePhase =
+  | "waiting_for_turn_boundary"
+  | "preparing_workspace"
+  | "updating_metadata"
+  | "starting_continuation"
+  | "completed"
+  | "failed";
+
+export type MoveThreadWorkspaceResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  workspaceMoveId: string;
+  status: MoveThreadWorkspaceStatus;
+  phase: MoveThreadWorkspacePhase;
+  direction: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
+  repositoryPath?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
+  leaveLocalBranch?: string;
+  newBranchName?: string;
+  targetPath?: string;
+  branch?: string;
+  linkedDirectory?: LinkedDirectorySummary;
+  warnings?: string[];
+  continuationTurnId?: string;
+  createdAt: number;
+  updatedAt: number;
+  message: string;
+  error?: string;
 };
 
 export type ThreadHandoffOriginWorkspace = {
@@ -214,6 +275,7 @@ export type SendMessageToThreadResult = {
 
 export type PwrAgentThreadOrchestrationToolArgsByOperation = {
   handoff_task: HandoffTaskToolArgs;
+  move_thread_workspace: MoveThreadWorkspaceToolArgs;
   send_message_to_thread: SendMessageToThreadToolArgs;
 };
 
@@ -236,7 +298,10 @@ export type PwrAgentThreadOrchestrationRequest<
 export type PwrAgentThreadOrchestrationResponse =
   | {
       ok: true;
-      data: HandoffTaskResult | SendMessageToThreadResult;
+      data:
+        | HandoffTaskResult
+        | MoveThreadWorkspaceResult
+        | SendMessageToThreadResult;
     }
   | {
       ok: false;

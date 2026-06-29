@@ -35,6 +35,26 @@ describe("pwragent thread orchestration agent tools", () => {
       }),
       expect.objectContaining({
         namespace: "pwragent",
+        name: "move_thread_workspace",
+        description: expect.stringContaining("same-thread continuation"),
+        deferLoading: false,
+        inputSchema: expect.objectContaining({
+          additionalProperties: false,
+          properties: expect.objectContaining({
+            direction: expect.objectContaining({
+              enum: ["local-to-worktree", "worktree-to-local"],
+            }),
+            strategy: expect.objectContaining({
+              enum: ["move-branch", "detached-changes", "new-branch"],
+            }),
+            sourcePath: expect.objectContaining({
+              description: expect.stringContaining("multiple linked directories"),
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        namespace: "pwragent",
         name: "send_message_to_thread",
         deferLoading: false,
         inputSchema: expect.objectContaining({
@@ -114,6 +134,46 @@ describe("pwragent thread orchestration agent tools", () => {
             backend: "codex",
             threadId: "target-thread",
             prompt: "  ",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("validates move_thread_workspace before dispatch", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "move_thread_workspace",
+          arguments: {
+            direction: "sideways",
+            sourcePath: "/repo/app",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-2",
+          namespace: "pwragent",
+          tool: "move_thread_workspace",
+          arguments: {
+            sourcePath: "  ",
           },
         },
       }),
@@ -247,6 +307,59 @@ describe("pwragent thread orchestration agent tools", () => {
         prompt: "Check CI",
         model: "gpt-5.5",
         fastMode: true,
+      },
+    });
+  });
+
+  it("normalizes move_thread_workspace args and dispatches with caller context", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        workspaceMoveId: "workspace-move:codex:thread-1:turn-1:call-1",
+        status: "queued" as const,
+        phase: "waiting_for_turn_boundary" as const,
+        direction: "local-to-worktree" as const,
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+        createdAt: 1_773_000_000_000,
+        updatedAt: 1_773_000_000_000,
+        message:
+          "Workspace move queued. Stop this turn and wait for the continuation.",
+      },
+    }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          repositoryPath: " /repo/app ",
+          sourcePath: " /repo/app ",
+          leaveLocalBranch: " main ",
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      operation: "move_thread_workspace",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        callId: "call-1",
+        turnId: "turn-1",
+      },
+      args: {
+        direction: "local-to-worktree",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+        leaveLocalBranch: "main",
       },
     });
   });
