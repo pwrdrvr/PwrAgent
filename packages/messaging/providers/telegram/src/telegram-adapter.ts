@@ -25,6 +25,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
+  MessagingResponseMode,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -560,6 +561,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    if (update.responseMode !== undefined) {
+      this.options.config.responseMode = update.responseMode;
+    }
     this.options.config.authorizedActorIds = telegramContactsFromIds(
       update.authorizedActorIds,
       this.options.config.authorizedActorIds,
@@ -568,6 +572,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       update.authorizedConversationIds ?? [],
       this.options.config.authorizedSupergroupIds,
     );
+    if (update.conversationResponseModes) {
+      const responseModeById = new Map(
+        update.conversationResponseModes.map((entry) => [
+          entry.conversationId,
+          entry.responseMode,
+        ]),
+      );
+      this.options.config.authorizedSupergroupIds =
+        this.options.config.authorizedSupergroupIds.map((contact) => {
+          const { responseMode: _discard, ...rest } = contact;
+          const responseMode = responseModeById.get(contact.id);
+          return responseMode ? { ...rest, responseMode } : rest;
+        });
+    }
   }
 
   async updateRenderingPreferences(
@@ -1458,25 +1476,19 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // controller's normal "bind before attachments" response.
       !(mentionRemainder.length === 0 && attachments.length > 0)
     ) {
-      // If the remainder after the mention doesn't form a valid verb
-      // (e.g. a second mention, or a digit-leading token), we
-      // deliberately fall through to the attachment / slash / text
-      // paths below so the user's original message is dispatched as
-      // media or plain text rather than a half-recognized command.
-      const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
-      const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
-      if (mentionCommandMatch) {
+      if (mentionRemainder.length === 0) {
         this.options.logger?.debug(
-          `telegram inbound mention-command update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} command=${mentionCommandMatch[1]} preview="${compactPreview(mentionCandidate)}"`,
+          `telegram inbound mention-command update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} command=help preview="${compactPreview(mentionCandidate)}"`,
         );
         await listener({
           id: `telegram:update:${updateId}:message:${message.message_id}`,
           kind: "command",
           actor: this.actorFromUser(message.from),
-          args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
+          args: [],
+          botMention: true,
           channel: this.channelFromMessage(message),
-          command: mentionCommandMatch[1]?.toLowerCase() ?? "",
-          rawText: synthRaw,
+          command: "help",
+          rawText: "/help",
           receivedAt: this.messageReceivedAt(message),
           routingState: this.routingStateFromMessage(message),
         });
@@ -1506,32 +1518,35 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         },
         receivedAt: this.messageReceivedAt(message),
         routingState: this.routingStateFromMessage(message),
-        text: message.caption,
+        ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+        text: mentionRemainder ?? message.caption,
       });
       return;
     }
 
-    if (!message.text) {
+    const inboundText = mentionRemainder ?? message.text;
+    if (!inboundText) {
       return;
     }
 
-    const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(message.text);
+    const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(inboundText);
     this.options.logger?.debug(
-      `telegram inbound ${commandMatch ? "command" : "text"} update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} chars=${message.text.length} preview="${compactPreview(message.text)}"`,
+      `telegram inbound ${commandMatch ? "command" : "text"} update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} chars=${inboundText.length} preview="${compactPreview(inboundText)}"`,
     );
     await listener({
       id: `telegram:update:${updateId}:message:${message.message_id}`,
       kind: commandMatch ? "command" : "text",
       actor: this.actorFromUser(message.from),
       channel: this.channelFromMessage(message),
+      ...(mentionRemainder !== undefined ? { botMention: true } : {}),
       ...(commandMatch
         ? {
             args: commandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
             command: commandMatch[1]?.toLowerCase() ?? "",
-            rawText: message.text,
+            rawText: inboundText,
           }
         : {
-            text: message.text,
+            text: inboundText,
           }),
       receivedAt: this.messageReceivedAt(message),
       routingState: this.routingStateFromMessage(message),
@@ -2822,8 +2837,14 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
 
 function telegramContactsFromIds(
   ids: readonly string[],
-  previous: readonly { id: string; displayName: string }[] | undefined,
-): { id: string; displayName: string }[] {
+  previous:
+    | readonly {
+        id: string;
+        displayName: string;
+        responseMode?: MessagingResponseMode;
+      }[]
+    | undefined,
+): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }

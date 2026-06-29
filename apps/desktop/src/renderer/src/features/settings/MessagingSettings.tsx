@@ -15,6 +15,7 @@ import {
   validateLineGroupId,
   validateLineRoomId,
   validateLineUserId,
+  validateSlackChannelId,
   validateMattermostId,
   validateSlackTeamId,
   validateSlackUserId,
@@ -23,6 +24,7 @@ import {
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
   type DesktopMessagingImageProfile,
+  type DesktopMessagingResponseMode,
   type DesktopMessagingContactLookupKind,
   type DesktopMessagingContactLookupPlatform,
   type DesktopMessagingContactLookupResponse,
@@ -296,6 +298,23 @@ export function MessagingSettings(props: {
             scopeOptions={TELEGRAM_PAIRING_SCOPE_OPTIONS}
             supportsBucket
           />
+          <SegmentedField
+            disabled={props.saving}
+            label="Respond to"
+            sub="In authorized Telegram groups and topics, choose whether regular chat reaches PwrAgent or only leading @bot mentions do. DMs and slash commands still work."
+            options={RESPONSE_MODE_OPTIONS}
+            source={sourceBadge(telegram.responseMode)}
+            value={telegram.responseMode.value}
+            onChange={(responseMode) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                responseMode: {
+                  ...telegram.responseMode,
+                  value: responseMode,
+                },
+              });
+            }}
+          />
           <ToggleField
             checked={telegram.streamingResponses.value}
             disabled={props.saving}
@@ -350,6 +369,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(telegram.authorizedSupergroups)}
             validateEntry={validateTelegramGroupChatEntry}
             value={telegram.authorizedSupergroups.value}
+            responseModePolicy
             onSave={(authorizedSupergroups) => {
               void props.onSaveTelegram({
                 ...telegram,
@@ -818,6 +838,23 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
+          <SegmentedField
+            disabled={props.saving}
+            label="Respond to"
+            sub="In authorized Slack channels, choose whether regular chat reaches PwrAgent or only @mentions do. DMs and slash commands still work."
+            options={RESPONSE_MODE_OPTIONS}
+            source={sourceBadge(slack.responseMode)}
+            value={slack.responseMode.value}
+            onChange={(responseMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                responseMode: {
+                  ...slack.responseMode,
+                  value: responseMode,
+                },
+              });
+            }}
+          />
           <ToggleField
             checked={slack.streamingResponses.value}
             disabled={props.saving}
@@ -898,9 +935,9 @@ export function MessagingSettings(props: {
               "slack",
               "workspace",
             )}
-            label="Authorized Workspaces"
-            sub="Optional Slack workspace/team IDs allowed for this bot."
-            help="Slack workspace IDs start with T, e.g. T012ABCDEF0."
+            label="Authorized Workspace / Team IDs"
+            sub="Slack team IDs allowed for shared channel access. Authorizing a workspace allows any channel or group DM in that workspace where the bot is present."
+            help="Slack team/workspace IDs start with T, e.g. T012ABCDEF0. These are not channel IDs."
             source={optionalListSourceBadge(slack.authorizedWorkspaces)}
             validateEntry={validateSlackWorkspaceIdEntry}
             value={slack.authorizedWorkspaces.value}
@@ -910,6 +947,30 @@ export function MessagingSettings(props: {
                 authorizedWorkspaces: {
                   ...slack.authorizedWorkspaces,
                   value: authorizedWorkspaces,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "channel",
+            )}
+            label="Authorized Channels"
+            sub="Slack channel, private channel, DM, or group DM IDs allowed even when the whole workspace is not authorized."
+            help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Add a row here to give one channel a different Respond to mode than the workspace default."
+            source={optionalListSourceBadge(slack.authorizedChannels)}
+            validateEntry={validateSlackChannelIdEntry}
+            value={slack.authorizedChannels.value}
+            responseModePolicy
+            onSave={(authorizedChannels) => {
+              void props.onSaveSlack({
+                ...slack,
+                authorizedChannels: {
+                  ...slack.authorizedChannels,
+                  value: authorizedChannels,
                 },
               });
             }}
@@ -1373,6 +1434,14 @@ const IMAGE_PROFILE_OPTIONS: Array<{
   { label: "Medium", value: "medium" },
   { label: "High", value: "high" },
   { label: "Actual", value: "actual" },
+];
+
+const RESPONSE_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingResponseMode;
+}> = [
+  { label: "@ mention only", value: "mention_only" },
+  { label: "Every message", value: "every_message" },
 ];
 
 const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{
@@ -1892,6 +1961,7 @@ function AuthorizedListField(props: {
   help?: ReactNode;
   label: string;
   lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
+  responseModePolicy?: boolean;
   sub?: ReactNode;
   source: string;
   validateEntry?: (value: string) => string | undefined;
@@ -2076,6 +2146,8 @@ function AuthorizedListField(props: {
                   className={`settings-authorized-list__row${
                     props.fullAccessWarningPolicy
                       ? " settings-authorized-list__row--with-warning"
+                      : props.responseModePolicy
+                        ? " settings-authorized-list__row--with-response-mode"
                       : ""
                   }`}
                 >
@@ -2150,6 +2222,39 @@ function AuthorizedListField(props: {
                       }
                     >
                       {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  {props.responseModePolicy ? (
+                    <select
+                      aria-label={`${props.label} response mode ${index + 1}`}
+                      className="settings-input settings-authorized-list__response-mode"
+                      disabled={props.disabled}
+                      value={row.responseMode ?? ""}
+                      onBlur={() => {
+                        const nextRows = rows.map((current, rowIndex) =>
+                          rowIndex === index
+                            ? normalizeAuthorizedContactRow(current)
+                            : current,
+                        );
+                        setRows(nextRows);
+                        saveIfValid(nextRows);
+                      }}
+                      onChange={(event) =>
+                        updateRow(index, {
+                          responseMode:
+                            event.currentTarget.value === ""
+                              ? undefined
+                              : event.currentTarget
+                                .value as DesktopMessagingResponseMode,
+                        })
+                      }
+                    >
+                      <option value="">Default</option>
+                      {RESPONSE_MODE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
@@ -2296,6 +2401,10 @@ function normalizeAuthorizedContactRow(
     ...(contact.fullAccessWarningDismissed === true
       ? { fullAccessWarningDismissed: true }
       : {}),
+    ...(contact.responseMode === "every_message" ||
+    contact.responseMode === "mention_only"
+      ? { responseMode: contact.responseMode }
+      : {}),
   };
 }
 
@@ -2378,6 +2487,13 @@ function validateSlackWorkspaceIdEntry(value: string): string | undefined {
   return validationMessage(validateSlackTeamId(value), "Slack workspace ID", {
     format: "Use a Slack workspace/team ID starting with T, e.g. T012ABCDEF0.",
     length: "Slack workspace IDs must be 64 characters or fewer.",
+  });
+}
+
+function validateSlackChannelIdEntry(value: string): string | undefined {
+  return validationMessage(validateSlackChannelId(value), "Slack channel ID", {
+    format: "Use a Slack channel/conversation ID starting with C, G, or D, e.g. C012ABCDEF0.",
+    length: "Slack channel IDs must be 64 characters or fewer.",
   });
 }
 

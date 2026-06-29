@@ -2058,6 +2058,8 @@ describe("DesktopMessagingRuntime", () => {
     expect(telegramAdapter.updateAuthorization).toHaveBeenCalledWith({
       authorizedActorIds: ["user-1", "user-2"],
       authorizedConversationIds: ["-1001", "-1002"],
+      responseMode: undefined,
+      conversationResponseModes: [],
     });
     expect(replacementTelegramAdapter.start).not.toHaveBeenCalled();
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({

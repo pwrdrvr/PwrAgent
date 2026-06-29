@@ -395,7 +395,7 @@ describe("TelegramAdapter", () => {
     expect(request?.text).toContain("Choose a thread to resume");
   });
 
-  it("treats a photo caption like `@PwrAgentBot resume` as a command, not media", async () => {
+  it("marks a photo caption like `@PwrAgentBot resume` as mentioned media", async () => {
     const harness = await createControllerHarness();
     const events: MessagingInboundEvent[] = [];
     await harness.adapter.start(async (event) => {
@@ -430,9 +430,9 @@ describe("TelegramAdapter", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      kind: "command",
-      command: "resume",
-      rawText: "/resume",
+      kind: "media",
+      botMention: true,
+      text: "resume",
     });
   });
 
@@ -472,7 +472,8 @@ describe("TelegramAdapter", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       kind: "media",
-      text: "@PwrAgentBot",
+      botMention: true,
+      text: "",
       attachments: [
         expect.objectContaining({
           id: "telegram:photo:AgADBA",
@@ -483,7 +484,7 @@ describe("TelegramAdapter", () => {
     });
   });
 
-  it("treats `@PwrAgentBot help` as a command and a non-leading mention as text", async () => {
+  it("marks `@PwrAgentBot help` as mentioned text and a non-leading mention as text", async () => {
     const harness = await createControllerHarness();
     const events: MessagingInboundEvent[] = [];
     await harness.adapter.start(async (event) => {
@@ -529,9 +530,9 @@ describe("TelegramAdapter", () => {
 
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
-      kind: "command",
-      command: "help",
-      rawText: "/help",
+      kind: "text",
+      botMention: true,
+      text: "help",
     });
     expect(events[1]).toMatchObject({
       kind: "text",

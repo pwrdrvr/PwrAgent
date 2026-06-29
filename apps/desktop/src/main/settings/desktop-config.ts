@@ -14,6 +14,7 @@ import type {
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
+  DesktopMessagingResponseMode,
   DesktopOnboardingCompletedSource,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
@@ -138,6 +139,7 @@ export type DesktopSettingsConfig = {
     };
     telegram?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedSupergroups?: AuthorizedContactConfig[];
@@ -162,6 +164,7 @@ export type DesktopSettingsConfig = {
     };
     slack?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
@@ -169,6 +172,7 @@ export type DesktopSettingsConfig = {
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedWorkspaces?: AuthorizedContactConfig[];
+      authorizedChannels?: AuthorizedContactConfig[];
     };
     feishu?: {
       enabled?: boolean;
@@ -560,6 +564,7 @@ export function desktopSettingsPatchToEdits(
         ...(contact.fullAccessWarningDismissed === true
           ? { full_access_warning_dismissed: true }
           : {}),
+        ...(contact.responseMode ? { response_mode: contact.responseMode } : {}),
       })),
     });
   };
@@ -881,6 +886,9 @@ export function desktopSettingsPatchToEdits(
   if (telegram?.enabled !== undefined) {
     set(["messaging", "telegram", "enabled"], telegram.enabled);
   }
+  if (telegram?.responseMode !== undefined) {
+    set(["messaging", "telegram", "response_mode"], telegram.responseMode);
+  }
   if (telegram?.streamingResponses !== undefined) {
     set(["messaging", "telegram", "streaming_responses"], telegram.streamingResponses);
   }
@@ -993,6 +1001,9 @@ export function desktopSettingsPatchToEdits(
   if (slack?.enabled !== undefined) {
     set(["messaging", "slack", "enabled"], slack.enabled);
   }
+  if (slack?.responseMode !== undefined) {
+    set(["messaging", "slack", "response_mode"], slack.responseMode);
+  }
   if (slack?.streamingResponses !== undefined) {
     set(["messaging", "slack", "streaming_responses"], slack.streamingResponses);
   }
@@ -1026,6 +1037,14 @@ export function desktopSettingsPatchToEdits(
       "authorized_workspaces",
       "authorized_workspaces",
       slack.authorizedWorkspaces,
+    );
+  }
+  if (slack?.authorizedChannels !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "slack"],
+      "authorized_channels",
+      "authorized_channels",
+      slack.authorizedChannels,
     );
   }
 
@@ -1316,6 +1335,7 @@ function normalizeDesktopConfig(
       },
       telegram: {
         enabled: readBoolean(telegram?.enabled),
+        responseMode: readMessagingResponseMode(telegram?.response_mode),
         streamingResponses: readBoolean(telegram?.streaming_responses),
         authorizedUserIds: readAuthorizedContacts(
           telegram?.authorized_users,
@@ -1368,6 +1388,7 @@ function normalizeDesktopConfig(
       },
       slack: {
         enabled: readBoolean(slack?.enabled),
+        responseMode: readMessagingResponseMode(slack?.response_mode),
         streamingResponses: readBoolean(slack?.streaming_responses),
         workspaceUrl: readString(slack?.workspace_url),
         inboundMode: readSlackInboundMode(slack?.inbound_mode),
@@ -1381,6 +1402,10 @@ function normalizeDesktopConfig(
         authorizedWorkspaces: readAuthorizedContacts(
           slack?.authorized_workspaces_list,
           slack?.authorized_workspaces,
+        ),
+        authorizedChannels: readAuthorizedContacts(
+          slack?.authorized_channels_list,
+          slack?.authorized_channels,
         ),
       },
       feishu: {
@@ -1857,6 +1882,18 @@ function readFullAccessWarningGlobalPolicy(
     : undefined;
 }
 
+function readMessagingResponseMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingResponseMode | undefined {
+  return isMessagingResponseMode(value) ? value : undefined;
+}
+
+function isMessagingResponseMode(
+  value: unknown,
+): value is DesktopMessagingResponseMode {
+  return value === "every_message" || value === "mention_only";
+}
+
 function isFullAccessWarningUserPolicy(
   value: unknown,
 ): value is DesktopMessagingFullAccessWarningUserPolicy {
@@ -1934,6 +1971,11 @@ function readAuthorizedContactArray(
       fullAccessWarningDismissed:
         entry.full_access_warning_dismissed === true ||
         entry.fullAccessWarningDismissed === true,
+      responseMode: isMessagingResponseMode(entry.response_mode)
+        ? entry.response_mode
+        : isMessagingResponseMode(entry.responseMode)
+          ? entry.responseMode
+          : undefined,
     })),
   );
 }
@@ -1951,6 +1993,9 @@ function normalizeAuthorizedContacts(
         : {}),
       ...(contact.fullAccessWarningDismissed === true
         ? { fullAccessWarningDismissed: true }
+        : {}),
+      ...(isMessagingResponseMode(contact.responseMode)
+        ? { responseMode: contact.responseMode }
         : {}),
     }))
     .filter((contact) => contact.id.length > 0);

@@ -12,6 +12,7 @@ import type {
   DesktopIntegratedTerminalWindowsShell,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
+  DesktopMessagingResponseMode,
   DesktopOnboardingCompletedSource,
   DesktopOnboardingSnapshot,
   DesktopSettingsConfigPatch,
@@ -670,6 +671,10 @@ export class DesktopSettingsService {
             false,
             TELEGRAM_ENABLED_ENV,
           ),
+          responseMode: this.resolveConfigMessagingResponseMode(
+            config.messaging?.telegram?.responseMode,
+            "every_message",
+          ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.telegram?.streamingResponses,
             false,
@@ -760,6 +765,10 @@ export class DesktopSettingsService {
             false,
             SLACK_ENABLED_ENV,
           ),
+          responseMode: this.resolveConfigMessagingResponseMode(
+            config.messaging?.slack?.responseMode,
+            "mention_only",
+          ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.slack?.streamingResponses,
             false,
@@ -792,6 +801,9 @@ export class DesktopSettingsService {
           authorizedWorkspaces: this.resolveList(
             config.messaging?.slack?.authorizedWorkspaces,
             SLACK_AUTHORIZED_WORKSPACES_ENV,
+          ),
+          authorizedChannels: this.resolveConfigList(
+            config.messaging?.slack?.authorizedChannels,
           ),
         },
         feishu: {
@@ -1844,6 +1856,16 @@ export class DesktopSettingsService {
     };
   }
 
+  private resolveConfigMessagingResponseMode(
+    configValue: DesktopMessagingResponseMode | undefined,
+    defaultValue: DesktopMessagingResponseMode,
+  ): DesktopSettingsValue<DesktopMessagingResponseMode> {
+    return {
+      value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
   private resolveWorktrees(
     configValue: DesktopWorktreeStorageLocation | undefined,
   ): {
@@ -1885,6 +1907,15 @@ export class DesktopSettingsService {
       };
     }
 
+    return {
+      value: configValue ?? [],
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveConfigList(
+    configValue: DesktopAuthorizedContact[] | undefined,
+  ): DesktopSettingsValue<DesktopAuthorizedContact[]> {
     return {
       value: configValue ?? [],
       source: configValue === undefined ? "default" : "config",

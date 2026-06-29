@@ -24,6 +24,7 @@ import type {
   MessagingJsonValue,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
+  MessagingResponseMode,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -330,6 +331,9 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    if (update.responseMode !== undefined) {
+      this.config.responseMode = update.responseMode;
+    }
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
@@ -338,6 +342,20 @@ export class SlackAdapter implements SlackProviderAdapter {
       update.authorizedConversationIds ?? [],
       this.config.authorizedConversationIds,
     );
+    if (update.conversationResponseModes) {
+      const responseModeById = new Map(
+        update.conversationResponseModes.map((entry) => [
+          entry.conversationId,
+          entry.responseMode,
+        ]),
+      );
+      this.config.authorizedConversationIds =
+        this.config.authorizedConversationIds.map((contact) => {
+          const { responseMode: _discard, ...rest } = contact;
+          const responseMode = responseModeById.get(contact.id);
+          return responseMode ? { ...rest, responseMode } : rest;
+        });
+    }
     this.config.authorizedTeamIds = slackContactsFromIds(
       update.authorizedWorkspaceIds ?? [],
       this.config.authorizedTeamIds,
@@ -618,8 +636,8 @@ export class SlackAdapter implements SlackProviderAdapter {
     const isMention = strippedText !== rawText;
     const text = strippedText.trim();
     const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
-    const command = isMention
-      ? parseBareCommand(text || "help")
+    const command = isMention && text.length === 0
+      ? { command: "help", args: [] }
       : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
@@ -640,6 +658,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         channel,
         receivedAt: this.now(),
         routingState,
+        ...(isMention ? { botMention: true } : {}),
         text: text || undefined,
         disposition: "available",
         attachments: event.files.flatMap((file) => this.describeFile(file)),
@@ -655,9 +674,10 @@ export class SlackAdapter implements SlackProviderAdapter {
         channel,
         receivedAt: this.now(),
         routingState,
+        ...(isMention ? { botMention: true } : {}),
         command: command.command,
         args: command.args,
-        rawText: isMention ? `/${text || "help"}` : text,
+        rawText: isMention && text.length === 0 ? "/help" : text,
       });
       return;
     }
@@ -670,6 +690,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       channel,
       receivedAt: this.now(),
       routingState,
+      ...(isMention ? { botMention: true } : {}),
       text,
     });
   }
@@ -1566,12 +1587,6 @@ function parseCommand(text: string): { command: string; args: string[] } | undef
   return command ? { command, args } : undefined;
 }
 
-function parseBareCommand(text: string): { command: string; args: string[] } | undefined {
-  const trimmed = text.trim();
-  if (!/^[A-Za-z0-9_]+(?:\s|$)/.test(trimmed)) return undefined;
-  return parseCommand(`/${trimmed}`);
-}
-
 function normalizeSlackSlashCommand(
   command: string,
   prefix: string | undefined,
@@ -1612,8 +1627,14 @@ function callbackAllowedActorIds(
 
 function slackContactsFromIds(
   ids: readonly string[],
-  previous: readonly { id: string; displayName: string }[] | undefined,
-): { id: string; displayName: string }[] {
+  previous:
+    | readonly {
+        id: string;
+        displayName: string;
+        responseMode?: MessagingResponseMode;
+      }[]
+    | undefined,
+): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }

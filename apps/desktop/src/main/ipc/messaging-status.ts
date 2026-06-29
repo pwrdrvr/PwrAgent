@@ -30,6 +30,7 @@ import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { subscribersForChannel } from "../window-channels";
@@ -96,15 +97,16 @@ function markPairingRejected(entryId: string): MessagingPairingEntry | undefined
   });
 }
 
-function buildPairingApprovalPatch(
+async function buildPairingApprovalPatch(
   entry: MessagingPairingEntry,
   snapshot: DesktopSettingsSnapshot,
-): { added: boolean; patch: DesktopSettingsConfigPatch } {
+  service: DesktopSettingsService,
+): Promise<{ added: boolean; patch: DesktopSettingsConfigPatch }> {
   if (entry.status !== "observed" || !entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request has not been observed yet.");
   }
 
-  const contact = contactForPairing(entry);
+  const contact = await contactForPairing(entry, service);
   const merge = (
     current: DesktopAuthorizedContact[],
   ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
@@ -246,13 +248,28 @@ function buildPairingApprovalPatch(
   }
 }
 
-function contactForPairing(entry: MessagingPairingEntry): DesktopAuthorizedContact {
+async function contactForPairing(
+  entry: MessagingPairingEntry,
+  service: DesktopSettingsService,
+): Promise<DesktopAuthorizedContact> {
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
   }
   if (entry.scope === "bucket") {
+    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
+    if (entry.platform === "slack") {
+      const displayName = await resolveSlackWorkspaceDisplayName(service, id);
+      return {
+        id,
+        displayName:
+          displayName
+          ?? entry.observedChat.parentTitle
+          ?? entry.observedChat.title
+          ?? "",
+      };
+    }
     return {
-      id: entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id,
+      id,
       displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
     };
   }
@@ -262,6 +279,30 @@ function contactForPairing(entry: MessagingPairingEntry): DesktopAuthorizedConta
       entry.observedActor.displayName
       ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
   };
+}
+
+async function resolveSlackWorkspaceDisplayName(
+  service: DesktopSettingsService,
+  id: string,
+): Promise<string | undefined> {
+  const botToken = service.resolveSlackBotTokenSync();
+  if (!botToken) return undefined;
+  try {
+    const provider = await import("@pwragent/messaging-provider-slack");
+    const result = await provider.resolveContact(
+      { botToken },
+      { id, kind: "workspace" },
+    );
+    if (result.status === "ok" && result.displayName) {
+      return result.displayName;
+    }
+  } catch (error) {
+    log.warn("slack workspace pairing lookup failed", {
+      workspaceId: id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return undefined;
 }
 
 function recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
@@ -374,7 +415,11 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
-      const approval = buildPairingApprovalPatch(pairing, await service.readSettings());
+      const approval = await buildPairingApprovalPatch(
+        pairing,
+        await service.readSettings(),
+        service,
+      );
       const next = await service.writeConfigPatch(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
         runtime,

@@ -71,6 +71,7 @@ import type {
   MessagingPendingIntentRecord,
   MessagingQuestionnaireAnswer,
   MessagingQuestionnaireIntent,
+  MessagingResponseMode,
   MessagingStreamUpdateIntent,
   MessagingSurfaceAction,
   MessagingSurfaceRef,
@@ -545,6 +546,9 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
+  responseModeForConversation?: (
+    channel: MessagingChannelRef,
+  ) => Promise<MessagingResponseMode> | MessagingResponseMode;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   fullAccessControls?: MessagingFullAccessControlsResolver;
   deliveryBudget?: MessagingDeliveryBudget;
@@ -1355,6 +1359,20 @@ export class MessagingController {
       return;
     }
 
+    const mentionCommand = event.botMention
+      ? parseMentionCommand(event.text)
+      : undefined;
+    if (mentionCommand) {
+      await this.handleCommand({
+        ...event,
+        kind: "command",
+        command: mentionCommand.command,
+        args: mentionCommand.args,
+        rawText: `/${[mentionCommand.command, ...mentionCommand.args].join(" ")}`,
+      });
+      return;
+    }
+
     const pendingNewThread = await this.findPendingNewThreadSession(event);
     const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
       actorId: event.actor.platformUserId,
@@ -1448,7 +1466,17 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
+      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+        return;
+      }
       await this.presentHelp(event);
+      return;
+    }
+
+    if (
+      binding.targetKind === "agent_thread" &&
+      !await this.shouldHandleAmbientSharedMessage(event, binding)
+    ) {
       return;
     }
 
@@ -1476,6 +1504,19 @@ export class MessagingController {
       });
       return;
     }
+    const mentionCommand = event.botMention && event.text
+      ? parseMentionCommand(event.text)
+      : undefined;
+    if (mentionCommand) {
+      await this.handleCommand({
+        ...event,
+        kind: "command",
+        command: mentionCommand.command,
+        args: mentionCommand.args,
+        rawText: `/${[mentionCommand.command, ...mentionCommand.args].join(" ")}`,
+      });
+      return;
+    }
 
     const pendingNewThread = await this.findPendingNewThreadSession(event);
     if (pendingNewThread) {
@@ -1485,6 +1526,9 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
+      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+        return;
+      }
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("needs-binding-media"),
@@ -1508,7 +1552,34 @@ export class MessagingController {
       return;
     }
 
+    if (
+      binding.targetKind === "agent_thread" &&
+      !await this.shouldHandleAmbientSharedMessage(event, binding)
+    ) {
+      return;
+    }
+
     await this.turnAdmission.append({ binding, event });
+  }
+
+  private async shouldHandleAmbientSharedMessage(
+    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
+    binding?: MessagingBindingRecord,
+  ): Promise<boolean> {
+    if (event.channel.conversation.kind === "dm") {
+      return true;
+    }
+    if (binding?.targetKind === "thread") {
+      return true;
+    }
+    const responseMode = await this.responseModeForConversation(event.channel);
+    return responseMode === "every_message" || event.botMention === true;
+  }
+
+  private async responseModeForConversation(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingResponseMode> {
+    return await this.options.responseModeForConversation?.(channel) ?? "every_message";
   }
 
   private async handleAdmittedTurnBundle(
@@ -13947,6 +14018,14 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function parseMentionCommand(
+  text: string,
+): { command: string; args: string[] } | undefined {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  const command = matchMessagingCommandVerb(tokens[0] ?? "");
+  return command ? { command, args: tokens.slice(1) } : undefined;
 }
 
 function skillSearchCwdsForThreadState(

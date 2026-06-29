@@ -2776,6 +2776,116 @@ describe("MessagingController", () => {
     }
   });
 
+  it("routes raw shared-channel text to a strict thread binding even in mention-only mode", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("500");
+    const event = buildTextEvent("continue the implementation", { channel });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:500:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue the implementation" }],
+      }),
+    );
+  });
+
+  it("applies mention-only response mode to agent-thread bindings", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("501");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:501:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("side discussion", { channel }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("apply the decision", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "apply the decision" }],
+      }),
+    );
+  });
+
+  it("applies mention-only response mode to unbound shared channels", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("502");
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("ambient chatter", { channel }),
+    );
+
+    expect(harness.delivered).toEqual([]);
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("hello", { botMention: true, channel }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent commands",
+    });
+  });
+
+  it("treats mentioned media captions with known commands as commands", async () => {
+    const harness = await createHarness();
+    const channel = buildTopicChannel("503");
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("resume", { botMention: true, channel }),
+      id: "event-media-command",
+      kind: "media",
+      attachments: [
+        {
+          id: "file-1",
+          kind: "image",
+          name: "screenshot.png",
+          disposition: "available",
+        },
+      ],
+      disposition: "available",
+      text: "resume",
+    });
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+    });
+  });
+
   it("updates the clicked resume picker when multiple pickers are active", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
@@ -13787,6 +13897,7 @@ async function createHarness(options?: {
   onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
@@ -14222,6 +14333,7 @@ async function createHarness(options?: {
       ? {}
       : { onBindingChanged }),
     store,
+    responseModeForConversation: options?.responseModeForConversation,
     streamingResponsesDefault: options?.streamingResponsesDefault,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
@@ -14674,6 +14786,7 @@ function buildTopicChannel(topicId: string): MessagingInboundEvent["channel"] {
 function buildTextEvent(
   text: string,
   params: {
+    botMention?: boolean;
     channel?: MessagingInboundTextEvent["channel"];
     routingState?: MessagingInboundTextEvent["routingState"];
   } = {},
@@ -14692,6 +14805,7 @@ function buildTextEvent(
       },
     },
     receivedAt: 1000,
+    ...(params.botMention ? { botMention: true } : {}),
     routingState: params.routingState,
     text,
   };

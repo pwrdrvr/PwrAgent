@@ -15,6 +15,7 @@ import type {
 import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingConversationResponseMode,
 } from "@pwragent/messaging-interface";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
@@ -215,6 +216,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     botToken: "connection",
     channel: "irrelevant",
     enabled: "connection",
+    responseMode: "authorization",
     streamingResponses: "rendering",
   },
   discord: {
@@ -250,6 +252,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     enabled: "connection",
     inboundMode: "connection",
     registerSlashCommands: "connection",
+    responseMode: "authorization",
     signingSecret: "connection",
     slashCommandPrefix: "connection",
     streamingResponses: "rendering",
@@ -541,6 +544,7 @@ export function loadDesktopMessagingConfig(
             channel: "telegram" as const,
             enabled: true,
             botToken: telegramBotToken,
+            responseMode: "every_message",
             streamingResponses: readEnvBoolean(
               env,
               TELEGRAM_STREAMING_RESPONSES_ENV,
@@ -616,6 +620,7 @@ export function loadDesktopMessagingConfig(
               env,
               SLACK_STREAMING_RESPONSES_ENV,
             ).value ?? false,
+            responseMode: "mention_only",
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedWorkspaces,
           },
@@ -743,6 +748,9 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackAuthorizedTeamIds =
     envConfig.slack?.authorizedTeamIds
     ?? snapshot.messaging.slack.authorizedWorkspaces.value;
+  const slackAuthorizedConversationIds =
+    envConfig.slack?.authorizedConversationIds
+    ?? snapshot.messaging.slack.authorizedChannels.value;
   const feishuAuthorizedActorIds =
     envConfig.feishu?.authorizedActorIds
     ?? snapshot.messaging.feishu.authorizedUserIds.value;
@@ -903,6 +911,7 @@ export async function loadDesktopMessagingConfigFromSettings(
           channel: "telegram" as const,
           enabled: true,
           botToken: telegramBotToken!,
+          responseMode: snapshot.messaging.telegram.responseMode.value,
           streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
           authorizedActorIds: telegramAuthorizedActorIds,
           authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
@@ -993,8 +1002,10 @@ export async function loadDesktopMessagingConfigFromSettings(
               : {}),
             registerSlashCommands: slackRegisterSlashCommands,
             streamingResponses: snapshot.messaging.slack.streamingResponses.value,
+            responseMode: snapshot.messaging.slack.responseMode.value,
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedTeamIds,
+            authorizedConversationIds: slackAuthorizedConversationIds,
           },
         }
       : {};
@@ -1381,6 +1392,10 @@ function authorizationUpdateForChannelConfig(
       return {
         authorizedActorIds: contactIds(config.telegram?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.telegram?.authorizedSupergroupIds),
+        conversationResponseModes: conversationResponseModes(
+          config.telegram?.authorizedSupergroupIds,
+        ),
+        responseMode: config.telegram?.responseMode,
       };
     case "discord":
       return {
@@ -1399,6 +1414,10 @@ function authorizationUpdateForChannelConfig(
       return {
         authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
+        conversationResponseModes: conversationResponseModes(
+          config.slack?.authorizedConversationIds,
+        ),
+        responseMode: config.slack?.responseMode,
         authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
       };
     case "feishu":
@@ -1450,6 +1469,21 @@ function contactIds(
   contacts: readonly { id: string }[] | undefined,
 ): readonly string[] {
   return contacts?.map((contact) => contact.id) ?? [];
+}
+
+function conversationResponseModes(
+  contacts:
+    | readonly {
+        id: string;
+        responseMode?: MessagingConversationResponseMode["responseMode"];
+      }[]
+    | undefined,
+): MessagingConversationResponseMode[] {
+  return contacts?.flatMap((contact) =>
+    contact.responseMode
+      ? [{ conversationId: contact.id, responseMode: contact.responseMode }]
+      : [],
+  ) ?? [];
 }
 
 function stableMessagingConfigStringify(value: unknown): string {

@@ -16,6 +16,7 @@ const baseConfig = {
   signingSecret: "test-signing-secret",
   authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Alice" }],
   authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "PwrDrvr" }],
+  responseMode: "every_message" as const,
 };
 
 function fakeStore(): MessagingCallbackHandleStore & {
@@ -408,7 +409,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("routes leading app mentions as commands", async () => {
+  it("routes leading app mentions as mentioned text", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: baseConfig,
@@ -437,10 +438,9 @@ describe("SlackAdapter", () => {
 
     expect(events).toEqual([
       expect.objectContaining({
-        kind: "command",
-        command: "help",
-        args: ["status"],
-        rawText: "/help status",
+        kind: "text",
+        botMention: true,
+        text: "help status",
       }),
     ]);
   });
@@ -478,6 +478,91 @@ describe("SlackAdapter", () => {
         command: "help",
         args: [],
         rawText: "/help",
+      }),
+    ]);
+  });
+
+  it("routes non-mention channel text for controller response-mode handling", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, responseMode: "mention_only" },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "general channel chatter",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        text: "general channel chatter",
+      }),
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("uses a Slack channel response-mode override before the workspace default", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        responseMode: "mention_only",
+        authorizedConversationIds: [
+          {
+            id: "C012ABCDEF0",
+            displayName: "alerts",
+            responseMode: "every_message",
+          },
+        ],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "alert details",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        text: "alert details",
       }),
     ]);
   });
@@ -521,9 +606,9 @@ describe("SlackAdapter", () => {
 
     expect(events).toEqual([
       expect.objectContaining({
-        kind: "command",
-        command: "help",
-        rawText: "/help",
+        kind: "text",
+        botMention: true,
+        text: "help",
       }),
     ]);
   });

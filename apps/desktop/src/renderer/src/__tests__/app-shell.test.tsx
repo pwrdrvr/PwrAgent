@@ -481,6 +481,7 @@ describe("App", () => {
         toolUpdateMode: { value: "show_some", source: "default" },
         telegram: {
           enabled: { value: false, source: "default" },
+          responseMode: { value: "every_message", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },
           authorizedUserIds: { value: [], source: "default" },
@@ -509,6 +510,7 @@ describe("App", () => {
         },
         slack: {
           enabled: { value: false, source: "default" },
+          responseMode: { value: "mention_only", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },
           appToken: { configured: false, source: "unset", writable: true },
@@ -519,6 +521,7 @@ describe("App", () => {
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
           authorizedWorkspaces: { value: [], source: "default" },
+          authorizedChannels: { value: [], source: "default" },
         },
         feishu: {
           enabled: { value: false, source: "default" },

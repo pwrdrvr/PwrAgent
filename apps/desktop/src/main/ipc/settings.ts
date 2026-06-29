@@ -704,7 +704,11 @@ async function resolveMessagingContact(
       );
     }
     case "slack": {
-      if (request.kind !== "user" && request.kind !== "workspace") {
+      if (
+        request.kind !== "user"
+        && request.kind !== "workspace"
+        && request.kind !== "channel"
+      ) {
         return unsupportedLookup(request);
       }
       const botToken = service.resolveSlackBotTokenSync();

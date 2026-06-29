@@ -50,6 +50,7 @@ import type {
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
+  MessagingResponseMode,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
@@ -851,6 +852,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     await run;
   }
 
+  private async shouldDropAmbientSharedMessage(params: {
+    channel: MessagingChannelKind;
+    event: MessagingInboundEvent;
+    store: MessagingStoreLike;
+  }): Promise<boolean> {
+    const { event } = params;
+    if (event.kind !== "text" && event.kind !== "media") {
+      return false;
+    }
+    if (event.botMention || event.channel.conversation.kind === "dm") {
+      return false;
+    }
+    const binding = await params.store.findActiveBindingForChannel(event.channel);
+    if (binding?.targetKind === "thread") {
+      return false;
+    }
+    return responseModeForChannel(
+      await this.loadConfig(),
+      params.channel,
+      event.channel,
+    ) === "mention_only";
+  }
+
   private async startRunningAdapter(params: {
     adapter: DesktopMessagingAdapter;
     config: DesktopMessagingConfig;
@@ -883,6 +907,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         config,
         adapter.channel,
       ),
+      responseModeForConversation: async (channel) =>
+        responseModeForChannel(
+          await this.loadConfig(),
+          adapter.channel,
+          channel,
+        ),
       toolUpdateDefaultMode: async () =>
         (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
       fullAccessControls: async () =>
@@ -945,6 +975,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           return;
         }
         const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
+        if (
+          authorized &&
+          await this.shouldDropAmbientSharedMessage({
+            channel: adapter.channel,
+            event,
+            store,
+          })
+        ) {
+          return;
+        }
         this.recordActivityFromInbound(adapter.channel, event, authorized);
         try {
           if (!authorized) {
@@ -2199,6 +2239,33 @@ function streamingResponsesDefaultForChannel(
       return config.telegram?.streamingResponses ?? false;
     default:
       return false;
+  }
+}
+
+function responseModeForChannel(
+  config: DesktopMessagingConfig,
+  channel: MessagingChannelKind,
+  channelRef: MessagingChannelRef,
+): MessagingResponseMode {
+  const conversationIds = [
+    channelRef.conversation.id,
+    channelRef.conversation.parentId,
+  ].filter((id): id is string => Boolean(id));
+  switch (channel) {
+    case "slack": {
+      const specificMode = config.slack?.authorizedConversationIds
+        ?.find((contact) => conversationIds.includes(contact.id))
+        ?.responseMode;
+      return specificMode ?? config.slack?.responseMode ?? "mention_only";
+    }
+    case "telegram": {
+      const specificMode = config.telegram?.authorizedSupergroupIds
+        ?.find((contact) => conversationIds.includes(contact.id))
+        ?.responseMode;
+      return specificMode ?? config.telegram?.responseMode ?? "every_message";
+    }
+    default:
+      return "every_message";
   }
 }
 

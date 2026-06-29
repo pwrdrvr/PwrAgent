@@ -159,16 +159,15 @@ describe("TelegramAdapter inbound security boundary", () => {
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({
         actor: expect.objectContaining({ platformUserId: "99" }),
-        args: ["123456789ABCDEFGHJKLMNPQRSTUVWXY"],
+        botMention: true,
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "-1009999999999",
             kind: "channel",
           }),
         }),
-        command: "pair",
-        kind: "command",
-        rawText: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        kind: "text",
+        text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
       }),
     );
     expect(rejectedEvents).toEqual([]);
@@ -234,6 +233,63 @@ describe("TelegramAdapter inbound security boundary", () => {
       expect.objectContaining({
         chatId: "-1009999999999",
       }),
+    );
+  });
+
+  it("routes non-mention group text for controller response-mode handling", async () => {
+    const listener = vi.fn();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      bot: fakeBot(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [
+          {
+            id: "-1001234567890",
+            displayName: "Alerts",
+            responseMode: "mention_only",
+          },
+        ],
+        botToken: "token",
+        channel: "telegram",
+        responseMode: "every_message",
+      },
+      logger,
+      pollOnStart: false,
+    });
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    await adapter.start(listener);
+
+    await adapter.handleUpdate({
+      update_id: 102,
+      message: {
+        chat: {
+          id: -1001234567890,
+          title: "Alerts",
+          type: "supergroup",
+        },
+        from: {
+          id: 42,
+          first_name: "Harold",
+        },
+        message_id: 202,
+        text: "general group chatter",
+      },
+    });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "text",
+        text: "general group chatter",
+      }),
+    );
+    expect(rejectedEvents).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "telegram inbound ignored unauthorized conversation",
+      expect.anything(),
     );
   });
 
