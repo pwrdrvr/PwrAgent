@@ -577,6 +577,129 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("replaces a promoted optimistic user message when the completed user item arrives later", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 10;
+      return now;
+    });
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.addOptimisticUserMessage("Please fix transcript ordering.");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "assistant-message-1",
+              type: "agentMessage",
+              text: "Working on it.",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.response?.replay.messages).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^optimistic-/),
+        role: "user",
+        text: "Please fix transcript ordering.",
+      }),
+      expect.objectContaining({
+        id: "assistant-message-1",
+        role: "assistant",
+        text: "Working on it.",
+      }),
+    ]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-message-1",
+              type: "userMessage",
+              content: [
+                {
+                  type: "text",
+                  text: "Please fix transcript ordering.",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.id}:${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual([
+      "user-message-1:user:Please fix transcript ordering.",
+      "assistant-message-1:assistant:Working on it.",
+    ]);
+    expect(
+      result.current.response?.replay.messages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.text === "Please fix transcript ordering."
+      )
+    ).toEqual([
+      expect.objectContaining({
+        id: "user-message-1",
+      }),
+    ]);
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
