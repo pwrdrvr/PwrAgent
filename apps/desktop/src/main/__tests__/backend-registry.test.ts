@@ -14930,7 +14930,7 @@ script = "printf setup"
         params: {
           threadId: "ordinary-thread",
           turnId: "turn-1",
-          turn: { id: "turn-1" },
+          turn: { id: "turn-1", status: "completed", output: [] },
         },
       },
     });
@@ -15086,7 +15086,7 @@ script = "printf setup"
         params: {
           threadId: "ordinary-thread",
           turnId: "turn-1",
-          turn: { id: "turn-1" },
+          turn: { id: "turn-1", status: "completed", output: [] },
         },
       },
     });
@@ -15186,7 +15186,7 @@ script = "printf setup"
         params: {
           threadId: "ordinary-thread",
           turnId: "turn-1",
-          turn: { id: "turn-1" },
+          turn: { id: "turn-1", status: "completed", output: [] },
         },
       },
     });
@@ -15321,7 +15321,7 @@ script = "printf setup"
         params: {
           threadId: "ordinary-thread",
           turnId: "turn-1",
-          turn: { id: "turn-1" },
+          turn: { id: "turn-1", status: "completed", output: [] },
         },
       },
     });
