@@ -31,6 +31,7 @@ import {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
 import type { StateDb } from "../state/state-db.js";
+import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
 
@@ -415,6 +416,26 @@ export class AutomationStore {
       .filter((record): record is AutomationRecord =>
         Boolean(record && (options.includeDeleted || record.status !== "deleted")),
       );
+  }
+
+  /**
+   * Inbound matching runs on every inbound message (a hot path). Pre-filter at
+   * the SQL layer to enabled automations whose payload could carry an inbound
+   * trigger, so the common case (only scheduled automations, or a busy channel)
+   * does not JSON-parse every automation row per message. The LIKE can admit a
+   * false positive (e.g. the literal appears in a task prompt); recordFromRow
+   * plus matchAutomationInboundEvent then ignore non-inbound triggers, so the
+   * resulting match set is identical to filtering listAutomations().
+   */
+  listEnabledInboundAutomations(): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automations WHERE status = 'enabled' AND payload LIKE '%inbound_message%' ORDER BY updated_at DESC",
+      )
+      .all() as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord => Boolean(record));
   }
 
   listAutomationsForThread(params: {
@@ -1292,31 +1313,6 @@ function isSupportedAutomationOutputAction(
   return false;
 }
 
-function mergeTranscriptEvents(
-  existing: AutomationRunTranscriptEvent[],
-  incoming: AutomationRunTranscriptEvent[],
-): AutomationRunTranscriptEvent[] {
-  const byId = new Map<string, AutomationRunTranscriptEvent>();
-  for (const event of existing) {
-    byId.set(event.id, event);
-  }
-  for (const event of incoming) {
-    byId.set(event.id, event);
-  }
-  // The agent's final answer is recorded under two ids (streamed item/completed
-  // and the run-artifact builder); collapse assistant_final events with the
-  // same trimmed text so the run detail does not show the response twice.
-  const sorted = [...byId.values()].sort((left, right) => left.at - right.at);
-  const seenFinalText = new Set<string>();
-  return sorted.filter((event) => {
-    if (event.kind !== "assistant_final") return true;
-    const key = event.text?.trim();
-    if (!key) return true;
-    if (seenFinalText.has(key)) return false;
-    seenFinalText.add(key);
-    return true;
-  });
-}
 
 function minDefined(left: number | undefined, right: number | undefined): number | undefined {
   if (left === undefined) return right;

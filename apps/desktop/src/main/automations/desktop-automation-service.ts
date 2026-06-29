@@ -48,6 +48,7 @@ import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 import { matchAutomationInboundEvent } from "./automation-trigger-matcher.js";
+import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
 
@@ -443,7 +444,7 @@ export class DesktopAutomationService {
       return false;
     }
     const matches = matchAutomationInboundEvent({
-      automations: this.options.store.listAutomations(),
+      automations: this.options.store.listEnabledInboundAutomations(),
       event,
     });
     if (matches.length === 0) {
@@ -1197,44 +1198,6 @@ function automationToolSummary(
     return `${item.success === false ? "Failed" : "Completed"} ${item.type}`;
   }
   return undefined;
-}
-
-function mergeTranscriptEvents(
-  existing: AutomationRunTranscriptEvent[],
-  incoming: AutomationRunTranscriptEvent[],
-): AutomationRunTranscriptEvent[] {
-  const byId = new Map<string, AutomationRunTranscriptEvent>();
-  for (const event of existing) {
-    byId.set(event.id, event);
-  }
-  for (const event of incoming) {
-    byId.set(event.id, event);
-  }
-  return dedupeAssistantFinalEvents(
-    [...byId.values()].sort((left, right) => left.at - right.at),
-  );
-}
-
-/**
- * The agent's final answer is recorded from two sources under different ids —
- * the streamed `item/completed` event (`<run>:assistant:<item>`) and the
- * run-artifact builder (`<run>:assistant-final`). Both carry identical text, so
- * id-keyed merging keeps both and the run detail shows the response twice.
- * Collapse `assistant_final` events that share the same trimmed text, keeping
- * the earliest occurrence.
- */
-function dedupeAssistantFinalEvents(
-  events: AutomationRunTranscriptEvent[],
-): AutomationRunTranscriptEvent[] {
-  const seenFinalText = new Set<string>();
-  return events.filter((event) => {
-    if (event.kind !== "assistant_final") return true;
-    const key = event.text?.trim();
-    if (!key) return true;
-    if (seenFinalText.has(key)) return false;
-    seenFinalText.add(key);
-    return true;
-  });
 }
 
 function buildAutomationTimelineCard(params: {

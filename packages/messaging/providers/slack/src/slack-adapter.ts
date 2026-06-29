@@ -1828,7 +1828,18 @@ export class SlackAdapter implements SlackProviderAdapter {
     for (const message of messages) {
       const text = message.text;
       if (!text) continue;
-      if (message.subtype && message.subtype !== "bot_message") continue;
+      // Mirror the live handleMessageEvent filter so the preview reflects what
+      // a trigger would actually fire on: skip PwrAgent's own posts, and skip
+      // any subtype other than file_share (the only subtype the live tap
+      // accepts). Without this the preview surfaces the bot's own output and
+      // drops file_share messages that triggers DO match.
+      if (
+        (this.botId && message.bot_id === this.botId) ||
+        (this.botUserId && message.user === this.botUserId)
+      ) {
+        continue;
+      }
+      if (message.subtype && message.subtype !== "file_share") continue;
       const actor = message.bot_id
         ? this.actorForSlackBot(message.bot_id)
         : message.user

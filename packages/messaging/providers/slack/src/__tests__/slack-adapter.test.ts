@@ -643,6 +643,48 @@ describe("SlackAdapter", () => {
     ).toEqual([]);
   });
 
+  it("preview mirrors the live message filter (skips own posts, keeps file_share, drops bot_message)", async () => {
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({}),
+        conversationsHistory: async () => [
+          { ts: "1712023032.000500", text: "own bot post", bot_id: "B0PWRAGENT" },
+          { ts: "1712023032.000400", text: "own user post", user: "U0BOTUSERID" },
+          {
+            ts: "1712023032.000300",
+            subtype: "bot_message",
+            text: "other bot via bot_message",
+            bot_id: "B012DATADOG",
+          },
+          {
+            ts: "1712023032.000200",
+            subtype: "file_share",
+            text: "shared a file",
+            user: "U2",
+            username: "alice",
+          },
+          { ts: "1712023032.000100", text: "normal message", user: "U3", username: "bob" },
+        ],
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    // start() runs authTest, setting botId=B0PWRAGENT / botUserId=U0BOTUSERID.
+    await adapter.start(async () => undefined);
+
+    const events = await adapter.fetchRecentMessages({
+      conversationId: "C012ABCDEF0",
+    });
+
+    // Own posts and bot_message subtypes are filtered (the live tap skips them);
+    // file_share and plain user messages survive, oldest-first.
+    expect(
+      events.map((event) => (event.kind === "text" ? event.text : undefined)),
+    ).toEqual(["normal message", "shared a file"]);
+  });
+
   it("keeps fan-out callback records scoped per routed binding", async () => {
     const store = fakeStore();
     const spies: { posted: unknown[] } = { posted: [] };

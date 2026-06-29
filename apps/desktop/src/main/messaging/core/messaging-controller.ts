@@ -236,6 +236,12 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+// Upper bound on retained automation start/final delivery-dedup keys. Each entry
+// embeds the full rendered message text and is only consulted while a run's
+// terminal events are in flight; oldest-first eviction reclaims keys for runs
+// that completed long ago so a long-lived controller does not grow without
+// bound (one entry per automation run).
+const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
@@ -10492,7 +10498,7 @@ export class MessagingController {
     if (this.deliveredAutomationFinalKeys.has(key)) {
       return;
     }
-    this.deliveredAutomationFinalKeys.add(key);
+    rememberBoundedKey(this.deliveredAutomationFinalKeys, key);
     await this.deliverAssistantMessage(messageText, params.event, params.binding);
   }
 
@@ -10588,7 +10594,7 @@ export class MessagingController {
     if (this.deliveredAutomationStartKeys.has(key)) {
       return;
     }
-    this.deliveredAutomationStartKeys.add(key);
+    rememberBoundedKey(this.deliveredAutomationStartKeys, key);
 
     const name = params.automationName?.trim();
     const text = [
@@ -13490,6 +13496,21 @@ function isTerminalTurnLifecycle(
     lifecycle &&
       ["completed", "failed", "interrupted"].includes(lifecycle.status),
   );
+}
+
+/**
+ * Add `key` to a dedup set, evicting the oldest entries (insertion order) once
+ * the set exceeds MAX_DELIVERED_AUTOMATION_KEYS. Eviction only ever drops keys
+ * for runs whose terminal events fired long ago and will not re-deliver, so the
+ * dedup guarantee for in-flight runs is preserved while retention stays bounded.
+ */
+function rememberBoundedKey(set: Set<string>, key: string): void {
+  set.add(key);
+  while (set.size > MAX_DELIVERED_AUTOMATION_KEYS) {
+    const oldest = set.values().next().value;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
 }
 
 function isSameActiveTurnState(

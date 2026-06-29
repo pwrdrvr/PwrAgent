@@ -228,6 +228,54 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("listEnabledInboundAutomations returns only enabled automations with inbound triggers", () => {
+    store.createAutomation({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Scheduled",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 1_000,
+    });
+    const enabledInbound = store.createAutomation({
+      id: "inbound-enabled",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Enabled inbound",
+      taskPrompt: "Triage.",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C1" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 1_000,
+    });
+    const pausedInbound = store.createAutomation({
+      id: "inbound-paused",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Paused inbound",
+      taskPrompt: "Triage.",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C2" },
+          textFilter: { mode: "contains", text: "WARN" },
+        },
+      ],
+      now: 1_000,
+    });
+    store.updateAutomation(pausedInbound.id, { status: "paused" });
+
+    const ids = store.listEnabledInboundAutomations().map((a) => a.id);
+    expect(ids).toEqual([enabledInbound.id]);
+  });
+
   it("collapses duplicate assistant_final transcript events with the same text", () => {
     store.createAutomation({
       id: "automation-1",
