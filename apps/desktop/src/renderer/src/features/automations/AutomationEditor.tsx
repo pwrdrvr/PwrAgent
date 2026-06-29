@@ -1768,9 +1768,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </select>
             </label>
             <p className="automation-field__hint">
-              Hard cap on how many runs this automation can start each hour, even
-              if coalescing is off. A safety backstop against runaway agent runs
-              (and token spend) from a busy channel or a message loop.
+              Hard cap on how many inbound-triggered runs this automation starts
+              each hour, even if coalescing is off. A safety backstop against
+              runaway agent runs (and token spend) from a busy channel or a
+              message loop. Over-limit messages are dropped.
             </p>
           </div>
 

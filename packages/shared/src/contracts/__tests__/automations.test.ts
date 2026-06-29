@@ -4,12 +4,31 @@ import {
   AUTOMATION_INBOUND_TEXT_MATCH_MODES,
   AUTOMATION_RUN_TRIGGERS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
+  DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
   formatAutomationScheduleSummary,
+  resolveAutomationRunsPerHour,
   validateAutomationScheduleDefinition,
   type AutomationScheduleDefinition,
 } from "../automations";
 
 describe("automation contracts", () => {
+  it("resolves the inbound run-rate, clamping fractional rates to at least 1/hour", () => {
+    // undefined inherits the default; null is unlimited.
+    expect(resolveAutomationRunsPerHour(undefined)).toBe(
+      DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
+    );
+    expect(resolveAutomationRunsPerHour(null)).toBeNull();
+    expect(resolveAutomationRunsPerHour(45)).toBe(45);
+    // Zero / negative / non-finite are unlimited.
+    expect(resolveAutomationRunsPerHour(0)).toBeNull();
+    expect(resolveAutomationRunsPerHour(-5)).toBeNull();
+    expect(resolveAutomationRunsPerHour(Number.NaN)).toBeNull();
+    // A positive fraction must NOT floor to 0 (a 0-capacity bucket blocks every
+    // run); it clamps up to 1/hour, the most restrictive real cap.
+    expect(resolveAutomationRunsPerHour(0.5)).toBe(1);
+    expect(resolveAutomationRunsPerHour(0.01)).toBe(1);
+  });
+
   it("defaults backlog handling to coalescing missed windows", () => {
     expect(DEFAULT_AUTOMATION_BACKLOG_POLICY).toBe("coalesce");
   });

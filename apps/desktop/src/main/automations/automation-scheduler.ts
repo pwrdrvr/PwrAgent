@@ -146,21 +146,8 @@ export class AutomationScheduler {
         return undefined;
       }
       // Leading edge: open an empty window for any follow-ups, then fire this
-      // first message immediately.
+      // first message immediately. dispatchInboundRun applies the rate limit.
       this.openCoalesceWindow(params.automation, windowMs);
-    }
-
-    // Rate-gate the run start (leading edge, or — when coalescing is disabled —
-    // the direct dispatch). If throttled and a window is open, fold the source
-    // into it so it is preserved and flushes (also rate-gated) later; with no
-    // window the over-rate message is dropped.
-    if (!this.tryConsumeRunStartToken(params.automation, now)) {
-      const open = this.coalesceWindows.get(params.automation.id);
-      if (open) {
-        appendCoalesceSource(open, params.source);
-      }
-      this.noteThrottledInboundRun(params.automation);
-      return undefined;
     }
 
     return await this.dispatchInboundRun({
@@ -176,9 +163,11 @@ export class AutomationScheduler {
     now: number;
   }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const { now } = params;
-    // Idempotency: a provider can redeliver the same event (slow ack, retry).
-    // If a run already exists for this stable source-event key, skip rather than
-    // launch a duplicate headless run and re-post its actions.
+    // Idempotency: a provider can redeliver the same event (slow ack, retry),
+    // and an automation with two triggers can match one message twice. If a run
+    // already exists for this stable source-event key, skip — before consuming a
+    // rate-limit token — rather than launch a duplicate or burn budget on a
+    // no-op.
     const existing = this.options.store.findRunBySourceEventKey({
       automationId: params.automation.id,
       sourceEventKey: params.source.sourceEventKey,
@@ -187,6 +176,39 @@ export class AutomationScheduler {
       return undefined;
     }
     const active = this.options.store.findActiveRunForAutomation(params.automation.id);
+
+    // drop_missed + busy lane records a visible skipped run but starts no
+    // headless turn, so it must NOT consume a rate-limit token.
+    if (active && params.automation.backlogPolicy === "drop_missed") {
+      const dropped = this.options.store.createRun({
+        automationId: params.automation.id,
+        trigger: "inbound_message",
+        scheduledWindows: [],
+        source: params.source,
+        now,
+      });
+      if (dropped) {
+        this.options.store.markRunTerminal({
+          runId: dropped.id,
+          status: "skipped",
+          completedAt: now,
+          errorMessage:
+            "The automation execution lane was busy when this inbound message arrived.",
+          now,
+        });
+      }
+      return undefined;
+    }
+
+    // The run will start now (lane free) or queue (coalesce backlog) and start
+    // later — either way it consumes exactly one token. Gate here, AFTER the
+    // idempotency and drop_missed checks, so only runs that actually start are
+    // counted, and throttled messages leave no run row.
+    if (!this.tryConsumeRunStartToken(params.automation, now)) {
+      this.noteThrottledInboundRun(params.automation);
+      return undefined;
+    }
+
     const run = this.options.store.createRun({
       automationId: params.automation.id,
       trigger: "inbound_message",
@@ -197,17 +219,6 @@ export class AutomationScheduler {
     if (!run) return undefined;
 
     if (active) {
-      if (params.automation.backlogPolicy === "drop_missed") {
-        this.options.store.markRunTerminal({
-          runId: run.id,
-          status: "skipped",
-          completedAt: now,
-          errorMessage:
-            "The automation execution lane was busy when this inbound message arrived.",
-          now,
-        });
-        return undefined;
-      }
       const queued = this.options.store.markRunQueued({
         runId: run.id,
         queueEntryId: buildLaneQueueEntryId(run.id),
@@ -247,18 +258,14 @@ export class AutomationScheduler {
     if (!open || open.sources.length === 0) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation || automation.status !== "enabled") return;
-    if (!this.tryConsumeRunStartToken(automation, this.now())) {
-      // Over rate: drop the coalesced batch. The messages were already merged,
-      // so this drops a single run rather than one per message.
-      this.noteThrottledInboundRun(automation);
-      return;
-    }
     const [primary, ...rest] = open.sources;
     if (!primary) return;
     const source: AutomationRunSourceMetadata =
       rest.length > 0
         ? { ...primary, batchedEvents: rest.map(toBatchedEntry) }
         : primary;
+    // dispatchInboundRun applies the rate limit; an over-rate flush drops the
+    // (already-merged) batch as a single throttled run.
     await this.dispatchInboundRun({ automation, source, now: this.now() });
   }
 

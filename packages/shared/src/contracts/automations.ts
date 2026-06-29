@@ -44,8 +44,10 @@ export const AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS = [5, 20, 45, 60] as const;
 /**
  * Resolve the effective inbound run-rate for an automation: the number of run
  * starts allowed per hour, or `null` for unlimited. `undefined` (field absent /
- * legacy row) falls back to the default; non-positive or non-finite values are
- * treated as unlimited.
+ * legacy row) falls back to the default; `null` and non-positive / non-finite
+ * values are unlimited. A positive fraction clamps UP to 1/hour so a sub-1 rate
+ * becomes the most restrictive real cap rather than flooring to 0 (a 0-capacity
+ * bucket that would block every run).
  */
 export function resolveAutomationRunsPerHour(
   maxRunsPerHour: number | null | undefined,
@@ -53,7 +55,7 @@ export function resolveAutomationRunsPerHour(
   if (maxRunsPerHour === null) return null;
   if (maxRunsPerHour === undefined) return DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR;
   if (!Number.isFinite(maxRunsPerHour) || maxRunsPerHour <= 0) return null;
-  return Math.floor(maxRunsPerHour);
+  return Math.max(1, Math.floor(maxRunsPerHour));
 }
 
 export const AUTOMATION_STATUSES = ["enabled", "paused", "deleted"] as const;

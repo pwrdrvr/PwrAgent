@@ -664,6 +664,52 @@ describe("AutomationScheduler", () => {
     expect(store.listRunsForAutomation("automation-rl")).toHaveLength(6);
   });
 
+  it("does not spend rate tokens on idempotent redeliveries or duplicate-trigger matches", async () => {
+    const automation = store.createAutomation({
+      id: "automation-rl2",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 2,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    // First message starts a run (1 token spent, 1 left).
+    await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
+    // Three redeliveries of the same key are idempotent: no run, no token spent.
+    for (let i = 0; i < 3; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
+    }
+    // A genuinely new message still has its token and starts/queues a run.
+    await scheduler.runFromInboundEvent({ automation, source: src("k2"), now });
+
+    // 2 real runs (k1, k2); the bucket was not drained by the redeliveries. If
+    // tokens were spent before the idempotency check, k2 would have been
+    // throttled and only 1 run would exist.
+    expect(store.listRunsForAutomation("automation-rl2")).toHaveLength(2);
+  });
+
   it("does not rate-limit inbound runs when the limit is unlimited", async () => {
     const automation = store.createAutomation({
       id: "automation-unlimited",
