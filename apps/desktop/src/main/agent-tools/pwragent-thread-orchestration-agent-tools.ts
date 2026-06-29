@@ -438,32 +438,22 @@ function normalizeMoveThreadWorkspaceArgs(
       return undefined;
     }
   }
+  const backend = readTrimmedString(args.backend);
+  const repositoryPath = readTrimmedString(args.repositoryPath);
+  const sourcePath = readTrimmedString(args.sourcePath);
+  const sourceBranch = readTrimmedString(args.sourceBranch);
+  const leaveLocalBranch = readTrimmedString(args.leaveLocalBranch);
+  const newBranchName = readTrimmedString(args.newBranchName);
 
   return {
     direction,
     ...(strategy ? { strategy } : {}),
-    ...(readTrimmedString(args.backend)
-      ? {
-          backend: readTrimmedString(
-            args.backend,
-          ) as MoveThreadWorkspaceToolArgs["backend"],
-        }
-      : {}),
-    ...(readTrimmedString(args.repositoryPath)
-      ? { repositoryPath: readTrimmedString(args.repositoryPath) }
-      : {}),
-    ...(readTrimmedString(args.sourcePath)
-      ? { sourcePath: readTrimmedString(args.sourcePath) }
-      : {}),
-    ...(readTrimmedString(args.sourceBranch)
-      ? { sourceBranch: readTrimmedString(args.sourceBranch) }
-      : {}),
-    ...(readTrimmedString(args.leaveLocalBranch)
-      ? { leaveLocalBranch: readTrimmedString(args.leaveLocalBranch) }
-      : {}),
-    ...(readTrimmedString(args.newBranchName)
-      ? { newBranchName: readTrimmedString(args.newBranchName) }
-      : {}),
+    ...(backend ? { backend: backend as MoveThreadWorkspaceToolArgs["backend"] } : {}),
+    ...(repositoryPath ? { repositoryPath } : {}),
+    ...(sourcePath ? { sourcePath } : {}),
+    ...(sourceBranch ? { sourceBranch } : {}),
+    ...(leaveLocalBranch ? { leaveLocalBranch } : {}),
+    ...(newBranchName ? { newBranchName } : {}),
   };
 }
 

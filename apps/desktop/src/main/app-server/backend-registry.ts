@@ -14465,15 +14465,22 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const sourceThread = await this.findThreadForWorkspaceHandoff({
-      backend: sourceBackend,
-      callerReason: "agent-workspace-move",
-      threadId: sourceThreadId,
-    });
-    const sourceOverlay = await this.overlayStore.getThreadOverlayState({
-      backend: sourceBackend,
-      threadId: sourceThreadId,
-    });
+    const needsWorkspaceInference = !(
+      request.args.repositoryPath?.trim() && request.args.sourcePath?.trim()
+    );
+    const [sourceThread, sourceOverlay] = needsWorkspaceInference
+      ? await Promise.all([
+          this.findThreadForWorkspaceHandoff({
+            backend: sourceBackend,
+            callerReason: "agent-workspace-move",
+            threadId: sourceThreadId,
+          }),
+          this.overlayStore.getThreadOverlayState({
+            backend: sourceBackend,
+            threadId: sourceThreadId,
+          }),
+        ])
+      : [undefined, undefined];
 
     let candidate: {
       repositoryPath?: string;
@@ -14489,8 +14496,36 @@ export class DesktopBackendRegistry {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return threadOrchestrationFailure(
-        /ambiguous/i.test(message) ? "ambiguous_workspace" : "unsupported_workspace",
+        /ambiguous|multiple eligible/i.test(message)
+          ? "ambiguous_workspace"
+          : "unsupported_workspace",
         message,
+      );
+    }
+
+    const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
+      (move) =>
+        (move.status === "queued" || move.status === "running") &&
+        move.sourceBackend === sourceBackend &&
+        move.sourceThreadId === sourceThreadId &&
+        move.sourceTurnId === sourceTurnId,
+    );
+    if (duplicateMove) {
+      const sameSource =
+        duplicateMove.direction === direction &&
+        path.resolve(duplicateMove.sourcePath ?? "") ===
+          path.resolve(candidate.sourcePath ?? "") &&
+        path.resolve(duplicateMove.repositoryPath ?? "") ===
+          path.resolve(candidate.repositoryPath ?? "");
+      if (sameSource) {
+        return {
+          ok: true,
+          data: this.pendingThreadWorkspaceMoveToResult(duplicateMove),
+        };
+      }
+      return threadOrchestrationFailure(
+        "unsupported_workspace",
+        "A workspace move is already queued for this thread turn. Wait for the continuation before requesting another workspace move.",
       );
     }
 
@@ -14632,6 +14667,20 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private drainPendingThreadWorkspaceMovesForTurnIds(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnIds: Iterable<string>;
+  }): void {
+    for (const turnId of params.turnIds) {
+      this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId,
+      });
+    }
+  }
+
   private async runPendingThreadWorkspaceMove(
     workspaceMoveId: string,
   ): Promise<void> {
@@ -14676,11 +14725,19 @@ export class DesktopBackendRegistry {
         kind: "failure",
         moveId: workspaceMoveId,
       }).catch((continuationError) => {
+        const message =
+          continuationError instanceof Error
+            ? continuationError.message
+            : String(continuationError);
+        this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
+          status: "failed",
+          phase: "failed",
+          error: message,
+          message:
+            "Workspace move failed, and starting the same-thread failure continuation also failed. The original runtime workspace remains authoritative.",
+        });
         backendRegistryLog.warn("workspace move failure continuation failed", {
-          error:
-            continuationError instanceof Error
-              ? continuationError.message
-              : String(continuationError),
+          error: message,
           workspaceMoveId,
         });
       });
@@ -17581,6 +17638,7 @@ export class DesktopBackendRegistry {
       const hasActiveCodexReviewTurn =
         event.backend === "codex" &&
         this.threadHasActiveCodexReviewTurn(threadId);
+      const endedTurnIds = new Set<string>();
       const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
       for (const key of Array.from(this.activeTurnKeys)) {
         if (key.startsWith(genericKeyPrefix)) {
@@ -17593,6 +17651,9 @@ export class DesktopBackendRegistry {
             )
           ) {
             continue;
+          }
+          if (parsed?.turnId && !parsed.turnId.startsWith("pending:")) {
+            endedTurnIds.add(parsed.turnId);
           }
           this.activeTurnKeys.delete(key);
         }
@@ -17621,6 +17682,10 @@ export class DesktopBackendRegistry {
             if (!key.startsWith(`${keyPrefix}pending:`)) {
               hadKnownActiveTurn = true;
             }
+            const parsed = parseThreadTurnKeyBody(key);
+            if (parsed?.turnId && !parsed.turnId.startsWith("pending:")) {
+              endedTurnIds.add(parsed.turnId);
+            }
             this.activeCodexTurnModes.delete(key);
           }
         }
@@ -17648,6 +17713,11 @@ export class DesktopBackendRegistry {
         // point where the thread becomes available again.
         return;
       }
+      this.drainPendingThreadWorkspaceMovesForTurnIds({
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+        turnIds: endedTurnIds,
+      });
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,
         threadId: event.notification.params.threadId,

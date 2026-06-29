@@ -134,7 +134,6 @@ export type MoveThreadWorkspaceStatus =
   | "failed";
 
 export type MoveThreadWorkspacePhase =
-  | "resolving_source"
   | "waiting_for_turn_boundary"
   | "preparing_workspace"
   | "updating_metadata"

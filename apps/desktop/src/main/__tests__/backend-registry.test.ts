@@ -14442,7 +14442,16 @@ script = "printf setup"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "default",
+            extraLinkedDirectories: thread.linkedDirectories ?? [],
+          },
+        },
+      }),
       gitWorkspaceHandoffService: {
         handoff,
       } as never,
@@ -14490,6 +14499,32 @@ script = "printf setup"
     });
     expect(handoff).not.toHaveBeenCalled();
 
+    const duplicateResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-2",
+        requestId: "move-call-1b",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+          leaveLocalBranch: "main",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const duplicatePayload = JSON.parse(
+      (duplicateResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    expect(duplicatePayload).toMatchObject({
+      workspaceMoveId: payload.workspaceMoveId,
+      status: "queued",
+      sourcePath: "/repo/app",
+    });
+    expect(handoff).not.toHaveBeenCalled();
+
     const statusResponse = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
@@ -14517,6 +14552,275 @@ script = "printf setup"
         sourcePath: "/repo/app",
       }),
     ]);
+
+    const searchResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "search-call-1",
+        requestId: "search-call-1",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: {
+          backend: "codex",
+          query: "workspace-move",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const searchPayload = JSON.parse(
+      (searchResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    expect(searchPayload.pendingWorkspaceMoves).toEqual([
+      expect.objectContaining({
+        workspaceMoveId:
+          "workspace-move:codex:ordinary-thread:turn-1:move-call-1",
+        status: "queued",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("drains same-thread workspace moves from idle status boundaries", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      gitBranch: "feature/handoff",
+      updatedAt: 1000,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "ordinary-thread",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:ordinary-thread",
+        kind: "worktree" as const,
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "default",
+            extraLinkedDirectories: thread.linkedDirectories ?? [],
+          },
+        },
+      }),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-1",
+        requestId: "move-call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "ordinary-thread",
+          status: { type: "idle" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(handoff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "ordinary-thread",
+        direction: "local-to-worktree",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+      });
+    });
+    await registry.close();
+  });
+
+  it("rejects invalid same-thread workspace move requests before handoff", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+        {
+          id: "directory:/repo/other",
+          kind: "local",
+          label: "other",
+          path: "/repo/other",
+        },
+      ],
+      updatedAt: 1000,
+    };
+    const handoff = vi.fn();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "active",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "default",
+            extraLinkedDirectories: thread.linkedDirectories ?? [],
+          },
+        },
+      }),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    async function callMove(
+      callId: string,
+      args: Record<string, unknown>,
+      turnId = "turn-1",
+    ) {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId,
+          callId,
+          requestId: callId,
+          namespace: "pwragent",
+          tool: "move_thread_workspace",
+          arguments: args,
+        },
+      } as AppServerPendingRequestNotification);
+      return JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+    }
+
+    await expect(callMove("move-call-no-turn", {})).resolves.toMatchObject({
+      code: "forbidden",
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    await expect(
+      callMove("move-call-wrong-turn", {}, "turn-2"),
+    ).resolves.toMatchObject({
+      code: "forbidden",
+    });
+    const ambiguousPayload = await callMove("move-call-ambiguous", {});
+    expect(ambiguousPayload).toMatchObject({
+      code: "ambiguous_workspace",
+    });
+    await expect(
+      callMove("move-call-backend", {
+        backend: "grok",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+      }),
+    ).resolves.toMatchObject({
+      code: "unsupported_backend",
+    });
+    await expect(
+      callMove("move-call-direction", {
+        direction: "worktree-to-local",
+        repositoryPath: "/repo/app",
+        sourcePath: "/repo/app",
+      }),
+    ).resolves.toMatchObject({
+      code: "unsupported_workspace",
+    });
+    expect(handoff).not.toHaveBeenCalled();
 
     await registry.close();
   });
@@ -14664,6 +14968,267 @@ script = "printf setup"
         : "";
     expect(prompt).toContain("PwrAgent workspace move completed");
     expect(prompt).toContain("New runtime cwd: /repo/app/.worktrees/app-feature-handoff");
+    await registry.close();
+  });
+
+  it("reports failed same-thread workspace moves through a continuation", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      gitBranch: "feature/handoff",
+      updatedAt: 1000,
+    };
+    const handoff = vi.fn(async () => {
+      throw new Error("worktree setup failed");
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-1",
+        requestId: "move-call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        threadId: "ordinary-thread",
+      });
+    });
+    const prompt =
+      codexClient.lastStartTurnParams?.input[0]?.type === "text"
+        ? codexClient.lastStartTurnParams.input[0].text
+        : "";
+    expect(prompt).toContain("PwrAgent workspace move failed");
+    expect(prompt).toContain("worktree setup failed");
+    expect(prompt).toContain("original runtime workspace remains authoritative");
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-2",
+          turn: { id: "turn-2" },
+        },
+      },
+    });
+    const statusResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-2",
+        callId: "status-call-1",
+        requestId: "status-call-1",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "ordinary-thread",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const statusPayload = JSON.parse(
+      (statusResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    expect(statusPayload.thread.pendingWorkspaceMoves).toEqual([
+      expect.objectContaining({
+        workspaceMoveId:
+          "workspace-move:codex:ordinary-thread:turn-1:move-call-1",
+        status: "failed",
+        phase: "failed",
+        error: "worktree setup failed",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("keeps failed workspace move state when failure continuation cannot start", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "ordinary-thread",
+      title: "Parent Thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          kind: "local",
+          label: "app",
+          path: "/repo/app",
+        },
+      ],
+      updatedAt: 1000,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read", "turn/start"] },
+      threads: [thread],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+      startTurnError: new Error("continuation boom"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitWorkspaceHandoffService: {
+        handoff: vi.fn(async () => {
+          throw new Error("worktree setup failed");
+        }),
+      } as never,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "move-call-1",
+        requestId: "move-call-1",
+        namespace: "pwragent",
+        tool: "move_thread_workspace",
+        arguments: {
+          sourcePath: "/repo/app",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(codexClient.startTurnCallCount).toBe(1);
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-2",
+          turn: { id: "turn-2" },
+        },
+      },
+    });
+    const statusResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-2",
+        callId: "status-call-1",
+        requestId: "status-call-1",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "ordinary-thread",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const statusPayload = JSON.parse(
+      (statusResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    expect(statusPayload.thread.pendingWorkspaceMoves).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        phase: "failed",
+        error: "continuation boom",
+        message: expect.stringContaining("failure continuation also failed"),
+      }),
+    ]);
+
     await registry.close();
   });
 
