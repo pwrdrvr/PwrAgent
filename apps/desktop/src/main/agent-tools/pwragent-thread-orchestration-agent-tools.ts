@@ -17,6 +17,8 @@ import {
   HANDOFF_TASK_WORKSPACE_MODES,
   PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
+  THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
+  THREAD_WORKSPACE_HANDOFF_STRATEGIES,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -30,17 +32,6 @@ import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE =
   "PwrAgent thread handoff tools are not available.";
-
-const MOVE_THREAD_WORKSPACE_DIRECTIONS = [
-  "local-to-worktree",
-  "worktree-to-local",
-] as const;
-
-const MOVE_THREAD_WORKSPACE_STRATEGIES = [
-  "move-branch",
-  "detached-changes",
-  "new-branch",
-] as const;
 
 export type PwrAgentThreadOrchestrationHandler = (
   request: PwrAgentThreadOrchestrationRequest,
@@ -191,13 +182,13 @@ function inputSchemaForOperation(
           },
           direction: {
             type: "string",
-            enum: MOVE_THREAD_WORKSPACE_DIRECTIONS,
+            enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
             description:
               "`local-to-worktree` is the default and first supported direction. `worktree-to-local` is reserved for compatible backends and may be rejected until implemented.",
           },
           strategy: {
             type: "string",
-            enum: MOVE_THREAD_WORKSPACE_STRATEGIES,
+            enum: THREAD_WORKSPACE_HANDOFF_STRATEGIES,
             description:
               "Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary.",
           },
@@ -413,14 +404,14 @@ function normalizeMoveThreadWorkspaceArgs(
   const direction =
     args.direction === undefined
       ? "local-to-worktree"
-      : readChoice(args.direction, MOVE_THREAD_WORKSPACE_DIRECTIONS);
+      : readChoice(args.direction, THREAD_WORKSPACE_HANDOFF_DIRECTIONS);
   if (!direction) {
     return undefined;
   }
   const strategy =
     args.strategy === undefined
       ? undefined
-      : readChoice(args.strategy, MOVE_THREAD_WORKSPACE_STRATEGIES);
+      : readChoice(args.strategy, THREAD_WORKSPACE_HANDOFF_STRATEGIES);
   if (args.strategy !== undefined && !strategy) {
     return undefined;
   }
